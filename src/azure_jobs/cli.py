@@ -47,8 +47,8 @@ def main():
     help="Template environment to execute the command",
     default="default",
 )
-@click.option("-n", "--nodes", default=1, help="Number of nodes")
-@click.option("-p", "--processes", default=1, help="Number of processes")
+@click.option("-n", "--nodes", default=None, help="Number of nodes")
+@click.option("-p", "--processes", default=None, help="Number of processes")
 @click.option(
     "-d", "--dry-run", is_flag=True, help="Dry run the command without executing"
 )
@@ -68,7 +68,9 @@ def run(command, args, template, nodes, processes, dry_run):
 
     sid = uuid.uuid4().hex[:8]
     name = os.getenv("AJ_NAME", Path.cwd().name) + f"_{sid}"
-
+    processes = processes or conf.get("_extra", {}).get("processes", 1)
+    nodes = nodes or conf.get("_extra", {}).get("nodes", 1)
+    conf.pop("_extra", None)
     conf["description"] = name
     conf["jobs"][0]["name"] = name
     conf["jobs"][0]["sku"] = conf["jobs"][0]["sku"].format(
