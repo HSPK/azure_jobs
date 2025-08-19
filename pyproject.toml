@@ -1,0 +1,17 @@
+[project]
+name = "azure_jobs"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [{ name = "HSPK", email = "whxway@whu.edu.cn" }]
+requires-python = ">=3.10"
+dependencies = [
+    "click>=8.2.1",
+]
+
+[project.scripts]
+aj = "azure_jobs.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
