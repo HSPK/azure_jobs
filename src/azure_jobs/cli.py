@@ -68,8 +68,8 @@ def run(command, args, template, nodes, processes, dry_run):
 
     sid = uuid.uuid4().hex[:8]
     name = os.getenv("AJ_NAME", Path.cwd().name) + f"_{sid}"
-    processes = processes or conf.get("_extra", {}).get("processes", 1)
-    nodes = nodes or conf.get("_extra", {}).get("nodes", 1)
+    processes = int(processes or conf.get("_extra", {}).get("processes", 1))
+    nodes = int(nodes or conf.get("_extra", {}).get("nodes", 1))
     conf.pop("_extra", None)
     conf["description"] = name
     conf["jobs"][0]["name"] = name
