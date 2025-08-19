@@ -112,5 +112,13 @@ def run(command, args, template, nodes, processes, dry_run):
     log_record(rec)
 
 
+@main.command()
+@click.argument(
+    "repo_id", type=str, help="Download .azure_jobs directory from a repository"
+)
+def pull(repo_id: str):
+    pass
+
+
 if __name__ == "__main__":
     main()
