@@ -4,7 +4,10 @@ __pycache__/
 build/
 dist/
 .python-version
+.azure_jobs/
+.amltconfig
 wheels/
+test.ipynb
 *.egg-info
 
 # Virtual environments
