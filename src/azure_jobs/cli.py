@@ -33,6 +33,7 @@ def log_record(record: SubmissionRecord):
 
 
 @click.group()
+@click.version_option(package_name="azure_jobs")
 def main():
     pass
 
@@ -74,7 +75,7 @@ def run(command, args, template, nodes, processes, dry_run):
         nodes=nodes, processes=processes
     )
     cmd = conf["jobs"][0].get("command", [])
-    cmd.extend([f"export AJ_NODES={nodes}", f"export AJ_PROCESSES={processes}"])
+    cmd.extend([f"export AJ_NODES={nodes}", f"export AJ_PROCESSES={processes * nodes}"])
     if Path(command).is_file():
         if command.endswith(".sh"):
             cmd.append(f"bash {command} {' '.join(args)}")
