@@ -8,6 +8,8 @@ dist/
 .amltconfig
 wheels/
 test.ipynb
+test.sh
+scripts/
 *.egg-info
 
 # Virtual environments

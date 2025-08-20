@@ -52,9 +52,10 @@ def main():
 @click.option(
     "-d", "--dry-run", is_flag=True, help="Dry run the command without executing"
 )
+@click.option("-L", "--run-local", is_flag=True, help="Run the command locally")
 @click.argument("command", nargs=1)
 @click.argument("args", nargs=-1)
-def run(command, args, template, nodes, processes, dry_run):
+def run(command, args, template, nodes, processes, dry_run, run_local):
     template_fp = AJ_TEMPLATE_HOME / f"{template}.yaml"
     if not template_fp.exists():
         raise click.ClickException(
@@ -77,14 +78,21 @@ def run(command, args, template, nodes, processes, dry_run):
         nodes=nodes, processes=processes
     )
     cmd = conf["jobs"][0].get("command", [])
-    cmd.extend([f"export AJ_NODES={nodes}", f"export AJ_PROCESSES={processes * nodes}"])
+    cmd.extend(
+        [
+            f"export AJ_NODES={nodes}",
+            f"export AJ_PROCESSES={processes * nodes}",
+            f"export AJ_NAME={name}",
+            f"export AJ_ID={sid}",
+        ]
+    )
     if Path(command).is_file():
         if command.endswith(".sh"):
-            cmd.append(f"bash {command} {' '.join(args)}")
+            cmd.append(f"bash {command} {' '.join(args)}".strip())
         elif command.endswith(".py"):
-            cmd.append(f"uv run {command} {' '.join(args)}")
+            cmd.append(f"uv run {command} {' '.join(args)}".strip())
     else:
-        cmd.append(f"{command} {' '.join(args)}")
+        cmd.append(f"{command} {' '.join(args)}".strip())
     conf["jobs"][0]["command"] = cmd
 
     submission_fp = AJ_SUBMISSION_HOME / f"{sid}.yaml"
@@ -96,23 +104,26 @@ def run(command, args, template, nodes, processes, dry_run):
     if dry_run:
         print("Dry run mode: not executing command")
         return
-    amlt_command = ["amlt", "run", submission_fp, sid]
-    rec = SubmissionRecord(
-        id=sid,
-        template=template,
-        nodes=nodes,
-        processes=processes,
-        portal="azure",
-        created_at=datetime.now(timezone.utc).isoformat(),
-        status="success",
-        command=command,
-        args=args,
-    )
-    try:
-        subprocess.run(amlt_command, shell=False)
-    except Exception:
-        rec.status = "failed"
-    log_record(rec)
+    if run_local:
+        subprocess.run(" && ".join(cmd), shell=True)
+    else:
+        amlt_command = ["amlt", "run", submission_fp, sid]
+        rec = SubmissionRecord(
+            id=sid,
+            template=template,
+            nodes=nodes,
+            processes=processes,
+            portal="azure",
+            created_at=datetime.now(timezone.utc).isoformat(),
+            status="success",
+            command=command,
+            args=args,
+        )
+        try:
+            subprocess.run(amlt_command, shell=False)
+        except Exception:
+            rec.status = "failed"
+        log_record(rec)
 
 
 @main.command()
