@@ -5,7 +5,13 @@ import click
 import yaml
 
 from .conf import read_conf
-from .const import AJ_DEFAULT_TEMPLATE, AJ_TEMPLATE_HOME, AJ_RECORD, AJ_SUBMISSION_HOME
+from .const import (
+    AJ_DEFAULT_TEMPLATE,
+    AJ_TEMPLATE_HOME,
+    AJ_RECORD,
+    AJ_SUBMISSION_HOME,
+    AJ_HOME,
+)
 from pathlib import Path
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
@@ -52,10 +58,11 @@ def main():
 @click.option(
     "-d", "--dry-run", is_flag=True, help="Dry run the command without executing"
 )
+@click.option("-y", "--yes", is_flag=True, help="Skip confirmation prompts")
 @click.option("-L", "--run-local", is_flag=True, help="Run the command locally")
 @click.argument("command", nargs=1)
 @click.argument("args", nargs=-1)
-def run(command, args, template, nodes, processes, dry_run, run_local):
+def run(command, args, template, nodes, processes, dry_run, run_local, yes):
     template_fp = AJ_TEMPLATE_HOME / f"{template}.yaml"
     if not template_fp.exists():
         raise click.ClickException(
@@ -77,8 +84,8 @@ def run(command, args, template, nodes, processes, dry_run, run_local):
     conf["jobs"][0]["sku"] = conf["jobs"][0]["sku"].format(
         nodes=nodes, processes=processes
     )
-    cmd = conf["jobs"][0].get("command", [])
-    cmd.extend(
+    cmd_list = conf["jobs"][0].get("command", [])
+    cmd_list.extend(
         [
             f"export AJ_NODES={nodes}",
             f"export AJ_PROCESSES={processes * nodes}",
@@ -88,13 +95,20 @@ def run(command, args, template, nodes, processes, dry_run, run_local):
     )
     if Path(command).is_file():
         if command.endswith(".sh"):
-            cmd.append(f"bash {command} {' '.join(args)}".strip())
+            cmd = f"bash {command} {' '.join(args)}".strip()
         elif command.endswith(".py"):
-            cmd.append(f"uv run {command} {' '.join(args)}".strip())
+            cmd = f"uv run {command} {' '.join(args)}".strip()
     else:
-        cmd.append(f"{command} {' '.join(args)}".strip())
-    conf["jobs"][0]["command"] = cmd
+        cmd = f"{command} {' '.join(args)}".strip()
+    if yes:
+        cmd = f"yes | {cmd}"
+    cmd_list.append(cmd)
+    print(f"Final command to execute: {cmd}")
+    conf["jobs"][0]["command"] = cmd_list
 
+    if run_local:
+        subprocess.run(cmd, shell=True)
+        return
     submission_fp = AJ_SUBMISSION_HOME / f"{sid}.yaml"
     submission_fp.parent.mkdir(parents=True, exist_ok=True)
     with open(submission_fp, "w") as f:
@@ -104,8 +118,7 @@ def run(command, args, template, nodes, processes, dry_run, run_local):
     if dry_run:
         print("Dry run mode: not executing command")
         return
-    if run_local:
-        subprocess.run(" && ".join(cmd), shell=True)
+
     else:
         amlt_command = ["amlt", "run", submission_fp, sid]
         rec = SubmissionRecord(
@@ -128,8 +141,43 @@ def run(command, args, template, nodes, processes, dry_run, run_local):
 
 @main.command()
 @click.argument("repo_id", type=str)
-def pull(repo_id: str):
-    pass
+@click.option(
+    "-f", "--force", is_flag=True, help="Force pull even if template home exists"
+)
+def pull(repo_id: str, force: bool):
+    if AJ_HOME.exists() and not force:
+        print(f"AJ home {AJ_HOME} already exists. Remove it first.")
+        return
+    if AJ_HOME.exists() and force:
+        print(f"Removing existing AJ home {AJ_HOME}")
+        shutil.rmtree(AJ_HOME)
+    AJ_HOME.mkdir(parents=True, exist_ok=True)
+    print(f"Cloning repository {repo_id} to {AJ_HOME}")
+    cmd = ["git", "clone", repo_id, str(AJ_HOME)]
+    outputs = subprocess.run(cmd, check=True)
+    if outputs.returncode == 0:
+        print(f"Successfully cloned {repo_id} to {AJ_HOME}")
+        # delete .git folder
+        git_fp = AJ_HOME / ".git"
+        if git_fp.exists() and git_fp.is_dir():
+            shutil.rmtree(git_fp)
+            print(f"Removed .git folder from {AJ_HOME}")
+    else:
+        print(f"Failed to clone {repo_id}: {outputs.stderr}")
+
+
+@main.command(name="list")
+def list_templates():
+    if not AJ_TEMPLATE_HOME.exists():
+        print(f"No templates found in {AJ_TEMPLATE_HOME}")
+        return
+    templates = list(AJ_TEMPLATE_HOME.glob("*.yaml"))
+    if not templates:
+        print(f"No templates found in {AJ_TEMPLATE_HOME}")
+        return
+    print("Available templates:")
+    for tp in templates:
+        print(f"- {tp.stem}")
 
 
 if __name__ == "__main__":
