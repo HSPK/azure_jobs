@@ -11,6 +11,7 @@ from .const import (
     AJ_RECORD,
     AJ_SUBMISSION_HOME,
     AJ_HOME,
+    AJ_CONFIG_FP,
 )
 from pathlib import Path
 from dataclasses import dataclass, asdict
@@ -44,8 +45,13 @@ def main():
     pass
 
 
+# aj run -t template_name -n 2 -p 4 python train.py --arg1 val1
 @main.command(
-    context_settings={"ignore_unknown_options": True, "allow_extra_args": True}
+    context_settings={
+        "ignore_unknown_options": True,
+        "allow_extra_args": True,
+        "allow_interspersed_args": False,
+    }
 )
 @click.option(
     "-t",
@@ -100,8 +106,6 @@ def run(command, args, template, nodes, processes, dry_run, run_local, yes):
             cmd = f"uv run {command} {' '.join(args)}".strip()
     else:
         cmd = f"{command} {' '.join(args)}".strip()
-    if yes:
-        cmd = f"yes | {cmd}"
     cmd_list.append(cmd)
     print(f"Final command to execute: {cmd}")
     conf["jobs"][0]["command"] = cmd_list
@@ -121,6 +125,8 @@ def run(command, args, template, nodes, processes, dry_run, run_local, yes):
 
     else:
         amlt_command = ["amlt", "run", submission_fp, sid]
+        if yes:
+            amlt_command = ["yes", "|"] + amlt_command
         rec = SubmissionRecord(
             id=sid,
             template=template,
@@ -140,11 +146,21 @@ def run(command, args, template, nodes, processes, dry_run, run_local, yes):
 
 
 @main.command()
-@click.argument("repo_id", type=str)
+@click.argument("repo_id", type=str, required=False, default=None)
 @click.option(
     "-f", "--force", is_flag=True, help="Force pull even if template home exists"
 )
 def pull(repo_id: str, force: bool):
+    if AJ_CONFIG_FP.exists():
+        config = read_conf(AJ_CONFIG_FP)
+    else:
+        config = {}
+    if repo_id is None and "repo_id" in config:
+        repo_id = config["repo_id"]
+    if repo_id is None:
+        raise click.ClickException("Repository ID must be provided")
+    config["repo_id"] = repo_id
+
     if AJ_HOME.exists() and not force:
         print(f"AJ home {AJ_HOME} already exists. Remove it first.")
         return
@@ -164,6 +180,10 @@ def pull(repo_id: str, force: bool):
             print(f"Removed .git folder from {AJ_HOME}")
     else:
         print(f"Failed to clone {repo_id}: {outputs.stderr}")
+
+    with open(AJ_CONFIG_FP, "w") as f:
+        yaml.dump(config, f, default_flow_style=False)
+        print(f"Wrote configuration to {AJ_CONFIG_FP}")
 
 
 @main.command(name="list")
