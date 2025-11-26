@@ -152,7 +152,7 @@ def run(command, args, template, nodes, processes, dry_run, run_local, yes):
 )
 def pull(repo_id: str, force: bool):
     if AJ_CONFIG_FP.exists():
-        config = read_conf(AJ_CONFIG_FP)
+        config = yaml.safe_load(AJ_CONFIG_FP.read_text())
     else:
         config = {}
     if repo_id is None and "repo_id" in config:
