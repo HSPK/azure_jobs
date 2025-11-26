@@ -81,7 +81,11 @@ def run(command, args, template, nodes, processes, dry_run, run_local, yes):
         shutil.copy(template_fp, AJ_DEFAULT_TEMPLATE)
 
     sid = uuid.uuid4().hex[:8]
-    name = os.getenv("AJ_NAME", Path.cwd().name) + f"_{sid}"
+    name = os.getenv("AJ_NAME", Path.cwd().name)
+    if Path(command.split(" ")[-1]).exists():
+        cmd_name = Path(command.split(" ")[-1]).stem
+        name += f"_{cmd_name}"
+    name += f"_{sid}"
     processes = int(processes or conf.get("_extra", {}).get("processes", 1))
     nodes = int(nodes or conf.get("_extra", {}).get("nodes", 1))
     conf.pop("_extra", None)
@@ -90,21 +94,24 @@ def run(command, args, template, nodes, processes, dry_run, run_local, yes):
     conf["jobs"][0]["sku"] = conf["jobs"][0]["sku"].format(
         nodes=nodes, processes=processes
     )
-    cmd_list = conf["jobs"][0].get("command", [])
-    cmd_list.extend(
-        [
-            f"export AJ_NODES={nodes}",
-            f"export AJ_PROCESSES={processes * nodes}",
-            f"export AJ_NAME={name}",
-            f"export AJ_ID={sid}",
-            "export PATH=$$HOME/.local/bin:$$PATH",  # common for a lot of tools
-        ]
-    )
+    cmd_list = [
+        f"export AJ_NODES={nodes}",
+        f"export AJ_PROCESSES={processes * nodes}",
+        f"export AJ_NAME={name}",
+        f"export AJ_ID={sid}",
+        "export PATH=$$HOME/.local/bin:$$PATH",  # common for a lot of tools
+    ]
+    cmd_list.extend(conf["jobs"][0].get("command", []))
+
     if Path(command).is_file():
         if command.endswith(".sh"):
             cmd = f"bash {command} {' '.join(args)}".strip()
         elif command.endswith(".py"):
             cmd = f"uv run {command} {' '.join(args)}".strip()
+        else:
+            raise click.ClickException(
+                f"Unsupported script type: {command}. Only .sh and .py are supported."
+            )
     else:
         cmd = f"{command} {' '.join(args)}".strip()
     cmd_list.append(cmd)
