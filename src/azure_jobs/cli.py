@@ -81,10 +81,12 @@ def run(command, args, template, nodes, processes, dry_run, run_local, yes):
         shutil.copy(template_fp, AJ_DEFAULT_TEMPLATE)
 
     sid = uuid.uuid4().hex[:8]
-    name = os.getenv("AJ_NAME", Path.cwd().name)
-    if Path(command.split(" ")[-1]).exists():
-        cmd_name = Path(command.split(" ")[-1]).stem
-        name += f"_{cmd_name}"
+    name = os.getenv("AJ_NAME", None)
+    if name is None:
+        name = Path.cwd().name
+        if Path(command.split(" ")[-1]).exists():
+            cmd_name = Path(command.split(" ")[-1]).stem
+            name += f"_{cmd_name}"
     name += f"_{sid}"
     processes = int(processes or conf.get("_extra", {}).get("processes", 1))
     nodes = int(nodes or conf.get("_extra", {}).get("nodes", 1))
