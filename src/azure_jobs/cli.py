@@ -97,6 +97,7 @@ def run(command, args, template, nodes, processes, dry_run, run_local, yes):
             f"export AJ_PROCESSES={processes * nodes}",
             f"export AJ_NAME={name}",
             f"export AJ_ID={sid}",
+            "export PATH=$$HOME/.local/bin:$$PATH",  # common for a lot of tools
         ]
     )
     if Path(command).is_file():
