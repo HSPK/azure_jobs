@@ -1,24 +1,24 @@
+import json
+import os
 import shutil
 import subprocess
+import uuid
+from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
+from pathlib import Path
 
 import click
 import yaml
 
 from .conf import read_conf
 from .const import (
+    AJ_CONFIG_FP,
     AJ_DEFAULT_TEMPLATE,
-    AJ_TEMPLATE_HOME,
+    AJ_HOME,
     AJ_RECORD,
     AJ_SUBMISSION_HOME,
-    AJ_HOME,
-    AJ_CONFIG_FP,
+    AJ_TEMPLATE_HOME,
 )
-from pathlib import Path
-from dataclasses import dataclass, asdict
-from datetime import datetime, timezone
-import json
-import uuid
-import os
 
 
 @dataclass
@@ -101,6 +101,8 @@ def run(command, args, template, nodes, processes, dry_run, run_local, yes):
         f"export AJ_PROCESSES={processes * nodes}",
         f"export AJ_NAME={name}",
         f"export AJ_ID={sid}",
+        f"export AJ_TEMPLATE={template}",
+        f"export AJ_SUBMIT_TIMESTAMP_UTC={datetime.now(timezone.utc).isoformat()}",
         "export PATH=$$HOME/.local/bin:$$PATH",  # common for a lot of tools
     ]
     cmd_list.extend(conf["jobs"][0].get("command", []))
