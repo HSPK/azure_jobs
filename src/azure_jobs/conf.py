@@ -1,25 +1,37 @@
-import yaml
+from copy import deepcopy
 from pathlib import Path
+
+import yaml
+
 from .const import AJ_HOME
 
 
 def merge_confs(*data):
+    data = [d for d in data if d is not None]
+    if not data:
+        return None
     # merge multiple dictionaries or lists recursively
     if all(isinstance(d, dict) for d in data):
         merged = {}
-        for d in data:
-            for key, value in d.items():
-                if key in merged:
-                    merged[key] = merge_confs(merged[key], value)
-                else:
-                    merged[key] = value
+        all_keys = set().union(*data)
+        for key in all_keys:
+            values = [d[key] for d in data if key in d]
+            merged[key] = merge_confs(*values)
         return merged
     elif all(isinstance(d, list) for d in data):
         merged = []
-        for d in zip(*data):
-            merged.append(merge_confs(*d))
-        return merged
-    return data[-1]
+        if any(isinstance(item, dict) for lst in data for item in lst):
+            max_len = max(len(d) for d in data)
+            for i in range(max_len):
+                items_at_i = [d[i] for d in data if i < len(d)]
+                merged.append(merge_confs(*items_at_i))
+            return merged
+        else:
+            merged = []
+            for d in data:
+                merged.extend(deepcopy(d))
+            return merged
+    return deepcopy(data[-1])
 
 
 def read_conf(fp: Path | str) -> dict:
