@@ -45,6 +45,16 @@ def main():
     pass
 
 
+def check_dot_ssh():
+    dot_ssh_dir = Path.cwd() / ".ssh"
+    if not dot_ssh_dir.exists():
+        raise click.ClickException(
+            ".ssh directory not found in the current working directory."
+        )
+    if not any(dot_ssh_dir.iterdir()):
+        raise click.ClickException(".ssh directory is empty.")
+
+
 # aj run -t template_name -n 2 -p 4 python train.py --arg1 val1
 @main.command(
     context_settings={
@@ -66,9 +76,24 @@ def main():
 )
 @click.option("-y", "--yes", is_flag=True, help="Skip confirmation prompts")
 @click.option("-L", "--run-local", is_flag=True, help="Run the command locally")
+@click.option(
+    "-s", "--skip-ssh-check", is_flag=True, help="Skip checking for .ssh directory"
+)
 @click.argument("command", nargs=1)
 @click.argument("args", nargs=-1)
-def run(command, args, template, nodes, processes, dry_run, run_local, yes):
+def run(
+    command,
+    args,
+    template,
+    nodes,
+    processes,
+    dry_run,
+    run_local,
+    yes,
+    skip_ssh_check,
+):
+    if not skip_ssh_check:
+        check_dot_ssh()
     template_fp = AJ_TEMPLATE_HOME / f"{template}.yaml"
     if not template_fp.exists():
         raise click.ClickException(
