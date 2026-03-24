@@ -118,9 +118,44 @@ def run(
     conf.pop("_extra", None)
     conf["description"] = name
     conf["jobs"][0]["name"] = name
-    conf["jobs"][0]["sku"] = conf["jobs"][0]["sku"].format(
-        nodes=nodes, processes=processes
-    )
+    sku_template = conf["jobs"][0]["sku"]
+    if isinstance(sku_template, str):
+        conf["jobs"][0]["sku"] = conf["jobs"][0]["sku"].format(
+            nodes=nodes, processes=processes
+        )
+    elif isinstance(sku_template, dict):
+        # key example: 1, 1-2, 2-4, 4+
+        matched_template = None
+        for key, value in sku_template.items():
+            if "-" in key:
+                min_val, max_val = key.split("-")
+                min_val = int(min_val)
+                max_val = int(max_val) if max_val != "+" else float("inf")
+                if min_val <= nodes <= max_val:
+                    matched_template = value
+                    break
+            elif key.endswith("+"):
+                min_val = int(key[:-1])
+                if nodes >= min_val:
+                    matched_template = value
+                    break
+            else:
+                if int(key) == nodes:
+                    matched_template = value
+                    break
+        if matched_template is not None:
+            conf["jobs"][0]["sku"] = matched_template.format(
+                nodes=nodes, processes=processes
+            )
+        else:
+            raise click.ClickException(
+                f"No matching SKU template found for {nodes} nodes in {sku_template}"
+            )
+    else:
+        raise click.ClickException(
+            f"Unsupported SKU template type: {type(sku_template)}. Only str and dict are supported."
+        )
+
     cmd_list = [
         f"export AJ_NODES={nodes}",
         f"export AJ_PROCESSES={processes * nodes}",
