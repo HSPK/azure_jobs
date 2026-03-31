@@ -4,6 +4,26 @@ This document describes how to replace subprocess calls to the `amlt` CLI with d
 
 ---
 
+## Performance Constraint
+
+**`aj` must stay fast.** The current CLI starts in ~100ms. amlt is known to be laggy because its import chain pulls in the Azure SDK:
+
+```
+Module                              Import time
+────────────────────────────────    ──────────
+amlt (top-level)                       ~55ms
+amlt.api.base                          ~86ms
+amlt.api.experiment                   ~153ms
+amlt.api.jobs                          ~51ms
+amlt.api.run (ConfigRunClient)        ~570ms  ← heaviest
+────────────────────────────────    ──────────
+Total if imported eagerly             ~600ms+
+```
+
+**Design rule:** amlt imports happen _only_ inside the functions that need them (lazy imports), _never_ at module level. Commands that don't touch Azure (`aj template list`, `aj run --dry-run`, `aj jobs list` from local records) must remain fast and never import amlt.
+
+---
+
 ## Motivation
 
 The current implementation shells out to `amlt` via `subprocess.run`:
@@ -68,20 +88,20 @@ Key classes:
 
 Create `src/azure_jobs/amlt_client.py` as a thin wrapper around amlt's API. This isolates amlt imports so the rest of the codebase doesn't depend on amlt internals directly, and makes testing easier via mocking.
 
+**Critical: all amlt imports are lazy (inside functions), never at module top level.** This keeps `import azure_jobs.amlt_client` essentially free and ensures commands that don't touch Azure stay fast.
+
 ```python
-"""azure_jobs.amlt_client — Thin wrapper around amlt's Python API."""
+"""azure_jobs.amlt_client — Thin wrapper around amlt's Python API.
+
+All amlt imports are deferred to function bodies so that importing this
+module adds zero startup cost.  Commands that never call these functions
+(template list, dry-run, etc.) never pay the ~600ms amlt import tax.
+"""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterator
-
-import amlt
-from amlt.api.run import ConfigRunClient
-from amlt.api.status import JobPortalInfo
-from amlt.config.core import AMLTConfig
-from amlt.globals import AmltStatus
 
 
 @dataclass
@@ -95,8 +115,22 @@ class JobInfo:
     retries: int = 0
 
 
-def get_project() -> amlt.api.project.ProjectClient:
+def _import_amlt():
+    """Lazy-import amlt and return the module. Raises ImportError with a
+    helpful message if amlt is not installed."""
+    try:
+        import amlt
+        return amlt
+    except ImportError:
+        raise ImportError(
+            "amlt is not installed in this environment. "
+            "Install it with: pip install amlt"
+        )
+
+
+def get_project():
     """Get the active amlt project. Raises if no .amltconfig found."""
+    amlt = _import_amlt()
     return amlt.active_project()
 
 
@@ -107,7 +141,15 @@ def submit(
     assume_yes: bool = False,
     show_progress: bool = True,
 ) -> list[JobInfo]:
-    """Submit jobs from a config YAML. Returns structured job info."""
+    """Submit jobs from a config YAML. Returns structured job info.
+
+    This is the only function that imports the heavy ``amlt.api.run``
+    module (~570ms).  It is called only on actual submission, never
+    on dry-run or local execution.
+    """
+    from amlt.api.run import ConfigRunClient  # ~570ms — deferred
+    from amlt.config.core import AMLTConfig
+
     project = get_project()
     experiment = project.experiments.create(name=experiment_name)
     config = AMLTConfig.load(str(config_file))
@@ -135,6 +177,8 @@ def submit(
 
 def get_status(experiment_name: str) -> list[JobInfo]:
     """Get status of all jobs in an experiment."""
+    from amlt.api.status import JobPortalInfo  # lightweight import
+
     project = get_project()
     experiment = project.experiments.get(name=experiment_name)
     results: list[JobInfo] = []
@@ -328,7 +372,9 @@ def logs(job_id, follow, tail):
     )
 ```
 
-### Phase 5: Graceful Fallback
+### Phase 5: Dependency Strategy — Stay Lite
+
+**Goal:** `aj --help`, `aj template list`, `aj run --dry-run` must never import amlt. Only commands that actually talk to Azure pay the import cost.
 
 Since amlt is installed via pipx in its own venv, it won't be importable from the azure_jobs venv by default. Two options:
 
@@ -339,51 +385,39 @@ Since amlt is installed via pipx in its own venv, it won't be importable from th
 dependencies = ["click>=8.2.1", "pyyaml>=6.0.2", "amlt"]
 ```
 
-This is the simplest approach but couples the install to amlt.
+Simple but couples the install to amlt and adds ~600ms to every import if done eagerly. With lazy imports in `amlt_client.py` this is acceptable — local-only commands never trigger the import. However, it makes `pip install azure_jobs` pull in the entire Azure SDK.
 
-**Option B: Optional dependency with subprocess fallback**
+**Option B (Recommended): Optional dependency with subprocess fallback**
 
 ```toml
 [project.optional-dependencies]
-amlt = ["amlt"]
+azure = ["amlt"]
 ```
 
 ```python
-# amlt_client.py
-try:
-    import amlt
-    HAS_AMLT = True
-except ImportError:
-    HAS_AMLT = False
-
+# amlt_client.py — each function checks availability at call time
 def submit(config_file, experiment_name, *, assume_yes=False, **kwargs):
-    if HAS_AMLT:
+    try:
         return _submit_api(config_file, experiment_name, assume_yes=assume_yes)
-    else:
+    except ImportError:
         return _submit_subprocess(config_file, experiment_name, assume_yes=assume_yes)
 ```
 
-This keeps the tool functional even without amlt as a Python dependency (it falls back to the CLI), but uses the richer API when available.
+This keeps `pip install azure_jobs` fast and lightweight (only click + pyyaml). Users who want the rich API install with `pip install azure_jobs[azure]`. When amlt isn't importable, we fall back to subprocess — the tool always works.
 
-**Option C: Import from pipx venv directly**
+**Performance budget:**
 
-```python
-import sys
-import subprocess
-
-def _find_amlt_site_packages() -> str | None:
-    """Locate amlt's pipx venv site-packages."""
-    result = subprocess.run(
-        ["python", "-c", "import amlt; print(amlt.__file__)"],
-        capture_output=True, text=True,
-        executable=shutil.which("amlt")  # uses amlt's python
-    )
-    ...
-```
-
-This is fragile and not recommended.
-
-**Recommendation:** Option B (optional dependency with fallback). This preserves the current zero-amlt-dependency install for template management (`aj template list/pull`) while unlocking the full API when amlt is co-installed.
+| Command | amlt imported? | Target latency |
+|---------|---------------|----------------|
+| `aj --help` | No | <100ms |
+| `aj template list` | No | <100ms |
+| `aj template show gpu` | No | <150ms |
+| `aj run --dry-run ...` | No | <200ms |
+| `aj run ...` (actual submit) | Yes (lazy) | ~700ms + network |
+| `aj jobs list` (local only) | No | <150ms |
+| `aj jobs list --live` | Yes (lazy) | ~300ms + network |
+| `aj jobs cancel <id>` | Yes (lazy) | ~300ms + network |
+| `aj jobs logs <id>` | Yes (lazy) | ~300ms + network |
 
 ---
 
