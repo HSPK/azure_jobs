@@ -21,6 +21,7 @@ from .const import (
     AJ_SUBMISSION_HOME,
     AJ_TEMPLATE_HOME,
 )
+from .ui import console, dim, error, info, show_submission_preview, success, warning
 
 
 @dataclass
@@ -233,20 +234,31 @@ def run(
         sid=sid,
         template=template,
     )
-    click.echo(f"Final command to execute: {conf['jobs'][0]['command'][-1]}")
+    final_cmd = conf["jobs"][0]["command"][-1]
 
     if run_local:
-        subprocess.run(conf["jobs"][0]["command"][-1], shell=True)
+        info(f"Running locally: {final_cmd}")
+        subprocess.run(final_cmd, shell=True)
         return
 
     submission_fp = AJ_SUBMISSION_HOME / f"{sid}.yaml"
     submission_fp.parent.mkdir(parents=True, exist_ok=True)
-    click.echo(f"Writing submission file to {submission_fp}")
     with open(submission_fp, "w") as f:
         yaml.dump(conf, f, default_flow_style=False)
 
+    show_submission_preview(
+        job_name=name,
+        template=template,
+        sku=conf["jobs"][0]["sku"],
+        nodes=nodes_int,
+        processes=processes_int,
+        command=final_cmd,
+        submission_file=str(submission_fp),
+        dry_run=dry_run,
+    )
+
     if dry_run:
-        click.echo("Dry run mode: not executing command")
+        dim(f"Config written to {submission_fp}")
         return
 
     amlt_command: list[str | Path] = ["amlt", "run", submission_fp, sid]
@@ -262,18 +274,19 @@ def run(
         args=list(args),
     )
     try:
-        if yes:
-            # Pipe 'yes' into amlt via stdin to auto-confirm prompts
-            with subprocess.Popen(
-                ["yes"], stdout=subprocess.PIPE
-            ) as yes_proc:
-                result = subprocess.run(
-                    amlt_command,
-                    stdin=yes_proc.stdout,
-                    check=True,
-                )
-        else:
-            result = subprocess.run(amlt_command, check=True)
+        with console.status("[bold cyan]Submitting job to Azure…[/bold cyan]", spinner="dots"):
+            if yes:
+                with subprocess.Popen(
+                    ["yes"], stdout=subprocess.PIPE
+                ) as yes_proc:
+                    subprocess.run(
+                        amlt_command,
+                        stdin=yes_proc.stdout,
+                        check=True,
+                    )
+            else:
+                subprocess.run(amlt_command, check=True)
+        success(f"Job [bold]{sid}[/bold] submitted successfully")
     except subprocess.CalledProcessError as exc:
         rec.status = "failed"
         raise click.ClickException(
@@ -306,46 +319,68 @@ def pull(repo_id: str | None, force: bool) -> None:
     config["repo_id"] = repo_id
 
     if AJ_HOME.exists() and not force:
-        click.echo(f"AJ home {AJ_HOME} already exists. Remove it first.")
+        warning(f"AJ home {AJ_HOME} already exists. Use -f to force.")
         return
     if AJ_HOME.exists() and force:
-        click.echo(f"Removing existing AJ home {AJ_HOME}")
+        info(f"Removing existing {AJ_HOME}")
         shutil.rmtree(AJ_HOME)
 
     AJ_HOME.mkdir(parents=True, exist_ok=True)
-    click.echo(f"Cloning repository {repo_id} to {AJ_HOME}")
     cmd = ["git", "clone", repo_id, str(AJ_HOME)]
     try:
-        subprocess.run(cmd, check=True, capture_output=True, text=True)
+        with console.status(f"[bold cyan]Cloning {repo_id}…[/bold cyan]", spinner="dots"):
+            subprocess.run(cmd, check=True, capture_output=True, text=True)
     except subprocess.CalledProcessError as exc:
         raise click.ClickException(
             f"Failed to clone {repo_id}: {exc.stderr.strip()}"
         )
 
-    click.echo(f"Successfully cloned {repo_id} to {AJ_HOME}")
     git_fp = AJ_HOME / ".git"
     if git_fp.exists() and git_fp.is_dir():
         shutil.rmtree(git_fp)
-        click.echo(f"Removed .git folder from {AJ_HOME}")
 
     AJ_CONFIG_FP.parent.mkdir(parents=True, exist_ok=True)
     with open(AJ_CONFIG_FP, "w") as f:
         yaml.dump(config, f, default_flow_style=False)
-    click.echo(f"Wrote configuration to {AJ_CONFIG_FP}")
+    success(f"Templates cloned to {AJ_HOME}")
 
 
 @main.command(name="list")
 def list_templates() -> None:
     if not AJ_TEMPLATE_HOME.exists():
-        click.echo(f"No templates found in {AJ_TEMPLATE_HOME}")
+        warning(f"No templates found in {AJ_TEMPLATE_HOME}")
         return
-    templates = list(AJ_TEMPLATE_HOME.glob("*.yaml"))
-    if not templates:
-        click.echo(f"No templates found in {AJ_TEMPLATE_HOME}")
+    template_files = sorted(AJ_TEMPLATE_HOME.glob("*.yaml"))
+    if not template_files:
+        warning(f"No templates found in {AJ_TEMPLATE_HOME}")
         return
-    click.echo("Available templates:")
-    for tp in templates:
-        click.echo(f"- {tp.stem}")
+
+    from .ui import show_template_table
+
+    templates: list[dict] = []
+    for tp in template_files:
+        raw = yaml.safe_load(tp.read_text()) or {}
+        conf = raw.get("config", {})
+        extra = conf.get("_extra", {})
+        base = raw.get("base", None)
+        if isinstance(base, list):
+            base = ", ".join(base)
+        sku = "—"
+        jobs = conf.get("jobs", [])
+        if jobs and isinstance(jobs[0], dict):
+            sku_val = jobs[0].get("sku", "—")
+            sku = str(sku_val) if not isinstance(sku_val, dict) else "dict{…}"
+
+        templates.append(
+            {
+                "name": tp.stem,
+                "base": base or "—",
+                "nodes": extra.get("nodes", "—"),
+                "processes": extra.get("processes", "—"),
+                "sku": sku,
+            }
+        )
+    show_template_table(templates)
 
 
 if __name__ == "__main__":

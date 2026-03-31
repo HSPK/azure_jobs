@@ -147,7 +147,7 @@ class TestRunCommand:
         runner = CliRunner()
         result = runner.invoke(main, ["run", "-s", "-d", "echo", "hello"])
         assert result.exit_code == 0
-        assert "Dry run" in result.output
+        assert "Dry Run" in result.output
         submissions = list(aj_env["submission_home"].glob("*.yaml"))
         assert len(submissions) == 1
 

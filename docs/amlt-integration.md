@@ -320,55 +320,41 @@ For the lighter operations (status, cancel, logs), we bypass amlt entirely and c
 
 ## Workspace Configuration
 
-`aj` needs to know which Azure ML workspace to target for status/cancel/logs. Two options:
+`aj` stores Azure workspace config in `.azure_jobs/azure_config.json` — well-indented JSON, auto-created interactively when missing.
 
-### Option A: Read from amlt's project config (recommended)
-
-amlt stores workspace info in `.amltconfig` (project root). Parse it directly:
-
-```python
-def read_workspace_config() -> dict:
-    """Read workspace details from amlt's .amltconfig."""
-    for parent in [Path.cwd(), *Path.cwd().parents]:
-        config_fp = parent / ".amltconfig"
-        if config_fp.exists():
-            config = yaml.safe_load(config_fp.read_text())
-            target = config.get("target", {})
-            return {
-                "subscription_id": target.get("subscription_id"),
-                "resource_group": target.get("resource_group"),
-                "workspace_name": target.get("workspace_name"),
-            }
-    raise click.ClickException(
-        "No .amltconfig found. Run `amlt project create` to configure workspace."
-    )
+```json
+{
+  "workspace": {
+    "subscription_id": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+    "resource_group": "my-rg",
+    "workspace_name": "my-workspace"
+  }
+}
 ```
 
-This reuses amlt's existing setup — no new auth flow for the user.
+When a command needs workspace info and the config doesn't exist, `aj` prompts interactively:
 
-### Option B: Store in aj's own config
+```
+Azure workspace not configured. Let's set it up:
 
-```yaml
-# .azure_jobs/config.yaml
-workspace:
-  subscription_id: "..."
-  resource_group: "..."
-  workspace_name: "..."
+  Subscription ID: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+  Resource group: my-rg
+  Workspace name: my-workspace
+
+  ✓ Saved to .azure_jobs/azure_config.json
 ```
 
-Added via `aj config set workspace.subscription_id <value>` or auto-detected.
-
-**Recommendation:** Option A first (zero setup), with Option B as override.
+Implementation: `src/azure_jobs/config.py` — `get_workspace_config()` reads or prompts, `write_azure_config()` writes with `indent=2`.
 
 ---
 
 ## Dependencies
 
-Core `aj` remains lightweight:
+Core `aj` is lightweight but beautiful:
 
 ```toml
 # pyproject.toml
-dependencies = ["click>=8.2.1", "pyyaml>=6.0.2"]
+dependencies = ["click>=8.2.1", "pyyaml>=6.0.2", "rich>=13.0"]
 
 [project.optional-dependencies]
 azure = ["azure-ai-ml>=1.0", "azure-identity>=1.0"]
