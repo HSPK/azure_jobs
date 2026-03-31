@@ -3,7 +3,7 @@ from pathlib import Path
 
 import yaml
 
-from azure_jobs.conf import read_conf, ConfigError
+from azure_jobs.core.conf import read_conf, ConfigError
 
 
 @pytest.fixture
@@ -11,7 +11,7 @@ def conf_dir(tmp_path, monkeypatch):
     """Set up a temp directory with AJ_HOME pointing to it."""
     aj_home = tmp_path / ".azure_jobs"
     aj_home.mkdir()
-    monkeypatch.setattr("azure_jobs.conf.AJ_HOME", aj_home)
+    monkeypatch.setattr("azure_jobs.core.const.AJ_HOME", aj_home)
     return tmp_path
 
 

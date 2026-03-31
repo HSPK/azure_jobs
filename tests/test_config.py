@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from azure_jobs.config import read_azure_config, write_azure_config, get_workspace_config
+from azure_jobs.core.config import read_azure_config, write_azure_config, get_workspace_config
 
 
 @pytest.fixture
@@ -12,7 +12,7 @@ def az_config_env(tmp_path, monkeypatch):
     aj_home = tmp_path / ".azure_jobs"
     aj_home.mkdir()
     config_fp = aj_home / "azure_config.json"
-    monkeypatch.setattr("azure_jobs.config.AJ_AZURE_CONFIG", config_fp)
+    monkeypatch.setattr("azure_jobs.core.const.AJ_AZURE_CONFIG", config_fp)
     return {"aj_home": aj_home, "config_fp": config_fp}
 
 
@@ -38,7 +38,7 @@ class TestWriteAzureConfig:
 
     def test_creates_parent_dirs(self, tmp_path, monkeypatch):
         deep_path = tmp_path / "a" / "b" / "azure_config.json"
-        monkeypatch.setattr("azure_jobs.config.AJ_AZURE_CONFIG", deep_path)
+        monkeypatch.setattr("azure_jobs.core.const.AJ_AZURE_CONFIG", deep_path)
         write_azure_config({"key": "value"})
         assert deep_path.exists()
 

@@ -1,4 +1,4 @@
-"""azure_jobs.config — Azure workspace configuration management.
+"""Azure workspace configuration management.
 
 Reads/writes `.azure_jobs/azure_config.json`.  Provides interactive
 setup when the config doesn't exist yet.
@@ -12,20 +12,20 @@ from typing import Any
 
 import click
 
-from .const import AJ_AZURE_CONFIG
+from . import const
 
 
 def read_azure_config() -> dict[str, Any]:
     """Read azure_config.json, returning an empty dict if missing."""
-    if not AJ_AZURE_CONFIG.exists():
+    if not const.AJ_AZURE_CONFIG.exists():
         return {}
-    return json.loads(AJ_AZURE_CONFIG.read_text())
+    return json.loads(const.AJ_AZURE_CONFIG.read_text())
 
 
 def write_azure_config(config: dict[str, Any]) -> None:
     """Write azure_config.json with pretty indentation."""
-    AJ_AZURE_CONFIG.parent.mkdir(parents=True, exist_ok=True)
-    AJ_AZURE_CONFIG.write_text(json.dumps(config, indent=2) + "\n")
+    const.AJ_AZURE_CONFIG.parent.mkdir(parents=True, exist_ok=True)
+    const.AJ_AZURE_CONFIG.write_text(json.dumps(config, indent=2) + "\n")
 
 
 def get_workspace_config() -> dict[str, str]:
@@ -68,7 +68,7 @@ def get_workspace_config() -> dict[str, str]:
         write_azure_config(config)
         click.echo()
         click.secho(
-            f"  ✓ Saved to {AJ_AZURE_CONFIG}",
+            f"  ✓ Saved to {const.AJ_AZURE_CONFIG}",
             fg="green",
         )
         click.echo()

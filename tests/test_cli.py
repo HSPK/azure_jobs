@@ -10,14 +10,14 @@ import pytest
 import yaml
 from click.testing import CliRunner
 
-from azure_jobs.cli import (
-    SubmissionRecord,
+from azure_jobs.cli import main
+from azure_jobs.cli.run import (
     build_command_list,
-    main,
     resolve_name,
     resolve_sku,
     validate_config,
 )
+from azure_jobs.core.record import SubmissionRecord
 
 
 @pytest.fixture
@@ -33,13 +33,12 @@ def aj_env(tmp_path, monkeypatch):
     config_fp = aj_home / "config.yaml"
     default_template = template_home / "default.yaml"
 
-    monkeypatch.setattr("azure_jobs.cli.AJ_HOME", aj_home)
-    monkeypatch.setattr("azure_jobs.cli.AJ_TEMPLATE_HOME", template_home)
-    monkeypatch.setattr("azure_jobs.cli.AJ_SUBMISSION_HOME", submission_home)
-    monkeypatch.setattr("azure_jobs.cli.AJ_RECORD", record_fp)
-    monkeypatch.setattr("azure_jobs.cli.AJ_CONFIG_FP", config_fp)
-    monkeypatch.setattr("azure_jobs.cli.AJ_DEFAULT_TEMPLATE", default_template)
-    monkeypatch.setattr("azure_jobs.conf.AJ_HOME", aj_home)
+    monkeypatch.setattr("azure_jobs.core.const.AJ_HOME", aj_home)
+    monkeypatch.setattr("azure_jobs.core.const.AJ_TEMPLATE_HOME", template_home)
+    monkeypatch.setattr("azure_jobs.core.const.AJ_SUBMISSION_HOME", submission_home)
+    monkeypatch.setattr("azure_jobs.core.const.AJ_RECORD", record_fp)
+    monkeypatch.setattr("azure_jobs.core.const.AJ_CONFIG_FP", config_fp)
+    monkeypatch.setattr("azure_jobs.core.const.AJ_DEFAULT_TEMPLATE", default_template)
 
     # Create .ssh dir in a workdir
     workdir = tmp_path / "workdir"
@@ -130,7 +129,7 @@ class TestCheckDotSsh:
         shutil.rmtree(aj_env["workdir"] / ".ssh")
         write_template(aj_env["template_home"], "default", MINIMAL_JOB_CONF)
         runner = CliRunner()
-        with patch("azure_jobs.cli.subprocess.run"):
+        with patch("azure_jobs.cli.run.subprocess.run"):
             result = runner.invoke(main, ["run", "-s", "-d", "echo", "hello"])
         assert result.exit_code == 0
 
@@ -294,7 +293,7 @@ class TestRunCommand:
     def test_record_logged_on_submit(self, aj_env):
         write_template(aj_env["template_home"], "default", MINIMAL_JOB_CONF)
         runner = CliRunner()
-        with patch("azure_jobs.cli.subprocess.run"):
+        with patch("azure_jobs.cli.run.subprocess.run"):
             result = runner.invoke(main, ["run", "-s", "echo", "hello"])
         assert result.exit_code == 0
         assert aj_env["record_fp"].exists()
@@ -314,7 +313,7 @@ class TestPullCommand:
     def test_pull_uses_saved_repo_id(self, aj_env):
         aj_env["config_fp"].write_text(yaml.dump({"repo_id": "https://example.com/repo.git"}))
         runner = CliRunner()
-        with patch("azure_jobs.cli.subprocess.run") as mock_run:
+        with patch("azure_jobs.cli.pull.subprocess.run") as mock_run:
             mock_run.return_value.returncode = 0
             result = runner.invoke(main, ["pull", "-f"])
         assert result.exit_code == 0
@@ -475,9 +474,9 @@ class TestRunErrorPaths:
         write_template(aj_env["template_home"], "default", MINIMAL_JOB_CONF)
         runner = CliRunner()
         with patch(
-            "azure_jobs.cli.subprocess.run",
+            "azure_jobs.cli.run.subprocess.run",
             side_effect=FileNotFoundError("amlt not found"),
-        ), patch("azure_jobs.cli.subprocess.Popen"):
+        ), patch("azure_jobs.cli.run.subprocess.Popen"):
             result = runner.invoke(main, ["run", "-s", "echo", "hello"])
         assert result.exit_code != 0
         assert "amlt" in result.output.lower()
@@ -487,9 +486,9 @@ class TestRunErrorPaths:
         write_template(aj_env["template_home"], "default", MINIMAL_JOB_CONF)
         runner = CliRunner()
         with patch(
-            "azure_jobs.cli.subprocess.run",
+            "azure_jobs.cli.run.subprocess.run",
             side_effect=subprocess.CalledProcessError(1, "amlt"),
-        ), patch("azure_jobs.cli.subprocess.Popen"):
+        ), patch("azure_jobs.cli.run.subprocess.Popen"):
             result = runner.invoke(main, ["run", "-s", "echo", "hello"])
         assert result.exit_code != 0
         assert "failed" in result.output.lower()
@@ -499,9 +498,9 @@ class TestRunErrorPaths:
         write_template(aj_env["template_home"], "default", MINIMAL_JOB_CONF)
         runner = CliRunner()
         with patch(
-            "azure_jobs.cli.subprocess.run",
+            "azure_jobs.cli.run.subprocess.run",
             side_effect=subprocess.CalledProcessError(1, "amlt"),
-        ), patch("azure_jobs.cli.subprocess.Popen"):
+        ), patch("azure_jobs.cli.run.subprocess.Popen"):
             runner.invoke(main, ["run", "-s", "echo", "hello"])
         assert aj_env["record_fp"].exists()
         record = json.loads(aj_env["record_fp"].read_text().strip())
@@ -521,7 +520,7 @@ class TestPullErrorPaths:
     def test_pull_clone_failure(self, aj_env):
         runner = CliRunner()
         with patch(
-            "azure_jobs.cli.subprocess.run",
+            "azure_jobs.cli.pull.subprocess.run",
             side_effect=subprocess.CalledProcessError(
                 128, "git", stderr="fatal: repo not found"
             ),

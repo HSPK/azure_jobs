@@ -6,7 +6,7 @@ from typing import Any
 
 import yaml
 
-from .const import AJ_HOME
+from . import const
 
 
 class ConfigError(Exception):
@@ -89,7 +89,7 @@ def read_conf(
     for base in aj_base:
         if "." in base:
             subdir_name, base_name = base.split(".", 1)
-            base_fp = AJ_HOME / subdir_name / f"{base_name}.yaml"
+            base_fp = const.AJ_HOME / subdir_name / f"{base_name}.yaml"
         else:
             base_fp = fp.parent / f"{base}.yaml"
         confs.append(read_conf(base_fp, _seen))

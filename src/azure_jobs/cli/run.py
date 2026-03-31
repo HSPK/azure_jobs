@@ -1,52 +1,20 @@
 from __future__ import annotations
 
-import json
 import os
 import shutil
 import subprocess
 import uuid
-from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
 import click
 import yaml
 
-from .conf import read_conf
-from .const import (
-    AJ_CONFIG_FP,
-    AJ_DEFAULT_TEMPLATE,
-    AJ_HOME,
-    AJ_RECORD,
-    AJ_SUBMISSION_HOME,
-    AJ_TEMPLATE_HOME,
-)
-from .ui import console, dim, error, info, show_submission_preview, success, warning
-
-
-@dataclass
-class SubmissionRecord:
-    id: str
-    template: str
-    nodes: int
-    processes: int
-    portal: str
-    created_at: str
-    status: str
-    command: str
-    args: list[str] = field(default_factory=list)
-
-
-def log_record(record: SubmissionRecord) -> None:
-    AJ_RECORD.parent.mkdir(parents=True, exist_ok=True)
-    with open(AJ_RECORD, "a") as f:
-        f.write(json.dumps(asdict(record)) + "\n")
-
-
-@click.group()
-@click.version_option(package_name="azure_jobs")
-def main() -> None:
-    pass
+from azure_jobs.cli import main
+from azure_jobs.core import const
+from azure_jobs.core.conf import read_conf
+from azure_jobs.core.record import SubmissionRecord, log_record
+from azure_jobs.utils.ui import console, dim, info, show_submission_preview, success
 
 
 def check_dot_ssh() -> None:
@@ -157,7 +125,6 @@ def build_command_list(
     return cmd_list
 
 
-# aj run -t template_name -n 2 -p 4 python train.py --arg1 val1
 @main.command(
     context_settings={
         "ignore_unknown_options": True,
@@ -197,7 +164,7 @@ def run(
     if not skip_ssh_check:
         check_dot_ssh()
 
-    template_fp = AJ_TEMPLATE_HOME / f"{template}.yaml"
+    template_fp = const.AJ_TEMPLATE_HOME / f"{template}.yaml"
     if not template_fp.exists():
         raise click.ClickException(
             f"Template {template} does not exist at {template_fp}"
@@ -206,8 +173,8 @@ def run(
     conf = read_conf(template_fp)
     if not conf:
         raise click.ClickException(f"Empty configuration file: {template_fp}")
-    if template_fp != AJ_DEFAULT_TEMPLATE:
-        shutil.copy(template_fp, AJ_DEFAULT_TEMPLATE)
+    if template_fp != const.AJ_DEFAULT_TEMPLATE:
+        shutil.copy(template_fp, const.AJ_DEFAULT_TEMPLATE)
 
     sid = uuid.uuid4().hex[:8]
     name = resolve_name(command, sid)
@@ -241,7 +208,7 @@ def run(
         subprocess.run(final_cmd, shell=True)
         return
 
-    submission_fp = AJ_SUBMISSION_HOME / f"{sid}.yaml"
+    submission_fp = const.AJ_SUBMISSION_HOME / f"{sid}.yaml"
     submission_fp.parent.mkdir(parents=True, exist_ok=True)
     with open(submission_fp, "w") as f:
         yaml.dump(conf, f, default_flow_style=False)
@@ -300,88 +267,3 @@ def run(
         )
     finally:
         log_record(rec)
-
-
-@main.command()
-@click.argument("repo_id", type=str, required=False, default=None)
-@click.option(
-    "-f", "--force", is_flag=True, help="Force pull even if template home exists"
-)
-def pull(repo_id: str | None, force: bool) -> None:
-    if AJ_CONFIG_FP.exists():
-        config: dict = yaml.safe_load(AJ_CONFIG_FP.read_text()) or {}
-    else:
-        config = {}
-    if repo_id is None and "repo_id" in config:
-        repo_id = config["repo_id"]
-    if repo_id is None:
-        raise click.ClickException("Repository ID must be provided")
-    config["repo_id"] = repo_id
-
-    if AJ_HOME.exists() and not force:
-        warning(f"AJ home {AJ_HOME} already exists. Use -f to force.")
-        return
-    if AJ_HOME.exists() and force:
-        info(f"Removing existing {AJ_HOME}")
-        shutil.rmtree(AJ_HOME)
-
-    AJ_HOME.mkdir(parents=True, exist_ok=True)
-    cmd = ["git", "clone", repo_id, str(AJ_HOME)]
-    try:
-        with console.status(f"[bold cyan]Cloning {repo_id}…[/bold cyan]", spinner="dots"):
-            subprocess.run(cmd, check=True, capture_output=True, text=True)
-    except subprocess.CalledProcessError as exc:
-        raise click.ClickException(
-            f"Failed to clone {repo_id}: {exc.stderr.strip()}"
-        )
-
-    git_fp = AJ_HOME / ".git"
-    if git_fp.exists() and git_fp.is_dir():
-        shutil.rmtree(git_fp)
-
-    AJ_CONFIG_FP.parent.mkdir(parents=True, exist_ok=True)
-    with open(AJ_CONFIG_FP, "w") as f:
-        yaml.dump(config, f, default_flow_style=False)
-    success(f"Templates cloned to {AJ_HOME}")
-
-
-@main.command(name="list")
-def list_templates() -> None:
-    if not AJ_TEMPLATE_HOME.exists():
-        warning(f"No templates found in {AJ_TEMPLATE_HOME}")
-        return
-    template_files = sorted(AJ_TEMPLATE_HOME.glob("*.yaml"))
-    if not template_files:
-        warning(f"No templates found in {AJ_TEMPLATE_HOME}")
-        return
-
-    from .ui import show_template_table
-
-    templates: list[dict] = []
-    for tp in template_files:
-        raw = yaml.safe_load(tp.read_text()) or {}
-        conf = raw.get("config", {})
-        extra = conf.get("_extra", {})
-        base = raw.get("base", None)
-        if isinstance(base, list):
-            base = ", ".join(base)
-        sku = "—"
-        jobs = conf.get("jobs", [])
-        if jobs and isinstance(jobs[0], dict):
-            sku_val = jobs[0].get("sku", "—")
-            sku = str(sku_val) if not isinstance(sku_val, dict) else "dict{…}"
-
-        templates.append(
-            {
-                "name": tp.stem,
-                "base": base or "—",
-                "nodes": extra.get("nodes", "—"),
-                "processes": extra.get("processes", "—"),
-                "sku": sku,
-            }
-        )
-    show_template_table(templates)
-
-
-if __name__ == "__main__":
-    main()

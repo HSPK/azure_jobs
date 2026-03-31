@@ -1,7 +1,7 @@
-"""azure_jobs.ui — Rich console output for the aj CLI.
+"""Rich console output for the aj CLI.
 
 Provides beautiful, informative terminal output: panels, tables,
-spinners, and styled messages.  Imported lazily by cli.py commands
+spinners, and styled messages.  Imported lazily by cli commands
 so that `aj --help` stays fast.
 """
 
