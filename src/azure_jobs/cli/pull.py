@@ -10,6 +10,17 @@ from azure_jobs.cli import main
 from azure_jobs.core import const
 from azure_jobs.utils.ui import console, info, success, warning
 
+_SHORTHAND_RE = r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+
+
+def resolve_repo_url(repo_id: str) -> str:
+    """Expand shorthand ``user/repo`` to a full git SSH URL."""
+    import re
+
+    if re.match(_SHORTHAND_RE, repo_id):
+        return f"git@github.com:{repo_id}.git"
+    return repo_id
+
 
 @main.command()
 @click.argument("repo_id", type=str, required=False, default=None)
@@ -25,6 +36,7 @@ def pull(repo_id: str | None, force: bool) -> None:
         repo_id = config["repo_id"]
     if repo_id is None:
         raise click.ClickException("Repository ID must be provided")
+    repo_id = resolve_repo_url(repo_id)
     config["repo_id"] = repo_id
 
     if const.AJ_HOME.exists() and not force:

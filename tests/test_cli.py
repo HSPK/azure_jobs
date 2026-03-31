@@ -11,6 +11,7 @@ import yaml
 from click.testing import CliRunner
 
 from azure_jobs.cli import main
+from azure_jobs.cli.pull import resolve_repo_url
 from azure_jobs.cli.run import (
     build_command_list,
     resolve_name,
@@ -325,6 +326,36 @@ class TestPullCommand:
         result = runner.invoke(main, ["pull", "https://example.com/repo.git"])
         assert result.exit_code == 0
         assert "already exists" in result.output
+
+    def test_pull_shorthand_expands_to_ssh(self, aj_env):
+        runner = CliRunner()
+        with patch("azure_jobs.cli.pull.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            result = runner.invoke(main, ["pull", "-f", "user/repo"])
+        assert result.exit_code == 0
+        assert "git@github.com:user/repo.git" in mock_run.call_args[0][0]
+
+    def test_pull_full_url_unchanged(self, aj_env):
+        runner = CliRunner()
+        with patch("azure_jobs.cli.pull.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            result = runner.invoke(main, ["pull", "-f", "https://example.com/repo.git"])
+        assert result.exit_code == 0
+        assert "https://example.com/repo.git" in mock_run.call_args[0][0]
+
+
+class TestResolveRepoUrl:
+    def test_shorthand(self):
+        assert resolve_repo_url("user/repo") == "git@github.com:user/repo.git"
+
+    def test_shorthand_with_dots(self):
+        assert resolve_repo_url("org.name/my.repo") == "git@github.com:org.name/my.repo.git"
+
+    def test_full_https_unchanged(self):
+        assert resolve_repo_url("https://github.com/u/r.git") == "https://github.com/u/r.git"
+
+    def test_full_ssh_unchanged(self):
+        assert resolve_repo_url("git@github.com:u/r.git") == "git@github.com:u/r.git"
 
 
 # ---------------------------------------------------------------------------
