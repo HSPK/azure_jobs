@@ -4,10 +4,10 @@ import shutil
 import subprocess
 
 import click
-import yaml
 
 from azure_jobs.cli import main
 from azure_jobs.core import const
+from azure_jobs.core.config import read_config, write_config
 from azure_jobs.utils.ui import console, info, success, warning
 
 _SHORTHAND_RE = r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
@@ -28,12 +28,9 @@ def resolve_repo_url(repo_id: str) -> str:
     "-f", "--force", is_flag=True, help="Force pull even if template home exists"
 )
 def pull(repo_id: str | None, force: bool) -> None:
-    if const.AJ_CONFIG_FP.exists():
-        config: dict = yaml.safe_load(const.AJ_CONFIG_FP.read_text()) or {}
-    else:
-        config = {}
-    if repo_id is None and "repo_id" in config:
-        repo_id = config["repo_id"]
+    config = read_config()
+    if repo_id is None:
+        repo_id = config.get("repo_id")
     if repo_id is None:
         raise click.ClickException("Repository ID must be provided")
     repo_id = resolve_repo_url(repo_id)
@@ -60,7 +57,6 @@ def pull(repo_id: str | None, force: bool) -> None:
     if git_fp.exists() and git_fp.is_dir():
         shutil.rmtree(git_fp)
 
-    const.AJ_CONFIG_FP.parent.mkdir(parents=True, exist_ok=True)
-    with open(const.AJ_CONFIG_FP, "w") as f:
-        yaml.dump(config, f, default_flow_style=False)
+    const.AJ_CONFIG.parent.mkdir(parents=True, exist_ok=True)
+    write_config(config)
     success(f"Templates cloned to {const.AJ_HOME}")

@@ -31,19 +31,20 @@ def aj_env(tmp_path, monkeypatch):
     submission_home.mkdir(parents=True)
 
     record_fp = aj_home / "record.jsonl"
-    config_fp = aj_home / "config.yaml"
-    default_template = template_home / "default.yaml"
+    config_fp = aj_home / "aj_config.json"
 
     monkeypatch.setattr("azure_jobs.core.const.AJ_HOME", aj_home)
     monkeypatch.setattr("azure_jobs.core.const.AJ_TEMPLATE_HOME", template_home)
     monkeypatch.setattr("azure_jobs.core.const.AJ_SUBMISSION_HOME", submission_home)
     monkeypatch.setattr("azure_jobs.core.const.AJ_RECORD", record_fp)
-    monkeypatch.setattr("azure_jobs.core.const.AJ_CONFIG_FP", config_fp)
-    monkeypatch.setattr("azure_jobs.core.const.AJ_DEFAULT_TEMPLATE", default_template)
+    monkeypatch.setattr("azure_jobs.core.const.AJ_CONFIG", config_fp)
 
     workdir = tmp_path / "workdir"
     workdir.mkdir()
     monkeypatch.chdir(workdir)
+
+    # Pre-set default template in aj_config.json
+    config_fp.write_text(json.dumps({"defaults": {"template": "default"}}, indent=2))
 
     return {
         "aj_home": aj_home,
@@ -51,7 +52,6 @@ def aj_env(tmp_path, monkeypatch):
         "submission_home": submission_home,
         "record_fp": record_fp,
         "config_fp": config_fp,
-        "default_template": default_template,
         "workdir": workdir,
     }
 
@@ -113,6 +113,14 @@ class TestListCommand:
 
 
 class TestRunCommand:
+    def test_no_template_specified(self, aj_env):
+        """When no -t and no default in config, should error."""
+        aj_env["config_fp"].write_text("{}")
+        runner = CliRunner()
+        result = runner.invoke(main, ["run", "echo"])
+        assert result.exit_code != 0
+        assert "No template specified" in result.output
+
     def test_missing_template(self, aj_env):
         runner = CliRunner()
         result = runner.invoke(main, ["run", "-t", "nonexistent", "echo"])
@@ -211,12 +219,13 @@ class TestRunCommand:
         assert result.exit_code != 0
         assert "Unsupported SKU" in result.output
 
-    def test_copies_to_default_template(self, aj_env):
+    def test_saves_default_template_to_config(self, aj_env):
         write_template(aj_env["template_home"], "custom", MINIMAL_JOB_CONF)
         runner = CliRunner()
         result = runner.invoke(main, ["run", "-d", "-t", "custom", "echo"])
         assert result.exit_code == 0
-        assert aj_env["default_template"].exists()
+        saved = json.loads(aj_env["config_fp"].read_text())
+        assert saved["defaults"]["template"] == "custom"
 
     def test_py_script_detection(self, aj_env):
         write_template(aj_env["template_home"], "default", MINIMAL_JOB_CONF)
@@ -289,7 +298,7 @@ class TestPullCommand:
         assert "Repository ID must be provided" in result.output
 
     def test_pull_uses_saved_repo_id(self, aj_env):
-        aj_env["config_fp"].write_text(yaml.dump({"repo_id": "https://example.com/repo.git"}))
+        aj_env["config_fp"].write_text(json.dumps({"repo_id": "https://example.com/repo.git"}))
         runner = CliRunner()
         with patch("azure_jobs.cli.pull.subprocess.run") as mock_run:
             mock_run.return_value.returncode = 0

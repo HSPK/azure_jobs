@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import shutil
 import subprocess
 import uuid
 from datetime import datetime, timezone
@@ -13,6 +12,7 @@ import yaml
 from azure_jobs.cli import main
 from azure_jobs.core import const
 from azure_jobs.core.conf import read_conf
+from azure_jobs.core.config import get_defaults, save_defaults
 from azure_jobs.core.record import SubmissionRecord, log_record
 from azure_jobs.utils.ui import console, dim, info, show_submission_preview, success
 
@@ -126,7 +126,7 @@ def build_command_list(
     "-t",
     "--template",
     help="Template environment to execute the command",
-    default="default",
+    default=None,
 )
 @click.option("-n", "--nodes", default=None, help="Number of nodes")
 @click.option("-p", "--processes", default=None, help="Number of processes")
@@ -140,13 +140,22 @@ def build_command_list(
 def run(
     command: str,
     args: tuple[str, ...],
-    template: str,
+    template: str | None,
     nodes: str | None,
     processes: str | None,
     dry_run: bool,
     run_local: bool,
     yes: bool,
 ) -> None:
+    defaults = get_defaults()
+
+    if template is None:
+        template = defaults.get("template")
+    if template is None:
+        raise click.ClickException(
+            "No template specified. Use -t <template> or set a default with aj config."
+        )
+
     template_fp = const.AJ_TEMPLATE_HOME / f"{template}.yaml"
     if not template_fp.exists():
         raise click.ClickException(
@@ -156,15 +165,27 @@ def run(
     conf = read_conf(template_fp)
     if not conf:
         raise click.ClickException(f"Empty configuration file: {template_fp}")
-    if template_fp != const.AJ_DEFAULT_TEMPLATE:
-        shutil.copy(template_fp, const.AJ_DEFAULT_TEMPLATE)
 
     sid = uuid.uuid4().hex[:8]
     name = resolve_name(command, sid)
 
-    nodes_int = int(nodes or conf.get("_extra", {}).get("nodes", 1))
-    processes_int = int(processes or conf.get("_extra", {}).get("processes", 1))
+    extra = conf.get("_extra", {})
+    nodes_int = int(
+        nodes
+        or extra.get("nodes")
+        or defaults.get("nodes")
+        or 1
+    )
+    processes_int = int(
+        processes
+        or extra.get("processes")
+        or defaults.get("processes")
+        or 1
+    )
     conf.pop("_extra", None)
+
+    # Remember this template as the new default
+    save_defaults(template=template)
 
     validate_config(conf, template_fp)
 
