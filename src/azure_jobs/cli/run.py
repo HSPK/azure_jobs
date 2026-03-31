@@ -17,16 +17,6 @@ from azure_jobs.core.record import SubmissionRecord, log_record
 from azure_jobs.utils.ui import console, dim, info, show_submission_preview, success
 
 
-def check_dot_ssh() -> None:
-    dot_ssh_dir = Path.cwd() / ".ssh"
-    if not dot_ssh_dir.exists():
-        raise click.ClickException(
-            ".ssh directory not found in the current working directory."
-        )
-    if not any(dot_ssh_dir.iterdir()):
-        raise click.ClickException(".ssh directory is empty.")
-
-
 def validate_config(conf: dict, template_fp: Path) -> None:
     """Validate that a merged config has the required structure."""
     if "jobs" not in conf:
@@ -145,9 +135,6 @@ def build_command_list(
 )
 @click.option("-y", "--yes", is_flag=True, help="Skip confirmation prompts")
 @click.option("-L", "--run-local", is_flag=True, help="Run the command locally")
-@click.option(
-    "-s", "--skip-ssh-check", is_flag=True, help="Skip checking for .ssh directory"
-)
 @click.argument("command", nargs=1)
 @click.argument("args", nargs=-1)
 def run(
@@ -159,11 +146,7 @@ def run(
     dry_run: bool,
     run_local: bool,
     yes: bool,
-    skip_ssh_check: bool,
 ) -> None:
-    if not skip_ssh_check:
-        check_dot_ssh()
-
     template_fp = const.AJ_TEMPLATE_HOME / f"{template}.yaml"
     if not template_fp.exists():
         raise click.ClickException(

@@ -23,7 +23,7 @@ from azure_jobs.core.record import SubmissionRecord
 
 @pytest.fixture
 def aj_env(tmp_path, monkeypatch):
-    """Set up an isolated AJ_HOME with a valid template and .ssh dir."""
+    """Set up an isolated AJ_HOME with a valid template and working dir."""
     aj_home = tmp_path / ".azure_jobs"
     template_home = aj_home / "template"
     submission_home = aj_home / "submission"
@@ -41,12 +41,8 @@ def aj_env(tmp_path, monkeypatch):
     monkeypatch.setattr("azure_jobs.core.const.AJ_CONFIG_FP", config_fp)
     monkeypatch.setattr("azure_jobs.core.const.AJ_DEFAULT_TEMPLATE", default_template)
 
-    # Create .ssh dir in a workdir
     workdir = tmp_path / "workdir"
     workdir.mkdir()
-    ssh_dir = workdir / ".ssh"
-    ssh_dir.mkdir()
-    (ssh_dir / "id_rsa").write_text("fake-key")
     monkeypatch.chdir(workdir)
 
     return {
@@ -116,36 +112,17 @@ class TestListCommand:
         assert "No templates found" in result.output
 
 
-class TestCheckDotSsh:
-    def test_run_fails_without_ssh(self, aj_env):
-        # Remove the .ssh dir
-        shutil.rmtree(aj_env["workdir"] / ".ssh")
-        write_template(aj_env["template_home"], "default", MINIMAL_JOB_CONF)
-        runner = CliRunner()
-        result = runner.invoke(main, ["run", "echo", "hello"])
-        assert result.exit_code != 0
-        assert ".ssh" in result.output
-
-    def test_run_skips_ssh_check(self, aj_env):
-        shutil.rmtree(aj_env["workdir"] / ".ssh")
-        write_template(aj_env["template_home"], "default", MINIMAL_JOB_CONF)
-        runner = CliRunner()
-        with patch("azure_jobs.cli.run.subprocess.run"):
-            result = runner.invoke(main, ["run", "-s", "-d", "echo", "hello"])
-        assert result.exit_code == 0
-
-
 class TestRunCommand:
     def test_missing_template(self, aj_env):
         runner = CliRunner()
-        result = runner.invoke(main, ["run", "-s", "-t", "nonexistent", "echo"])
+        result = runner.invoke(main, ["run", "-t", "nonexistent", "echo"])
         assert result.exit_code != 0
         assert "does not exist" in result.output
 
     def test_dry_run_creates_submission_file(self, aj_env):
         write_template(aj_env["template_home"], "default", MINIMAL_JOB_CONF)
         runner = CliRunner()
-        result = runner.invoke(main, ["run", "-s", "-d", "echo", "hello"])
+        result = runner.invoke(main, ["run", "-d", "echo", "hello"])
         assert result.exit_code == 0
         assert "Dry Run" in result.output
         submissions = list(aj_env["submission_home"].glob("*.yaml"))
@@ -154,7 +131,7 @@ class TestRunCommand:
     def test_dry_run_submission_content(self, aj_env):
         write_template(aj_env["template_home"], "default", MINIMAL_JOB_CONF)
         runner = CliRunner()
-        result = runner.invoke(main, ["run", "-s", "-d", "-n", "2", "echo", "hello"])
+        result = runner.invoke(main, ["run", "-d", "-n", "2", "echo", "hello"])
         assert result.exit_code == 0
         sub_file = list(aj_env["submission_home"].glob("*.yaml"))[0]
         sub = yaml.safe_load(sub_file.read_text())
@@ -167,7 +144,7 @@ class TestRunCommand:
         }
         write_template(aj_env["template_home"], "default", conf)
         runner = CliRunner()
-        result = runner.invoke(main, ["run", "-s", "-d", "-n", "4", "-p", "8", "echo"])
+        result = runner.invoke(main, ["run", "-d", "-n", "4", "-p", "8", "echo"])
         assert result.exit_code == 0
         sub_file = list(aj_env["submission_home"].glob("*.yaml"))[0]
         sub = yaml.safe_load(sub_file.read_text())
@@ -180,7 +157,7 @@ class TestRunCommand:
         }
         write_template(aj_env["template_home"], "default", conf)
         runner = CliRunner()
-        result = runner.invoke(main, ["run", "-s", "-d", "-n", "2", "echo"])
+        result = runner.invoke(main, ["run", "-d", "-n", "2", "echo"])
         assert result.exit_code == 0
         sub_file = list(aj_env["submission_home"].glob("*.yaml"))[0]
         sub = yaml.safe_load(sub_file.read_text())
@@ -193,7 +170,7 @@ class TestRunCommand:
         }
         write_template(aj_env["template_home"], "default", conf)
         runner = CliRunner()
-        result = runner.invoke(main, ["run", "-s", "-d", "-n", "5", "echo"])
+        result = runner.invoke(main, ["run", "-d", "-n", "5", "echo"])
         assert result.exit_code == 0
         sub_file = list(aj_env["submission_home"].glob("*.yaml"))[0]
         sub = yaml.safe_load(sub_file.read_text())
@@ -206,7 +183,7 @@ class TestRunCommand:
         }
         write_template(aj_env["template_home"], "default", conf)
         runner = CliRunner()
-        result = runner.invoke(main, ["run", "-s", "-d", "-n", "8", "echo"])
+        result = runner.invoke(main, ["run", "-d", "-n", "8", "echo"])
         assert result.exit_code == 0
         sub_file = list(aj_env["submission_home"].glob("*.yaml"))[0]
         sub = yaml.safe_load(sub_file.read_text())
@@ -219,7 +196,7 @@ class TestRunCommand:
         }
         write_template(aj_env["template_home"], "default", conf)
         runner = CliRunner()
-        result = runner.invoke(main, ["run", "-s", "-d", "-n", "99", "echo"])
+        result = runner.invoke(main, ["run", "-d", "-n", "99", "echo"])
         assert result.exit_code != 0
         assert "No matching SKU" in result.output
 
@@ -230,14 +207,14 @@ class TestRunCommand:
         }
         write_template(aj_env["template_home"], "default", conf)
         runner = CliRunner()
-        result = runner.invoke(main, ["run", "-s", "-d", "echo"])
+        result = runner.invoke(main, ["run", "-d", "echo"])
         assert result.exit_code != 0
         assert "Unsupported SKU" in result.output
 
     def test_copies_to_default_template(self, aj_env):
         write_template(aj_env["template_home"], "custom", MINIMAL_JOB_CONF)
         runner = CliRunner()
-        result = runner.invoke(main, ["run", "-s", "-d", "-t", "custom", "echo"])
+        result = runner.invoke(main, ["run", "-d", "-t", "custom", "echo"])
         assert result.exit_code == 0
         assert aj_env["default_template"].exists()
 
@@ -246,7 +223,7 @@ class TestRunCommand:
         script = aj_env["workdir"] / "train.py"
         script.write_text("print('hello')")
         runner = CliRunner()
-        result = runner.invoke(main, ["run", "-s", "-d", "train.py", "--lr", "0.01"])
+        result = runner.invoke(main, ["run", "-d", "train.py", "--lr", "0.01"])
         assert result.exit_code == 0
         sub_file = list(aj_env["submission_home"].glob("*.yaml"))[0]
         sub = yaml.safe_load(sub_file.read_text())
@@ -258,7 +235,7 @@ class TestRunCommand:
         script = aj_env["workdir"] / "run.sh"
         script.write_text("#!/bin/bash\necho hi")
         runner = CliRunner()
-        result = runner.invoke(main, ["run", "-s", "-d", "run.sh"])
+        result = runner.invoke(main, ["run", "-d", "run.sh"])
         assert result.exit_code == 0
         sub_file = list(aj_env["submission_home"].glob("*.yaml"))[0]
         sub = yaml.safe_load(sub_file.read_text())
@@ -268,7 +245,7 @@ class TestRunCommand:
     def test_env_vars_in_command_list(self, aj_env):
         write_template(aj_env["template_home"], "default", MINIMAL_JOB_CONF)
         runner = CliRunner()
-        result = runner.invoke(main, ["run", "-s", "-d", "-n", "2", "-p", "4", "echo"])
+        result = runner.invoke(main, ["run", "-d", "-n", "2", "-p", "4", "echo"])
         assert result.exit_code == 0
         sub_file = list(aj_env["submission_home"].glob("*.yaml"))[0]
         sub = yaml.safe_load(sub_file.read_text())
@@ -284,7 +261,7 @@ class TestRunCommand:
         }
         write_template(aj_env["template_home"], "default", conf)
         runner = CliRunner()
-        result = runner.invoke(main, ["run", "-s", "-d", "echo"])
+        result = runner.invoke(main, ["run", "-d", "echo"])
         assert result.exit_code == 0
         sub_file = list(aj_env["submission_home"].glob("*.yaml"))[0]
         sub = yaml.safe_load(sub_file.read_text())
@@ -295,7 +272,7 @@ class TestRunCommand:
         write_template(aj_env["template_home"], "default", MINIMAL_JOB_CONF)
         runner = CliRunner()
         with patch("azure_jobs.cli.run.subprocess.run"):
-            result = runner.invoke(main, ["run", "-s", "echo", "hello"])
+            result = runner.invoke(main, ["run", "echo", "hello"])
         assert result.exit_code == 0
         assert aj_env["record_fp"].exists()
         record = json.loads(aj_env["record_fp"].read_text().strip())
@@ -488,7 +465,7 @@ class TestRunErrorPaths:
         conf = {"description": "placeholder"}
         write_template(aj_env["template_home"], "default", conf)
         runner = CliRunner()
-        result = runner.invoke(main, ["run", "-s", "-d", "echo"])
+        result = runner.invoke(main, ["run", "-d", "echo"])
         assert result.exit_code != 0
         assert "jobs" in result.output
 
@@ -496,7 +473,7 @@ class TestRunErrorPaths:
         fp = aj_env["template_home"] / "default.yaml"
         fp.write_text("")
         runner = CliRunner()
-        result = runner.invoke(main, ["run", "-s", "-d", "echo"])
+        result = runner.invoke(main, ["run", "-d", "echo"])
         assert result.exit_code != 0
         assert "Empty configuration" in result.output
 
@@ -508,7 +485,7 @@ class TestRunErrorPaths:
             "azure_jobs.cli.run.subprocess.run",
             side_effect=FileNotFoundError("amlt not found"),
         ), patch("azure_jobs.cli.run.subprocess.Popen"):
-            result = runner.invoke(main, ["run", "-s", "echo", "hello"])
+            result = runner.invoke(main, ["run", "echo", "hello"])
         assert result.exit_code != 0
         assert "amlt" in result.output.lower()
 
@@ -520,7 +497,7 @@ class TestRunErrorPaths:
             "azure_jobs.cli.run.subprocess.run",
             side_effect=subprocess.CalledProcessError(1, "amlt"),
         ), patch("azure_jobs.cli.run.subprocess.Popen"):
-            result = runner.invoke(main, ["run", "-s", "echo", "hello"])
+            result = runner.invoke(main, ["run", "echo", "hello"])
         assert result.exit_code != 0
         assert "failed" in result.output.lower()
 
@@ -532,7 +509,7 @@ class TestRunErrorPaths:
             "azure_jobs.cli.run.subprocess.run",
             side_effect=subprocess.CalledProcessError(1, "amlt"),
         ), patch("azure_jobs.cli.run.subprocess.Popen"):
-            runner.invoke(main, ["run", "-s", "echo", "hello"])
+            runner.invoke(main, ["run", "echo", "hello"])
         assert aj_env["record_fp"].exists()
         record = json.loads(aj_env["record_fp"].read_text().strip())
         assert record["status"] == "failed"
@@ -542,7 +519,7 @@ class TestRunErrorPaths:
         script = aj_env["workdir"] / "run.rb"
         script.write_text("puts 'hello'")
         runner = CliRunner()
-        result = runner.invoke(main, ["run", "-s", "-d", "run.rb"])
+        result = runner.invoke(main, ["run", "-d", "run.rb"])
         assert result.exit_code != 0
         assert "Unsupported script type" in result.output
 
