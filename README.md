@@ -1,85 +1,52 @@
 # Azure Jobs
 
-A simple interface to manage Azure Jobs. Features include:
+A fast, lightweight CLI for submitting and managing Azure ML jobs. Wraps `amlt` with YAML template inheritance, sensible defaults, and rich terminal output.
 
-1. Create jobs from templates with flexible command line overrides.
-2. Support global and local configurations by using `.azurejobs` files. (Credentials may be stored here.)
-3. Pretty print job details, export status, link to custom dashboards.
-4. Set up alerts for job events using simple hooks.
+## Install
 
-# Get started
+    pipx install azure_jobs
 
-1. Install the Azure Jobs CLI tool.
+For development:
 
-```bash
-pipx install azure_jobs
-```
+    uv pip install -e .
 
-2. Setup your credentials by running:
+## Usage
 
-```bash
-aj init
-```
+    aj pull user/templates          # clone shared templates (supports user/repo shorthand)
+    aj list                         # show available templates
+    aj run -t gpu python train.py   # submit a job using the "gpu" template
+    aj run python train.py          # re-use last template (saved in aj_config.json)
+    aj run -d python train.py       # dry run — inspect YAML without submitting
+    aj run -L python train.py       # run locally for testing
 
-3. Pull templates from private repositories:
+Common options for `aj run`:
 
-```bash
-aj pull <repository-url>
-```
+| Flag | Purpose |
+|------|---------|
+| `-t` | Template name |
+| `-n` | Number of nodes |
+| `-p` | Processes per node |
+| `-d` | Dry run |
+| `-y` | Skip confirmation |
+| `-L` | Run locally |
 
-4. Run jobs using the CLI:
+## How It Works
 
-```bash
-aj run -t <template> <command> [args...]
-```
+1. **Templates** define reusable job environments as YAML with optional inheritance
+2. **`aj run`** loads a template, resolves the inheritance chain, merges configs, applies CLI overrides, and generates a submission YAML
+3. **`amlt`** handles the actual Azure submission (code upload, Docker, storage mounts)
+4. **`aj_config.json`** stores your defaults (template, nodes, processes) and workspace config
 
-# Template
+## Documentation
 
-A template consists of a YAML file defines:
-1. The job's environment (e.g., AML, Singularity)
-2. GPU, CPU resources required
-3. Storages used.
-4. Pre-execution commands (Environment preparation commands)
-5. Account information (e.g., Azure subscription ID)
+| Document | Contents |
+|----------|----------|
+| [Architecture](docs/architecture.md) | Module layout, data flow, design decisions |
+| [Configuration](docs/configuration.md) | `aj_config.json`, templates, inheritance, merge rules |
+| [Roadmap](docs/roadmap.md) | Planned features and milestones |
+| [Azure Integration](docs/amlt-integration.md) | Backend design for direct Azure SDK access |
 
-By default, `azure_jobs` will store environments in the `~/.azurejobs/environments` directory. Storage credentials will be stored in the `~/.azurejobs/storage` directory. Account information will be stored in the `~/.azurejobs/account` directory.
+## Testing
 
-Templates will be stored in the `~/.azurejobs/templates` directory. A reserved template name is `default`, it will be updated automatically with the latest configuration.
+    uv run pytest
 
-# Configuration Structure
-
-```yaml
-base: base_configuration or a list of configurations to merge
-config:
-    example_a: value_a
-    example_b: value_b
-```
-
-# Configuration Merging
-
-Configuration can be merged by the following rules:
-1. Dict configuration will be merged recursively.
-2. List configuration will be merged by appending elements from the source list to the target list.
-3. Scalar values will be replaced by the target value.
-
-Here is the code for merging configurations:
-
-```python
-def merge_confs(*data):
-    # merge multiple dictionaries or lists recursively
-    if all(isinstance(d, dict) for d in data):
-        merged = {}
-        for d in data:
-            for key, value in d.items():
-                if key in merged:
-                    merged[key] = merge_confs(merged[key], value)
-                else:
-                    merged[key] = value
-        return merged
-    elif all(isinstance(d, list) for d in data):
-        merged = []
-        for d in zip(*data):
-            merged.append(merge_confs(*d))
-        return merged
-    return data[-1]
-```
