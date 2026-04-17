@@ -102,10 +102,9 @@ class AjDashboard(WorkspaceMixin, App):
         self.workers.cancel_all()
         self.exit()
 
-    def __init__(self, last: int = 100, **kwargs: Any) -> None:
+    def __init__(self, last: int = 100, page_size: int | None = None, **kwargs: Any) -> None:
         super().__init__(**kwargs)
-        self._last = last
-        self._page_size: int = get_page_size()
+        self._page_size: int = page_size if page_size is not None else get_page_size()
         self._all_jobs: list[dict[str, Any]] = []
         self._filtered: list[dict[str, Any]] = []
         self._workspace: dict[str, str] | None = None

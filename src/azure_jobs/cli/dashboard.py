@@ -12,14 +12,18 @@ from azure_jobs.cli import main
     "-n", "--last", default=100, show_default=True,
     help="Number of recent jobs to show",
 )
-def dashboard(last: int) -> None:
+@click.option(
+    "--page-size", default=None, type=int,
+    help="Jobs per page (default: 30, configurable in aj_config.json)",
+)
+def dashboard(last: int, page_size: int | None) -> None:
     """Interactive job dashboard (lazydocker-style TUI)."""
     import os
     import threading
 
     from azure_jobs.tui.app import AjDashboard
 
-    app = AjDashboard(last=last)
+    app = AjDashboard(last=last, page_size=page_size)
     app.run(mouse=False)
 
     # Force-exit if background Azure SDK threads are still blocking.
@@ -32,6 +36,7 @@ def dashboard(last: int) -> None:
 
 @main.command(name="d", hidden=True)
 @click.option("-n", "--last", default=100)
-def _alias_d(last: int) -> None:
+@click.option("--page-size", default=None, type=int)
+def _alias_d(last: int, page_size: int | None) -> None:
     """Shortcut for ``aj dash``."""
-    dashboard.callback(last)
+    dashboard.callback(last, page_size)

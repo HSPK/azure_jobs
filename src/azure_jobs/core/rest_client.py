@@ -57,6 +57,7 @@ class AzureMLJobsClient:
         self,
         next_link: str | None = None,
         list_view_type: str = "All",
+        top: int = 100,
     ) -> tuple[list[dict[str, Any]], str | None]:
         """Fetch one page of jobs.
 
@@ -70,6 +71,7 @@ class AzureMLJobsClient:
                 f"{self._base}/jobs"
                 f"?api-version={_API_VERSION}"
                 f"&listViewType={list_view_type}"
+                f"&$top={top}"
             )
 
         resp = requests.get(url, headers=self._headers(), timeout=30)
