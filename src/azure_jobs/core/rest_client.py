@@ -317,16 +317,23 @@ def _extract_rest_job(raw: dict[str, Any]) -> dict[str, Any]:
     # Error — dig into nested innerError for more detail
     error_msg = ""
     err = props.get("error", None)
-    if err and isinstance(err, dict):
-        msg = err.get("message", "")
-        # Walk innerError chain for more specific messages
-        inner = err.get("innerError") or err.get("inner_error")
-        while inner and isinstance(inner, dict):
-            inner_msg = inner.get("message", "")
-            if inner_msg:
-                msg = inner_msg
-            inner = inner.get("innerError") or inner.get("inner_error")
-        error_msg = (msg or str(err))[:500]
+    if err:
+        if isinstance(err, dict):
+            code = err.get("code", "")
+            msg = err.get("message", "")
+            # Walk innerError chain for more specific messages
+            inner = err.get("innerError") or err.get("inner_error")
+            while inner and isinstance(inner, dict):
+                inner_msg = inner.get("message", "")
+                if inner_msg:
+                    msg = inner_msg
+                inner = inner.get("innerError") or inner.get("inner_error")
+            if code and msg:
+                error_msg = f"{code}: {msg}"[:500]
+            else:
+                error_msg = (msg or code or str(err))[:500]
+        else:
+            error_msg = str(err)[:500]
 
     # Portal URL
     services = props.get("services", {}) or {}

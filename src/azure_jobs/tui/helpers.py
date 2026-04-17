@@ -11,7 +11,9 @@ from typing import Any
 from rich.text import Text
 from textual.widgets.option_list import Option
 
-from azure_jobs.utils.ui import AZ_ICON, AZ_STYLE, icon_style, short_portal_url
+from azure_jobs.utils.ui import (
+    AZ_ICON, AZ_STYLE, icon_style, short_portal_url, status_badge,
+)
 
 # ---- TUI-specific constants ------------------------------------------------
 
@@ -70,28 +72,28 @@ def kv(pairs: list[tuple[str, str]], *, hint: str = "") -> str:
 
 
 def info_block(job: dict[str, Any]) -> str:
-    """Build a compact, visually rich info panel for a job."""
+    """Build a visually rich info panel for a job."""
     L: list[str] = []  # noqa: N806
     name = job.get("name", "")
     display = job.get("display_name") or name
-    icon, sty = icon_style(job.get("status", ""))
     status = job.get("status", "?")
 
     W = 12  # label column width
 
     def _kv(label: str, val: str) -> str:
-        return f"  [dim]{label:>{W}}[/dim]  {val}"
+        return f"  [cyan]{label:>{W}}[/cyan]  {val}"
 
-    # ── Header ──
-    L.append(f"  [{sty} bold]{icon} {status}[/{sty} bold]  [bold]{display}[/bold]")
+    # ── Status badge + name ──
+    L.append(f"  {status_badge(status)}  [bold]{display}[/bold]")
     if display != name:
         L.append(f"  {'':>{W}}  [dim]{name}[/dim]")
 
-    # ── Error (quote-block style) ──
+    # ── Error (prominent, impossible to miss) ──
     if job.get("error"):
         L.append("")
+        L.append(f"  [bold white on red] ✗ ERROR [/bold white on red]")
         for err_line in job["error"].splitlines():
-            L.append(f"  [red]┃[/red] [red]{err_line}[/red]")
+            L.append(f"  [red]{err_line}[/red]")
 
     # ── Config ──
     fields: list[str] = []
@@ -105,8 +107,8 @@ def info_block(job: dict[str, Any]) -> str:
         fields.append(_kv("Env", job["environment"]))
     if job.get("command"):
         cmd = job["command"]
-        if len(cmd) > 55:
-            cmd = cmd[:52] + "…"
+        if len(cmd) > 50:
+            cmd = cmd[:47] + "…"
         fields.append(_kv("Command", f"[dim]{cmd}[/dim]"))
     if fields:
         L.append("")
@@ -124,7 +126,7 @@ def info_block(job: dict[str, Any]) -> str:
     dur = job.get("duration", "")
     qt = job.get("queue_time", "")
     if dur and qt:
-        timing.append(_kv("Duration", f"[bold]{dur}[/bold]  [dim]⏳ queue {qt}[/dim]"))
+        timing.append(_kv("Duration", f"[bold]{dur}[/bold]  [dim]queue {qt}[/dim]"))
     elif dur:
         timing.append(_kv("Duration", f"[bold]{dur}[/bold]"))
     elif qt:
@@ -141,14 +143,14 @@ def info_block(job: dict[str, Any]) -> str:
         meta.append(_kv("Tags", f"[dim]{job['tags']}[/dim]"))
     if job.get("description"):
         desc = job["description"]
-        if len(desc) > 55:
-            desc = desc[:52] + "…"
+        if len(desc) > 50:
+            desc = desc[:47] + "…"
         meta.append(_kv("Description", desc))
     if meta:
         L.append("")
         L.extend(meta)
 
-    # ── Portal link ──
+    # ── Portal ──
     url = job.get("portal_url", "")
     if url:
         short = short_portal_url(url, rich_link=False)

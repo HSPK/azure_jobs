@@ -245,6 +245,23 @@ def icon_style(status: str) -> tuple[str, str]:
     return AZ_ICON.get(status, "?"), AZ_STYLE.get(status, "white")
 
 
+# Background colors for status badges
+_BADGE_BG: dict[str, str] = {
+    "Completed": "green", "Running": "blue", "Starting": "blue",
+    "Preparing": "yellow", "Queued": "yellow", "Failed": "red",
+    "Canceled": "bright_black", "CancelRequested": "bright_black",
+    "NotStarted": "bright_black", "Provisioning": "yellow", "Finalizing": "blue",
+}
+
+
+def status_badge(status: str) -> str:
+    """Return a colored Rich badge like ``[ ✓ Completed ]``."""
+    icon = AZ_ICON.get(status, "?")
+    bg = _BADGE_BG.get(status, "bright_black")
+    fg = "bold" if bg == "yellow" else "bold white"
+    return f"[{fg} on {bg}] {icon} {status} [/{fg} on {bg}]"
+
+
 def short_portal_url(url: str, *, rich_link: bool = True) -> str:
     """Shorten portal URL. If *rich_link* is True, wrap in Rich ``[link]`` markup."""
     if not url:
@@ -359,24 +376,23 @@ def show_job_detail(job: dict[str, Any]) -> None:
     W = 14  # label column width
 
     def _kv(label: str, val: str) -> str:
-        return f"  [dim]{label:>{W}}[/dim]  {val}"
+        return f"  [cyan]{label:>{W}}[/cyan]  {val}"
 
-    # Header
+    # Status badge + name
     status = job.get("status", "Unknown")
-    style = _JOB_STATUS_STYLE.get(status, "white")
-    icon = _JOB_STATUS_ICON.get(status, "?")
     display = job.get("display_name") or job.get("name", "")
     name = job.get("name", "")
-    lines.append(f"  [{style} bold]{icon} {status}[/{style} bold]  [bold]{display}[/bold]")
+    lines.append(f"  {status_badge(status)}  [bold]{display}[/bold]")
     if display != name:
         lines.append(f"  {'':>{W}}  [dim]{name}[/dim]")
 
-    # Error (quote-block style)
+    # Error (prominent badge + red text)
     error_msg = job.get("error", "")
     if error_msg:
         lines.append("")
+        lines.append(f"  [bold white on red] ✗ ERROR [/bold white on red]")
         for err_line in error_msg.splitlines():
-            lines.append(f"  [red]┃[/red] [red]{err_line}[/red]")
+            lines.append(f"  [red]{err_line}[/red]")
 
     # Config
     fields: list[str] = []
@@ -408,7 +424,7 @@ def show_job_detail(job: dict[str, Any]) -> None:
     dur = job.get("duration", "")
     qt = job.get("queue_time", "")
     if dur and qt:
-        timing.append(_kv("Duration", f"[bold]{dur}[/bold]  [dim]⏳ queue {qt}[/dim]"))
+        timing.append(_kv("Duration", f"[bold]{dur}[/bold]  [dim]queue {qt}[/dim]"))
     elif dur:
         timing.append(_kv("Duration", f"[bold]{dur}[/bold]"))
     elif qt:
