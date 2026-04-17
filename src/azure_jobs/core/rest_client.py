@@ -296,8 +296,9 @@ def _extract_rest_job(raw: dict[str, Any]) -> dict[str, Any]:
     if "/" in compute:
         compute = compute.rstrip("/").rsplit("/", 1)[-1]
 
-    # Tags
+    # Tags — filter out internal AML system tags
     tags = props.get("tags", {}) or {}
+    tags = {k: v for k, v in tags.items() if not k.startswith("_aml_system_")}
     tags_str = ", ".join(f"{k}={v}" for k, v in tags.items()) if tags else ""
 
     # Environment
@@ -332,23 +333,6 @@ def _extract_rest_job(raw: dict[str, Any]) -> dict[str, Any]:
     studio = services.get("Studio", {}) or {}
     portal_url = studio.get("endpoint", "") or ""
 
-    # Outputs — summarize as "key: type" pairs
-    outputs_raw = props.get("outputs", {}) or {}
-    outputs_parts: list[str] = []
-    for okey, oval in outputs_raw.items():
-        if isinstance(oval, dict):
-            otype = oval.get("jobOutputType", oval.get("type", ""))
-            uri = oval.get("uri", "")
-            if uri:
-                # Trim long ARM/azureml URIs to just the last segment
-                short_uri = uri.rsplit("/", 1)[-1] if "/" in uri else uri
-                outputs_parts.append(f"{okey} ({otype}: {short_uri})")
-            elif otype:
-                outputs_parts.append(f"{okey} ({otype})")
-            else:
-                outputs_parts.append(okey)
-    outputs_str = ", ".join(outputs_parts)
-
     return {
         "name": name,
         "display_name": props.get("displayName", "") or "",
@@ -367,6 +351,5 @@ def _extract_rest_job(raw: dict[str, Any]) -> dict[str, Any]:
         "command": (props.get("command", "") or "")[:200],
         "created": created,
         "created_by": created_by,
-        "outputs": outputs_str,
         "error": error_msg,
     }

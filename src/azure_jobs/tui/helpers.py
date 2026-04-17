@@ -81,101 +81,93 @@ def kv(pairs: list[tuple[str, str]], *, hint: str = "") -> str:
 
 
 def info_block(job: dict[str, Any]) -> str:
-    """Build the info panel content for a job with visual sections."""
-    lines: list[str] = []
+    """Build a compact, visually rich info panel for a job."""
+    L: list[str] = []  # noqa: N806
     name = job.get("name", "")
     display = job.get("display_name") or name
     icon, sty = icon_style(job.get("status", ""))
     status = job.get("status", "?")
 
-    # ── Status badge ──
-    lines.append("")
-    lines.append(f"  [{sty} bold]{icon} {status}[/{sty} bold]")
-    lines.append("")
+    W = 14  # label column width
 
-    # ── Error (for failed jobs) ──
+    def _kv(label: str, val: str, style: str = "dim") -> str:
+        return f"  [{style}]{label:>{W}}[/{style}]  {val}"
+
+    # ── Header ──
+    L.append("")
+    L.append(f"  [{sty} bold]{icon} {status}[/{sty} bold]  [bold]{display}[/bold]")
+    if display != name:
+        L.append(f"  {'':>{W}}  [dim]{name}[/dim]")
+
+    # ── Error ──
     if job.get("error"):
-        lines.append("  [bold red]Error[/bold red]")
-        lines.append(f"  [dim]{'─' * 42}[/dim]")
+        L.append("")
+        L.append(f"  [bold red]{'━' * 46}[/bold red]")
         for err_line in job["error"].splitlines():
-            lines.append(f"    [red]{err_line}[/red]")
-        lines.append("")
+            L.append(f"  [red]{err_line}[/red]")
+        L.append(f"  [bold red]{'━' * 46}[/bold red]")
 
-    # ── Identity ──
-    lines.append("  [bold cyan]Identity[/bold cyan]")
-    lines.append(f"  [dim]{'─' * 42}[/dim]")
-    if display and display != name:
-        lines.append(f"    [dim]Name[/dim]           {display}")
-    lines.append(f"    [dim]ID[/dim]             {name}")
+    # ── Details — single compact block ──
+    L.append("")
+    L.append(f"  [bold]{'─' * 46}[/bold]")
+
     if job.get("type"):
-        lines.append(f"    [dim]Type[/dim]           {job['type']}")
+        L.append(_kv("Type", job["type"]))
     if job.get("experiment"):
-        lines.append(f"    [dim]Experiment[/dim]     {job['experiment']}")
-    if job.get("created_by"):
-        lines.append(f"    [dim]Created by[/dim]     {job['created_by']}")
-    if job.get("description"):
-        lines.append(f"    [dim]Description[/dim]    {job['description']}")
-    if job.get("tags"):
-        lines.append(f"    [dim]Tags[/dim]           {job['tags']}")
-
-    # ── Configuration ──
-    has_config = job.get("environment") or job.get("command")
-    if has_config:
-        lines.append("")
-        lines.append("  [bold cyan]Configuration[/bold cyan]")
-        lines.append(f"  [dim]{'─' * 42}[/dim]")
-        if job.get("environment"):
-            lines.append(f"    [dim]Environment[/dim]    {job['environment']}")
-        if job.get("command"):
-            cmd = job["command"]
-            if len(cmd) > 80:
-                cmd = cmd[:77] + "..."
-            lines.append(f"    [dim]Command[/dim]        {cmd}")
-
-    # ── Resources ──
+        L.append(_kv("Experiment", f"[italic]{job['experiment']}[/italic]"))
     if job.get("compute"):
-        lines.append("")
-        lines.append("  [bold cyan]Resources[/bold cyan]")
-        lines.append(f"  [dim]{'─' * 42}[/dim]")
-        lines.append(f"    [dim]Compute[/dim]        {job['compute']}")
-
-    # ── Outputs ──
-    if job.get("outputs"):
-        lines.append("")
-        lines.append("  [bold cyan]Outputs[/bold cyan]")
-        lines.append(f"  [dim]{'─' * 42}[/dim]")
-        lines.append(f"    {job['outputs']}")
+        L.append(_kv("Compute", f"[bold]{job['compute']}[/bold]"))
+    if job.get("environment"):
+        L.append(_kv("Environment", job["environment"]))
+    if job.get("command"):
+        cmd = job["command"]
+        if len(cmd) > 72:
+            cmd = cmd[:69] + "…"
+        L.append(_kv("Command", f"[italic dim]{cmd}[/italic dim]"))
 
     # ── Timing ──
     has_time = job.get("duration") or job.get("start_time") or job.get("created")
     if has_time:
-        lines.append("")
-        lines.append("  [bold cyan]Timing[/bold cyan]")
-        lines.append(f"  [dim]{'─' * 42}[/dim]")
-        if job.get("created"):
-            lines.append(f"    [dim]Created[/dim]        {job['created']}")
-        if job.get("start_time"):
-            lines.append(f"    [dim]Started[/dim]        {job['start_time']}")
-        if job.get("end_time"):
-            lines.append(f"    [dim]Ended[/dim]          {job['end_time']}")
-        if job.get("duration"):
-            lines.append(f"    [dim]Duration[/dim]       {job['duration']}")
-        if job.get("queue_time"):
-            lines.append(f"    [dim]Queue time[/dim]     {job['queue_time']}")
+        L.append(f"  [bold]{'─' * 46}[/bold]")
+        for label, key in [
+            ("Created", "created"), ("Started", "start_time"),
+            ("Ended", "end_time"),
+        ]:
+            val = job.get(key, "")
+            if val:
+                L.append(_kv(label, val))
+        # Duration + queue on same conceptual line
+        dur = job.get("duration", "")
+        qt = job.get("queue_time", "")
+        if dur and qt:
+            L.append(_kv("Duration", f"[bold]{dur}[/bold]  [dim]queue {qt}[/dim]"))
+        elif dur:
+            L.append(_kv("Duration", f"[bold]{dur}[/bold]"))
+        elif qt:
+            L.append(_kv("Queue time", qt))
 
-    # ── Links ──
+    # ── Meta ──
+    has_meta = job.get("created_by") or job.get("tags") or job.get("description")
+    if has_meta:
+        L.append(f"  [bold]{'─' * 46}[/bold]")
+        if job.get("created_by"):
+            L.append(_kv("User", job["created_by"]))
+        if job.get("tags"):
+            L.append(_kv("Tags", f"[dim]{job['tags']}[/dim]"))
+        if job.get("description"):
+            L.append(_kv("Description", job["description"]))
+
+    # ── Portal link ──
     url = job.get("portal_url", "")
     if url:
-        lines.append("")
-        lines.append("  [bold cyan]Links[/bold cyan]")
-        lines.append(f"  [dim]{'─' * 42}[/dim]")
+        L.append(f"  [bold]{'─' * 46}[/bold]")
         if "/runs/" in url:
             short = url.split("/runs/", 1)[1].split("?")[0]
             url = f"ml.azure.com/runs/{short}"
-        lines.append(f"    [dim]Portal[/dim]         [underline]{url}[/underline]")
+        L.append(_kv("Portal", f"[underline]{url}[/underline]"))
 
-    lines.append("")
-    return "\n".join(lines)
+    L.append("")
+    return "\n".join(L)
 
 
 def fmt_dur(secs: int) -> str:

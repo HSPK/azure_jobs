@@ -355,84 +355,82 @@ def show_cloud_jobs_table(
 def show_job_detail(job: dict[str, Any]) -> None:
     """Display detailed cloud job info as a rich panel."""
     lines: list[str] = []
+    W = 16  # label column width
 
-    # Status badge
+    def _kv(label: str, val: str) -> str:
+        return f"    [dim]{label:<{W}}[/dim]{val}"
+
+    # Header
     status = job.get("status", "Unknown")
     style = _JOB_STATUS_STYLE.get(status, "white")
     icon = _JOB_STATUS_ICON.get(status, "?")
-    lines.append(f"  [{style} bold]{icon} {status}[/{style} bold]")
+    display = job.get("display_name") or job.get("name", "")
+    name = job.get("name", "")
+    lines.append(f"  [{style} bold]{icon} {status}[/{style} bold]  [bold]{display}[/bold]")
+    if display != name:
+        lines.append(f"    {'':>{W}}{' ' * 0}[dim]{name}[/dim]")
 
     # Error
     error_msg = job.get("error", "")
     if error_msg:
         lines.append("")
-        lines.append("  [bold red]Error[/bold red]")
-        lines.append(f"  [dim]{'─' * 50}[/dim]")
+        lines.append(f"  [bold red]{'━' * 54}[/bold red]")
         lines.append(f"  [red]{error_msg}[/red]")
+        lines.append(f"  [bold red]{'━' * 54}[/bold red]")
 
-    # Identity
-    _section = "  [bold cyan]{}[/bold cyan]"
-    _sep = f"  [dim]{'─' * 50}[/dim]"
-
+    # Details
+    _sep = f"  {'─' * 54}"
     lines.append("")
-    lines.append(_section.format("Identity"))
     lines.append(_sep)
     for label, key in [
-        ("Name", "name"), ("Display Name", "display_name"),
         ("Type", "type"), ("Experiment", "experiment"),
-        ("Created by", "created_by"),
-        ("Description", "description"), ("Tags", "tags"),
+        ("Compute", "compute"), ("Environment", "environment"),
     ]:
         val = job.get(key, "")
         if val:
-            lines.append(f"    [dim]{label:<16}[/dim]{val}")
-
-    # Configuration
-    if job.get("environment") or job.get("command"):
-        lines.append("")
-        lines.append(_section.format("Configuration"))
-        lines.append(_sep)
-        if job.get("environment"):
-            lines.append(f"    [dim]{'Environment':<16}[/dim]{job['environment']}")
-        if job.get("command"):
-            lines.append(f"    [dim]{'Command':<16}[/dim]{job['command']}")
-
-    # Resources
-    if job.get("compute"):
-        lines.append("")
-        lines.append(_section.format("Resources"))
-        lines.append(_sep)
-        lines.append(f"    [dim]{'Compute':<16}[/dim]{job['compute']}")
-
-    # Outputs
-    if job.get("outputs"):
-        lines.append("")
-        lines.append(_section.format("Outputs"))
-        lines.append(_sep)
-        lines.append(f"    {job['outputs']}")
+            lines.append(_kv(label, val))
+    if job.get("command"):
+        cmd = job["command"]
+        if len(cmd) > 80:
+            cmd = cmd[:77] + "…"
+        lines.append(_kv("Command", cmd))
 
     # Timing
-    if job.get("duration") or job.get("start_time") or job.get("created"):
-        lines.append("")
-        lines.append(_section.format("Timing"))
+    has_time = job.get("duration") or job.get("start_time") or job.get("created")
+    if has_time:
         lines.append(_sep)
         for label, key in [
             ("Created", "created"), ("Started", "start_time"),
-            ("Ended", "end_time"), ("Duration", "duration"),
-            ("Queue time", "queue_time"),
+            ("Ended", "end_time"),
         ]:
             val = job.get(key, "")
             if val:
-                lines.append(f"    [dim]{label:<16}[/dim]{val}")
+                lines.append(_kv(label, val))
+        dur = job.get("duration", "")
+        qt = job.get("queue_time", "")
+        if dur and qt:
+            lines.append(_kv("Duration", f"{dur}  [dim](queue {qt})[/dim]"))
+        elif dur:
+            lines.append(_kv("Duration", dur))
+        elif qt:
+            lines.append(_kv("Queue time", qt))
 
-    # Links
+    # Meta
+    has_meta = job.get("created_by") or job.get("tags") or job.get("description")
+    if has_meta:
+        lines.append(_sep)
+        if job.get("created_by"):
+            lines.append(_kv("User", job["created_by"]))
+        if job.get("tags"):
+            lines.append(_kv("Tags", job["tags"]))
+        if job.get("description"):
+            lines.append(_kv("Description", job["description"]))
+
+    # Portal link
     if job.get("portal_url"):
-        lines.append("")
-        lines.append(_section.format("Links"))
         lines.append(_sep)
         lines.append(
-            f"    [dim]{'Portal':<16}[/dim]"
-            f"{_short_portal_url(job['portal_url'])}"
+            _kv("Portal", _short_portal_url(job["portal_url"]))
         )
 
     console.print()

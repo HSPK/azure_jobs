@@ -299,12 +299,12 @@ def test_info_block_sections() -> None:
         "end_time": "", "portal_url": "https://ml.azure.com/runs/j1?wsid=x",
     }
     block = _info_block(job)
-    assert "Identity" in block
-    assert "Resources" in block
-    assert "Timing" in block
-    assert "Links" in block
     assert "my-job" in block
     assert "j1" in block
+    assert "gpu" in block
+    assert "exp1" in block
+    assert "Duration" in block
+    assert "Portal" in block
 
 
 def test_info_block_new_fields() -> None:
@@ -322,7 +322,6 @@ def test_info_block_new_fields() -> None:
         "created": "2026-01-01 00:00:00", "error": "OOM killed",
     }
     block = _info_block(job)
-    assert "Configuration" in block
     assert "sweep" in block
     assert "Hyperparameter sweep" in block
     assert "project=alpha" in block
