@@ -49,15 +49,12 @@ def trunc(s: str, maxlen: int = NAME_MAX) -> str:
 
 
 def make_option(job: dict[str, Any]) -> Option:
-    """Compact list item: icon + truncated display name (+ error for failed)."""
+    """Compact list item: icon + truncated display name."""
     name = job.get("display_name") or job.get("name", "?")
     icon, sty = icon_style(job.get("status", ""))
     t = Text()
     t.append(f" {icon} ", style=sty)
     t.append(trunc(name))
-    if job.get("status") == "Failed" and job.get("error"):
-        err = job["error"].replace("\n", " ")[:NAME_MAX].strip()
-        t.append(f"\n     {err}", style="dim red")
     return Option(t, id=job.get("name", ""))
 
 
@@ -89,12 +86,13 @@ def info_block(job: dict[str, Any]) -> str:
     # ── Status badge ──
     L.append(f"  {status_badge(status)}")
 
-    # ── Error (prominent, right after status) ──
+    # ── Error (boxed, right after status) ──
     if job.get("error"):
         L.append("")
-        L.append(f"  [bold white on red] ✗ ERROR [/bold white on red]")
+        L.append(f"  [red]┌─ Error {'─' * 28}[/red]")
         for err_line in job["error"].splitlines():
-            L.append(f"  [red]{err_line}[/red]")
+            L.append(f"  [red]│[/red] {err_line}")
+        L.append(f"  [red]└{'─' * 37}[/red]")
 
     # ── Overview ──
     L.append("")

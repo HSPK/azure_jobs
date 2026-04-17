@@ -306,7 +306,12 @@ class AjDashboard(WorkspaceMixin, App):
 
         cur.extend(take)
         self._all_jobs.extend(take)
-        self._show_current_page()
+
+        # Preserve current selection while list grows
+        prev_name = ""
+        if 0 <= self._selected_idx < len(self._filtered):
+            prev_name = self._filtered[self._selected_idx].get("name", "")
+        self._show_current_page(restore_name=prev_name)
 
         # Overflow goes to the next (hidden) page buffer
         if overflow:
