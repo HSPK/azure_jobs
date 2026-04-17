@@ -87,28 +87,44 @@ class AzureMLJobsClient:
         list_view_type: str = "All",
         top: int = 30,
     ) -> tuple[list[dict[str, Any]], str | None]:
-        """Fetch one page of jobs.
+        """Fetch *top* jobs, issuing multiple server requests if needed.
+
+        The Azure ML REST API may return fewer items than ``$top`` requests.
+        This method transparently fetches additional pages until *top* items
+        are collected or the server has no more data.
 
         Returns ``(jobs, next_link)`` where *next_link* is ``None`` when
         there are no more pages.
         """
-        if next_link:
-            # Replace $top in server-returned nextLink to match our page size
-            url = self._patch_top(next_link, top)
-        else:
-            url = (
-                f"{self._base}/jobs"
-                f"?api-version={_API_VERSION}"
-                f"&listViewType={list_view_type}"
-                f"&$top={top}"
-            )
+        collected: list[dict[str, Any]] = []
+        url = next_link  # may be None for first call
 
-        resp = requests.get(url, headers=self._headers(), timeout=30)
-        resp.raise_for_status()
-        data = resp.json()
+        while len(collected) < top:
+            if url:
+                req_url = self._patch_top(url, top)
+            else:
+                req_url = (
+                    f"{self._base}/jobs"
+                    f"?api-version={_API_VERSION}"
+                    f"&listViewType={list_view_type}"
+                    f"&$top={top}"
+                )
 
-        jobs = [_extract_rest_job(j) for j in data.get("value", [])]
-        return jobs, data.get("nextLink")
+            resp = requests.get(req_url, headers=self._headers(), timeout=30)
+            resp.raise_for_status()
+            data = resp.json()
+
+            batch = [_extract_rest_job(j) for j in data.get("value", [])]
+            if not batch:
+                return collected, None
+
+            collected.extend(batch)
+            url = data.get("nextLink")
+            if not url:
+                return collected, None
+
+        # We have enough — return exactly `top` and preserve nextLink
+        return collected[:top], url
 
     @staticmethod
     def _patch_top(url: str, top: int) -> str:

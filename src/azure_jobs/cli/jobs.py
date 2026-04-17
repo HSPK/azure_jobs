@@ -50,12 +50,11 @@ def job_list(
     scanned = 0
     filtering = bool(status or experiment)
     max_pages = 5 if filtering else 1
-    page_size = min(100, last) if not filtering else 100
 
     with console.status("[bold cyan]Fetching jobs…[/bold cyan]", spinner="dots") as st:
         for _ in range(max_pages):
             jobs, next_link = client.list_jobs_page(
-                next_link=next_link, top=page_size,
+                next_link=next_link, top=last if not filtering else 100,
             )
             if not jobs:
                 break
