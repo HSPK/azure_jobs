@@ -334,7 +334,12 @@ def _build_resources(request: SubmitRequest, on_status: Any = None) -> dict[str,
 
     if on_status:
         on_status("sku", f"Resolving SKU {sku_raw}…")
-    instance_names = resolve_instance_type(sku_raw)
+    instance_names = resolve_instance_type(
+        sku_raw,
+        vc_subscription_id=request.vc_subscription_id or request.subscription_id,
+        vc_resource_group=request.vc_resource_group or request.resource_group,
+        vc_name=request.compute,
+    )
     if instance_names:
         instance_types = [f"Singularity.{n}" for n in instance_names]
     else:

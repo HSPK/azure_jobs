@@ -1,27 +1,24 @@
 """Singularity SKU resolution.
 
 Parses amlt-style SKU shorthand (e.g. ``1xC1``, ``1x80G8-A100-NvLink``) and
-resolves them to actual Singularity instance type names (e.g.
-``Standard_D2_v3``, ``Standard_ND40rs_v2``) by querying the Singularity API.
+resolves them to actual Singularity instance type names by querying the
+virtual cluster's available quotas.
 
-Results are cached locally in ``$AJ_HOME/cache/instance_types.json`` so the
-API is only queried once per day.
+Resolution strategy:
+1. Direct instance type names (e.g. ``E16ads_v5``) pass through as-is.
+2. amlt shorthand is parsed into GPU/CPU requirements.
+3. The virtual cluster quotas are queried for available instance families.
+4. A known mapping from family → instance types is used to pick the best match.
 """
 
 from __future__ import annotations
 
-import json
 import logging
 import re
-import time
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any
 
 log = logging.getLogger(__name__)
-
-# Cache valid for 24 hours
-_CACHE_TTL_SECONDS = 86400
 
 
 @dataclass
@@ -82,214 +79,209 @@ class SkuSpec:
         return spec
 
 
-@dataclass
-class InstanceType:
-    """A Singularity instance type from the API."""
+# ---------------------------------------------------------------------------
+# Known Singularity instance families → instance type templates
+# ---------------------------------------------------------------------------
+# Each family maps to a dict of { gpu_count: instance_name } or for CPU
+# families a list of instance names sorted small→large.
+#
+# Source: Azure VM docs + observed Singularity clusters.
+# ---------------------------------------------------------------------------
+_FAMILY_MAP: dict[str, dict[str, Any]] = {
+    # CPU families
+    "Eadsv5": {
+        "cpu": True,
+        "gpu_model": None,
+        "instances": ["E2ads_v5", "E4ads_v5", "E8ads_v5", "E16ads_v5",
+                       "E32ads_v5", "E48ads_v5", "E64ads_v5", "E96ads_v5"],
+    },
+    "Dadsv5": {
+        "cpu": True,
+        "gpu_model": None,
+        "instances": ["D2ads_v5", "D4ads_v5", "D8ads_v5", "D16ads_v5",
+                       "D32ads_v5", "D48ads_v5", "D64ads_v5", "D96ads_v5"],
+    },
+    # A100 80GB (single node, no NvLink)
+    "NC_A100_v4": {
+        "cpu": False,
+        "gpu_model": "A100",
+        "gpu_memory": 80,
+        "nvlink": False,
+        "instances_by_gpu": {1: "NC24ads_A100_v4", 4: "NC48ads_A100_v4"},
+    },
+    # A100 80GB (8-GPU NvLink)
+    "NDAMv4": {
+        "cpu": False,
+        "gpu_model": "A100",
+        "gpu_memory": 80,
+        "nvlink": True,
+        "instances_by_gpu": {8: "ND96amsr_A100_v4"},
+    },
+    # A100 40GB
+    "NDv4": {
+        "cpu": False,
+        "gpu_model": "A100",
+        "gpu_memory": 40,
+        "nvlink": False,
+        "instances_by_gpu": {8: "ND96asr_v4"},
+    },
+    # V100 32GB (legacy)
+    "NDv2": {
+        "cpu": False,
+        "gpu_model": "V100",
+        "gpu_memory": 32,
+        "nvlink": True,
+        "instances_by_gpu": {8: "Standard_ND40rs_v2"},
+    },
+    # H100 80GB
+    "NDH100v5": {
+        "cpu": False,
+        "gpu_model": "H100",
+        "gpu_memory": 80,
+        "nvlink": True,
+        "instances_by_gpu": {8: "ND96isr_H100_v5"},
+    },
+    # MI200 (AMD)
+    "NDMI200v4": {
+        "cpu": False,
+        "gpu_model": "MI200",
+        "gpu_memory": 64,
+        "nvlink": False,
+        "instances_by_gpu": {8: "ND96amsr_MI200_v4"},
+    },
+    # MI300X (AMD)
+    "NDMI300Xv4": {
+        "cpu": False,
+        "gpu_model": "MI300X",
+        "gpu_memory": 192,
+        "nvlink": False,
+        "instances_by_gpu": {8: "ND96isr_MI300X_v4"},
+    },
+    # H200
+    "NDH200v5": {
+        "cpu": False,
+        "gpu_model": "H200",
+        "gpu_memory": 141,
+        "nvlink": True,
+        "instances_by_gpu": {8: "ND96isr_H200_v5"},
+    },
+}
 
-    name: str
-    series: str = ""
-    num_gpus: int = 0
-    gpu_memory_gb: int = 0
-    gpu_model: str = ""
-    is_cpu: bool = False
-    nvlink: bool = False
-    description: str = ""
 
-    @classmethod
-    def from_api(cls, entry: dict) -> InstanceType | None:
-        """Parse an instance type from the Singularity API response."""
-        name = entry.get("name", "")
-        # Strip "Singularity." prefix
-        m = re.match(r"Singularity\.(.*)", name)
-        if m:
-            name = m.group(1)
-        if name.endswith("-n1"):
+def _fetch_vc_families(
+    vc_subscription_id: str,
+    vc_resource_group: str,
+    vc_name: str,
+) -> list[str]:
+    """Query the virtual cluster's available instance families from quotas."""
+    try:
+        from azure_jobs.core.config import _az_json
+
+        data = _az_json([
+            "rest", "--method", "get", "--url",
+            f"https://management.azure.com/subscriptions/{vc_subscription_id}"
+            f"/resourceGroups/{vc_resource_group}"
+            f"/providers/Microsoft.MachineLearningServices"
+            f"/virtualclusters/{vc_name}?api-version=2021-03-01-preview",
+        ])
+        if not data:
+            return []
+        managed = data.get("properties", {}).get("managed", {})
+        quotas = managed.get("defaultGroupPolicyOverallQuotas", {}).get("limits", [])
+        return [q["id"] for q in quotas if q.get("limit", 0) > 0]
+    except Exception:
+        return []
+
+
+def _match_family(spec: SkuSpec, family_id: str, family_info: dict) -> str | None:
+    """Try to match a SkuSpec against a family, returning the instance name or None."""
+    if spec.is_cpu:
+        if not family_info.get("cpu"):
+            return None
+        instances = family_info.get("instances", [])
+        # Pick a reasonable CPU instance (index 3 = 16 vCPUs, good default)
+        idx = min(3, len(instances) - 1) if instances else -1
+        return instances[idx] if idx >= 0 else None
+
+    # GPU matching
+    if family_info.get("cpu"):
+        return None
+
+    # Check accelerator match
+    if spec.accelerators:
+        accel = spec.accelerators[0]
+        fm = family_info.get("gpu_model", "")
+        if fm and accel not in fm.upper():
             return None
 
-        desc = entry.get("description", "")
-        it = cls(name=name, description=desc)
-
-        # Parse GPU info from description
-        gpu_match = re.search(
-            r"(NVIDIA|AMD)\W+((?:[A-Za-z]\w+\W*)+)\W*(\d+)GB\W*GPU\W*x\W*(\d+)\W*(NVLink)?",
-            desc,
-        )
-        if gpu_match:
-            it.gpu_model = gpu_match.group(2).strip().upper()
-            it.gpu_memory_gb = int(gpu_match.group(3))
-            it.num_gpus = int(gpu_match.group(4))
-            it.nvlink = bool(gpu_match.group(5))
-            return it
-
-        # CPU-only instance
-        cpu_match = re.search(r"vCPU:\s*(\d+)", desc)
-        if cpu_match:
-            it.is_cpu = True
-            return it
-
-        return it
-
-    @property
-    def series_id(self) -> str:
-        return self.series
-
-
-def _get_cache_path() -> Path:
-    """Return the cache file path for instance types."""
-    from azure_jobs.core.const import AJ_HOME
-
-    cache_dir = AJ_HOME / "cache"
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    return cache_dir / "instance_types.json"
-
-
-def _load_cache() -> list[dict] | None:
-    """Load cached instance types if fresh enough."""
-    cache_path = _get_cache_path()
-    if not cache_path.exists():
+    # Check memory match
+    fam_mem = family_info.get("gpu_memory", 0)
+    if spec.unit_memory and fam_mem and fam_mem < spec.unit_memory:
         return None
-    try:
-        data = json.loads(cache_path.read_text())
-        if time.time() - data.get("timestamp", 0) < _CACHE_TTL_SECONDS:
-            return data.get("instances", [])
-    except Exception:
-        pass
+
+    # Check NvLink
+    if spec.nvlink and not family_info.get("nvlink"):
+        return None
+
+    # Find instance with matching GPU count
+    gpu_map = family_info.get("instances_by_gpu", {})
+    if spec.num_units in gpu_map:
+        return gpu_map[spec.num_units]
+
+    # Fallback: return any instance from the family
+    if gpu_map:
+        # Prefer the one closest to requested GPU count
+        closest = min(gpu_map.keys(), key=lambda k: abs(k - spec.num_units))
+        return gpu_map[closest]
+
     return None
 
 
-def _save_cache(instances: list[dict]) -> None:
-    """Save instance types to cache."""
-    cache_path = _get_cache_path()
-    try:
-        cache_path.write_text(
-            json.dumps({"timestamp": time.time(), "instances": instances}, indent=2)
-        )
-    except Exception:
-        pass
-
-
-def _fetch_instance_types() -> list[InstanceType]:
-    """Fetch all Singularity instance types, with caching."""
-    # Try cache first
-    cached = _load_cache()
-    if cached:
-        return [InstanceType(**it) for it in cached]
-
-    from azure_jobs.core.config import _az_json
-
-    subs = _az_json(["account", "list", "--query", "[].id", "-o", "json"])
-    if not subs:
-        return []
-
-    all_instances: list[InstanceType] = []
-
-    for sub_id in subs:
-        try:
-            series_data = _az_json([
-                "rest", "--method", "get", "--url",
-                f"https://management.azure.com/subscriptions/{sub_id}"
-                f"/providers/Microsoft.Singularity/locations/westus2"
-                f"/instancetypeseries?api-version=2020-12-01-preview",
-            ])
-            if not series_data or not series_data.get("value"):
-                continue
-
-            for s in series_data["value"]:
-                series_id = s.get("id", "")
-                series_name = series_id.rsplit("/", 1)[-1] if "/" in series_id else series_id
-                try:
-                    it_data = _az_json([
-                        "rest", "--method", "get", "--url",
-                        f"https://management.azure.com/subscriptions/{sub_id}"
-                        f"/providers/Microsoft.Singularity/locations/westus2"
-                        f"/instancetypeseries/{series_name}/instancetypes"
-                        f"?api-version=2020-12-01-preview",
-                    ])
-                    if not it_data or not it_data.get("value"):
-                        continue
-                    for entry in it_data["value"]:
-                        it = InstanceType.from_api(entry)
-                        if it:
-                            it.series = series_name
-                            all_instances.append(it)
-                except Exception:
-                    continue
-
-            if all_instances:
-                # Save to cache
-                _save_cache([
-                    {
-                        "name": it.name, "series": it.series,
-                        "num_gpus": it.num_gpus, "gpu_memory_gb": it.gpu_memory_gb,
-                        "gpu_model": it.gpu_model, "is_cpu": it.is_cpu,
-                        "nvlink": it.nvlink, "description": it.description,
-                    }
-                    for it in all_instances
-                ])
-                return all_instances
-        except Exception:
-            continue
-
-    return []
-
-
-def resolve_instance_type(sku_raw: str) -> list[str]:
+def resolve_instance_type(
+    sku_raw: str,
+    *,
+    vc_subscription_id: str = "",
+    vc_resource_group: str = "",
+    vc_name: str = "",
+) -> list[str]:
     """Resolve an amlt SKU shorthand to Singularity instance type name(s).
 
     Args:
         sku_raw: Raw SKU string, e.g. "1xC1", "1x80G8-A100-NvLink", or
-                 a direct instance type name like "Standard_ND40rs_v2".
+                 a direct instance type name like "E16ads_v5".
+        vc_subscription_id: Virtual cluster subscription for quota lookup.
+        vc_resource_group: Virtual cluster resource group.
+        vc_name: Virtual cluster name.
 
     Returns:
         List of matching instance type names (without "Singularity." prefix).
         Empty list if resolution fails.
     """
-    # Strip the {nodes}x prefix for matching but keep it parsed
-    spec = SkuSpec.parse(sku_raw)
-
-    # If the raw SKU looks like an instance type name (contains _ or starts
-    # with Standard_/ND), return it directly
+    # Strip the {nodes}x prefix for direct-name detection
     sku_no_prefix = re.sub(r"^\d+x", "", sku_raw.strip())
+
+    # If the raw SKU looks like a direct instance type name, pass through
     if "_" in sku_no_prefix or sku_no_prefix.startswith("Standard"):
         return [sku_no_prefix]
 
-    all_types = _fetch_instance_types()
-    if not all_types:
-        log.warning("Could not fetch Singularity instance types for SKU resolution")
-        return []
+    spec = SkuSpec.parse(sku_raw)
 
-    def _score(it: InstanceType) -> int:
-        """Higher = better match. -1 = no match."""
-        if spec.is_cpu and not it.is_cpu:
-            return -1
-        if not spec.is_cpu and it.is_cpu:
-            return -1
-        if not spec.is_cpu:
-            # GPU matching
-            if it.num_gpus != spec.num_units:
-                return -1
-            score = 100
-            if spec.unit_memory and it.gpu_memory_gb != spec.unit_memory:
-                if it.gpu_memory_gb < (spec.unit_memory or 0):
-                    return -1
-                score -= 10  # memory mismatch penalty
-            if spec.accelerators:
-                accel_name = spec.accelerators[0]
-                if accel_name not in it.gpu_model:
-                    return -1
-                score += 50  # exact accelerator match
-            if spec.nvlink and not it.nvlink:
-                return -1
-            if spec.nvlink and it.nvlink:
-                score += 20
-            return score
-        else:
-            # CPU matching — any CPU instance works
-            return 50
+    # Get available families from VC quotas (if VC info provided)
+    available_families: list[str] | None = None
+    if vc_subscription_id and vc_name:
+        available_families = _fetch_vc_families(
+            vc_subscription_id, vc_resource_group, vc_name
+        )
 
-    scored = [(it, _score(it)) for it in all_types]
-    scored = [(it, s) for it, s in scored if s >= 0]
-    scored.sort(key=lambda x: -x[1])
+    # Match against known families
+    results: list[str] = []
+    for family_id, family_info in _FAMILY_MAP.items():
+        # If we have VC info, only consider available families
+        if available_families is not None and family_id not in available_families:
+            continue
 
-    # Return top matches (up to 4 alternatives, like amlt)
-    return [it.name for it, _ in scored[:4]]
+        instance = _match_family(spec, family_id, family_info)
+        if instance:
+            results.append(instance)
+
+    return results[:4]  # up to 4 alternatives, like amlt

@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
-from azure_jobs.core.sku import InstanceType, SkuSpec, resolve_instance_type
+from azure_jobs.core.sku import SkuSpec, _match_family, _FAMILY_MAP, resolve_instance_type
 
 
 class TestSkuSpecParse:
@@ -52,75 +52,78 @@ class TestSkuSpecParse:
         assert spec.num_units == 1
 
 
-class TestInstanceTypeFromApi:
-    def test_gpu_instance(self):
-        entry = {
-            "name": "Singularity.Standard_ND40rs_v2",
-            "description": "NVIDIA V100 32GB GPU x 8 NVLink",
-        }
-        it = InstanceType.from_api(entry)
-        assert it is not None
-        assert it.name == "Standard_ND40rs_v2"
-        assert it.num_gpus == 8
-        assert it.gpu_memory_gb == 32
-        assert it.nvlink is True
+class TestMatchFamily:
+    def test_cpu_matches_eadsv5(self):
+        spec = SkuSpec.parse("1xC1")
+        result = _match_family(spec, "Eadsv5", _FAMILY_MAP["Eadsv5"])
+        assert result is not None
+        assert "ads_v5" in result
 
-    def test_cpu_instance(self):
-        entry = {
-            "name": "Singularity.Standard_D2_v3",
-            "description": "vCPU: 2, Memory GiB: 8",
-        }
-        it = InstanceType.from_api(entry)
-        assert it is not None
-        assert it.name == "Standard_D2_v3"
-        assert it.is_cpu is True
+    def test_cpu_rejects_gpu_family(self):
+        spec = SkuSpec.parse("1xC1")
+        result = _match_family(spec, "NC_A100_v4", _FAMILY_MAP["NC_A100_v4"])
+        assert result is None
 
-    def test_n1_suffix_filtered(self):
-        entry = {"name": "Singularity.ND40rs_v2-n1", "description": "foo"}
-        it = InstanceType.from_api(entry)
-        assert it is None
+    def test_gpu_a100_80g_nvlink_matches_ndamv4(self):
+        spec = SkuSpec.parse("1x80G8-A100-NvLink")
+        result = _match_family(spec, "NDAMv4", _FAMILY_MAP["NDAMv4"])
+        assert result == "ND96amsr_A100_v4"
+
+    def test_gpu_a100_40g_matches_ndv4(self):
+        spec = SkuSpec.parse("1x40G8-A100")
+        result = _match_family(spec, "NDv4", _FAMILY_MAP["NDv4"])
+        assert result == "ND96asr_v4"
+
+    def test_gpu_rejects_cpu_family(self):
+        spec = SkuSpec.parse("1x80G8-A100")
+        result = _match_family(spec, "Eadsv5", _FAMILY_MAP["Eadsv5"])
+        assert result is None
+
+    def test_nvlink_rejects_non_nvlink(self):
+        spec = SkuSpec.parse("1x80G8-A100-NvLink")
+        result = _match_family(spec, "NC_A100_v4", _FAMILY_MAP["NC_A100_v4"])
+        assert result is None
 
 
 class TestResolveInstanceType:
     def test_direct_instance_name(self):
         """Instance type names with underscores pass through directly."""
-        result = resolve_instance_type("Standard_ND40rs_v2")
-        assert result == ["Standard_ND40rs_v2"]
+        result = resolve_instance_type("E16ads_v5")
+        assert result == ["E16ads_v5"]
 
     def test_direct_name_with_node_prefix(self):
         result = resolve_instance_type("2xStandard_ND40rs_v2")
         assert result == ["Standard_ND40rs_v2"]
 
-    @patch("azure_jobs.core.sku._fetch_instance_types")
-    def test_cpu_resolution(self, mock_fetch):
-        mock_fetch.return_value = [
-            InstanceType(name="Standard_D2_v3", is_cpu=True),
-            InstanceType(name="Standard_ND40rs_v2", num_gpus=8, gpu_memory_gb=32),
-        ]
-        result = resolve_instance_type("1xC1")
-        assert "Standard_D2_v3" in result
-        assert "Standard_ND40rs_v2" not in result
+    @patch("azure_jobs.core.sku._fetch_vc_families")
+    def test_cpu_resolution_with_vc(self, mock_fetch):
+        mock_fetch.return_value = ["Eadsv5", "NC_A100_v4"]
+        result = resolve_instance_type(
+            "1xC1",
+            vc_subscription_id="sub", vc_resource_group="rg", vc_name="vc",
+        )
+        assert len(result) == 1
+        assert "ads_v5" in result[0]  # E16ads_v5
 
-    @patch("azure_jobs.core.sku._fetch_instance_types")
-    def test_gpu_a100_resolution(self, mock_fetch):
-        mock_fetch.return_value = [
-            InstanceType(name="Standard_D2_v3", is_cpu=True),
-            InstanceType(
-                name="Standard_NC24ads_A100_v4", num_gpus=4,
-                gpu_memory_gb=80, gpu_model="A100",
-            ),
-            InstanceType(
-                name="Standard_ND96amsr_A100_v4", num_gpus=8,
-                gpu_memory_gb=80, gpu_model="A100", nvlink=True,
-            ),
-        ]
-        result = resolve_instance_type("1x80G8-A100-NvLink")
-        assert result[0] == "Standard_ND96amsr_A100_v4"
+    @patch("azure_jobs.core.sku._fetch_vc_families")
+    def test_gpu_a100_80g_nvlink(self, mock_fetch):
+        mock_fetch.return_value = ["NDAMv4", "NDv4"]
+        result = resolve_instance_type(
+            "1x80G8-A100-NvLink",
+            vc_subscription_id="sub", vc_resource_group="rg", vc_name="vc",
+        )
+        assert result[0] == "ND96amsr_A100_v4"
 
-    @patch("azure_jobs.core.sku._fetch_instance_types")
-    def test_empty_when_no_match(self, mock_fetch):
-        mock_fetch.return_value = [
-            InstanceType(name="Standard_D2_v3", is_cpu=True),
-        ]
-        result = resolve_instance_type("1x80G8-H100")
+    @patch("azure_jobs.core.sku._fetch_vc_families")
+    def test_no_match_returns_empty(self, mock_fetch):
+        mock_fetch.return_value = ["Eadsv5"]  # Only CPU available
+        result = resolve_instance_type(
+            "1x80G8-H100",
+            vc_subscription_id="sub", vc_resource_group="rg", vc_name="vc",
+        )
         assert result == []
+
+    def test_no_vc_info_uses_all_families(self):
+        """Without VC info, all known families are tried."""
+        result = resolve_instance_type("1xC1")
+        assert len(result) > 0  # Should find CPU instances from all families
