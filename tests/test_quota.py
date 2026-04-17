@@ -8,7 +8,14 @@ import pytest
 from click.testing import CliRunner
 
 from azure_jobs.cli import main
-from azure_jobs.core.sku import SLA_TIERS, SeriesQuota, SlaTierQuota, fetch_vc_quotas
+from azure_jobs.core.sku import (
+    SLA_TIERS,
+    SeriesQuota,
+    SlaTierQuota,
+    VCInfo,
+    discover_virtual_clusters,
+    fetch_vc_quotas,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -31,7 +38,7 @@ class TestSlaTierQuota:
 
     def test_available_unknown_used(self):
         q = SlaTierQuota(limit=10, used=None)
-        assert q.available == 10  # assume all free
+        assert q.available == 10
 
     def test_bool_true(self):
         assert bool(SlaTierQuota(limit=1))
@@ -79,14 +86,12 @@ class TestSeriesQuota:
         assert sq.has_any_quota()
 
     def test_accelerator_from_family_map(self):
-        # _FAMILY_MAP uses keys like "NDAMv4", "NDH100v5" etc.
         sq = SeriesQuota(series="NDH100v5")
-        acc = sq.accelerator
-        assert acc == "H100"
+        assert sq.accelerator == "H100"
 
     def test_accelerator_unknown_series(self):
         sq = SeriesQuota(series="UNKNOWN_SERIES_XYZ")
-        assert sq.accelerator == ""  # no match in _FAMILY_MAP
+        assert sq.accelerator == ""
 
     def test_gpu_memory_from_family_map(self):
         sq = SeriesQuota(series="NDH100v5")
@@ -166,6 +171,49 @@ class TestFetchVcQuotas:
 
 
 # ---------------------------------------------------------------------------
+# discover_virtual_clusters tests
+# ---------------------------------------------------------------------------
+
+
+class TestDiscoverVirtualClusters:
+    @patch("azure_jobs.core.config._az_json")
+    def test_discovers_vcs_from_resource_graph(self, mock_az):
+        mock_az.side_effect = [
+            {"id": "sub-123"},  # account show
+            {"data": [
+                {"name": "vc1", "resourceGroup": "rg1", "subscriptionId": "sub-123"},
+                {"name": "vc2", "resourceGroup": "rg2", "subscriptionId": "sub-123"},
+            ]},  # resource graph
+        ]
+        vcs = discover_virtual_clusters()
+        assert len(vcs) == 2
+        assert vcs[0].name == "vc1"
+        assert vcs[1].name == "vc2"
+
+    @patch("azure_jobs.core.config._az_json")
+    def test_uses_provided_subscriptions(self, mock_az):
+        mock_az.return_value = {"data": [
+            {"name": "vc1", "resourceGroup": "rg1", "subscriptionId": "sub-a"},
+        ]}
+        vcs = discover_virtual_clusters(subscription_ids=["sub-a", "sub-b"])
+        assert len(vcs) == 1
+        # Should NOT call account show when subscriptions provided
+        assert mock_az.call_count == 1
+
+    @patch("azure_jobs.core.config._az_json", return_value=None)
+    def test_empty_on_no_account(self, mock_az):
+        assert discover_virtual_clusters() == []
+
+    @patch("azure_jobs.core.config._az_json")
+    def test_empty_on_no_data(self, mock_az):
+        mock_az.side_effect = [
+            {"id": "sub-123"},
+            {"data": []},
+        ]
+        assert discover_virtual_clusters() == []
+
+
+# ---------------------------------------------------------------------------
 # CLI tests
 # ---------------------------------------------------------------------------
 
@@ -174,61 +222,45 @@ class TestQuotaListCli:
     def setup_method(self):
         self.runner = CliRunner()
 
-    @patch("azure_jobs.cli.quota._resolve_vc_config", return_value={"name": ""})
-    def test_sing_no_vc_configured(self, mock_resolve):
+    @patch("azure_jobs.cli.quota._discover_vcs", return_value=[])
+    def test_sing_no_vcs_found(self, mock_disc):
         result = self.runner.invoke(main, ["quota", "list"])
         assert result.exit_code != 0
-        assert "No virtual cluster" in result.output
+        assert "No Singularity" in result.output
 
     @patch("azure_jobs.core.sku.fetch_vc_quotas", return_value=[])
-    @patch(
-        "azure_jobs.cli.quota._resolve_vc_config",
-        return_value={"name": "myvc", "subscription_id": "s", "resource_group": "rg"},
-    )
-    def test_sing_no_quotas(self, mock_resolve, mock_fetch):
+    @patch("azure_jobs.cli.quota._discover_vcs", return_value=[
+        VCInfo(name="myvc", resource_group="rg", subscription_id="s"),
+    ])
+    def test_sing_vc_with_no_quotas(self, mock_disc, mock_fetch):
         result = self.runner.invoke(main, ["quota", "list"])
         assert result.exit_code == 0
-        assert "No quotas" in result.output
-
-    @patch("azure_jobs.core.sku.fetch_vc_quotas")
-    @patch(
-        "azure_jobs.cli.quota._resolve_vc_config",
-        return_value={"name": "myvc", "subscription_id": "s", "resource_group": "rg"},
-    )
-    def test_sing_shows_table_with_tiers(self, mock_resolve, mock_fetch):
-        sq1 = SeriesQuota(series="ND_A100_v4")
-        sq1.set_tier("Premium", 64, 32)
-        sq1.set_tier("Standard", 32, 10)
-        sq2 = SeriesQuota(series="ND_H100_v5")
-        sq2.set_tier("Premium", 16, 16)
-        mock_fetch.return_value = [sq1, sq2]
-
-        result = self.runner.invoke(main, ["quota", "list"])
-        assert result.exit_code == 0
-        assert "ND_A100_v4" in result.output
-        assert "ND_H100_v5" in result.output
         assert "myvc" in result.output
-        # SLA tier columns should appear
-        assert "Premium" in result.output
-        assert "Standard" in result.output
 
     @patch("azure_jobs.core.sku.fetch_vc_quotas")
-    @patch(
-        "azure_jobs.cli.quota._resolve_vc_config",
-        return_value={"name": "vc1", "subscription_id": "s", "resource_group": "r"},
-    )
-    def test_full_quota_series(self, mock_resolve, mock_fetch):
-        sq = SeriesQuota(series="Full")
-        sq.set_tier("Premium", 10, 10)
-        mock_fetch.return_value = [sq]
+    @patch("azure_jobs.cli.quota._discover_vcs")
+    def test_sing_shows_grouped_table(self, mock_disc, mock_fetch):
+        mock_disc.return_value = [
+            VCInfo(name="vc1", resource_group="rg1", subscription_id="s"),
+            VCInfo(name="vc2", resource_group="rg2", subscription_id="s"),
+        ]
+        sq1 = SeriesQuota(series="NDH100v5")
+        sq1.set_tier("Premium", 64, 32)
+        sq2 = SeriesQuota(series="NDAMv4")
+        sq2.set_tier("Premium", 16, 16)
+        mock_fetch.side_effect = [[sq1], [sq2]]
+
         result = self.runner.invoke(main, ["quota", "list"])
         assert result.exit_code == 0
-        assert "Full" in result.output
+        assert "vc1" in result.output
+        assert "vc2" in result.output
+        assert "NDH100v5" in result.output
+        assert "NDAMv4" in result.output
 
     def test_ql_alias_works(self):
-        with patch("azure_jobs.cli.quota._resolve_vc_config", return_value={"name": ""}):
+        with patch("azure_jobs.cli.quota._discover_vcs", return_value=[]):
             result = self.runner.invoke(main, ["ql"])
-            assert "No virtual cluster" in result.output
+            assert "No Singularity" in result.output
 
     @patch("azure_jobs.cli.quota._show_aml_quotas")
     def test_aml_flag_routes_to_aml(self, mock_aml):
@@ -239,23 +271,3 @@ class TestQuotaListCli:
     def test_aml_all_flag(self, mock_aml):
         self.runner.invoke(main, ["quota", "list", "--aml", "--all"])
         mock_aml.assert_called_once_with(True)
-
-
-class TestResolveVcConfig:
-    @patch("azure_jobs.core.config.get_workspace_config", return_value={
-        "subscription_id": "ws-sub", "resource_group": "ws-rg",
-    })
-    @patch("azure_jobs.core.config.get_defaults", return_value={})
-    def test_fallback_to_workspace(self, mock_def, mock_ws):
-        from azure_jobs.cli.quota import _resolve_vc_config
-        result = _resolve_vc_config(vc_override="myvc")
-        assert result["name"] == "myvc"
-        assert result["subscription_id"] == "ws-sub"
-        assert result["resource_group"] == "ws-rg"
-
-    @patch("azure_jobs.core.config.get_workspace_config", return_value={})
-    @patch("azure_jobs.core.config.get_defaults", return_value={})
-    def test_vc_override_sets_name(self, mock_def, mock_ws):
-        from azure_jobs.cli.quota import _resolve_vc_config
-        result = _resolve_vc_config(vc_override="override-vc")
-        assert result["name"] == "override-vc"

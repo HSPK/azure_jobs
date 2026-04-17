@@ -16,57 +16,17 @@ def quota_group() -> None:
 @click.option("--aml", "backend", flag_value="aml", help="Show AML workspace quotas")
 @click.option("--sing", "backend", flag_value="sing", default=True, help="Show Singularity VC quotas (default)")
 @click.option("--all", "show_all", is_flag=True, help="Include zero-quota families")
-@click.option("--vc", default=None, help="Virtual cluster name (overrides template)")
 @click.option("-t", "--template", default=None, help="Read VC config from template")
-def quota_list(backend: str, show_all: bool, vc: str | None, template: str | None) -> None:
+def quota_list(backend: str, show_all: bool, template: str | None) -> None:
     """List compute quotas.
 
-    By default shows Singularity virtual cluster quotas.
+    By default discovers all Singularity virtual clusters and shows their quotas.
     Use --aml for Azure ML workspace quotas.
     """
     if backend == "aml":
         _show_aml_quotas(show_all)
     else:
-        _show_sing_quotas(show_all, vc_override=vc, template=template)
-
-
-def _resolve_vc_config(
-    vc_override: str | None = None,
-    template: str | None = None,
-) -> dict[str, str]:
-    """Resolve VC subscription/resource_group/name from config or template."""
-    from azure_jobs.core import const
-    from azure_jobs.core.conf import read_conf
-    from azure_jobs.core.config import get_defaults, get_workspace_config
-
-    target: dict[str, str] = {}
-
-    # Try from template
-    if template is None:
-        template = get_defaults().get("template")
-    if template:
-        fp = const.AJ_TEMPLATE_HOME / f"{template}.yaml"
-        if fp.exists():
-            conf = read_conf(fp)
-            t = conf.get("target", {})
-            target = {
-                "subscription_id": t.get("subscription_id", ""),
-                "resource_group": t.get("resource_group", ""),
-                "name": t.get("name", ""),
-            }
-
-    if vc_override:
-        target["name"] = vc_override
-
-    # Fill missing fields from workspace config
-    if not target.get("subscription_id") or not target.get("resource_group"):
-        ws = get_workspace_config()
-        if not target.get("subscription_id"):
-            target["subscription_id"] = ws.get("subscription_id", "")
-        if not target.get("resource_group"):
-            target["resource_group"] = ws.get("resource_group", "")
-
-    return target
+        _show_sing_quotas(show_all, template=template)
 
 
 # ---------------------------------------------------------------------------
@@ -86,48 +46,83 @@ def _fmt_used_limit(used: int | None, limit: int) -> str:
 # Singularity quotas
 # ---------------------------------------------------------------------------
 
-def _show_sing_quotas(show_all: bool, vc_override: str | None, template: str | None) -> None:
-    """Display Singularity VC quotas, matching ``amlt target info sing`` output."""
+def _discover_vcs(template: str | None) -> list:
+    """Discover VCs: from template or via Resource Graph."""
+    from azure_jobs.core import const
+    from azure_jobs.core.conf import read_conf
+    from azure_jobs.core.config import get_defaults, get_workspace_config
+    from azure_jobs.core.sku import VCInfo, discover_virtual_clusters
+
+    # If a template is specified, extract the single VC from it
+    if template is None:
+        template = get_defaults().get("template")
+    if template:
+        fp = const.AJ_TEMPLATE_HOME / f"{template}.yaml"
+        if fp.exists():
+            conf = read_conf(fp)
+            t = conf.get("target", {})
+            if t.get("name") and t.get("service", "aml") == "sing":
+                ws = get_workspace_config()
+                return [VCInfo(
+                    name=t["name"],
+                    resource_group=t.get("resource_group") or ws.get("resource_group", ""),
+                    subscription_id=t.get("subscription_id") or ws.get("subscription_id", ""),
+                )]
+
+    # Discover all VCs via Azure Resource Graph
+    return discover_virtual_clusters()
+
+
+def _show_sing_quotas(show_all: bool, template: str | None) -> None:
+    """Discover all VCs and display their quotas grouped by VC."""
     from azure_jobs.core.sku import SLA_TIERS, fetch_vc_quotas
     from azure_jobs.utils.ui import console, error, warning
 
     from rich.table import Table
 
-    vc = _resolve_vc_config(vc_override, template)
-    vc_name = vc.get("name", "")
-    if not vc_name:
-        error("No virtual cluster configured")
-        console.print("  Specify --vc NAME or set a template with a Singularity target")
+    with console.status("[bold cyan]Discovering virtual clusters…[/bold cyan]", spinner="dots"):
+        vcs = _discover_vcs(template)
+
+    if not vcs:
+        error("No Singularity virtual clusters found")
+        console.print("  Make sure you are logged in (`az login`) and have access to VCs")
         raise SystemExit(1)
 
-    with console.status("[bold cyan]Fetching Singularity quotas…[/bold cyan]", spinner="dots"):
-        quotas = fetch_vc_quotas(
-            vc_subscription_id=vc.get("subscription_id", ""),
-            vc_resource_group=vc.get("resource_group", ""),
-            vc_name=vc_name,
-            include_zero=show_all,
-        )
+    console.print(f"\n  Found [bold]{len(vcs)}[/bold] virtual cluster(s)\n")
 
-    if not quotas:
-        warning(f"No quotas found for VC '{vc_name}'")
-        return
+    # Fetch quotas for each VC
+    all_vc_quotas: list[tuple] = []  # (vc, quotas)
+    with console.status("[bold cyan]Fetching quotas…[/bold cyan]", spinner="dots"):
+        for vc in vcs:
+            quotas = fetch_vc_quotas(
+                vc_subscription_id=vc.subscription_id,
+                vc_resource_group=vc.resource_group,
+                vc_name=vc.name,
+                include_zero=show_all,
+            )
+            vc.quotas = quotas
+            all_vc_quotas.append((vc, quotas))
 
-    # Detect which SLA tiers are present across all series
-    active_tiers = []
-    for tier in SLA_TIERS:
-        if any(tier in sq.tiers for sq in quotas):
-            active_tiers.append(tier)
+    # Determine which SLA tiers are active across ALL VCs
+    active_tiers: list[str] = []
+    has_overall = False
+    for _vc, quotas in all_vc_quotas:
+        for tier in SLA_TIERS:
+            if tier not in active_tiers and any(tier in sq.tiers for sq in quotas):
+                active_tiers.append(tier)
+        if not has_overall and any(sq.overall for sq in quotas):
+            has_overall = True
 
-    has_overall = any(sq.overall for sq in quotas)
-
+    # Build one table with VC grouping
     table = Table(
-        title=f"[bold]Singularity Quotas[/bold]  [dim]{vc_name}[/dim]",
+        title="[bold]Singularity Quotas[/bold]",
         title_style="",
         show_header=True,
         header_style="bold",
         show_lines=False,
         pad_edge=True,
     )
+    table.add_column("VC", style="bold magenta", no_wrap=True)
     table.add_column("Series", style="bold cyan", no_wrap=True)
     table.add_column("Accelerator", no_wrap=True)
     table.add_column("Memory", justify="right", no_wrap=True)
@@ -137,26 +132,41 @@ def _show_sing_quotas(show_all: bool, vc_override: str | None, template: str | N
     if has_overall:
         table.add_column("[cyan]Overall[/cyan]", justify="right", no_wrap=True)
 
-    for sq in quotas:
-        acc = sq.accelerator or "[dim]—[/dim]"
-        mem = f"{sq.gpu_memory}GB" if sq.gpu_memory else "[dim]—[/dim]"
+    for vc, quotas in all_vc_quotas:
+        if not quotas:
+            # Show VC with no-quota note
+            empty_row: list[str] = [vc.name, "[dim]no quotas[/dim]", "", ""]
+            empty_row += [""] * len(active_tiers)
+            if has_overall:
+                empty_row.append("")
+            table.add_row(*empty_row)
+            continue
 
-        row: list[str] = [sq.series, acc, mem]
-        for tier in active_tiers:
-            tq = sq.tiers.get(tier)
-            if tq:
-                row.append(_fmt_used_limit(tq.used, tq.limit))
-            else:
-                row.append("[dim]·[/dim]")
-        if has_overall:
-            if sq.overall:
-                row.append(_fmt_used_limit(sq.overall.used, sq.overall.limit))
-            else:
-                row.append("[dim]·[/dim]")
+        for i, sq in enumerate(quotas):
+            vc_label = vc.name if i == 0 else ""
+            acc = sq.accelerator or "[dim]—[/dim]"
+            mem = f"{sq.gpu_memory}GB" if sq.gpu_memory else "[dim]—[/dim]"
 
-        table.add_row(*row)
+            row: list[str] = [vc_label, sq.series, acc, mem]
+            for tier in active_tiers:
+                tq = sq.tiers.get(tier)
+                if tq:
+                    row.append(_fmt_used_limit(tq.used, tq.limit))
+                else:
+                    row.append("[dim]·[/dim]")
+            if has_overall:
+                if sq.overall:
+                    row.append(_fmt_used_limit(sq.overall.used, sq.overall.limit))
+                else:
+                    row.append("[dim]·[/dim]")
 
-    console.print()
+            table.add_row(*row)
+
+        # Add separator between VCs (empty row)
+        if vc != all_vc_quotas[-1][0]:
+            sep: list[str] = [""] * len(table.columns)
+            table.add_row(*sep)
+
     console.print(table)
     console.print()
 
@@ -238,8 +248,7 @@ def _show_aml_quotas(show_all: bool) -> None:
 @click.option("--aml", "backend", flag_value="aml")
 @click.option("--sing", "backend", flag_value="sing", default=True)
 @click.option("--all", "show_all", is_flag=True)
-@click.option("--vc", default=None)
 @click.option("-t", "--template", default=None)
-def _alias_ql(backend: str, show_all: bool, vc: str | None, template: str | None) -> None:
+def _alias_ql(backend: str, show_all: bool, template: str | None) -> None:
     """Shortcut for ``aj quota list``."""
-    quota_list.callback(backend, show_all, vc, template)
+    quota_list.callback(backend, show_all, template)

@@ -13,6 +13,7 @@ Resolution strategy:
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from dataclasses import dataclass, field
@@ -317,6 +318,69 @@ def fetch_vc_quotas(
     if not include_zero:
         results = [s for s in results if s.has_any_quota()]
     return results
+
+
+@dataclass
+class VCInfo:
+    """Discovered virtual cluster with its quotas."""
+
+    name: str
+    resource_group: str
+    subscription_id: str
+    quotas: list[SeriesQuota] = field(default_factory=list)
+
+
+def discover_virtual_clusters(
+    subscription_ids: list[str] | None = None,
+) -> list[VCInfo]:
+    """Discover all Singularity virtual clusters via Azure Resource Graph.
+
+    Uses the same approach as ``amlt``: query Resource Graph for all
+    ``microsoft.machinelearningservices/virtualclusters`` across subscriptions.
+    If *subscription_ids* is ``None``, uses the current ``az account`` subscription.
+    """
+    from azure_jobs.core.config import _az_json
+
+    if not subscription_ids:
+        # Fall back to current subscription
+        acct = _az_json(["account", "show"])
+        if not acct or not acct.get("id"):
+            return []
+        subscription_ids = [acct["id"]]
+
+    # Azure Resource Graph query (same as amlt)
+    query = (
+        "resources "
+        "| where type == 'microsoft.machinelearningservices/virtualclusters' "
+        "| order by name asc "
+        "| project name, resourceGroup, subscriptionId"
+    )
+    data = _az_json(
+        [
+            "rest", "--method", "post", "--url",
+            "https://management.azure.com/providers/Microsoft.ResourceGraph"
+            "/resources?api-version=2021-03-01",
+            "--body",
+            json.dumps({
+                "query": query,
+                "subscriptions": subscription_ids,
+            }),
+        ],
+        timeout=30,
+    )
+    if not data:
+        return []
+
+    rows = data.get("data", [])
+    return [
+        VCInfo(
+            name=r.get("name", ""),
+            resource_group=r.get("resourceGroup", ""),
+            subscription_id=r.get("subscriptionId", ""),
+        )
+        for r in rows
+        if r.get("name")
+    ]
 
 
 def _match_family(spec: SkuSpec, family_id: str, family_info: dict) -> str | None:
