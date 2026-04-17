@@ -37,9 +37,8 @@ def _resolve_vc_config(
     """Resolve VC subscription/resource_group/name from config or template."""
     from azure_jobs.core import const
     from azure_jobs.core.conf import read_conf
-    from azure_jobs.core.config import get_defaults, get_workspace_config, read_config
+    from azure_jobs.core.config import get_defaults, get_workspace_config
 
-    # If --vc given, we still need sub/rg from workspace or template
     target: dict[str, str] = {}
 
     # Try from template
@@ -56,7 +55,6 @@ def _resolve_vc_config(
                 "name": t.get("name", ""),
             }
 
-    # Override name if --vc given
     if vc_override:
         target["name"] = vc_override
 
@@ -71,9 +69,26 @@ def _resolve_vc_config(
     return target
 
 
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _fmt_used_limit(used: int | None, limit: int) -> str:
+    """Format a ``used/limit`` cell with color coding like amlt."""
+    if limit == 0:
+        return "[dim]·[/dim]"
+    u = str(used) if used is not None else "?"
+    color = "green" if (used or 0) < limit else "red"
+    return f"[{color}]{u}[/{color}][dim]/[/dim][yellow]{limit}[/yellow]"
+
+
+# ---------------------------------------------------------------------------
+# Singularity quotas
+# ---------------------------------------------------------------------------
+
 def _show_sing_quotas(show_all: bool, vc_override: str | None, template: str | None) -> None:
-    """Display Singularity virtual cluster quotas."""
-    from azure_jobs.core.sku import fetch_vc_quotas
+    """Display Singularity VC quotas, matching ``amlt target info sing`` output."""
+    from azure_jobs.core.sku import SLA_TIERS, fetch_vc_quotas
     from azure_jobs.utils.ui import console, error, warning
 
     from rich.table import Table
@@ -97,6 +112,14 @@ def _show_sing_quotas(show_all: bool, vc_override: str | None, template: str | N
         warning(f"No quotas found for VC '{vc_name}'")
         return
 
+    # Detect which SLA tiers are present across all series
+    active_tiers = []
+    for tier in SLA_TIERS:
+        if any(tier in sq.tiers for sq in quotas):
+            active_tiers.append(tier)
+
+    has_overall = any(sq.overall for sq in quotas)
+
     table = Table(
         title=f"[bold]Singularity Quotas[/bold]  [dim]{vc_name}[/dim]",
         title_style="",
@@ -105,41 +128,42 @@ def _show_sing_quotas(show_all: bool, vc_override: str | None, template: str | N
         show_lines=False,
         pad_edge=True,
     )
-    table.add_column("Family", style="bold cyan", no_wrap=True)
-    table.add_column("GPU", no_wrap=True)
-    table.add_column("Limit", justify="right")
-    table.add_column("Used", justify="right")
-    table.add_column("Avail", justify="right")
-    table.add_column("", no_wrap=True)  # bar
+    table.add_column("Series", style="bold cyan", no_wrap=True)
+    table.add_column("Accelerator", no_wrap=True)
+    table.add_column("Memory", justify="right", no_wrap=True)
+    for tier in active_tiers:
+        color = {"Premium": "green", "Standard": "yellow", "Basic": "bright_red"}.get(tier, "white")
+        table.add_column(f"[{color}]{tier}[/{color}]", justify="right", no_wrap=True)
+    if has_overall:
+        table.add_column("[cyan]Overall[/cyan]", justify="right", no_wrap=True)
 
-    for q in quotas:
-        avail = q.available
-        if avail > 0:
-            avail_s = f"[green]{avail}[/green]"
-        elif q.limit > 0:
-            avail_s = f"[red]{avail}[/red]"
-        else:
-            avail_s = f"[dim]{avail}[/dim]"
+    for sq in quotas:
+        acc = sq.accelerator or "[dim]—[/dim]"
+        mem = f"{sq.gpu_memory}GB" if sq.gpu_memory else "[dim]—[/dim]"
 
-        pct = (q.used / q.limit * 100) if q.limit > 0 else 0
-        bar_len = 15
-        filled = int(pct / 100 * bar_len)
-        bar_color = "green" if pct < 70 else ("yellow" if pct < 90 else "red")
-        bar = f"[{bar_color}]{'█' * filled}[/{bar_color}][dim]{'░' * (bar_len - filled)}[/dim]"
+        row: list[str] = [sq.series, acc, mem]
+        for tier in active_tiers:
+            tq = sq.tiers.get(tier)
+            if tq:
+                row.append(_fmt_used_limit(tq.used, tq.limit))
+            else:
+                row.append("[dim]·[/dim]")
+        if has_overall:
+            if sq.overall:
+                row.append(_fmt_used_limit(sq.overall.used, sq.overall.limit))
+            else:
+                row.append("[dim]·[/dim]")
 
-        table.add_row(
-            q.family,
-            q.description,
-            str(q.limit),
-            str(q.used),
-            avail_s,
-            bar,
-        )
+        table.add_row(*row)
 
     console.print()
     console.print(table)
     console.print()
 
+
+# ---------------------------------------------------------------------------
+# AML quotas
+# ---------------------------------------------------------------------------
 
 def _show_aml_quotas(show_all: bool) -> None:
     """Display Azure ML workspace quotas."""
@@ -153,7 +177,6 @@ def _show_aml_quotas(show_all: bool) -> None:
 
     with console.status("[bold cyan]Fetching AML quotas…[/bold cyan]", spinner="dots"):
         ml = create_ml_client(ws)
-        # Detect workspace location
         ws_obj = ml.workspaces.get(ws.get("workspace_name", ""))
         location = getattr(ws_obj, "location", "") or ""
         if not location:
@@ -173,11 +196,10 @@ def _show_aml_quotas(show_all: bool) -> None:
         show_lines=False,
         pad_edge=True,
     )
-    table.add_column("Family", style="bold cyan", no_wrap=True)
-    table.add_column("Limit", justify="right")
-    table.add_column("Used", justify="right")
-    table.add_column("Avail", justify="right")
-    table.add_column("", no_wrap=True)
+    table.add_column("VM Family", style="bold cyan", no_wrap=True)
+    table.add_column("Quota", justify="right", no_wrap=True)
+    table.add_column("Nodes", justify="right", no_wrap=True)
+    table.add_column("", no_wrap=True)  # bar
 
     for u in usages:
         limit = getattr(u, "limit", 0) or 0
@@ -189,11 +211,11 @@ def _show_aml_quotas(show_all: bool) -> None:
 
         avail = max(0, limit - current)
         if avail > 0:
-            avail_s = f"[green]{avail}[/green]"
+            nodes_s = f"[green]{current}[/green][dim]/[/dim]{limit}"
         elif limit > 0:
-            avail_s = f"[red]{avail}[/red]"
+            nodes_s = f"[red]{current}[/red][dim]/[/dim]{limit}"
         else:
-            avail_s = f"[dim]{avail}[/dim]"
+            nodes_s = f"[dim]{current}/{limit}[/dim]"
 
         pct = (current / limit * 100) if limit > 0 else 0
         bar_len = 15
@@ -201,13 +223,7 @@ def _show_aml_quotas(show_all: bool) -> None:
         bar_color = "green" if pct < 70 else ("yellow" if pct < 90 else "red")
         bar = f"[{bar_color}]{'█' * filled}[/{bar_color}][dim]{'░' * (bar_len - filled)}[/dim]"
 
-        table.add_row(
-            family,
-            str(limit),
-            str(current),
-            avail_s,
-            bar,
-        )
+        table.add_row(family, f"[green]{avail}[/green] free", nodes_s, bar)
 
     console.print()
     console.print(table)

@@ -193,37 +193,64 @@ def _fetch_vc_families(
         return []
 
 
-@dataclass
-class QuotaInfo:
-    """Single VM family quota entry."""
+SLA_TIERS = ("Premium", "Standard", "Basic")
 
-    family: str
+
+@dataclass
+class SlaTierQuota:
+    """Quota usage for a single SLA tier."""
+
     limit: int = 0
-    used: int = 0
-    gpu_model: str = ""
-    gpu_memory: int = 0
-    gpu_count: int = 0
-    is_cpu: bool = False
+    used: int | None = None  # None = unknown
 
     @property
     def available(self) -> int:
+        if self.used is None:
+            return self.limit
         return max(0, self.limit - self.used)
 
+    def __bool__(self) -> bool:
+        return self.limit > 0
+
+
+@dataclass
+class SeriesQuota:
+    """Per-series quota across SLA tiers, matching amlt's data model."""
+
+    series: str
+    tiers: dict[str, SlaTierQuota] = field(default_factory=dict)
+    # Overall (user-level) quota — separate from per-SLA tiers
+    overall: SlaTierQuota | None = None
+
+    def set_tier(self, sla_tier: str | None, limit: int, used: int | None) -> None:
+        """Set quota for a given SLA tier.  ``None`` maps to overall."""
+        if sla_tier is None:
+            self.overall = SlaTierQuota(limit, used)
+        else:
+            # Normalize to title case (Premium/Standard/Basic)
+            tier = sla_tier.strip().title()
+            if tier not in SLA_TIERS:
+                tier = "Basic"  # amlt fallback for unknown tiers
+            self.tiers[tier] = SlaTierQuota(limit, used)
+
     @property
-    def description(self) -> str:
-        """Human-readable description from _FAMILY_MAP or instance fields."""
-        if self.is_cpu:
-            return "CPU"
-        info = _FAMILY_MAP.get(self.family, {})
+    def accelerator(self) -> str:
+        """GPU accelerator name from _FAMILY_MAP."""
+        info = _FAMILY_MAP.get(self.series, {})
         if info.get("cpu"):
             return "CPU"
-        model = info.get("gpu_model") or self.gpu_model or "GPU"
-        mem = info.get("gpu_memory") or self.gpu_memory or 0
-        nv = " NvLink" if info.get("nvlink") else ""
-        gpus = info.get("instances_by_gpu", {})
-        count = max(gpus.keys()) if gpus else (self.gpu_count or "?")
-        mem_s = f" {mem}GB" if mem else ""
-        return f"{count}× {model}{mem_s}{nv}"
+        return info.get("gpu_model", "")
+
+    @property
+    def gpu_memory(self) -> int:
+        """GPU memory in GB from _FAMILY_MAP."""
+        return _FAMILY_MAP.get(self.series, {}).get("gpu_memory", 0) or 0
+
+    def has_any_quota(self) -> bool:
+        """Return True if any tier has a non-zero limit."""
+        if self.overall and self.overall.limit > 0:
+            return True
+        return any(t.limit > 0 for t in self.tiers.values())
 
 
 def fetch_vc_quotas(
@@ -232,11 +259,16 @@ def fetch_vc_quotas(
     vc_name: str,
     *,
     include_zero: bool = False,
-) -> list[QuotaInfo]:
-    """Fetch full quota info for a Singularity virtual cluster.
+) -> list[SeriesQuota]:
+    """Fetch quota info for a Singularity virtual cluster.
 
-    Returns a list of :class:`QuotaInfo` with limit, used, and GPU details.
+    Merges both ``defaultGroupPolicyOverallQuotas`` and regioned
+    ``properties.managed.quotas`` — matching ``amlt target info sing``.
+
+    Each quota item from the API has ``{id, slaTier, limit, used}``.
     """
+    from collections import defaultdict
+
     from azure_jobs.core.config import _az_json
 
     data = _az_json(
@@ -253,25 +285,37 @@ def fetch_vc_quotas(
         return []
 
     managed = data.get("properties", {}).get("managed", {})
-    quotas = managed.get("defaultGroupPolicyOverallQuotas", {}).get("limits", [])
-    results: list[QuotaInfo] = []
-    for q in quotas:
-        fam = q.get("id", "")
-        limit = q.get("limit", 0)
-        used = q.get("currentValue", 0)
-        if not include_zero and limit == 0:
+
+    # Collect all raw quota items from both sources (like amlt does)
+    raw_items: list[dict[str, Any]] = []
+
+    # 1. defaultGroupPolicyOverallQuotas.limits
+    dgp = managed.get("defaultGroupPolicyOverallQuotas", {}).get("limits", [])
+    raw_items.extend(dgp)
+
+    # 2. regioned quotas: properties.managed.quotas.{region}.limits
+    regioned = managed.get("quotas", {})
+    for _region, region_data in regioned.items():
+        if isinstance(region_data, dict):
+            raw_items.extend(region_data.get("limits", []))
+
+    # Build per-series quotas
+    series_map: dict[str, SeriesQuota] = defaultdict(lambda: SeriesQuota(series=""))
+    for item in raw_items:
+        sid = item.get("id", "")
+        if not sid:
             continue
-        info = _FAMILY_MAP.get(fam, {})
-        gpus = info.get("instances_by_gpu", {})
-        results.append(QuotaInfo(
-            family=fam,
-            limit=limit,
-            used=used,
-            gpu_model=info.get("gpu_model", "") or "",
-            gpu_memory=info.get("gpu_memory", 0) or 0,
-            gpu_count=max(gpus.keys()) if gpus else 0,
-            is_cpu=bool(info.get("cpu")),
-        ))
+        if sid not in series_map:
+            series_map[sid] = SeriesQuota(series=sid)
+        sq = series_map[sid]
+        limit = item.get("limit", 0)
+        used = item.get("used") if "used" in item else None
+        sla_tier = item.get("slaTier")
+        sq.set_tier(sla_tier, limit, used)
+
+    results = sorted(series_map.values(), key=lambda s: s.series)
+    if not include_zero:
+        results = [s for s in results if s.has_any_quota()]
     return results
 
 
