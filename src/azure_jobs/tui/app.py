@@ -305,6 +305,7 @@ class AjDashboard(App):
 
         from azure.ai.ml.constants import ListViewType
 
+        _FIRST_BATCH = 20
         jobs: list[dict[str, Any]] = []
         try:
             for job_obj in self._ml_client.jobs.list(
@@ -314,11 +315,9 @@ class AjDashboard(App):
                 if worker.is_cancelled:
                     return
                 jobs.append(_extract_job(job_obj))
-                if len(jobs) % 20 == 0:
-                    self.call_from_thread(
-                        self._update_loading,
-                        f"Fetching jobs… ({len(jobs)} loaded)",
-                    )
+                # Show first batch immediately so the UI is responsive
+                if len(jobs) == _FIRST_BATCH:
+                    self.call_from_thread(self._on_jobs_loaded, list(jobs))
         except Exception as exc:
             if not worker.is_cancelled:
                 msg = str(exc)[:100]
@@ -329,17 +328,15 @@ class AjDashboard(App):
 
         if jobs and not worker.is_cancelled:
             self.call_from_thread(self._on_jobs_loaded, jobs)
-        elif not jobs and not worker.is_cancelled:
-            self.call_from_thread(
-                self._update_loading, "No jobs found in this workspace.",
-            )
 
     def _on_jobs_loaded(self, jobs: list[dict[str, Any]]) -> None:
+        prev_name = ""
+        if 0 <= self._selected_idx < len(self._filtered):
+            prev_name = self._filtered[self._selected_idx].get("name", "")
         self._all_jobs = jobs
-        self._apply_filter()
-        self.notify(f"Loaded {len(jobs)} jobs")
+        self._apply_filter(restore_name=prev_name)
 
-    def _apply_filter(self) -> None:
+    def _apply_filter(self, *, restore_name: str = "") -> None:
         out = self._all_jobs
         if self._status_filter:
             out = [j for j in out if j.get("status") == self._status_filter]
@@ -359,10 +356,18 @@ class AjDashboard(App):
 
         self._update_titles()
 
+        # Restore previous selection if possible
+        target_idx = 0
+        if restore_name:
+            for i, j in enumerate(self._filtered):
+                if j.get("name") == restore_name:
+                    target_idx = i
+                    break
+
         if self._filtered:
-            ol.highlighted = 0
-            self._selected_idx = 0
-            self._show_job_info(self._filtered[0])
+            ol.highlighted = target_idx
+            self._selected_idx = target_idx
+            self._show_job_info(self._filtered[target_idx])
         else:
             self._selected_idx = -1
             self.query_one("#info-content", Static).update(
