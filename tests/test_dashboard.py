@@ -575,9 +575,78 @@ async def test_tab_title_shows_scroll_state(_dash) -> None:
         await pilot.pause()
         rp = _dash.query_one("#right-pane")
         title = str(rp.border_title)
-        assert "⤓" in title  # auto-scroll ON
+        assert "▶" in title  # auto-scroll ON
         _dash._auto_scroll = False
         _dash._update_tab_title()
         await pilot.pause()
         title = str(rp.border_title)
         assert "⏸" in title  # auto-scroll OFF
+
+
+@pytest.mark.asyncio
+async def test_log_viewer_has_vim_bindings(_dash) -> None:
+    """_LogViewer widget supports j/k/G/g vim keys."""
+    from azure_jobs.tui.app import _LogViewer
+    async with _dash.run_test(size=(120, 30)) as pilot:
+        await _load_jobs(_dash, pilot)
+        await pilot.pause()
+        lv = _dash.query_one("#log-content", _LogViewer)
+        binding_keys = {b.key for b in lv.BINDINGS}
+        assert "j" in binding_keys
+        assert "k" in binding_keys
+        assert "G" in binding_keys
+        assert "g" in binding_keys
+
+
+@pytest.mark.asyncio
+async def test_logs_focus_on_show(_dash) -> None:
+    """Showing logs focuses the log viewer widget."""
+    async with _dash.run_test(size=(120, 30)) as pilot:
+        await _load_jobs(_dash, pilot)
+        await pilot.pause()
+        _dash.action_show_logs()
+        await pilot.pause()
+        assert _dash.focused is not None
+        assert _dash.focused.id == "log-content"
+
+
+@pytest.mark.asyncio
+async def test_info_returns_focus_to_job_list(_dash) -> None:
+    """Switching back to info returns focus to job list."""
+    async with _dash.run_test(size=(120, 30)) as pilot:
+        await _load_jobs(_dash, pilot)
+        await pilot.pause()
+        _dash.action_show_logs()
+        await pilot.pause()
+        _dash.action_show_info()
+        await pilot.pause()
+        assert _dash.focused is not None
+        assert _dash.focused.id == "job-list"
+
+
+@pytest.mark.asyncio
+async def test_error_lines_inline(_dash) -> None:
+    """_append_log_error adds error lines with line numbers."""
+    async with _dash.run_test(size=(120, 30)) as pilot:
+        await _load_jobs(_dash, pilot)
+        await pilot.pause()
+        _dash.action_show_logs()
+        await pilot.pause()
+        lw = _dash.query_one("#log-content")
+        lw.clear()
+        _dash._log_line_count = 0
+        _dash._append_log_line("normal output")
+        _dash._append_log_error("something failed\ndetails here")
+        await pilot.pause()
+        # 1 normal + 2 error = 3 total lines
+        assert _dash._log_line_count == 3
+
+
+@pytest.mark.asyncio
+async def test_log_viewer_wrap_enabled(_dash) -> None:
+    """Log viewer has wrap=True for long lines."""
+    from azure_jobs.tui.app import _LogViewer
+    async with _dash.run_test(size=(120, 30)) as pilot:
+        await pilot.pause()
+        lv = _dash.query_one("#log-content", _LogViewer)
+        assert lv.wrap is True

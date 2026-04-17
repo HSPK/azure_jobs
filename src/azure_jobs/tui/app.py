@@ -403,6 +403,27 @@ class _PickerModal(ModalScreen[str]):
         self.dismiss(self._current)
 
 
+# ---- log viewer with vim keys ----------------------------------------------
+
+
+class _LogViewer(RichLog):
+    """RichLog subclass with vim-style keyboard navigation.
+
+    Bindings are only active when this widget has focus (i.e. logs tab open).
+    """
+
+    BINDINGS = [
+        Binding("j", "scroll_down", "↓", show=False),
+        Binding("k", "scroll_up", "↑", show=False),
+        Binding("G", "scroll_end", "End", show=False),
+        Binding("g", "scroll_home", "Top", show=False),
+        Binding("ctrl+d", "page_down", "PgDn", show=False),
+        Binding("ctrl+u", "page_up", "PgUp", show=False),
+        Binding("ctrl+f", "page_down", "PgDn", show=False),
+        Binding("ctrl+b", "page_up", "PgUp", show=False),
+    ]
+
+
 # ---- app --------------------------------------------------------------------
 
 
@@ -553,9 +574,9 @@ class AjDashboard(App):
             with Vertical(id="right-pane"):
                 with VerticalScroll(id="info-scroll"):
                     yield Static(id="info-content")
-                yield RichLog(
+                yield _LogViewer(
                     id="log-content", highlight=True, markup=True,
-                    classes="hidden",
+                    wrap=True, auto_scroll=True, classes="hidden",
                 )
         yield Footer()
 
@@ -734,7 +755,7 @@ class AjDashboard(App):
         """Update right pane border-title to show active tab + scroll state."""
         rp = self.query_one("#right-pane")
         if self._view_mode == "logs":
-            scroll_icon = "⤓" if self._auto_scroll else "⏸"
+            scroll_icon = "▶" if self._auto_scroll else "⏸"
             rp.border_title = (
                 f"  Info  [bold reverse] Logs [/bold reverse]"
                 f"  [dim]{scroll_icon}[/dim]  "
@@ -970,7 +991,9 @@ class AjDashboard(App):
     def action_show_logs(self) -> None:
         self._view_mode = "logs"
         self.query_one("#info-scroll").add_class("hidden")
-        self.query_one("#log-content").remove_class("hidden")
+        lw = self.query_one("#log-content", _LogViewer)
+        lw.remove_class("hidden")
+        lw.focus()
         self._update_tab_title()
 
         if 0 <= self._selected_idx < len(self._filtered):
@@ -980,9 +1003,8 @@ class AjDashboard(App):
                 self._logs_job = name
                 self._log_line_count = 0
                 self._log_streaming = False
-                log_w = self.query_one("#log-content", RichLog)
-                log_w.clear()
-                log_w.write("[dim]Connecting to Azure ML…[/dim]")
+                lw.clear()
+                lw.write("[dim]Connecting to Azure ML…[/dim]")
                 self._fetch_logs(name)
 
     def action_show_info(self) -> None:
@@ -990,6 +1012,7 @@ class AjDashboard(App):
         self.query_one("#log-content").add_class("hidden")
         self.query_one("#info-scroll").remove_class("hidden")
         self._update_tab_title()
+        self.query_one("#job-list", OptionList).focus()
 
     def action_toggle_scroll(self) -> None:
         """Toggle auto-scroll for streaming logs."""
@@ -1001,9 +1024,20 @@ class AjDashboard(App):
     def _append_log_line(self, line: str) -> None:
         """Append a single numbered log line to the RichLog widget."""
         self._log_line_count += 1
-        lw = self.query_one("#log-content", RichLog)
-        num = f"[dim]{self._log_line_count:>5}[/dim] │ "
+        lw = self.query_one("#log-content", _LogViewer)
+        num = f"[dim]{self._log_line_count:>5}[/dim] [dim]│[/dim] "
         lw.write(f"{num}{line}", scroll_end=self._auto_scroll)
+
+    def _append_log_error(self, error: str) -> None:
+        """Append error lines inline with line numbers (red styled)."""
+        lw = self.query_one("#log-content", _LogViewer)
+        for raw_line in error.splitlines():
+            self._log_line_count += 1
+            num = f"[red]{self._log_line_count:>5}[/red] [dim]│[/dim] "
+            lw.write(
+                f"{num}[bold red]{raw_line}[/bold red]",
+                scroll_end=self._auto_scroll,
+            )
 
     @work(thread=True, exclusive=True, group="logs")
     def _fetch_logs(self, azure_name: str) -> None:
@@ -1016,15 +1050,14 @@ class AjDashboard(App):
             )
             return
 
-        # Clear the "Connecting…" message and show streaming start
+        # Clear the "Connecting…" message
         def _begin_stream() -> None:
-            lw = self.query_one("#log-content", RichLog)
-            lw.clear()
+            self.query_one("#log-content", _LogViewer).clear()
             self._log_streaming = True
 
         self.call_from_thread(_begin_stream)
 
-        # Custom file-like object that intercepts stdout writes line by line
+        # Custom file-like that intercepts stdout writes and streams to TUI
         app_ref = self
         skip = self._SKIP_PREFIXES
 
@@ -1034,10 +1067,21 @@ class AjDashboard(App):
             def __init__(self) -> None:
                 self._buf = ""
 
+            # Attributes the Azure SDK may inspect
+            encoding = "utf-8"
+
+            def writable(self) -> bool:
+                return True
+
+            def isatty(self) -> bool:
+                return False
+
             def write(self, s: str) -> int:
                 if worker.is_cancelled:
                     return len(s)
                 self._buf += s
+                # Normalise \r\n → \n then split
+                self._buf = self._buf.replace("\r\n", "\n").replace("\r", "\n")
                 while "\n" in self._buf:
                     line, self._buf = self._buf.split("\n", 1)
                     if any(line.startswith(p) for p in skip):
@@ -1050,11 +1094,11 @@ class AjDashboard(App):
 
             def drain(self) -> None:
                 """Flush remaining partial line."""
-                if self._buf.strip() and not worker.is_cancelled:
-                    line = self._buf
-                    self._buf = ""
-                    if not any(line.startswith(p) for p in skip):
-                        app_ref.call_from_thread(app_ref._append_log_line, line)
+                rest = self._buf.strip()
+                self._buf = ""
+                if rest and not worker.is_cancelled:
+                    if not any(rest.startswith(p) for p in skip):
+                        app_ref.call_from_thread(app_ref._append_log_line, rest)
 
         capture = _StreamCapture()
         old_out = sys.stdout
@@ -1083,17 +1127,14 @@ class AjDashboard(App):
 
         def _finish(err: str = error_msg) -> None:
             self._log_streaming = False
-            lw = self.query_one("#log-content", RichLog)
+            lw = self.query_one("#log-content", _LogViewer)
             if err:
-                lw.write(
-                    f"\n[bold red]Error:[/bold red] [red]{err}[/red]",
-                    scroll_end=self._auto_scroll,
-                )
+                self._append_log_error(err)
             if self._log_line_count == 0 and not err:
                 lw.write("[dim]No logs available.[/dim]")
-            elif not err:
+            else:
                 lw.write(
-                    f"\n[dim]── End of logs ({self._log_line_count} lines) ──[/dim]",
+                    f"\n[dim]── End ({self._log_line_count} lines) ──[/dim]",
                     scroll_end=self._auto_scroll,
                 )
 
