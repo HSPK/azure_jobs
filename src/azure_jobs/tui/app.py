@@ -31,6 +31,7 @@ from textual.worker import get_current_worker
 
 from azure_jobs.tui.helpers import (
     STATUS_CYCLE,
+    get_page_size,
     icon_style,
     info_block,
     kv,
@@ -38,6 +39,7 @@ from azure_jobs.tui.helpers import (
 )
 from azure_jobs.tui.log_viewer import LogViewer, StreamCapture
 from azure_jobs.tui.modals import ConfirmCancel, HelpScreen, PickerModal
+from azure_jobs.tui.workspace import WorkspaceMixin
 
 # ---- backward-compat re-exports (test code may import private names) --------
 
@@ -67,91 +69,13 @@ _STATUS_CYCLE = STATUS_CYCLE
 # ---- app --------------------------------------------------------------------
 
 
-class AjDashboard(App):
+class AjDashboard(WorkspaceMixin, App):
     """Azure Jobs interactive dashboard."""
 
     TITLE = "aj dashboard"
     # Keyboard-only for low-latency SSH — disable mouse support
     MOUSE_SUPPORT = False
-
-    CSS = """
-    Screen {
-        layout: horizontal;
-    }
-
-    .hidden { display: none; }
-
-    /* ── left column ── */
-    #left-col {
-        width: 38;
-        min-width: 30;
-        height: 100%;
-    }
-    #jobs-pane {
-        height: 1fr;
-        border: round #4e9a06;
-        border-title-color: #8ae234;
-        border-title-style: bold;
-    }
-    #jobs-pane:focus-within {
-        border: round #8ae234;
-    }
-    #job-list {
-        height: 1fr;
-        border: none;
-        padding: 0;
-        scrollbar-size: 1 1;
-    }
-
-    /* ── search bar ── */
-    #search-bar {
-        height: 3;
-        dock: bottom;
-        border-top: solid #4e9a06 40%;
-        padding: 0 1;
-    }
-    #search-input {
-        height: 1;
-        border: none;
-        padding: 0;
-    }
-
-    /* ── workspace panel (always visible) ── */
-    #ws-pane {
-        height: 3;
-        margin-top: 1;
-        border: round #75507b;
-        border-title-color: #ad7fa8;
-        border-title-style: italic;
-        padding: 0 1;
-    }
-    #ws-current {
-        height: 1;
-    }
-
-    /* ── right ── */
-    #right-pane {
-        width: 1fr;
-        height: 100%;
-        margin-left: 1;
-        border: round #3465a4;
-        border-title-color: #729fcf;
-        border-title-style: bold;
-        border-subtitle-color: $text-muted;
-        border-subtitle-style: italic;
-    }
-    #info-scroll {
-        height: 1fr;
-        padding: 1 2;
-    }
-    #info-content {
-        width: 100%;
-    }
-    #log-content {
-        height: 1fr;
-        padding: 1 2;
-    }
-    """
+    CSS_PATH = "dashboard.tcss"
 
     BINDINGS = [
         Binding("q", "quit", "Quit"),
@@ -181,6 +105,7 @@ class AjDashboard(App):
     def __init__(self, last: int = 100, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._last = last
+        self._page_size: int = get_page_size()
         self._all_jobs: list[dict[str, Any]] = []
         self._filtered: list[dict[str, Any]] = []
         self._workspace: dict[str, str] | None = None
@@ -197,7 +122,7 @@ class AjDashboard(App):
         self._experiment_filter: str = ""
         self._search_query: str = ""
         self._view_mode: str = "info"
-        # Pagination — page-based with left/right navigation
+        # Pagination — display pages of _page_size items each
         self._pages: list[list[dict[str, Any]]] = []
         self._current_page: int = 0
         self._next_link: str | None = None
@@ -340,16 +265,22 @@ class AjDashboard(App):
         finally:
             self._fetching = False
 
+    def _chunk(self, jobs: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+        """Split a flat job list into display-page-sized chunks."""
+        ps = self._page_size
+        return [jobs[i:i + ps] for i in range(0, len(jobs), ps)] if jobs else []
+
     def _on_page_fetched(self, new_jobs: list[dict[str, Any]]) -> None:
-        """Called when a new REST page arrives — append and display it."""
-        self._pages.append(new_jobs)
+        """Called when a new REST page arrives — chunk and display."""
+        chunks = self._chunk(new_jobs)
+        self._pages.extend(chunks)
         self._all_jobs.extend(new_jobs)
-        self._current_page = len(self._pages) - 1
+        self._current_page = len(self._pages) - len(chunks)
         self._show_current_page()
 
     def _on_jobs_loaded(self, jobs: list[dict[str, Any]]) -> None:
         """Full replace (used by tests and refresh)."""
-        self._pages = [jobs]
+        self._pages = self._chunk(jobs) or [[]]
         self._all_jobs = list(jobs)
         self._current_page = 0
         self._has_more = False
@@ -455,111 +386,7 @@ class AjDashboard(App):
         display = job.get("display_name") or job.get("name", "")
         rp.border_subtitle = f"{display}  [{sty}]{icon} {status}[/{sty}]"
 
-    # ---- workspace / client -------------------------------------------------
-
-    def _ensure_workspace(self) -> dict[str, str] | None:
-        if self._workspace is not None:
-            return self._workspace
-        from azure_jobs.core.config import read_config
-        ws = read_config().get("workspace", {})
-        if all(ws.get(k) for k in ("subscription_id", "resource_group", "workspace_name")):
-            self._workspace = ws
-            self._subscription_id = ws["subscription_id"]
-            return ws
-        return None
-
-    def _update_ws_label(self) -> None:
-        """Update the always-visible workspace panel."""
-        ws = self._workspace
-        if ws:
-            name = ws.get("workspace_name", "")
-            rg = ws.get("resource_group", "")
-            self.query_one("#ws-current", Static).update(
-                f"[bold]{name}[/bold]  [dim]{rg}[/dim]"
-            )
-        else:
-            self.query_one("#ws-current", Static).update(
-                "[dim]Not configured[/dim]"
-            )
-
-    def _create_ml_client(self, ws: dict[str, str]) -> Any:
-        """Create a new MLClient for the given workspace dict."""
-        from azure_jobs.core.client import create_ml_client
-        merged = {
-            "subscription_id": ws.get("subscription_id", self._subscription_id),
-            "resource_group": ws.get("resource_group", ""),
-            "workspace_name": ws.get("workspace_name", ws.get("name", "")),
-        }
-        return create_ml_client(merged)
-
-    def _get_or_create_ml_client(self) -> Any:
-        if self._ml_client is not None:
-            return self._ml_client
-        ws = self._ensure_workspace()
-        if ws is None:
-            return None
-        self._ml_client = self._create_ml_client(ws)
-        return self._ml_client
-
-    # ---- workspace selector -------------------------------------------------
-
-    def action_pick_workspace(self) -> None:
-        """Open workspace picker (detects workspaces on first call)."""
-        if not self._workspaces:
-            self.notify("Detecting workspaces…", timeout=3)
-            self._detect_workspaces_then_pick()
-        else:
-            self._show_ws_picker()
-
-    @work(thread=True, exclusive=True, group="ws-detect")
-    def _detect_workspaces_then_pick(self) -> None:
-        worker = get_current_worker()
-        from azure_jobs.core.config import _detect_subscription, _detect_workspaces
-
-        sub = _detect_subscription()
-        if worker.is_cancelled:
-            return
-        if not sub:
-            self.call_from_thread(
-                self.notify, "Cannot detect Azure subscription", severity="warning",
-            )
-            return
-        sub_id = sub["subscription_id"]
-        wss = _detect_workspaces(sub_id)
-        if not worker.is_cancelled:
-            self.call_from_thread(self._on_workspaces_ready, sub_id, wss)
-
-    def _on_workspaces_ready(
-        self, sub_id: str, workspaces: list[dict[str, str]],
-    ) -> None:
-        self._subscription_id = sub_id
-        self._workspaces = workspaces
-        if not workspaces:
-            self.notify("No workspaces found", severity="warning")
-            return
-        self._show_ws_picker()
-
-    def _show_ws_picker(self) -> None:
-        cur_name = (self._workspace or {}).get("workspace_name", "")
-        items: list[tuple[str, str]] = []
-        for ws in self._workspaces:
-            name = ws.get("name", "")
-            rg = ws.get("resource_group", "")
-            label = f"[bold]{name}[/bold]  [dim]{rg}[/dim]"
-            items.append((name, label))
-        self.push_screen(
-            PickerModal("Workspace", items, current=cur_name),
-            self._on_workspace_picked,
-        )
-
-    def _on_workspace_picked(self, value: str) -> None:
-        cur_name = (self._workspace or {}).get("workspace_name", "")
-        if value == cur_name or not value:
-            return
-        for idx, ws in enumerate(self._workspaces):
-            if ws.get("name") == value:
-                self._switch_workspace(idx)
-                return
+    # ---- job list events ----------------------------------------------------
 
     def on_option_list_option_selected(
         self, event: OptionList.OptionSelected,
@@ -572,34 +399,6 @@ class AjDashboard(App):
                 kv([("", "")], hint="Refreshing...")
             )
             self._fetch_single(self._filtered[idx])
-
-    def _switch_workspace(self, idx: int) -> None:
-        if idx < 0 or idx >= len(self._workspaces):
-            return
-        ws = self._workspaces[idx]
-        self._workspace = {
-            "subscription_id": self._subscription_id,
-            "resource_group": ws["resource_group"],
-            "workspace_name": ws["name"],
-        }
-        self._ml_client = None
-        self._rest_client = None
-        self._all_jobs.clear()
-        self._filtered.clear()
-        self._pages.clear()
-        self._current_page = 0
-        self._next_link = None
-        self._has_more = True
-        self._logs_job = ""
-
-        self._update_ws_label()
-        self._update_titles()
-        self.query_one("#info-content", Static).update(
-            kv([], hint="Loading jobs…")
-        )
-        self._init_fetch()
-        self.query_one("#job-list", OptionList).focus()
-        self.notify(f"Switched to {ws['name']}")
 
     # ---- navigation ---------------------------------------------------------
 
@@ -864,18 +663,8 @@ class AjDashboard(App):
     ) -> None:
         if new_jobs:
             self._all_jobs = new_jobs + self._all_jobs
-            # Prepend new jobs to first page
-            if self._pages:
-                self._pages[0] = new_jobs + self._pages[0]
-            else:
-                self._pages.append(new_jobs)
-        # Update page cache for status changes
-        for page in self._pages:
-            for i, j in enumerate(page):
-                for aj in self._all_jobs:
-                    if aj["name"] == j["name"] and aj is not j:
-                        page[i] = aj
-                        break
+        # Re-chunk all jobs to keep page sizes consistent
+        self._pages = self._chunk(self._all_jobs) or [[]]
         prev_name = ""
         if 0 <= self._selected_idx < len(self._filtered):
             prev_name = self._filtered[self._selected_idx].get("name", "")

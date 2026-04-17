@@ -33,6 +33,15 @@ NAME_MAX = LEFT_WIDTH - 8
 PAGE_SIZE = 30
 
 
+def get_page_size() -> int:
+    """Return dashboard page size from config, defaulting to PAGE_SIZE."""
+    try:
+        from azure_jobs.core.config import read_config
+        return int(read_config().get("dashboard", {}).get("page_size", PAGE_SIZE))
+    except Exception:
+        return PAGE_SIZE
+
+
 # ---- pure functions ---------------------------------------------------------
 
 
@@ -82,9 +91,15 @@ def info_block(job: dict[str, Any]) -> str:
     # ── Status badge ──
     lines.append("")
     lines.append(f"  [{sty} bold]{icon} {status}[/{sty} bold]")
-    if job.get("error"):
-        lines.append(f"  [red]{job['error']}[/red]")
     lines.append("")
+
+    # ── Error (for failed jobs) ──
+    if job.get("error"):
+        lines.append("  [bold red]Error[/bold red]")
+        lines.append(f"  [dim]{'─' * 42}[/dim]")
+        for err_line in job["error"].splitlines():
+            lines.append(f"    [red]{err_line}[/red]")
+        lines.append("")
 
     # ── Identity ──
     lines.append("  [bold cyan]Identity[/bold cyan]")

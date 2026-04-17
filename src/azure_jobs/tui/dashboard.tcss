@@ -1,0 +1,76 @@
+Screen {
+    layout: horizontal;
+}
+
+.hidden { display: none; }
+
+/* ── left column ── */
+#left-col {
+    width: 38;
+    min-width: 30;
+    height: 100%;
+}
+#jobs-pane {
+    height: 1fr;
+    border: round #4e9a06;
+    border-title-color: #8ae234;
+    border-title-style: bold;
+}
+#jobs-pane:focus-within {
+    border: round #8ae234;
+}
+#job-list {
+    height: 1fr;
+    border: none;
+    padding: 0;
+    scrollbar-size: 1 1;
+}
+
+/* ── search bar ── */
+#search-bar {
+    height: 3;
+    dock: bottom;
+    border-top: solid #4e9a06 40%;
+    padding: 0 1;
+}
+#search-input {
+    height: 1;
+    border: none;
+    padding: 0;
+}
+
+/* ── workspace panel (always visible) ── */
+#ws-pane {
+    height: 3;
+    margin-top: 1;
+    border: round #75507b;
+    border-title-color: #ad7fa8;
+    border-title-style: italic;
+    padding: 0 1;
+}
+#ws-current {
+    height: 1;
+}
+
+/* ── right ── */
+#right-pane {
+    width: 1fr;
+    height: 100%;
+    margin-left: 1;
+    border: round #3465a4;
+    border-title-color: #729fcf;
+    border-title-style: bold;
+    border-subtitle-color: $text-muted;
+    border-subtitle-style: italic;
+}
+#info-scroll {
+    height: 1fr;
+    padding: 1 2;
+}
+#info-content {
+    width: 100%;
+}
+#log-content {
+    height: 1fr;
+    padding: 1 2;
+}
