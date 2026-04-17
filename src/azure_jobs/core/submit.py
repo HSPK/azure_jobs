@@ -230,8 +230,21 @@ def _build_storage_mounts(request: SubmitRequest) -> dict[str, Any]:
 
 
 def _build_command_str(request: SubmitRequest) -> str:
-    """Build the full command string from setup + user commands."""
-    all_cmds = list(request.setup_commands) + list(request.command)
+    """Build the full command string from setup + user commands.
+
+    For multi-node jobs, wraps with a distributed preamble that
+    configures RANK/MASTER_ADDR env vars and runs setup on rank 0 only.
+    """
+    is_distributed = request.nodes > 1 or request.processes_per_node > 1
+
+    if is_distributed:
+        from azure_jobs.core.distributed import build_distributed_preamble
+
+        preamble = build_distributed_preamble(list(request.setup_commands))
+        all_cmds = preamble + list(request.command)
+    else:
+        all_cmds = list(request.setup_commands) + list(request.command)
+
     return " && ".join(all_cmds)
 
 
@@ -295,7 +308,7 @@ def _build_resources(request: SubmitRequest) -> dict[str, Any] | None:
                 "imageVersion": image_version,
                 "slaTier": request.sla_tier,
                 "Priority": request.priority,
-                "EnableAzmlInt": True,
+                "EnableAzmlInt": False,
                 "VirtualClusterArmId": arm_id,
                 "tensorboardLogDirectory": "outputs",
             }
@@ -359,6 +372,11 @@ def submit(request: SubmitRequest, on_status: Any = None) -> SubmitResult:
         env_vars = {k: v for k, v in request.env_vars.items() if not k.startswith("_")}
         if request.shm_size:
             env_vars.setdefault("SHM_SIZE", request.shm_size)
+
+        # Singularity-specific env vars
+        if request.service == "sing":
+            env_vars.setdefault("JOB_EXECUTION_MODE", "Basic")
+            env_vars.setdefault("AZUREML_COMPUTE_USE_COMMON_RUNTIME", "false")
 
         # Build tags
         tags = {}
@@ -597,3 +615,71 @@ def get_job_status(
             status="error",
             error=_extract_error_message(exc),
         )
+
+
+def cancel_job(
+    azure_name: str,
+    workspace: dict[str, str],
+) -> str:
+    """Cancel an Azure ML job.
+
+    Returns:
+        Final status string (e.g. "Canceled", "Completed", "Failed").
+    """
+    _quiet_azure_sdk()
+
+    from azure.ai.ml import MLClient
+    from azure.identity import AzureCliCredential
+
+    with _suppress_sdk_output():
+        credential = AzureCliCredential()
+        ml_client = MLClient(
+            credential=credential,
+            subscription_id=workspace.get("subscription_id", ""),
+            resource_group_name=workspace.get("resource_group", ""),
+            workspace_name=workspace.get("workspace_name", ""),
+        )
+
+    # Check current status first
+    job = ml_client.jobs.get(azure_name)
+    status = getattr(job, "status", "")
+    if status in ("Completed", "Failed", "Canceled"):
+        return status
+
+    with _suppress_sdk_output():
+        lrop = ml_client.jobs.begin_cancel(azure_name)
+        try:
+            lrop.wait()
+        except Exception:
+            pass
+
+    job = ml_client.jobs.get(azure_name)
+    return getattr(job, "status", "Unknown")
+
+
+def get_job_logs(
+    azure_name: str,
+    workspace: dict[str, str],
+) -> str:
+    """Stream/fetch logs for an Azure ML job.
+
+    Uses ``ml_client.jobs.stream()`` which prints to stdout for running
+    jobs, or fetches completed job output logs.
+    """
+    _quiet_azure_sdk()
+
+    from azure.ai.ml import MLClient
+    from azure.identity import AzureCliCredential
+
+    with _suppress_sdk_output():
+        credential = AzureCliCredential()
+        ml_client = MLClient(
+            credential=credential,
+            subscription_id=workspace.get("subscription_id", ""),
+            resource_group_name=workspace.get("resource_group", ""),
+            workspace_name=workspace.get("workspace_name", ""),
+        )
+
+    # stream() prints to stdout and blocks until job finishes
+    ml_client.jobs.stream(azure_name)
+    return ""

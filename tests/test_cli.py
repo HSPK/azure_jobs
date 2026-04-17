@@ -394,6 +394,53 @@ class TestJobStatusCommand:
         assert "Completed" in result.output
 
 
+class TestJobCancelCommand:
+    def test_cancel_success(self, aj_env):
+        from unittest.mock import patch as mock_patch
+
+        record = json.dumps({
+            "id": "abc12345", "template": "cpu", "nodes": 1, "processes": 1,
+            "portal": "", "created_at": "2026-01-01T00:00:00",
+            "status": "submitted", "command": "echo", "args": [],
+            "azure_name": "azure_jobs_abc12345",
+        })
+        aj_env["record_fp"].write_text(record + "\n")
+
+        with mock_patch("azure_jobs.core.submit.cancel_job", return_value="Canceled"), \
+             mock_patch("azure_jobs.core.config.get_workspace_config", return_value={
+                 "subscription_id": "s", "resource_group": "r", "workspace_name": "w",
+             }):
+            runner = CliRunner()
+            result = runner.invoke(main, ["job", "cancel", "abc12345"])
+        assert result.exit_code == 0
+        assert "cancelled" in result.output.lower()
+
+    def test_cancel_already_completed(self, aj_env):
+        from unittest.mock import patch as mock_patch
+
+        with mock_patch("azure_jobs.core.submit.cancel_job", return_value="Completed"), \
+             mock_patch("azure_jobs.core.config.get_workspace_config", return_value={
+                 "subscription_id": "s", "resource_group": "r", "workspace_name": "w",
+             }):
+            runner = CliRunner()
+            result = runner.invoke(main, ["job", "cancel", "some-job"])
+        assert result.exit_code == 0
+        assert "completed" in result.output.lower()
+
+
+class TestJobLogsCommand:
+    def test_logs_command_runs(self, aj_env):
+        from unittest.mock import patch as mock_patch
+
+        with mock_patch("azure_jobs.core.submit.get_job_logs", return_value=""), \
+             mock_patch("azure_jobs.core.config.get_workspace_config", return_value={
+                 "subscription_id": "s", "resource_group": "r", "workspace_name": "w",
+             }):
+            runner = CliRunner()
+            result = runner.invoke(main, ["job", "logs", "some-job"])
+        assert result.exit_code == 0
+
+
 class TestRunCommand:
     def test_no_template_specified(self, aj_env):
         """When no -t and no default in config, should error."""

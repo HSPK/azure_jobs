@@ -52,18 +52,63 @@ def job_status(job_id: str) -> None:
     from azure_jobs.core.submit import get_job_status
 
     console = Console()
-
-    # Resolve job_id → azure_name via record.jsonl
-    azure_name = job_id
-    records = read_records()
-    for r in records:
-        if r.get("id") == job_id:
-            azure_name = r.get("azure_name") or job_id
-            break
-
+    azure_name = _resolve_job_id(job_id)
     workspace = get_workspace_config()
 
     with console.status("[bold cyan]Querying job status…[/bold cyan]", spinner="dots"):
         result = get_job_status(azure_name, workspace)
 
     show_job_status(result)
+
+
+@job_group.command(name="cancel")
+@click.argument("job_id")
+def job_cancel(job_id: str) -> None:
+    """Cancel a running job.
+
+    JOB_ID can be the short aj ID or the full Azure job name.
+    """
+    from rich.console import Console
+
+    from azure_jobs.core.config import get_workspace_config
+    from azure_jobs.core.submit import cancel_job
+    from azure_jobs.utils.ui import success, warning
+
+    console = Console()
+    azure_name = _resolve_job_id(job_id)
+    workspace = get_workspace_config()
+
+    with console.status("[bold cyan]Cancelling job…[/bold cyan]", spinner="dots"):
+        final_status = cancel_job(azure_name, workspace)
+
+    if final_status in ("Canceled", "CancelRequested"):
+        success(f"Job {job_id} cancelled")
+    elif final_status in ("Completed", "Failed"):
+        warning(f"Job {job_id} already {final_status.lower()}")
+    else:
+        warning(f"Job {job_id} status: {final_status}")
+
+
+@job_group.command(name="logs")
+@click.argument("job_id")
+def job_logs(job_id: str) -> None:
+    """Stream logs from a job.
+
+    Shows stdout/stderr output. For running jobs, streams until completion.
+    JOB_ID can be the short aj ID or the full Azure job name.
+    """
+    from azure_jobs.core.config import get_workspace_config
+    from azure_jobs.core.submit import get_job_logs
+
+    azure_name = _resolve_job_id(job_id)
+    workspace = get_workspace_config()
+    get_job_logs(azure_name, workspace)
+
+
+def _resolve_job_id(job_id: str) -> str:
+    """Resolve a short aj ID to the Azure job name via record.jsonl."""
+    records = read_records()
+    for r in records:
+        if r.get("id") == job_id:
+            return r.get("azure_name") or job_id
+    return job_id
