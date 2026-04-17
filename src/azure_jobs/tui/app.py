@@ -5,10 +5,11 @@ Mouse disabled — keyboard-only for low-latency server usage.
 
 Layout
 ------
-Left column  top: bordered OptionList (jobs) with status filter (1-5 keys).
+Left column  top: bordered OptionList (jobs) with status/experiment filter (f)
+             and keyword search (/).
              bottom: bordered workspace panel (always visible, w to switch).
-Right pane   bordered panel; border-title = job name + status.
-             Content toggles between Info (i) and Logs (l) views.
+Right pane   bordered panel; border-title shows tab indicator (Info/Logs),
+             border-subtitle shows job name + status.
 """
 
 from __future__ import annotations
@@ -26,6 +27,7 @@ from textual.screen import ModalScreen
 from textual.widgets import (
     Button,
     Footer,
+    Input,
     OptionList,
     RichLog,
     Static,
@@ -304,6 +306,134 @@ class _ConfirmCancel(ModalScreen[bool]):
         self.dismiss(False)
 
 
+_ALL_STATUSES = ["Running", "Completed", "Failed", "Canceled", "Queued"]
+
+
+class _FilterModal(ModalScreen[dict[str, str] | None]):
+    """Modal dialog for choosing status and experiment filters."""
+
+    CSS = """
+    _FilterModal {
+        align: center middle;
+    }
+    #filter-dialog {
+        width: 56;
+        height: auto;
+        max-height: 22;
+        border: thick #3465a4;
+        background: $surface;
+        padding: 1 2;
+    }
+    #filter-title {
+        width: 100%;
+        margin-bottom: 1;
+    }
+    .filter-section {
+        width: 100%;
+        margin-bottom: 1;
+    }
+    .filter-label {
+        margin-bottom: 0;
+    }
+    #filter-status, #filter-experiment {
+        height: auto;
+        max-height: 8;
+        border: tall $accent 40%;
+        padding: 0;
+        scrollbar-size: 1 1;
+    }
+    #filter-btns {
+        width: 100%;
+        height: 3;
+        align: center middle;
+    }
+    #filter-btns Button {
+        margin: 0 1;
+        min-width: 12;
+    }
+    """
+
+    BINDINGS = [
+        Binding("escape", "cancel_filter", "Cancel", show=False),
+    ]
+
+    def __init__(
+        self,
+        *,
+        current_status: str,
+        current_experiment: str,
+        experiments: list[str],
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(**kwargs)
+        self._current_status = current_status
+        self._current_experiment = current_experiment
+        self._experiments = experiments
+        self._chosen_status = current_status
+        self._chosen_experiment = current_experiment
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="filter-dialog"):
+            yield Static("[bold]Filter Jobs[/bold]", id="filter-title")
+            with Vertical(classes="filter-section"):
+                yield Static("[dim]Status[/dim]", classes="filter-label")
+                ol_s = OptionList(id="filter-status")
+                yield ol_s
+            with Vertical(classes="filter-section"):
+                yield Static("[dim]Experiment[/dim]", classes="filter-label")
+                ol_e = OptionList(id="filter-experiment")
+                yield ol_e
+            with Horizontal(id="filter-btns"):
+                yield Button("Apply", variant="primary", id="btn-apply")
+                yield Button("Clear", variant="warning", id="btn-clear")
+                yield Button("Cancel", variant="default", id="btn-cancel-filter")
+
+    def on_mount(self) -> None:
+        # Populate status list
+        ol_s = self.query_one("#filter-status", OptionList)
+        mark = "● " if not self._current_status else "  "
+        ol_s.add_option(Option(Text(f"{mark}All"), id="status:"))
+        for s in _ALL_STATUSES:
+            icon, sty = _icon_style(s)
+            mark = "● " if s == self._current_status else "  "
+            t = Text()
+            t.append(mark)
+            t.append(f"{icon} {s}", style=sty)
+            ol_s.add_option(Option(t, id=f"status:{s}"))
+
+        # Populate experiment list
+        ol_e = self.query_one("#filter-experiment", OptionList)
+        mark = "● " if not self._current_experiment else "  "
+        ol_e.add_option(Option(Text(f"{mark}All"), id="exp:"))
+        for exp in self._experiments:
+            mark = "● " if exp == self._current_experiment else "  "
+            ol_e.add_option(Option(Text(f"{mark}{exp}"), id=f"exp:{exp}"))
+        ol_s.focus()
+
+    def on_option_list_option_selected(
+        self, event: OptionList.OptionSelected,
+    ) -> None:
+        opt_id = event.option.id or ""
+        if opt_id.startswith("status:"):
+            self._chosen_status = opt_id[7:]
+        elif opt_id.startswith("exp:"):
+            self._chosen_experiment = opt_id[4:]
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "btn-apply":
+            self.dismiss({
+                "status": self._chosen_status,
+                "experiment": self._chosen_experiment,
+            })
+        elif event.button.id == "btn-clear":
+            self.dismiss({"status": "", "experiment": ""})
+        else:
+            self.dismiss(None)
+
+    def action_cancel_filter(self) -> None:
+        self.dismiss(None)
+
+
 # ---- app --------------------------------------------------------------------
 
 
@@ -329,12 +459,12 @@ class AjDashboard(App):
     }
     #jobs-pane {
         height: 1fr;
-        border: round $accent;
-        border-title-color: $accent;
+        border: round #4e9a06;
+        border-title-color: #8ae234;
         border-title-style: bold;
     }
     #jobs-pane:focus-within {
-        border: round $accent;
+        border: round #8ae234;
     }
     #job-list {
         height: 1fr;
@@ -343,12 +473,25 @@ class AjDashboard(App):
         scrollbar-size: 1 1;
     }
 
+    /* ── search bar ── */
+    #search-bar {
+        height: 3;
+        dock: bottom;
+        border-top: solid #4e9a06 40%;
+        padding: 0 1;
+    }
+    #search-input {
+        height: 1;
+        border: none;
+        padding: 0;
+    }
+
     /* ── workspace panel (always visible) ── */
     #ws-pane {
         height: 3;
         margin-top: 1;
-        border: round $accent 40%;
-        border-title-color: $text-muted;
+        border: round #75507b;
+        border-title-color: #ad7fa8;
         border-title-style: italic;
         padding: 0 1;
     }
@@ -360,8 +503,8 @@ class AjDashboard(App):
     #ws-list-pane {
         height: 1fr;
         margin-top: 1;
-        border: round $accent;
-        border-title-color: $accent;
+        border: round #ad7fa8;
+        border-title-color: #ad7fa8;
         border-title-style: bold;
     }
     #ws-list {
@@ -376,9 +519,9 @@ class AjDashboard(App):
         width: 1fr;
         height: 100%;
         margin-left: 1;
-        border: round $accent 40%;
+        border: round #3465a4;
+        border-title-color: #729fcf;
         border-title-style: bold;
-        border-title-color: $text;
         border-subtitle-color: $text-muted;
         border-subtitle-style: italic;
     }
@@ -402,6 +545,8 @@ class AjDashboard(App):
         Binding("l", "show_logs", "Logs"),
         Binding("i", "show_info", "Info"),
         Binding("w", "toggle_ws", "Workspace"),
+        Binding("f", "open_filter", "Filter"),
+        Binding("slash", "search", "Search"),
         Binding("1", "filter_all", "All", show=False),
         Binding("2", "filter_running", "Running", show=False),
         Binding("3", "filter_completed", "Completed", show=False),
@@ -428,6 +573,8 @@ class AjDashboard(App):
         self._logs_job: str = ""
         self._ml_client: Any = None
         self._status_filter: str = ""
+        self._experiment_filter: str = ""
+        self._search_query: str = ""
         self._view_mode: str = "info"
         # Pagination
         self._job_iter: Iterator | None = None
@@ -441,6 +588,11 @@ class AjDashboard(App):
             with Vertical(id="left-col"):
                 with Vertical(id="jobs-pane"):
                     yield OptionList(id="job-list")
+                    with Horizontal(id="search-bar", classes="hidden"):
+                        yield Input(
+                            placeholder="search…",
+                            id="search-input",
+                        )
                 with Vertical(id="ws-pane"):
                     yield Static("", id="ws-current")
                 with Vertical(id="ws-list-pane", classes="hidden"):
@@ -458,7 +610,7 @@ class AjDashboard(App):
         self.query_one("#ws-pane").border_title = "Workspace"
         self.query_one("#ws-list-pane").border_title = "Switch Workspace"
         self._update_titles()
-        self.query_one("#right-pane").border_subtitle = "Info"
+        self._update_tab_title()
         self.query_one("#info-content", Static).update(
             _kv([], hint="Loading jobs…")
         )
@@ -572,6 +724,17 @@ class AjDashboard(App):
         out = self._all_jobs
         if self._status_filter:
             out = [j for j in out if j.get("status") == self._status_filter]
+        if self._experiment_filter:
+            out = [j for j in out if j.get("experiment") == self._experiment_filter]
+        if self._search_query:
+            q = self._search_query.lower()
+            out = [
+                j for j in out
+                if q in (j.get("display_name") or j.get("name", "")).lower()
+                or q in j.get("name", "").lower()
+                or q in j.get("experiment", "").lower()
+                or q in j.get("tags", "").lower()
+            ]
         self._filtered = out
 
         ol = self.query_one("#job-list", OptionList)
@@ -598,9 +761,8 @@ class AjDashboard(App):
             self.query_one("#info-content", Static).update(
                 _kv([], hint="No matching jobs.")
             )
-            rp = self.query_one("#right-pane")
-            rp.border_title = ""
-            rp.border_subtitle = "Info"
+            self._update_tab_title()
+            self._update_job_subtitle(None)
 
     def _update_titles(self) -> None:
         total, shown = len(self._all_jobs), len(self._filtered)
@@ -610,7 +772,30 @@ class AjDashboard(App):
         parts = [label]
         if self._status_filter:
             parts.append(f"▸ {self._status_filter}")
+        if self._experiment_filter:
+            parts.append(f"▸ {self._experiment_filter}")
+        if self._search_query:
+            parts.append(f'"{self._search_query}"')
         self.query_one("#jobs-pane").border_title = "  ".join(parts)
+
+    def _update_tab_title(self) -> None:
+        """Update right pane border-title to show active tab."""
+        rp = self.query_one("#right-pane")
+        if self._view_mode == "logs":
+            rp.border_title = "  Info  [bold reverse] Logs [/bold reverse]  "
+        else:
+            rp.border_title = "  [bold reverse] Info [/bold reverse]  Logs  "
+
+    def _update_job_subtitle(self, job: dict[str, Any] | None = None) -> None:
+        """Update right pane border-subtitle with job name + status."""
+        rp = self.query_one("#right-pane")
+        if job is None:
+            rp.border_subtitle = ""
+            return
+        icon, sty = _icon_style(job.get("status", ""))
+        status = job.get("status", "?")
+        display = job.get("display_name") or job.get("name", "")
+        rp.border_subtitle = f"{display}  [{sty}]{icon} {status}[/{sty}]"
 
     # ---- workspace / client -------------------------------------------------
 
@@ -788,15 +973,8 @@ class AjDashboard(App):
     # ---- right pane: info ---------------------------------------------------
 
     def _show_job_info(self, job: dict[str, Any]) -> None:
-        icon, sty = _icon_style(job.get("status", ""))
-        status = job.get("status", "?")
-        display = job.get("display_name") or job.get("name", "")
-
-        rp = self.query_one("#right-pane")
-        rp.border_title = f"{display}  [{sty}]{icon} {status}[/{sty}]"
-        mode_label = "Logs" if self._view_mode == "logs" else "Info"
-        rp.border_subtitle = mode_label
-
+        self._update_job_subtitle(job)
+        self._update_tab_title()
         self.query_one("#info-content", Static).update(_info_block(job))
 
     @work(thread=True, exclusive=True, group="status")
@@ -839,8 +1017,7 @@ class AjDashboard(App):
         self._view_mode = "logs"
         self.query_one("#info-scroll").add_class("hidden")
         self.query_one("#log-content").remove_class("hidden")
-        rp = self.query_one("#right-pane")
-        rp.border_subtitle = "Logs"
+        self._update_tab_title()
 
         if 0 <= self._selected_idx < len(self._filtered):
             job = self._filtered[self._selected_idx]
@@ -856,8 +1033,7 @@ class AjDashboard(App):
         self._view_mode = "info"
         self.query_one("#log-content").add_class("hidden")
         self.query_one("#info-scroll").remove_class("hidden")
-        rp = self.query_one("#right-pane")
-        rp.border_subtitle = "Info"
+        self._update_tab_title()
 
     @work(thread=True, exclusive=True, group="logs")
     def _fetch_logs(self, azure_name: str) -> None:
@@ -913,7 +1089,17 @@ class AjDashboard(App):
     # ---- actions ------------------------------------------------------------
 
     def action_dismiss(self) -> None:
-        """Escape: close ws list → switch to info → quit."""
+        """Escape: close search → close ws list → switch to info → quit."""
+        search_bar = self.query_one("#search-bar")
+        if not search_bar.has_class("hidden"):
+            search_bar.add_class("hidden")
+            inp = self.query_one("#search-input", Input)
+            if inp.value:
+                inp.value = ""
+                self._search_query = ""
+                self._apply_filter()
+            self.query_one("#job-list", OptionList).focus()
+            return
         ws_list = self.query_one("#ws-list-pane")
         if not ws_list.has_class("hidden"):
             ws_list.add_class("hidden")
@@ -1023,6 +1209,58 @@ class AjDashboard(App):
     def action_filter_canceled(self) -> None:
         """Show only canceled jobs."""
         self._set_filter("Canceled")
+
+    # ---- search / filter modal ----------------------------------------------
+
+    def action_search(self) -> None:
+        """Toggle the search bar."""
+        search_bar = self.query_one("#search-bar")
+        if search_bar.has_class("hidden"):
+            search_bar.remove_class("hidden")
+            inp = self.query_one("#search-input", Input)
+            inp.value = self._search_query
+            inp.focus()
+        else:
+            search_bar.add_class("hidden")
+            self.query_one("#job-list", OptionList).focus()
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id == "search-input":
+            self._search_query = event.value
+            self._apply_filter()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input.id == "search-input":
+            self.query_one("#search-bar").add_class("hidden")
+            self.query_one("#job-list", OptionList).focus()
+
+    def action_open_filter(self) -> None:
+        """Open filter modal to choose status + experiment."""
+        experiments = sorted({
+            j.get("experiment", "") for j in self._all_jobs
+            if j.get("experiment")
+        })
+        self.push_screen(
+            _FilterModal(
+                current_status=self._status_filter,
+                current_experiment=self._experiment_filter,
+                experiments=experiments,
+            ),
+            self._on_filter_chosen,
+        )
+
+    def _on_filter_chosen(self, result: dict[str, str] | None) -> None:
+        if result is None:
+            return
+        self._status_filter = result.get("status", "")
+        self._experiment_filter = result.get("experiment", "")
+        self._apply_filter()
+        parts = []
+        if self._status_filter:
+            parts.append(self._status_filter)
+        if self._experiment_filter:
+            parts.append(self._experiment_filter)
+        self.notify(f"Filter: {', '.join(parts) or 'All'}")
 
     def action_cancel_job(self) -> None:
         if 0 <= self._selected_idx < len(self._filtered):

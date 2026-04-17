@@ -23,6 +23,13 @@ _JOBS = [
         "end_time": "2026-04-17 06:01:00", "duration": "1m 0s",
         "experiment": "nlp",
     },
+    {
+        "name": "azure_jobs_xyz99999", "display_name": "train-vision",
+        "status": "Running", "compute": "gpu-v100",
+        "portal_url": "", "start_time": "2026-04-17 08:00:00",
+        "end_time": "", "duration": "2m ↻",
+        "experiment": "cv",
+    },
 ]
 
 
@@ -57,7 +64,7 @@ async def test_composes(_dash) -> None:
         await _load_jobs(_dash, pilot)
         await pilot.pause()
         from textual.widgets import OptionList
-        assert _dash.query_one("#job-list", OptionList).option_count == 2
+        assert _dash.query_one("#job-list", OptionList).option_count == 3
 
 
 @pytest.mark.asyncio
@@ -122,11 +129,11 @@ async def test_filter_by_number_keys(_dash) -> None:
         assert _dash._status_filter == "Failed"
         ol = _dash.query_one("#job-list")
         assert ol.option_count == 1
-        # 1 = All: back to both
+        # 1 = All: back to all 3
         _dash.action_filter_all()
         await pilot.pause()
         assert _dash._status_filter == ""
-        assert ol.option_count == 2
+        assert ol.option_count == 3
         # 3 = Completed: only eval-bert
         _dash.action_filter_completed()
         await pilot.pause()
@@ -367,5 +374,110 @@ async def test_cancel_shows_modal(_dash) -> None:
         await pilot.pause()
         screens = [s for s in _dash.screen_stack if isinstance(s, _ConfirmCancel)]
         assert len(screens) == 0
+
+
+@pytest.mark.asyncio
+async def test_search_filters_by_keyword(_dash) -> None:
+    """Search bar filters jobs by keyword in name."""
+    async with _dash.run_test(size=(120, 30)) as pilot:
+        await _load_jobs(_dash, pilot)
+        await pilot.pause()
+        # Set search query directly (Input captures keypresses)
+        _dash._search_query = "bert"
+        _dash._apply_filter()
+        await pilot.pause()
+        ol = _dash.query_one("#job-list")
+        assert ol.option_count == 1  # only eval-bert
+        # Clear search
+        _dash._search_query = ""
+        _dash._apply_filter()
+        await pilot.pause()
+        assert ol.option_count == 3
+
+
+@pytest.mark.asyncio
+async def test_experiment_filter(_dash) -> None:
+    """Experiment filter narrows to matching experiment."""
+    async with _dash.run_test(size=(120, 30)) as pilot:
+        await _load_jobs(_dash, pilot)
+        await pilot.pause()
+        _dash._experiment_filter = "cv"
+        _dash._apply_filter()
+        await pilot.pause()
+        ol = _dash.query_one("#job-list")
+        assert ol.option_count == 1  # only train-vision (cv)
+        _dash._experiment_filter = ""
+        _dash._apply_filter()
+        await pilot.pause()
+        assert ol.option_count == 3
+
+
+@pytest.mark.asyncio
+async def test_combined_filters(_dash) -> None:
+    """Status + experiment + search all combine."""
+    async with _dash.run_test(size=(120, 30)) as pilot:
+        await _load_jobs(_dash, pilot)
+        await pilot.pause()
+        # Filter by experiment=nlp → 2 jobs
+        _dash._experiment_filter = "nlp"
+        _dash._apply_filter()
+        await pilot.pause()
+        assert _dash.query_one("#job-list").option_count == 2
+        # Add status=Failed → 1 job
+        _dash._status_filter = "Failed"
+        _dash._apply_filter()
+        await pilot.pause()
+        assert _dash.query_one("#job-list").option_count == 1
+
+
+@pytest.mark.asyncio
+async def test_tab_title(_dash) -> None:
+    """Right pane border-title shows tab indicator."""
+    async with _dash.run_test(size=(120, 30)) as pilot:
+        await _load_jobs(_dash, pilot)
+        await pilot.pause()
+        rp = _dash.query_one("#right-pane")
+        assert "Info" in str(rp.border_title)
+        _dash.action_show_logs()
+        await pilot.pause()
+        assert "Logs" in str(rp.border_title)
+        _dash.action_show_info()
+        await pilot.pause()
+        assert "Info" in str(rp.border_title)
+
+
+@pytest.mark.asyncio
+async def test_filter_modal_opens(_dash) -> None:
+    """Filter action opens the filter modal."""
+    async with _dash.run_test(size=(120, 30)) as pilot:
+        await _load_jobs(_dash, pilot)
+        await pilot.pause()
+        _dash.action_open_filter()
+        await pilot.pause()
+        from azure_jobs.tui.app import _FilterModal
+        screens = [s for s in _dash.screen_stack if isinstance(s, _FilterModal)]
+        assert len(screens) == 1
+        # Cancel out
+        await pilot.press("escape")
+        await pilot.pause()
+        screens = [s for s in _dash.screen_stack if isinstance(s, _FilterModal)]
+        assert len(screens) == 0
+
+
+@pytest.mark.asyncio
+async def test_search_bar_toggle(_dash) -> None:
+    """Search action toggles search bar visibility."""
+    async with _dash.run_test(size=(120, 30)) as pilot:
+        await _load_jobs(_dash, pilot)
+        await pilot.pause()
+        search_bar = _dash.query_one("#search-bar")
+        assert search_bar.has_class("hidden")
+        _dash.action_search()
+        await pilot.pause()
+        assert not search_bar.has_class("hidden")
+        # Escape closes it
+        _dash.action_dismiss()
+        await pilot.pause()
+        assert search_bar.has_class("hidden")
 
 
