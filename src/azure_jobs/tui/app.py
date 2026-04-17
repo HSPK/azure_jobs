@@ -218,6 +218,11 @@ class AjDashboard(App):
         Binding("escape", "dismiss", "Back", show=False),
     ]
 
+    def action_quit(self) -> None:
+        """Cancel all background workers and exit cleanly."""
+        self.workers.cancel_all()
+        self.exit()
+
     def __init__(self, last: int = 100, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._last = last
@@ -264,17 +269,39 @@ class AjDashboard(App):
 
     # ---- data ---------------------------------------------------------------
 
+    def _update_loading(self, msg: str) -> None:
+        """Update the info panel with a loading stage message."""
+        self.query_one("#info-content", Static).update(
+            _kv([], hint=msg)
+        )
+
     @work(thread=True, exclusive=True, group="fetch")
     def _fetch_azure_jobs(self) -> None:
+        worker = get_current_worker()
+
+        self.call_from_thread(self._update_loading, "Reading workspace config…")
         ws = self._ensure_workspace()
         if ws is None:
             self.call_from_thread(
                 self.notify, "No workspace configured – press w", severity="warning",
             )
+            self.call_from_thread(
+                self._update_loading, "No workspace configured. Press [bold]w[/bold] to select.",
+            )
+            return
+        if worker.is_cancelled:
             return
 
         if self._ml_client is None:
+            self.call_from_thread(self._update_loading, "Authenticating…")
             self._ml_client = self._create_ml_client(ws)
+        if worker.is_cancelled:
+            return
+
+        self.call_from_thread(
+            self._update_loading,
+            f"Fetching jobs from [bold]{ws.get('workspace_name', '')}[/bold]…",
+        )
 
         from azure.ai.ml.constants import ListViewType
 
@@ -284,12 +311,28 @@ class AjDashboard(App):
                 list_view_type=ListViewType.ALL,
                 max_results=self._last,
             ):
+                if worker.is_cancelled:
+                    return
                 jobs.append(_extract_job(job_obj))
-        except Exception:
-            pass
+                if len(jobs) % 20 == 0:
+                    self.call_from_thread(
+                        self._update_loading,
+                        f"Fetching jobs… ({len(jobs)} loaded)",
+                    )
+        except Exception as exc:
+            if not worker.is_cancelled:
+                msg = str(exc)[:100]
+                self.call_from_thread(
+                    self._update_loading, f"[red]Error:[/red] {msg}",
+                )
+            return
 
-        if jobs and not get_current_worker().is_cancelled:
+        if jobs and not worker.is_cancelled:
             self.call_from_thread(self._on_jobs_loaded, jobs)
+        elif not jobs and not worker.is_cancelled:
+            self.call_from_thread(
+                self._update_loading, "No jobs found in this workspace.",
+            )
 
     def _on_jobs_loaded(self, jobs: list[dict[str, Any]]) -> None:
         self._all_jobs = jobs
@@ -393,9 +436,12 @@ class AjDashboard(App):
 
     @work(thread=True, exclusive=True, group="ws-detect")
     def _detect_workspaces(self) -> None:
+        worker = get_current_worker()
         from azure_jobs.core.config import _detect_subscription, _detect_workspaces
 
         sub = _detect_subscription()
+        if worker.is_cancelled:
+            return
         if not sub:
             self.call_from_thread(
                 self.notify, "Cannot detect Azure subscription", severity="warning",
@@ -403,7 +449,7 @@ class AjDashboard(App):
             return
         sub_id = sub["subscription_id"]
         wss = _detect_workspaces(sub_id)
-        if not get_current_worker().is_cancelled:
+        if not worker.is_cancelled:
             self.call_from_thread(self._on_workspaces_detected, sub_id, wss)
 
     def _on_workspaces_detected(
@@ -683,7 +729,7 @@ class AjDashboard(App):
         if self._view_mode == "logs":
             self.action_show_info()
             return
-        self.exit()
+        self.action_quit()
 
     def action_refresh(self) -> None:
         self._all_jobs.clear()

@@ -37,15 +37,25 @@ def _dash(tmp_path: Path):
         yield app
 
 
-async def _load_jobs(app):
-    """Inject test jobs into a running app instance."""
+async def _load_jobs(app, pilot=None):
+    """Inject test jobs into a running app instance.
+
+    We must first pause to drain any queued messages from the background
+    ``_fetch_azure_jobs`` worker (which fires on mount), then inject our
+    test data.
+    """
+    app.workers.cancel_all()
+    if pilot:
+        await pilot.pause()  # drain queued call_from_thread messages
     app._on_jobs_loaded([dict(j) for j in _JOBS])
+    if app._filtered:
+        app._show_job_info(app._filtered[0])
 
 
 @pytest.mark.asyncio
 async def test_composes(_dash) -> None:
     async with _dash.run_test(size=(120, 30)) as pilot:
-        await _load_jobs(_dash)
+        await _load_jobs(_dash, pilot)
         await pilot.pause()
         from textual.widgets import OptionList
         assert _dash.query_one("#job-list", OptionList).option_count == 2
@@ -54,7 +64,7 @@ async def test_composes(_dash) -> None:
 @pytest.mark.asyncio
 async def test_display_name_shown(_dash) -> None:
     async with _dash.run_test(size=(120, 30)) as pilot:
-        await _load_jobs(_dash)
+        await _load_jobs(_dash, pilot)
         await pilot.pause()
         opt = _dash.query_one("#job-list").get_option_at_index(0)
         text = opt.prompt.plain if hasattr(opt.prompt, "plain") else str(opt.prompt)
@@ -64,7 +74,7 @@ async def test_display_name_shown(_dash) -> None:
 @pytest.mark.asyncio
 async def test_navigate(_dash) -> None:
     async with _dash.run_test(size=(120, 30)) as pilot:
-        await _load_jobs(_dash)
+        await _load_jobs(_dash, pilot)
         await pilot.pause()
         _dash.query_one("#job-list").focus()
         await pilot.pause()
@@ -82,13 +92,16 @@ async def test_empty(tmp_path: Path) -> None:
         app = AjDashboard(last=10)
         async with app.run_test(size=(120, 30)):
             content = app.query_one("#info-content").content
-            assert "No matching" in content or "Loading" in content
+            # With no workspace, shows a stage message
+            assert any(s in content for s in (
+                "No matching", "Loading", "workspace", "Reading",
+            ))
 
 
 @pytest.mark.asyncio
 async def test_view_toggle(_dash) -> None:
     async with _dash.run_test(size=(120, 30)) as pilot:
-        await _load_jobs(_dash)
+        await _load_jobs(_dash, pilot)
         await pilot.pause()
         assert _dash._view_mode == "info"
         _dash.action_show_logs()
@@ -102,7 +115,7 @@ async def test_view_toggle(_dash) -> None:
 @pytest.mark.asyncio
 async def test_filter_cycle(_dash) -> None:
     async with _dash.run_test(size=(120, 30)) as pilot:
-        await _load_jobs(_dash)
+        await _load_jobs(_dash, pilot)
         await pilot.pause()
         _dash.action_cycle_filter()
         await pilot.pause()
@@ -118,7 +131,7 @@ async def test_filter_cycle(_dash) -> None:
 @pytest.mark.asyncio
 async def test_search(_dash) -> None:
     async with _dash.run_test(size=(120, 30)) as pilot:
-        await _load_jobs(_dash)
+        await _load_jobs(_dash, pilot)
         await pilot.pause()
         _dash.action_search()
         await pilot.pause()
@@ -137,7 +150,7 @@ async def test_search(_dash) -> None:
 @pytest.mark.asyncio
 async def test_info_shows_cloud_fields(_dash) -> None:
     async with _dash.run_test(size=(120, 30)) as pilot:
-        await _load_jobs(_dash)
+        await _load_jobs(_dash, pilot)
         await pilot.pause()
         text = _dash.query_one("#info-content").content
         assert "gpu-cluster" in text
@@ -148,7 +161,7 @@ async def test_info_shows_cloud_fields(_dash) -> None:
 async def test_escape_layered(_dash) -> None:
     """Escape: logs → info (layered dismiss)."""
     async with _dash.run_test(size=(120, 30)) as pilot:
-        await _load_jobs(_dash)
+        await _load_jobs(_dash, pilot)
         await pilot.pause()
         _dash.action_show_logs()
         await pilot.pause()
@@ -162,7 +175,7 @@ async def test_escape_layered(_dash) -> None:
 async def test_escape_closes_ws_pane(_dash) -> None:
     """Escape closes workspace pane first."""
     async with _dash.run_test(size=(120, 30)) as pilot:
-        await _load_jobs(_dash)
+        await _load_jobs(_dash, pilot)
         await pilot.pause()
         ws_pane = _dash.query_one("#ws-pane")
         ws_pane.remove_class("hidden")
@@ -190,7 +203,7 @@ async def test_workspace_toggle(_dash) -> None:
 async def test_switch_workspace(_dash) -> None:
     """Switching workspace updates workspace config and clears jobs."""
     async with _dash.run_test(size=(120, 30)) as pilot:
-        await _load_jobs(_dash)
+        await _load_jobs(_dash, pilot)
         await pilot.pause()
         _dash._subscription_id = "sub-123"
         _dash._workspaces = [
