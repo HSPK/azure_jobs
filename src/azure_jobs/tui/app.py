@@ -473,6 +473,9 @@ class AjDashboard(WorkspaceMixin, App):
 
     _SKIP_PREFIXES = ("RunId:", "Web View:", "Execution Summary", "=====")
 
+    # Statuses where log output cannot exist yet
+    _NO_LOG_STATUSES = ("Queued", "NotStarted", "Provisioning", "Preparing")
+
     def action_show_logs(self) -> None:
         self._view_mode = "logs"
         self.query_one("#info-scroll").add_class("hidden")
@@ -489,7 +492,17 @@ class AjDashboard(WorkspaceMixin, App):
                 self._log_line_count = 0
                 self._log_streaming = False
                 lw.clear()
-                lw.write("[dim]Connecting to Azure ML…[/dim]")
+                status = job.get("status", "")
+                if status in self._NO_LOG_STATUSES:
+                    icon, sty = icon_style(status)
+                    lw.write(
+                        f"[{sty}]{icon} {status}[/{sty}]  "
+                        f"— Logs not available yet.\n\n"
+                        f"[dim]The job is still {status.lower()}. "
+                        f"Press [bold]L[/bold] again when it starts running.[/dim]"
+                    )
+                    return
+                lw.write(f"[dim]Checking job status…[/dim]")
                 self._fetch_logs(name)
 
     def action_show_info(self) -> None:
@@ -505,6 +518,15 @@ class AjDashboard(WorkspaceMixin, App):
         self._update_tab_title()
         state = "ON" if self._auto_scroll else "OFF"
         self.notify(f"Auto-scroll {state}", timeout=2)
+
+    def _log_status(self, msg: str) -> None:
+        """Update the log viewer with a status message (replaces content)."""
+        try:
+            lw = self.query_one("#log-content", LogViewer)
+            lw.clear()
+            lw.write(msg)
+        except Exception:
+            pass
 
     def _append_log_line(self, line: str) -> None:
         """Append a single numbered log line to the RichLog widget."""
@@ -526,23 +548,69 @@ class AjDashboard(WorkspaceMixin, App):
 
     @work(thread=True, exclusive=True, group="logs")
     def _fetch_logs(self, azure_name: str) -> None:
-        """Fetch job logs with incremental streaming to the RichLog widget."""
+        """Fetch job logs with staged progress and incremental streaming."""
         worker = get_current_worker()
+
+        # Phase 1: Check job status via REST (fast, no SDK)
+        if self._rest_client:
+            try:
+                job = self._rest_client.get_job(azure_name)
+                status = job.get("status", "")
+                if worker.is_cancelled:
+                    return
+                if status in self._NO_LOG_STATUSES:
+                    icon, sty = icon_style(status)
+                    self.call_from_thread(
+                        self._log_status,
+                        f"[{sty}]{icon} {status}[/{sty}]  "
+                        f"— Logs not available yet.\n\n"
+                        f"[dim]The job is still {status.lower()}. "
+                        f"Press [bold]L[/bold] again when it starts running.[/dim]",
+                    )
+                    return
+                # Show the actual status while we init the SDK
+                icon, sty = icon_style(status)
+                self.call_from_thread(
+                    self._log_status,
+                    f"[{sty}]{icon} {status}[/{sty}]  "
+                    f"[dim]Initializing log stream…[/dim]",
+                )
+            except Exception:
+                pass  # Fall through to SDK
+
+        if worker.is_cancelled:
+            return
+
+        # Phase 2: Create ML client (slow — SDK import + auth)
+        self.call_from_thread(
+            self._log_status, "[dim]Loading Azure ML SDK…[/dim]",
+        )
         ml = self._get_or_create_ml_client()
         if ml is None:
             self.call_from_thread(
                 self.notify, "Workspace not configured", severity="warning",
             )
             return
+        if worker.is_cancelled:
+            return
 
-        # Clear the "Connecting…" message
-        def _begin_stream() -> None:
-            self.query_one("#log-content", LogViewer).clear()
-            self._log_streaming = True
+        # Phase 3: Start streaming
+        self.call_from_thread(
+            self._log_status, "[dim]Fetching log output…[/dim]",
+        )
 
-        self.call_from_thread(_begin_stream)
+        first_line_received = False
+
+        def _on_first_line() -> None:
+            """Clear status message on first real log line."""
+            nonlocal first_line_received
+            if not first_line_received:
+                first_line_received = True
+                self.query_one("#log-content", LogViewer).clear()
+                self._log_streaming = True
 
         def _line_cb(line: str) -> None:
+            self.call_from_thread(_on_first_line)
             self.call_from_thread(self._append_log_line, line)
 
         capture = StreamCapture(worker, self._SKIP_PREFIXES, _line_cb)
@@ -564,11 +632,13 @@ class AjDashboard(WorkspaceMixin, App):
         def _finish(err: str = error_msg) -> None:
             self._log_streaming = False
             lw = self.query_one("#log-content", LogViewer)
+            if not first_line_received:
+                lw.clear()  # Clear status message
             if err:
                 self._append_log_error(err)
             if self._log_line_count == 0 and not err:
-                lw.write("[dim]No logs available.[/dim]")
-            else:
+                lw.write("[dim]No logs available for this job.[/dim]")
+            elif self._log_line_count > 0:
                 lw.write(
                     f"\n[dim]── End ({self._log_line_count} lines) ──[/dim]",
                     scroll_end=self._auto_scroll,
