@@ -622,3 +622,104 @@ class TestPullErrorPaths:
             )
         assert result.exit_code != 0
         assert "Failed to clone" in result.output
+
+
+class TestPushCommand:
+    def test_push_no_home_errors(self, aj_env):
+        import shutil
+        shutil.rmtree(aj_env["aj_home"])
+        runner = CliRunner()
+        result = runner.invoke(main, ["push"])
+        assert result.exit_code != 0
+        assert "No AJ home found" in result.output
+
+    def test_push_no_repo_id_errors(self, aj_env):
+        aj_env["config_fp"].write_text(json.dumps({}))
+        runner = CliRunner()
+        result = runner.invoke(main, ["push"])
+        assert result.exit_code != 0
+        assert "No remote repo configured" in result.output
+
+    def test_push_no_changes(self, aj_env):
+        aj_env["config_fp"].write_text(
+            json.dumps({"repo_id": "git@github.com:u/r.git"})
+        )
+        runner = CliRunner()
+        with patch("azure_jobs.cli.pull.subprocess.run") as mock_run:
+            # clone returns ok, status returns empty (no changes)
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="", stderr=""
+            )
+            result = runner.invoke(main, ["push"])
+        assert result.exit_code == 0
+        assert "No changes" in result.output
+
+    def test_push_commits_and_pushes(self, aj_env):
+        aj_env["config_fp"].write_text(
+            json.dumps({"repo_id": "git@github.com:u/r.git"})
+        )
+        runner = CliRunner()
+        call_count = 0
+
+        def mock_run_side_effect(cmd, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if "status" in cmd:
+                return subprocess.CompletedProcess(
+                    args=cmd, returncode=0, stdout="M template/foo.yaml\n", stderr=""
+                )
+            if "clone" in cmd or "add" in cmd or "commit" in cmd or "push" in cmd:
+                return subprocess.CompletedProcess(
+                    args=cmd, returncode=0, stdout="", stderr=""
+                )
+            return subprocess.CompletedProcess(
+                args=cmd, returncode=0, stdout="", stderr=""
+            )
+
+        with patch("azure_jobs.cli.pull.subprocess.run", side_effect=mock_run_side_effect):
+            with patch("azure_jobs.cli.pull.shutil.copytree"):
+                with patch("azure_jobs.cli.pull.shutil.copy2"):
+                    result = runner.invoke(main, ["push", "-m", "test update"])
+        assert result.exit_code == 0
+        assert "pushed" in result.output.lower()
+
+    def test_push_clone_failure(self, aj_env):
+        aj_env["config_fp"].write_text(
+            json.dumps({"repo_id": "git@github.com:u/r.git"})
+        )
+        runner = CliRunner()
+        with patch(
+            "azure_jobs.cli.pull.subprocess.run",
+            side_effect=subprocess.CalledProcessError(
+                128, "git", stderr="fatal: auth failed"
+            ),
+        ):
+            result = runner.invoke(main, ["push"])
+        assert result.exit_code != 0
+        assert "Failed to clone remote" in result.output
+
+    def test_push_custom_message(self, aj_env):
+        aj_env["config_fp"].write_text(
+            json.dumps({"repo_id": "git@github.com:u/r.git"})
+        )
+        runner = CliRunner()
+        commit_msg = None
+
+        def mock_run_side_effect(cmd, **kwargs):
+            nonlocal commit_msg
+            if "status" in cmd:
+                return subprocess.CompletedProcess(
+                    args=cmd, returncode=0, stdout="M foo\n", stderr=""
+                )
+            if "commit" in cmd:
+                commit_msg = cmd[cmd.index("-m") + 1]
+            return subprocess.CompletedProcess(
+                args=cmd, returncode=0, stdout="", stderr=""
+            )
+
+        with patch("azure_jobs.cli.pull.subprocess.run", side_effect=mock_run_side_effect):
+            with patch("azure_jobs.cli.pull.shutil.copytree"):
+                with patch("azure_jobs.cli.pull.shutil.copy2"):
+                    result = runner.invoke(main, ["push", "-m", "my custom msg"])
+        assert result.exit_code == 0
+        assert commit_msg == "my custom msg"
