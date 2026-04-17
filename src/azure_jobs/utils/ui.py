@@ -245,21 +245,11 @@ def icon_style(status: str) -> tuple[str, str]:
     return AZ_ICON.get(status, "?"), AZ_STYLE.get(status, "white")
 
 
-# Background colors for status badges
-_BADGE_BG: dict[str, str] = {
-    "Completed": "green", "Running": "blue", "Starting": "blue",
-    "Preparing": "yellow", "Queued": "yellow", "Failed": "red",
-    "Canceled": "bright_black", "CancelRequested": "bright_black",
-    "NotStarted": "bright_black", "Provisioning": "yellow", "Finalizing": "blue",
-}
-
-
 def status_badge(status: str) -> str:
     """Return a colored Rich badge like ``[ ✓ Completed ]``."""
     icon = AZ_ICON.get(status, "?")
-    bg = _BADGE_BG.get(status, "bright_black")
-    fg = "bold" if bg == "yellow" else "bold white"
-    return f"[{fg} on {bg}] {icon} {status} [/{fg} on {bg}]"
+    style = AZ_STYLE.get(status, "white")
+    return f"[{style}] {icon} {status} [/{style}]"
 
 
 def short_portal_url(url: str, *, rich_link: bool = True) -> str:
