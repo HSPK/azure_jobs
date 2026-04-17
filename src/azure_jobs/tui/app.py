@@ -774,8 +774,7 @@ class AjDashboard(WorkspaceMixin, App):
 
     @work(thread=True, exclusive=True, group="cancel")
     def _do_cancel(self, job: dict[str, Any]) -> None:
-        ml = self._get_or_create_ml_client()
-        if ml is None:
+        if self._rest_client is None:
             self.call_from_thread(
                 self.notify, "Workspace not configured", severity="warning",
             )
@@ -783,17 +782,14 @@ class AjDashboard(WorkspaceMixin, App):
         name = job.get("name", "")
         display = job.get("display_name") or name
         try:
-            cur = ml.jobs.get(name)
-            st = getattr(cur, "status", "")
+            cur = self._rest_client.get_job(name)
+            st = cur.get("status", "")
             if st in ("Completed", "Failed", "Canceled"):
                 self.call_from_thread(self.notify, f"{display}: already {st}")
                 return
-            lro = ml.jobs.begin_cancel(name)
-            try:
-                lro.wait()
-            except Exception:
-                pass
-            final = getattr(ml.jobs.get(name), "status", "?")
+            self._rest_client.cancel_job(name)
+            final_job = self._rest_client.get_job(name)
+            final = final_job.get("status", "?")
         except Exception as exc:
             self.call_from_thread(self.notify, str(exc)[:80], severity="error")
             return

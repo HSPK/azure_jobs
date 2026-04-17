@@ -3,19 +3,28 @@
 Bypasses the heavy ``azure-ai-ml`` SDK deserialization and returns plain
 dicts with only the fields the TUI needs.  Authentication reuses the
 ``AzureCliCredential`` that is already a project dependency.
+
+Optimisations
+-------------
+- **Connection pooling** via ``requests.Session`` — TCP reuse across pages.
+- **Server-side filters** — ``jobType`` and ``tag`` are honoured by the API.
+- **Default ``ActiveOnly``** — skips archived jobs unless caller opts in.
+- **REST cancel** — single POST instead of heavy SDK round-trips.
 """
 
 from __future__ import annotations
 
+import re
 import time
 from typing import Any
+from urllib.parse import quote, urlencode
 
 import requests
 
 from azure_jobs.utils.time import calc_duration, format_time
 
 _MGMT = "https://management.azure.com"
-_API_VERSION = "2024-01-01-preview"
+_API_VERSION = "2024-04-01"
 _SCOPE = "https://management.azure.com/.default"
 
 
@@ -48,7 +57,10 @@ def create_rest_client(
 
 
 class AzureMLJobsClient:
-    """Thin REST wrapper for ``/workspaces/{ws}/jobs``."""
+    """Thin REST wrapper for ``/workspaces/{ws}/jobs``.
+
+    Uses a persistent ``requests.Session`` for TCP connection reuse.
+    """
 
     def __init__(
         self,
@@ -64,6 +76,7 @@ class AzureMLJobsClient:
         )
         self._token: str = ""
         self._token_expires: float = 0.0
+        self._session: requests.Session = requests.Session()
 
     # ---- auth ---------------------------------------------------------------
 
@@ -74,28 +87,51 @@ class AzureMLJobsClient:
         tok = AzureCliCredential().get_token(_SCOPE)
         self._token = tok.token
         self._token_expires = tok.expires_on
+        self._session.headers.update(
+            {"Authorization": f"Bearer {self._token}"}
+        )
         return self._token
 
     def _headers(self) -> dict[str, str]:
-        return {"Authorization": f"Bearer {self._ensure_token()}"}
+        self._ensure_token()
+        return {}  # token is on the session already
 
     # ---- list jobs ----------------------------------------------------------
 
     def list_jobs_page(
         self,
         next_link: str | None = None,
-        list_view_type: str = "All",
+        *,
+        list_view_type: str = "ActiveOnly",
         top: int = 30,
+        job_type: str = "",
+        tag: str = "",
     ) -> tuple[list[dict[str, Any]], str | None]:
         """Fetch *top* jobs, issuing multiple server requests if needed.
 
-        The Azure ML REST API may return fewer items than ``$top`` requests.
-        This method transparently fetches additional pages until *top* items
-        are collected or the server has no more data.
+        The Azure ML REST API may return fewer items than ``$top`` requests
+        (typically ~10 per page).  This method transparently fetches
+        additional server pages until *top* items are collected or data is
+        exhausted.
+
+        Parameters
+        ----------
+        next_link:
+            Continuation URL from a previous call (pagination).
+        list_view_type:
+            ``ActiveOnly`` (default), ``ArchivedOnly``, or ``All``.
+        top:
+            Desired number of jobs to return.
+        job_type:
+            Server-side filter — ``Command``, ``Pipeline``, ``Sweep``,
+            ``AutoML``, or empty for all.
+        tag:
+            Server-side filter — tag key (e.g. ``"experiment"``).
 
         Returns ``(jobs, next_link)`` where *next_link* is ``None`` when
         there are no more pages.
         """
+        self._ensure_token()
         collected: list[dict[str, Any]] = []
         url = next_link  # may be None for first call
 
@@ -103,14 +139,14 @@ class AzureMLJobsClient:
             if url:
                 req_url = self._patch_top(url, top)
             else:
-                req_url = (
-                    f"{self._base}/jobs"
-                    f"?api-version={_API_VERSION}"
-                    f"&listViewType={list_view_type}"
-                    f"&$top={top}"
+                req_url = self._build_list_url(
+                    list_view_type=list_view_type,
+                    top=top,
+                    job_type=job_type,
+                    tag=tag,
                 )
 
-            resp = requests.get(req_url, headers=self._headers(), timeout=30)
+            resp = self._session.get(req_url, timeout=30)
             resp.raise_for_status()
             data = resp.json()
 
@@ -126,10 +162,30 @@ class AzureMLJobsClient:
         # We have enough — return exactly `top` and preserve nextLink
         return collected[:top], url
 
+    def _build_list_url(
+        self,
+        *,
+        list_view_type: str,
+        top: int,
+        job_type: str,
+        tag: str,
+    ) -> str:
+        """Build the initial list URL with server-side query parameters."""
+        params: list[tuple[str, str]] = [
+            ("api-version", _API_VERSION),
+            ("listViewType", list_view_type),
+            ("$top", str(top)),
+        ]
+        if job_type:
+            params.append(("jobType", job_type))
+        if tag:
+            params.append(("tag", tag))
+        qs = "&".join(f"{k}={quote(v, safe='')}" for k, v in params)
+        return f"{self._base}/jobs?{qs}"
+
     @staticmethod
     def _patch_top(url: str, top: int) -> str:
         """Ensure ``$top=<top>`` in a server-returned nextLink URL."""
-        import re
         if re.search(r'[\$%24]top=', url):
             return re.sub(r'([\$%24]top=)\d+', rf'\g<1>{top}', url)
         sep = "&" if "?" in url else "?"
@@ -139,10 +195,20 @@ class AzureMLJobsClient:
 
     def get_job(self, name: str) -> dict[str, Any]:
         """Fetch a single job by name."""
+        self._ensure_token()
         url = f"{self._base}/jobs/{name}?api-version={_API_VERSION}"
-        resp = requests.get(url, headers=self._headers(), timeout=30)
+        resp = self._session.get(url, timeout=30)
         resp.raise_for_status()
         return _extract_rest_job(resp.json())
+
+    # ---- cancel -------------------------------------------------------------
+
+    def cancel_job(self, name: str) -> None:
+        """Cancel a job via REST API (POST, returns 202 Accepted)."""
+        self._ensure_token()
+        url = f"{self._base}/jobs/{name}/cancel?api-version={_API_VERSION}"
+        resp = self._session.post(url, timeout=30)
+        resp.raise_for_status()
 
 
 # ---- extraction ------------------------------------------------------------

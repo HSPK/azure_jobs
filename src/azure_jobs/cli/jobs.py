@@ -30,15 +30,34 @@ def job_group() -> None:
         ["Running", "Completed", "Failed", "Canceled", "Queued"],
         case_sensitive=False,
     ),
-    help="Filter by job status",
+    help="Filter by job status (client-side)",
 )
 @click.option(
     "-e", "--experiment", default=None,
-    help="Filter by experiment name",
+    help="Filter by experiment name (client-side)",
+)
+@click.option(
+    "-T", "--type", "job_type", default=None,
+    type=click.Choice(
+        ["Command", "Pipeline", "Sweep", "AutoML"],
+        case_sensitive=False,
+    ),
+    help="Filter by job type (server-side)",
+)
+@click.option("--tag", default=None, help="Filter by tag key (server-side)")
+@click.option(
+    "-a", "--archived", is_flag=True, default=False,
+    help="Include archived jobs",
 )
 @click.option("--ws", "ws_name", default=None, help="Workspace name override")
 def job_list(
-    last: int, status: str | None, experiment: str | None, ws_name: str | None,
+    last: int,
+    status: str | None,
+    experiment: str | None,
+    job_type: str | None,
+    tag: str | None,
+    archived: bool,
+    ws_name: str | None,
 ) -> None:
     """List recent jobs in the cloud workspace."""
     from azure_jobs.core.rest_client import create_rest_client
@@ -50,11 +69,16 @@ def job_list(
     scanned = 0
     filtering = bool(status or experiment)
     max_pages = 5 if filtering else 1
+    view_type = "All" if archived else "ActiveOnly"
 
     with console.status("[bold cyan]Fetching jobs…[/bold cyan]", spinner="dots") as st:
         for _ in range(max_pages):
             jobs, next_link = client.list_jobs_page(
-                next_link=next_link, top=last if not filtering else 100,
+                next_link=next_link,
+                top=last if not filtering else 100,
+                list_view_type=view_type,
+                job_type=job_type or "",
+                tag=tag or "",
             )
             if not jobs:
                 break
@@ -110,20 +134,16 @@ def job_status(job_id: str) -> None:
 
     JOB_ID can be the short aj ID (e.g. f8e7eb32) or the full Azure job name.
     """
-    from rich.console import Console
+    from azure_jobs.core.rest_client import create_rest_client
+    from azure_jobs.utils.ui import console, show_job_detail
 
-    from azure_jobs.core.config import get_workspace_config
-    from azure_jobs.core.submit import get_job_status
-    from azure_jobs.utils.ui import show_job_status as _show
-
-    console = Console()
     azure_name = _resolve_job_id(job_id)
-    workspace = get_workspace_config()
+    client = create_rest_client()
 
     with console.status("[bold cyan]Querying job status…[/bold cyan]", spinner="dots"):
-        result = get_job_status(azure_name, workspace)
+        job = client.get_job(azure_name)
 
-    _show(result)
+    show_job_detail(job)
 
 
 @job_group.command(name="cancel")
@@ -133,25 +153,31 @@ def job_cancel(job_id: str) -> None:
 
     JOB_ID can be the short aj ID or the full Azure job name.
     """
-    from rich.console import Console
+    from azure_jobs.core.rest_client import create_rest_client
+    from azure_jobs.utils.ui import console, success, warning
 
-    from azure_jobs.core.config import get_workspace_config
-    from azure_jobs.core.submit import cancel_job
-    from azure_jobs.utils.ui import success, warning
-
-    console = Console()
     azure_name = _resolve_job_id(job_id)
-    workspace = get_workspace_config()
+    client = create_rest_client()
+
+    # Check current status first
+    with console.status("[bold cyan]Checking job…[/bold cyan]", spinner="dots"):
+        job = client.get_job(azure_name)
+
+    current = job.get("status", "")
+    if current in ("Completed", "Failed", "Canceled"):
+        warning(f"Job {job_id} already {current.lower()}")
+        return
 
     with console.status("[bold cyan]Cancelling job…[/bold cyan]", spinner="dots"):
-        final_status = cancel_job(azure_name, workspace)
+        client.cancel_job(azure_name)
+        # Fetch updated status
+        job = client.get_job(azure_name)
 
-    if final_status in ("Canceled", "CancelRequested"):
+    final = job.get("status", "?")
+    if final in ("Canceled", "CancelRequested"):
         success(f"Job {job_id} cancelled")
-    elif final_status in ("Completed", "Failed"):
-        warning(f"Job {job_id} already {final_status.lower()}")
     else:
-        warning(f"Job {job_id} status: {final_status}")
+        warning(f"Job {job_id} status: {final}")
 
 
 @job_group.command(name="logs")
@@ -271,12 +297,17 @@ def _alias_js(job_id: str) -> None:
 @click.option("-n", "--last", default=30)
 @click.option("-s", "--status", default=None)
 @click.option("-e", "--experiment", default=None)
+@click.option("-T", "--type", "job_type", default=None)
+@click.option("--tag", default=None)
+@click.option("-a", "--archived", is_flag=True, default=False)
 @click.option("--ws", "ws_name", default=None)
 def _alias_jl(
-    last: int, status: str | None, experiment: str | None, ws_name: str | None,
+    last: int, status: str | None, experiment: str | None,
+    job_type: str | None, tag: str | None, archived: bool,
+    ws_name: str | None,
 ) -> None:
     """Shortcut for ``aj job list`` (cloud)."""
-    job_list.callback(last, status, experiment, ws_name)
+    job_list.callback(last, status, experiment, job_type, tag, archived, ws_name)
 
 
 @main.command(name="jc", hidden=True)

@@ -396,20 +396,21 @@ class TestJobStatusCommand:
     def test_status_by_azure_name(self, aj_env):
         """Query status using Azure job name directly."""
         from unittest.mock import MagicMock, patch
-        from azure_jobs.core.submit import JobStatus
 
-        mock_status = JobStatus(
-            azure_name="my-job-xyz",
-            display_name="azure_jobs_abc123",
-            status="Running",
-            duration="5m 30s (running)",
-            compute="msrresrchvc",
-            portal_url="https://ml.azure.com/runs/my-job-xyz",
-        )
-        with patch("azure_jobs.core.submit.get_job_status", return_value=mock_status), \
-             patch("azure_jobs.core.config.get_workspace_config", return_value={
-                 "subscription_id": "s", "resource_group": "r", "workspace_name": "w",
-             }):
+        mock_client = MagicMock()
+        mock_client.get_job.return_value = {
+            "name": "my-job-xyz",
+            "display_name": "azure_jobs_abc123",
+            "status": "Running",
+            "duration": "5m 30s",
+            "compute": "msrresrchvc",
+            "portal_url": "https://ml.azure.com/runs/my-job-xyz",
+            "start_time": "", "end_time": "", "queue_time": "",
+            "experiment": "", "type": "Command", "description": "",
+            "tags": "", "environment": "", "command": "", "created": "",
+            "error": "",
+        }
+        with patch("azure_jobs.core.rest_client.create_rest_client", return_value=mock_client):
             runner = CliRunner()
             result = runner.invoke(main, ["job", "status", "my-job-xyz"])
         assert result.exit_code == 0
@@ -419,7 +420,6 @@ class TestJobStatusCommand:
     def test_status_resolves_aj_id(self, aj_env):
         """Short aj ID should resolve to azure_name via record.jsonl."""
         from unittest.mock import MagicMock, patch
-        from azure_jobs.core.submit import JobStatus
 
         record = json.dumps({
             "id": "abc12345", "template": "cpu", "nodes": 1, "processes": 1,
@@ -429,24 +429,26 @@ class TestJobStatusCommand:
         })
         aj_env["record_fp"].write_text(record + "\n")
 
-        mock_status = JobStatus(azure_name="resolved-azure-name", status="Completed")
-        with patch("azure_jobs.core.submit.get_job_status", return_value=mock_status) as mock_get, \
-             patch("azure_jobs.core.config.get_workspace_config", return_value={
-                 "subscription_id": "s", "resource_group": "r", "workspace_name": "w",
-             }):
+        mock_client = MagicMock()
+        mock_client.get_job.return_value = {
+            "name": "resolved-azure-name", "display_name": "",
+            "status": "Completed", "duration": "", "compute": "",
+            "portal_url": "", "start_time": "", "end_time": "",
+            "queue_time": "", "experiment": "", "type": "", "description": "",
+            "tags": "", "environment": "", "command": "", "created": "",
+            "error": "",
+        }
+        with patch("azure_jobs.core.rest_client.create_rest_client", return_value=mock_client):
             runner = CliRunner()
             result = runner.invoke(main, ["job", "status", "abc12345"])
-        # Should have resolved "abc12345" → "resolved-azure-name"
-        mock_get.assert_called_once_with("resolved-azure-name", {
-            "subscription_id": "s", "resource_group": "r", "workspace_name": "w",
-        })
+        mock_client.get_job.assert_called_once_with("resolved-azure-name")
         assert result.exit_code == 0
         assert "Completed" in result.output
 
 
 class TestJobCancelCommand:
     def test_cancel_success(self, aj_env):
-        from unittest.mock import patch as mock_patch
+        from unittest.mock import MagicMock, patch as mock_patch
 
         record = json.dumps({
             "id": "abc12345", "template": "cpu", "nodes": 1, "processes": 1,
@@ -456,22 +458,26 @@ class TestJobCancelCommand:
         })
         aj_env["record_fp"].write_text(record + "\n")
 
-        with mock_patch("azure_jobs.core.submit.cancel_job", return_value="Canceled"), \
-             mock_patch("azure_jobs.core.config.get_workspace_config", return_value={
-                 "subscription_id": "s", "resource_group": "r", "workspace_name": "w",
-             }):
+        mock_client = MagicMock()
+        # First get_job call returns Running, second returns Canceled
+        mock_client.get_job.side_effect = [
+            {"name": "azure_jobs_abc12345", "status": "Running"},
+            {"name": "azure_jobs_abc12345", "status": "Canceled"},
+        ]
+        with mock_patch("azure_jobs.core.rest_client.create_rest_client", return_value=mock_client):
             runner = CliRunner()
             result = runner.invoke(main, ["job", "cancel", "abc12345"])
         assert result.exit_code == 0
         assert "cancelled" in result.output.lower()
 
     def test_cancel_already_completed(self, aj_env):
-        from unittest.mock import patch as mock_patch
+        from unittest.mock import MagicMock, patch as mock_patch
 
-        with mock_patch("azure_jobs.core.submit.cancel_job", return_value="Completed"), \
-             mock_patch("azure_jobs.core.config.get_workspace_config", return_value={
-                 "subscription_id": "s", "resource_group": "r", "workspace_name": "w",
-             }):
+        mock_client = MagicMock()
+        mock_client.get_job.return_value = {
+            "name": "some-job", "status": "Completed",
+        }
+        with mock_patch("azure_jobs.core.rest_client.create_rest_client", return_value=mock_client):
             runner = CliRunner()
             result = runner.invoke(main, ["job", "cancel", "some-job"])
         assert result.exit_code == 0
