@@ -203,30 +203,68 @@ def _build_environment(request: SubmitRequest, ml_client: Any) -> Any:
     return env
 
 
-def _build_storage_mounts(request: SubmitRequest) -> dict[str, Any]:
-    """Convert storage config to SDK Input objects for blob mounts."""
-    if not request.storage:
-        return {}
+def _build_storage_mounts(
+    request: SubmitRequest,
+    ml_client: Any,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, str], dict[str, str]]:
+    """Set up storage mounts via workspace datastores.
 
-    inputs = {}
+    Creates or reuses datastores in the workspace, then builds Output objects
+    and PathOnCompute properties that Singularity needs to mount storage.
+
+    Returns:
+        (inputs, outputs, path_on_compute_properties, datareference_env_vars)
+    """
+    inputs: dict[str, Any] = {}
+    outputs: dict[str, Any] = {}
+    path_on_compute: dict[str, str] = {}
+    dataref_env: dict[str, str] = {}
+
+    if not request.storage:
+        return inputs, outputs, path_on_compute, dataref_env
+
+    from azure.ai.ml import Output
+    from azure.ai.ml.constants import AssetTypes
+    from azure.ai.ml.entities import AzureBlobDatastore
+
     for mount_name, mount_cfg in request.storage.items():
         account = mount_cfg.get("storage_account_name", "")
         container = mount_cfg.get("container_name", "")
         mount_dir = mount_cfg.get("mount_dir", f"/mnt/{mount_name}")
 
-        # Use URI format for blob storage
-        uri = f"https://{account}.blob.core.windows.net/{container}"
+        # Sanitize datastore name (Azure requires alphanumeric + underscores)
+        ds_name = f"aj_{mount_name}".replace("-", "_")
 
-        from azure.ai.ml import Input
-        from azure.ai.ml.constants import InputOutputModes
+        # Create or reuse datastore in the workspace
+        try:
+            ml_client.datastores.get(ds_name)
+        except Exception:
+            ds = AzureBlobDatastore(
+                name=ds_name,
+                account_name=account,
+                container_name=container,
+                description=f"Created by aj for {mount_name}",
+            )
+            try:
+                ml_client.create_or_update(ds)
+            except Exception:
+                pass
 
-        inputs[mount_name] = Input(
-            type="uri_folder",
-            path=uri,
-            mode=InputOutputModes.RO_MOUNT,
+        # Build workspace-relative URI for the output
+        ws_id = (
+            f"/subscriptions/{request.subscription_id}"
+            f"/resourceGroups/{request.resource_group}"
+            f"/providers/Microsoft.MachineLearningServices"
+            f"/workspaces/{request.workspace_name}"
         )
+        uri = f"azureml://{ws_id}/datastores/{ds_name}/paths/"
 
-    return inputs
+        outputs[mount_name] = Output(type=AssetTypes.URI_FOLDER, path=uri)
+        prop_key = f"AZURE_ML_OUTPUT_PathOnCompute_{mount_name}"
+        path_on_compute[prop_key] = mount_dir.rstrip("/") + "/"
+        dataref_env[f"AZUREML_DATAREFERENCE_{mount_name}"] = mount_dir
+
+    return inputs, outputs, path_on_compute, dataref_env
 
 
 def _build_command_str(request: SubmitRequest) -> str:
@@ -316,6 +354,45 @@ def _build_resources(request: SubmitRequest) -> dict[str, Any] | None:
     }
 
 
+def _resolve_sing_identity(
+    request: SubmitRequest,
+    ml_client: Any,
+) -> str | None:
+    """Look up the Singularity UAI client_id from workspace identity config.
+
+    The ``_AZUREML_SINGULARITY_JOB_UAI`` env var specifies a User Assigned
+    Identity (UAI) resource ID.  We match it against the workspace's registered
+    UAIs to get the ``client_id``, which is exported as
+    ``DEFAULT_IDENTITY_CLIENT_ID`` and ``AZURE_CLIENT_ID`` in the job command.
+
+    Returns:
+        The client_id string, or None if not found / not applicable.
+    """
+    if request.service != "sing":
+        return None
+
+    uai_resource_id = request.env_vars.get("_AZUREML_SINGULARITY_JOB_UAI", "")
+    if not uai_resource_id:
+        return None
+
+    try:
+        ws = ml_client.workspaces.get(request.workspace_name)
+        for ident in ws.identity.user_assigned_identities or []:
+            # SDK returns dicts or objects depending on version
+            if isinstance(ident, dict):
+                rid = ident.get("resource_id", "")
+                cid = ident.get("client_id", "")
+            else:
+                rid = getattr(ident, "resource_id", "")
+                cid = getattr(ident, "client_id", "")
+            if rid and rid.lower().rstrip("/") == uai_resource_id.lower().rstrip("/"):
+                return cid or None
+    except Exception:
+        pass
+
+    return None
+
+
 def _build_identity(request: SubmitRequest) -> Any | None:
     """Build identity config.
 
@@ -331,6 +408,9 @@ def _build_identity(request: SubmitRequest) -> Any | None:
     elif request.identity == "user":
         return UserIdentityConfiguration()
     return None
+
+
+_INTERNAL_ENV_KEYS = {"_sku_raw"}
 
 
 def submit(request: SubmitRequest, on_status: Any = None) -> SubmitResult:
@@ -359,24 +439,55 @@ def submit(request: SubmitRequest, on_status: Any = None) -> SubmitResult:
             environment = _build_environment(request, ml_client)
 
         _status("storage", f"Configuring {len(request.storage)} storage mount(s)…")
-        inputs = _build_storage_mounts(request)
+        with _suppress_sdk_output():
+            inputs, outputs, poc_props, dataref_env = _build_storage_mounts(
+                request, ml_client
+            )
 
         _status("command", "Building command…")
-        command_str = _build_command_str(request)
         distribution = _build_distribution(request)
         identity = _build_identity(request)
         compute = _resolve_compute(request)
         resources = _build_resources(request)
 
-        # Build environment variables (drop internal keys starting with _)
-        env_vars = {k: v for k, v in request.env_vars.items() if not k.startswith("_")}
+        # Build environment variables — keep Azure-specific keys, drop only
+        # our internal markers like _sku_raw
+        env_vars = {
+            k: v for k, v in request.env_vars.items() if k not in _INTERNAL_ENV_KEYS
+        }
         if request.shm_size:
             env_vars.setdefault("SHM_SIZE", request.shm_size)
 
         # Singularity-specific env vars
         if request.service == "sing":
+            env_vars.setdefault("SUDO", "sudo")
+            env_vars.setdefault("AZCOPY_AUTO_LOGIN_TYPE", "MSI")
             env_vars.setdefault("JOB_EXECUTION_MODE", "Basic")
             env_vars.setdefault("AZUREML_COMPUTE_USE_COMMON_RUNTIME", "false")
+
+        # Add storage DATAREFERENCE env vars
+        env_vars.update(dataref_env)
+
+        # Singularity identity: resolve UAI client_id for storage auth
+        identity_prefix = ""
+        if request.service == "sing":
+            _status("identity", "Resolving Singularity identity…")
+            with _suppress_sdk_output():
+                client_id = _resolve_sing_identity(request, ml_client)
+            if client_id:
+                identity_prefix = (
+                    f"export DEFAULT_IDENTITY_CLIENT_ID={client_id}"
+                    f" && export AZURE_CLIENT_ID={client_id}"
+                )
+
+        # Build command with optional identity exports prepended
+        command_str = _build_command_str(request)
+        if identity_prefix:
+            command_str = f"{identity_prefix} && {command_str}"
+
+        # Build properties dict (PathOnCompute + metadata)
+        properties: dict[str, str] = {}
+        properties.update(poc_props)
 
         # Build tags
         tags = {}
@@ -400,10 +511,12 @@ def submit(request: SubmitRequest, on_status: Any = None) -> SubmitResult:
             instance_count=request.nodes,
             distribution=distribution,
             inputs=inputs if inputs else None,
+            outputs=outputs if outputs else None,
             environment_variables=env_vars,
             identity=identity,
             shm_size=request.shm_size,
             tags=tags if tags else None,
+            properties=properties if properties else None,
         )
         if resources:
             job_kwargs["resources"] = resources

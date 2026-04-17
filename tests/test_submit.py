@@ -12,9 +12,12 @@ from azure_jobs.core.submit import (
     _build_command_str,
     _build_environment,
     _build_identity,
+    _build_storage_mounts,
     _extract_error_message,
     _resolve_compute,
+    _resolve_sing_identity,
     _build_resources,
+    _INTERNAL_ENV_KEYS,
     _SING_DUMMY_IMAGE,
     _SING_IMAGE_PREFIX,
     build_request_from_config,
@@ -372,3 +375,133 @@ class TestBuildEnvironment:
         ml.environments.create_or_update.side_effect = Exception("skip")
         env = _build_environment(r, ml)
         assert env.image == "docker.io/pytorch:2.0"
+
+
+class TestResolveSingIdentity:
+    def test_non_sing_returns_none(self):
+        r = SubmitRequest(name="j", service="aml")
+        assert _resolve_sing_identity(r, MagicMock()) is None
+
+    def test_no_uai_env_returns_none(self):
+        r = SubmitRequest(name="j", service="sing", env_vars={})
+        assert _resolve_sing_identity(r, MagicMock()) is None
+
+    def test_matches_workspace_uai(self):
+        r = SubmitRequest(
+            name="j", service="sing", workspace_name="ws",
+            env_vars={"_AZUREML_SINGULARITY_JOB_UAI": "/subs/1/rg/Identity/providers/ManagedIdentity/uai/RL"},
+        )
+        ml = MagicMock()
+        ws = MagicMock()
+        ws.identity.user_assigned_identities = [
+            {"resource_id": "/subs/1/rg/Identity/providers/ManagedIdentity/uai/RL", "client_id": "abc-123"},
+        ]
+        ml.workspaces.get.return_value = ws
+        assert _resolve_sing_identity(r, ml) == "abc-123"
+
+    def test_case_insensitive_match(self):
+        r = SubmitRequest(
+            name="j", service="sing", workspace_name="ws",
+            env_vars={"_AZUREML_SINGULARITY_JOB_UAI": "/SUBS/1/RG/IDENTITY"},
+        )
+        ml = MagicMock()
+        ws = MagicMock()
+        ws.identity.user_assigned_identities = [
+            {"resource_id": "/subs/1/rg/identity", "client_id": "found-it"},
+        ]
+        ml.workspaces.get.return_value = ws
+        assert _resolve_sing_identity(r, ml) == "found-it"
+
+    def test_no_match_returns_none(self):
+        r = SubmitRequest(
+            name="j", service="sing", workspace_name="ws",
+            env_vars={"_AZUREML_SINGULARITY_JOB_UAI": "/subs/other"},
+        )
+        ml = MagicMock()
+        ws = MagicMock()
+        ws.identity.user_assigned_identities = [
+            {"resource_id": "/subs/1/rg/id", "client_id": "cid"},
+        ]
+        ml.workspaces.get.return_value = ws
+        assert _resolve_sing_identity(r, ml) is None
+
+    def test_workspace_error_returns_none(self):
+        r = SubmitRequest(
+            name="j", service="sing", workspace_name="ws",
+            env_vars={"_AZUREML_SINGULARITY_JOB_UAI": "/subs/1"},
+        )
+        ml = MagicMock()
+        ml.workspaces.get.side_effect = Exception("fail")
+        assert _resolve_sing_identity(r, ml) is None
+
+
+class TestBuildStorageMounts:
+    def test_empty_storage_returns_empty(self):
+        r = SubmitRequest(name="j")
+        inputs, outputs, poc, env = _build_storage_mounts(r, MagicMock())
+        assert inputs == {}
+        assert outputs == {}
+        assert poc == {}
+        assert env == {}
+
+    def test_creates_datastore_and_output(self):
+        r = SubmitRequest(
+            name="j",
+            subscription_id="sub1",
+            resource_group="rg1",
+            workspace_name="ws1",
+            storage={
+                "fast_shared": {
+                    "storage_account_name": "fastaml123",
+                    "container_name": "shared",
+                    "mount_dir": "/mnt/fast_shared",
+                },
+            },
+        )
+        ml = MagicMock()
+        ml.datastores.get.side_effect = Exception("not found")
+        inputs, outputs, poc, env = _build_storage_mounts(r, ml)
+
+        # Datastore should have been created
+        ml.create_or_update.assert_called_once()
+        ds = ml.create_or_update.call_args[0][0]
+        assert ds.name == "aj_fast_shared"
+        assert ds.account_name == "fastaml123"
+
+        # Output object created
+        assert "fast_shared" in outputs
+        assert "/datastores/aj_fast_shared/" in outputs["fast_shared"].path
+
+        # PathOnCompute property set
+        assert poc["AZURE_ML_OUTPUT_PathOnCompute_fast_shared"] == "/mnt/fast_shared/"
+
+        # DATAREFERENCE env var set
+        assert env["AZUREML_DATAREFERENCE_fast_shared"] == "/mnt/fast_shared"
+
+    def test_reuses_existing_datastore(self):
+        r = SubmitRequest(
+            name="j",
+            subscription_id="s", resource_group="r", workspace_name="w",
+            storage={
+                "data": {
+                    "storage_account_name": "acct",
+                    "container_name": "container",
+                    "mount_dir": "/mnt/data",
+                },
+            },
+        )
+        ml = MagicMock()
+        ml.datastores.get.return_value = MagicMock()  # already exists
+        inputs, outputs, poc, env = _build_storage_mounts(r, ml)
+
+        # Should NOT call create_or_update for datastore
+        ml.create_or_update.assert_not_called()
+        assert "data" in outputs
+
+
+class TestInternalEnvKeys:
+    def test_sku_raw_stripped(self):
+        assert "_sku_raw" in _INTERNAL_ENV_KEYS
+
+    def test_azure_keys_not_stripped(self):
+        assert "_AZUREML_SINGULARITY_JOB_UAI" not in _INTERNAL_ENV_KEYS
