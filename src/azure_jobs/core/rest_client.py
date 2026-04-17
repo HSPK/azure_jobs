@@ -108,6 +108,13 @@ def _extract_rest_job(raw: dict[str, Any]) -> dict[str, Any]:
     start_display = format_time(start)
     end_display = format_time(end)
 
+    # Queue time (created → started)
+    queue_time = ""
+    sys_data = raw.get("systemData", {}) or {}
+    created_raw = sys_data.get("createdAt", "")
+    if created_raw and start:
+        queue_time = calc_duration(created_raw[:19], start)
+
     # Compute — trim ARM ID to short name
     compute = props.get("computeId", "") or ""
     if "/" in compute:
@@ -124,9 +131,7 @@ def _extract_rest_job(raw: dict[str, Any]) -> dict[str, Any]:
     if ":" in env_str:
         env_str = env_str.rsplit(":", 1)[0]
 
-    # Created
-    sys_data = raw.get("systemData", {}) or {}
-    created_raw = sys_data.get("createdAt", "")
+    # Created (sys_data already extracted above for queue_time)
     created = format_time(created_raw[:19]) if created_raw else ""
 
     # Error — dig into nested innerError for more detail
@@ -157,6 +162,7 @@ def _extract_rest_job(raw: dict[str, Any]) -> dict[str, Any]:
         "start_time": start_display,
         "end_time": end_display,
         "duration": duration,
+        "queue_time": queue_time,
         "experiment": props.get("experimentName", "") or "",
         "type": props.get("jobType", "") or "",
         "description": (props.get("description", "") or "")[:200],

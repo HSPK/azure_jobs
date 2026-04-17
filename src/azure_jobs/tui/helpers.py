@@ -151,6 +151,8 @@ def info_block(job: dict[str, Any]) -> str:
             lines.append(f"    [dim]Ended[/dim]          {job['end_time']}")
         if job.get("duration"):
             lines.append(f"    [dim]Duration[/dim]       {job['duration']}")
+        if job.get("queue_time"):
+            lines.append(f"    [dim]Queue time[/dim]     {job['queue_time']}")
 
     # ── Links ──
     url = job.get("portal_url", "")
@@ -211,6 +213,11 @@ def extract_job(job_obj: Any) -> dict[str, Any]:
         if ct:
             created = format_time(str(ct)[:19])
 
+    # Queue time (created → started)
+    queue_time = ""
+    if created and start:
+        queue_time = calc_duration(str(ct)[:19], start) if ctx and ct else ""
+
     error_msg = ""
     err = getattr(job_obj, "error", None)
     if err:
@@ -225,6 +232,7 @@ def extract_job(job_obj: Any) -> dict[str, Any]:
         "start_time": start_display,
         "end_time": end_display,
         "duration": duration,
+        "queue_time": queue_time,
         "experiment": getattr(job_obj, "experiment_name", "") or "",
         "type": getattr(job_obj, "type", "") or "",
         "description": (getattr(job_obj, "description", "") or "")[:200],
