@@ -77,45 +77,40 @@ def info_block(job: dict[str, Any]) -> str:
     icon, sty = icon_style(job.get("status", ""))
     status = job.get("status", "?")
 
-    W = 14  # label column width
+    W = 12  # label column width
 
     def _kv(label: str, val: str) -> str:
-        return f"    [dim]{label:>{W}}[/dim]  {val}"
-
-    def _section(title: str) -> str:
-        return f"\n  [bold dim]{'▸'} {title}[/bold dim]"
+        return f"  [dim]{label:>{W}}[/dim]  {val}"
 
     # ── Header ──
-    L.append("")
     L.append(f"  [{sty} bold]{icon} {status}[/{sty} bold]  [bold]{display}[/bold]")
     if display != name:
-        L.append(f"    {'':>{W}}  [dim]{name}[/dim]")
+        L.append(f"  {'':>{W}}  [dim]{name}[/dim]")
 
-    # ── Error ──
+    # ── Error (quote-block style) ──
     if job.get("error"):
         L.append("")
-        L.append(f"  [bold red]{'━' * 46}[/bold red]")
         for err_line in job["error"].splitlines():
-            L.append(f"  [red]{err_line}[/red]")
-        L.append(f"  [bold red]{'━' * 46}[/bold red]")
+            L.append(f"  [red]┃[/red] [red]{err_line}[/red]")
 
-    # ── Details ──
-    details: list[str] = []
-    for label, key in [
-        ("Type", "type"), ("Experiment", "experiment"),
-        ("Compute", "compute"), ("Environment", "environment"),
-    ]:
-        val = job.get(key, "")
-        if val:
-            details.append(_kv(label, f"[bold]{val}[/bold]" if key == "compute" else val))
+    # ── Config ──
+    fields: list[str] = []
+    if job.get("type"):
+        fields.append(_kv("Type", job["type"]))
+    if job.get("experiment"):
+        fields.append(_kv("Experiment", job["experiment"]))
+    if job.get("compute"):
+        fields.append(_kv("Compute", f"[bold]{job['compute']}[/bold]"))
+    if job.get("environment"):
+        fields.append(_kv("Env", job["environment"]))
     if job.get("command"):
         cmd = job["command"]
-        if len(cmd) > 60:
-            cmd = cmd[:57] + "…"
-        details.append(_kv("Command", f"[italic dim]{cmd}[/italic dim]"))
-    if details:
-        L.append(_section("Details"))
-        L.extend(details)
+        if len(cmd) > 55:
+            cmd = cmd[:52] + "…"
+        fields.append(_kv("Command", f"[dim]{cmd}[/dim]"))
+    if fields:
+        L.append("")
+        L.extend(fields)
 
     # ── Timing ──
     timing: list[str] = []
@@ -129,13 +124,13 @@ def info_block(job: dict[str, Any]) -> str:
     dur = job.get("duration", "")
     qt = job.get("queue_time", "")
     if dur and qt:
-        timing.append(_kv("Duration", f"[bold]{dur}[/bold]  [dim]queue {qt}[/dim]"))
+        timing.append(_kv("Duration", f"[bold]{dur}[/bold]  [dim]⏳ queue {qt}[/dim]"))
     elif dur:
         timing.append(_kv("Duration", f"[bold]{dur}[/bold]"))
     elif qt:
-        timing.append(_kv("Queue time", qt))
+        timing.append(_kv("Queue", qt))
     if timing:
-        L.append(_section("Timing"))
+        L.append("")
         L.extend(timing)
 
     # ── Meta ──
@@ -145,9 +140,12 @@ def info_block(job: dict[str, Any]) -> str:
     if job.get("tags"):
         meta.append(_kv("Tags", f"[dim]{job['tags']}[/dim]"))
     if job.get("description"):
-        meta.append(_kv("Description", job["description"]))
+        desc = job["description"]
+        if len(desc) > 55:
+            desc = desc[:52] + "…"
+        meta.append(_kv("Description", desc))
     if meta:
-        L.append(_section("Meta"))
+        L.append("")
         L.extend(meta)
 
     # ── Portal link ──
@@ -157,9 +155,8 @@ def info_block(job: dict[str, Any]) -> str:
         if not short.startswith("http"):
             short = f"https://{short}"
         L.append("")
-        L.append(f"    [dim cyan underline]{short}[/dim cyan underline]")
+        L.append(f"  [dim]→[/dim] [cyan underline]{short}[/cyan underline]")
 
-    L.append("")
     return "\n".join(L)
 
 

@@ -356,13 +356,10 @@ def show_cloud_jobs_table(
 def show_job_detail(job: dict[str, Any]) -> None:
     """Display detailed cloud job info as a rich panel."""
     lines: list[str] = []
-    W = 16  # label column width
+    W = 14  # label column width
 
     def _kv(label: str, val: str) -> str:
-        return f"    [dim]{label:<{W}}[/dim]{val}"
-
-    def _section(title: str) -> str:
-        return f"\n  [bold dim]▸ {title}[/bold dim]"
+        return f"  [dim]{label:>{W}}[/dim]  {val}"
 
     # Header
     status = job.get("status", "Unknown")
@@ -372,33 +369,32 @@ def show_job_detail(job: dict[str, Any]) -> None:
     name = job.get("name", "")
     lines.append(f"  [{style} bold]{icon} {status}[/{style} bold]  [bold]{display}[/bold]")
     if display != name:
-        lines.append(f"    {'':>{W}}[dim]{name}[/dim]")
+        lines.append(f"  {'':>{W}}  [dim]{name}[/dim]")
 
-    # Error
+    # Error (quote-block style)
     error_msg = job.get("error", "")
     if error_msg:
         lines.append("")
-        lines.append(f"  [bold red]{'━' * 54}[/bold red]")
-        lines.append(f"  [red]{error_msg}[/red]")
-        lines.append(f"  [bold red]{'━' * 54}[/bold red]")
+        for err_line in error_msg.splitlines():
+            lines.append(f"  [red]┃[/red] [red]{err_line}[/red]")
 
-    # Details
-    details: list[str] = []
+    # Config
+    fields: list[str] = []
     for label, key in [
         ("Type", "type"), ("Experiment", "experiment"),
         ("Compute", "compute"), ("Environment", "environment"),
     ]:
         val = job.get(key, "")
         if val:
-            details.append(_kv(label, val))
+            fields.append(_kv(label, f"[bold]{val}[/bold]" if key == "compute" else val))
     if job.get("command"):
         cmd = job["command"]
-        if len(cmd) > 80:
-            cmd = cmd[:77] + "…"
-        details.append(_kv("Command", cmd))
-    if details:
-        lines.append(_section("Details"))
-        lines.extend(details)
+        if len(cmd) > 70:
+            cmd = cmd[:67] + "…"
+        fields.append(_kv("Command", f"[dim]{cmd}[/dim]"))
+    if fields:
+        lines.append("")
+        lines.extend(fields)
 
     # Timing
     timing: list[str] = []
@@ -412,13 +408,13 @@ def show_job_detail(job: dict[str, Any]) -> None:
     dur = job.get("duration", "")
     qt = job.get("queue_time", "")
     if dur and qt:
-        timing.append(_kv("Duration", f"{dur}  [dim](queue {qt})[/dim]"))
+        timing.append(_kv("Duration", f"[bold]{dur}[/bold]  [dim]⏳ queue {qt}[/dim]"))
     elif dur:
-        timing.append(_kv("Duration", dur))
+        timing.append(_kv("Duration", f"[bold]{dur}[/bold]"))
     elif qt:
-        timing.append(_kv("Queue time", qt))
+        timing.append(_kv("Queue", qt))
     if timing:
-        lines.append(_section("Timing"))
+        lines.append("")
         lines.extend(timing)
 
     # Meta
@@ -428,9 +424,12 @@ def show_job_detail(job: dict[str, Any]) -> None:
     if job.get("tags"):
         meta.append(_kv("Tags", job["tags"]))
     if job.get("description"):
-        meta.append(_kv("Description", job["description"]))
+        desc = job["description"]
+        if len(desc) > 70:
+            desc = desc[:67] + "…"
+        meta.append(_kv("Description", desc))
     if meta:
-        lines.append(_section("Meta"))
+        lines.append("")
         lines.extend(meta)
 
     # Portal link
@@ -440,7 +439,7 @@ def show_job_detail(job: dict[str, Any]) -> None:
         if not short.startswith("http"):
             short = f"https://{short}"
         lines.append("")
-        lines.append(f"    [link={url}][dim cyan underline]{short}[/dim cyan underline][/link]")
+        lines.append(f"  [dim]→[/dim] [link={url}][cyan underline]{short}[/cyan underline][/link]")
 
     console.print()
     console.print(Panel(
