@@ -812,5 +812,22 @@ def get_job_logs(
         )
 
     # stream() prints to stdout and blocks until job finishes
-    ml_client.jobs.stream(azure_name)
+    try:
+        ml_client.jobs.stream(azure_name)
+    except Exception as exc:
+        # For failed jobs, stream() raises JobException with the error.
+        # Extract and display the useful part.
+        msg = str(exc)
+        if "message" in msg:
+            import json as _json
+            try:
+                # Parse the embedded JSON error
+                start = msg.index("{")
+                end = msg.rindex("}") + 1
+                err = _json.loads(msg[start:end])
+                print(err.get("error", {}).get("message", msg).strip())
+            except (ValueError, _json.JSONDecodeError):
+                print(msg)
+        else:
+            print(msg)
     return ""

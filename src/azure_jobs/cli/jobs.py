@@ -112,3 +112,37 @@ def _resolve_job_id(job_id: str) -> str:
         if r.get("id") == job_id:
             return r.get("azure_name") or job_id
     return job_id
+
+
+# ---------------------------------------------------------------------------
+# Top-level shortcuts: aj js, aj jl, aj jc, aj jlogs
+# ---------------------------------------------------------------------------
+
+@main.command(name="js", hidden=True)
+@click.argument("job_id")
+def _alias_js(job_id: str) -> None:
+    """Shortcut for ``aj job status``."""
+    job_status.callback(job_id)
+
+
+@main.command(name="jl", hidden=True)
+@click.option("-n", "--last", default=20)
+@click.option("-t", "--template", default=None)
+@click.option("-s", "--status", default=None)
+def _alias_jl(last: int, template: str | None, status: str | None) -> None:
+    """Shortcut for ``aj job list``."""
+    job_list.callback(last, template, status)
+
+
+@main.command(name="jc", hidden=True)
+@click.argument("job_id")
+def _alias_jc(job_id: str) -> None:
+    """Shortcut for ``aj job cancel``."""
+    job_cancel.callback(job_id)
+
+
+@main.command(name="jlogs", hidden=True)
+@click.argument("job_id")
+def _alias_jlogs(job_id: str) -> None:
+    """Shortcut for ``aj job logs``."""
+    job_logs.callback(job_id)

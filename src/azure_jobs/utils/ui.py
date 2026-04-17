@@ -110,7 +110,7 @@ def show_template_table(
         show_header=True,
         header_style="bold",
         show_lines=False,
-        pad_edge=False,
+        pad_edge=True,
         title="[bold]Templates[/bold]",
         title_style="",
     )
