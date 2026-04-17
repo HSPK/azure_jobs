@@ -289,3 +289,27 @@ async def test_page_loaded_appends(_dash) -> None:
         _dash._on_page_loaded([dict(_JOBS[1])])
         assert len(_dash._all_jobs) == 2
         assert _dash.query_one("#job-list").option_count == 2
+
+
+def test_info_block_sections() -> None:
+    from azure_jobs.tui.app import _info_block
+    job = {
+        "name": "j1", "display_name": "my-job", "status": "Running",
+        "compute": "gpu", "experiment": "exp1",
+        "duration": "5m", "start_time": "2026-01-01 00:00:00",
+        "end_time": "", "portal_url": "https://ml.azure.com/runs/j1?wsid=x",
+    }
+    block = _info_block(job)
+    assert "Identity" in block
+    assert "Resources" in block
+    assert "Timing" in block
+    assert "Links" in block
+    assert "my-job" in block
+    assert "j1" in block
+
+
+def test_section_header() -> None:
+    from azure_jobs.tui.app import _section
+    s = _section("Test")
+    assert "Test" in s
+    assert "──" in s

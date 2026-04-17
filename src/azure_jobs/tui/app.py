@@ -1,6 +1,7 @@
 """Interactive TUI dashboard for Azure Jobs.
 
 Data: ``ml_client.jobs.list(list_view_type=ALL)`` → cloud-only, paginated.
+Mouse disabled — keyboard-only for low-latency server usage.
 
 Layout
 ------
@@ -45,10 +46,10 @@ _AZ_STYLE = {
     "NotStarted": "dim", "Provisioning": "yellow", "Finalizing": "cyan",
 }
 
-_KW = 12
+_KW = 14
 _STATUS_CYCLE = ["", "Running", "Completed", "Failed", "Canceled", "Queued"]
 _LEFT_WIDTH = 38
-_NAME_MAX = _LEFT_WIDTH - 8  # icon(3) + padding(2) + margin(3)
+_NAME_MAX = _LEFT_WIDTH - 8
 _PAGE_SIZE = 30
 
 
@@ -85,6 +86,60 @@ def _kv(pairs: list[tuple[str, str]], *, hint: str = "") -> str:
     if hint:
         out += ["", f"  [dim]{hint}[/dim]"]
     return "\n".join(out)
+
+
+def _section(title: str) -> str:
+    """Render a section header line."""
+    return f"  [dim]── {title} {'─' * max(1, 36 - len(title))}[/dim]"
+
+
+def _info_block(job: dict[str, Any]) -> str:
+    """Build the full info panel content for a job."""
+    lines: list[str] = []
+    name = job.get("name", "")
+    display = job.get("display_name") or name
+
+    # Identity
+    lines.append(_section("Identity"))
+    if display and display != name:
+        lines.append(f"  [bold]{'Display Name':>{_KW}}[/bold]  {display}")
+    lines.append(f"  [bold]{'Azure ID':>{_KW}}[/bold]  {name}")
+    if job.get("experiment"):
+        lines.append(f"  [bold]{'Experiment':>{_KW}}[/bold]  {job['experiment']}")
+
+    # Resources
+    if job.get("compute"):
+        lines.append("")
+        lines.append(_section("Resources"))
+        lines.append(f"  [bold]{'Compute':>{_KW}}[/bold]  {job['compute']}")
+
+    # Timing
+    has_time = job.get("duration") or job.get("start_time")
+    if has_time:
+        lines.append("")
+        lines.append(_section("Timing"))
+        if job.get("duration"):
+            lines.append(f"  [bold]{'Duration':>{_KW}}[/bold]  {job['duration']}")
+        if job.get("start_time"):
+            lines.append(f"  [bold]{'Started':>{_KW}}[/bold]  {job['start_time']}")
+        if job.get("end_time"):
+            lines.append(f"  [bold]{'Ended':>{_KW}}[/bold]  {job['end_time']}")
+
+    # Links
+    url = job.get("portal_url", "")
+    if url:
+        lines.append("")
+        lines.append(_section("Links"))
+        if "/runs/" in url:
+            short = url.split("/runs/", 1)[1].split("?")[0]
+            url = f"ml.azure.com/runs/{short}"
+        lines.append(f"  [bold]{'Portal':>{_KW}}[/bold]  {url}")
+
+    # Hint
+    lines.append("")
+    lines.append("  [dim]Enter: refresh  ·  l: logs  ·  c: cancel[/dim]")
+
+    return "\n".join(lines)
 
 
 def _fmt_dur(secs: int) -> str:
@@ -142,6 +197,8 @@ class AjDashboard(App):
     """Azure Jobs interactive dashboard."""
 
     TITLE = "aj dashboard"
+    # Keyboard-only for low-latency SSH — disable mouse support
+    MOUSE_SUPPORT = False
 
     CSS = """
     Screen {
@@ -178,7 +235,7 @@ class AjDashboard(App):
         scrollbar-size: 1 1;
     }
 
-    /* ── workspace panel ── */
+    /* ── workspace panel (always visible) ── */
     #ws-pane {
         height: auto;
         max-height: 3;
@@ -191,8 +248,11 @@ class AjDashboard(App):
     #ws-current {
         height: 1;
     }
+
+    /* ── workspace switcher (toggle with w) ── */
     #ws-list-pane {
-        max-height: 10;
+        height: auto;
+        max-height: 16;
         margin-top: 1;
         border: round $accent;
         border-title-color: $accent;
@@ -200,7 +260,7 @@ class AjDashboard(App):
     }
     #ws-list {
         height: auto;
-        max-height: 8;
+        max-height: 14;
         border: none;
         padding: 0;
         scrollbar-size: 1 1;
@@ -631,46 +691,14 @@ class AjDashboard(App):
     def _show_job_info(self, job: dict[str, Any]) -> None:
         icon, sty = _icon_style(job.get("status", ""))
         status = job.get("status", "?")
-        name = job.get("name", "")
-        display = job.get("display_name") or name
+        display = job.get("display_name") or job.get("name", "")
 
-        # Update right-pane border
         rp = self.query_one("#right-pane")
         rp.border_title = f"{display}  [{sty}]{icon} {status}[/{sty}]"
         mode_label = "Logs" if self._view_mode == "logs" else "Info"
         rp.border_subtitle = mode_label
 
-        pairs: list[tuple[str, str]] = []
-
-        # Full display name (may differ from truncated list item)
-        if display and display != name:
-            pairs.append(("Name", display))
-        if job.get("compute"):
-            pairs.append(("Compute", job["compute"]))
-        if job.get("experiment"):
-            pairs.append(("Experiment", job["experiment"]))
-        pairs.append(("Azure ID", name))
-
-        if job.get("duration") or job.get("start_time"):
-            pairs.append(("", ""))
-            if job.get("duration"):
-                pairs.append(("Duration", job["duration"]))
-            if job.get("start_time"):
-                pairs.append(("Started", job["start_time"]))
-            if job.get("end_time"):
-                pairs.append(("Ended", job["end_time"]))
-
-        if job.get("portal_url"):
-            pairs.append(("", ""))
-            url = job["portal_url"]
-            if "/runs/" in url:
-                rp_str = url.split("/runs/", 1)[1].split("?")[0]
-                url = f"ml.azure.com/runs/{rp_str}"
-            pairs.append(("Portal", url))
-
-        self.query_one("#info-content", Static).update(
-            _kv(pairs, hint="Enter: refresh  ·  l: logs  ·  c: cancel")
-        )
+        self.query_one("#info-content", Static).update(_info_block(job))
 
     @work(thread=True, exclusive=True, group="status")
     def _fetch_single(self, job: dict[str, Any]) -> None:
@@ -830,15 +858,79 @@ class AjDashboard(App):
         self.action_quit()
 
     def action_refresh(self) -> None:
-        self._all_jobs.clear()
-        self._filtered.clear()
+        """Incremental refresh — fetch new jobs without clearing current data."""
         self._job_iter = None
         self._has_more = True
-        self.query_one("#info-content", Static).update(
-            _kv([], hint="Loading jobs…")
-        )
-        self._init_fetch()
-        self.notify("Refreshing...")
+        self.notify("Refreshing…")
+        self._do_incremental_refresh()
+
+    @work(thread=True, exclusive=True, group="fetch")
+    def _do_incremental_refresh(self) -> None:
+        """Re-fetch and merge — keeps existing jobs, adds/updates new ones."""
+        worker = get_current_worker()
+        ws = self._ensure_workspace()
+        if ws is None:
+            self.call_from_thread(
+                self.notify, "No workspace configured", severity="warning",
+            )
+            return
+        if self._ml_client is None:
+            self._ml_client = self._create_ml_client(ws)
+        if worker.is_cancelled:
+            return
+
+        from azure.ai.ml.constants import ListViewType
+
+        existing = {j["name"] for j in self._all_jobs}
+        new_jobs: list[dict[str, Any]] = []
+        updated = 0
+        try:
+            for job_obj in self._ml_client.jobs.list(
+                list_view_type=ListViewType.ALL,
+            ):
+                if worker.is_cancelled:
+                    return
+                d = _extract_job(job_obj)
+                if d["name"] in existing:
+                    # Update status of existing job
+                    for j in self._all_jobs:
+                        if j["name"] == d["name"] and j["status"] != d["status"]:
+                            j.update(d)
+                            updated += 1
+                            break
+                else:
+                    new_jobs.append(d)
+                # Stop after scanning enough to find new jobs
+                if len(new_jobs) + updated >= _PAGE_SIZE:
+                    break
+        except Exception:
+            pass
+
+        if worker.is_cancelled:
+            return
+
+        if new_jobs:
+            self.call_from_thread(self._on_refresh_done, new_jobs, updated)
+        elif updated:
+            self.call_from_thread(self._on_refresh_done, [], updated)
+        else:
+            self.call_from_thread(self.notify, "No new jobs")
+
+    def _on_refresh_done(
+        self, new_jobs: list[dict[str, Any]], updated: int,
+    ) -> None:
+        if new_jobs:
+            self._all_jobs = new_jobs + self._all_jobs
+        prev_name = ""
+        if 0 <= self._selected_idx < len(self._filtered):
+            prev_name = self._filtered[self._selected_idx].get("name", "")
+        self._apply_filter(restore_name=prev_name)
+        parts = []
+        if new_jobs:
+            parts.append(f"+{len(new_jobs)} new")
+        if updated:
+            parts.append(f"{updated} updated")
+        self.notify(", ".join(parts))
 
     def action_cycle_filter(self) -> None:
         try:

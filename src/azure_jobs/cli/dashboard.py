@@ -20,7 +20,7 @@ def dashboard(last: int) -> None:
     from azure_jobs.tui.app import AjDashboard
 
     app = AjDashboard(last=last)
-    app.run()
+    app.run(mouse=False)
 
     # Force-exit if background Azure SDK threads are still blocking.
     # Textual @work threads use run_in_executor which can't be interrupted
