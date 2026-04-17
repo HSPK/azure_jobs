@@ -232,6 +232,7 @@ class AjDashboard(WorkspaceMixin, App):
         try:
             jobs, nxt = self._rest_client.list_jobs_page(
                 next_link=self._next_link,
+                top=self._page_size,
             )
         except Exception as exc:
             self._has_more = False
@@ -264,22 +265,17 @@ class AjDashboard(WorkspaceMixin, App):
         finally:
             self._fetching = False
 
-    def _chunk(self, jobs: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
-        """Split a flat job list into display-page-sized chunks."""
-        ps = self._page_size
-        return [jobs[i:i + ps] for i in range(0, len(jobs), ps)] if jobs else []
-
     def _on_page_fetched(self, new_jobs: list[dict[str, Any]]) -> None:
-        """Called when a new REST page arrives — chunk and display."""
-        chunks = self._chunk(new_jobs)
-        self._pages.extend(chunks)
+        """Called when a new REST page arrives — one REST page = one display page."""
+        self._pages.append(new_jobs)
         self._all_jobs.extend(new_jobs)
-        self._current_page = len(self._pages) - len(chunks)
+        self._current_page = len(self._pages) - 1
         self._show_current_page()
 
     def _on_jobs_loaded(self, jobs: list[dict[str, Any]]) -> None:
         """Full replace (used by tests and refresh)."""
-        self._pages = self._chunk(jobs) or [[]]
+        ps = self._page_size
+        self._pages = [jobs[i:i + ps] for i in range(0, len(jobs), ps)] if jobs else [[]]
         self._all_jobs = list(jobs)
         self._current_page = 0
         self._has_more = False
@@ -662,8 +658,10 @@ class AjDashboard(WorkspaceMixin, App):
     ) -> None:
         if new_jobs:
             self._all_jobs = new_jobs + self._all_jobs
-        # Re-chunk all jobs to keep page sizes consistent
-        self._pages = self._chunk(self._all_jobs) or [[]]
+        # Re-page all jobs to keep page sizes consistent
+        ps = self._page_size
+        all_j = self._all_jobs
+        self._pages = [all_j[i:i + ps] for i in range(0, len(all_j), ps)] if all_j else [[]]
         prev_name = ""
         if 0 <= self._selected_idx < len(self._filtered):
             prev_name = self._filtered[self._selected_idx].get("name", "")

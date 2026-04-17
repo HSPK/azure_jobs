@@ -57,7 +57,7 @@ class AzureMLJobsClient:
         self,
         next_link: str | None = None,
         list_view_type: str = "All",
-        top: int = 100,
+        top: int = 30,
     ) -> tuple[list[dict[str, Any]], str | None]:
         """Fetch one page of jobs.
 
