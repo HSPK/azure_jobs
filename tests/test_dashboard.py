@@ -112,38 +112,28 @@ async def test_view_toggle(_dash) -> None:
 
 
 @pytest.mark.asyncio
-async def test_filter_cycle(_dash) -> None:
+async def test_filter_by_number_keys(_dash) -> None:
     async with _dash.run_test(size=(120, 30)) as pilot:
         await _load_jobs(_dash, pilot)
         await pilot.pause()
-        _dash.action_cycle_filter()
-        await pilot.pause()
-        assert _dash._status_filter == "Running"
-        _dash.action_cycle_filter()  # Completed
-        _dash.action_cycle_filter()  # Failed
+        # 4 = Failed: only 1 job (def67890 is Failed)
+        _dash.action_filter_failed()
         await pilot.pause()
         assert _dash._status_filter == "Failed"
         ol = _dash.query_one("#job-list")
-        assert ol.option_count == 1  # only def67890 (Failed)
+        assert ol.option_count == 1
+        # 1 = All: back to both
+        _dash.action_filter_all()
+        await pilot.pause()
+        assert _dash._status_filter == ""
+        assert ol.option_count == 2
+        # 3 = Completed: only eval-bert
+        _dash.action_filter_completed()
+        await pilot.pause()
+        assert _dash._status_filter == "Completed"
+        assert ol.option_count == 1
 
 
-@pytest.mark.asyncio
-async def test_search(_dash) -> None:
-    async with _dash.run_test(size=(120, 30)) as pilot:
-        await _load_jobs(_dash, pilot)
-        await pilot.pause()
-        _dash.action_search()
-        await pilot.pause()
-        inp = _dash.query_one("#search-input")
-        assert not inp.has_class("hidden")
-        await pilot.press("a", "b", "c")
-        await pilot.pause()
-        ol = _dash.query_one("#job-list")
-        assert ol.option_count == 1  # only abc12345 matches
-        await pilot.press("escape")
-        await pilot.pause()
-        assert inp.has_class("hidden")
-        assert ol.option_count == 2  # restored
 
 
 @pytest.mark.asyncio
@@ -308,8 +298,3 @@ def test_info_block_sections() -> None:
     assert "j1" in block
 
 
-def test_section_header() -> None:
-    from azure_jobs.tui.app import _section
-    s = _section("Test")
-    assert "Test" in s
-    assert "──" in s

@@ -5,7 +5,7 @@ Mouse disabled — keyboard-only for low-latency server usage.
 
 Layout
 ------
-Left column  top: bordered OptionList (jobs) with search (/) and status filter (f).
+Left column  top: bordered OptionList (jobs) with status filter (1-5 keys).
              bottom: bordered workspace panel (always visible, w to switch).
 Right pane   bordered panel; border-title = job name + status.
              Content toggles between Info (i) and Logs (l) views.
@@ -24,7 +24,6 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.widgets import (
     Footer,
-    Input,
     OptionList,
     RichLog,
     Static,
@@ -47,7 +46,6 @@ _AZ_STYLE = {
 }
 
 _KW = 14
-_STATUS_CYCLE = ["", "Running", "Completed", "Failed", "Canceled", "Queued"]
 _LEFT_WIDTH = 38
 _NAME_MAX = _LEFT_WIDTH - 8
 _PAGE_SIZE = 30
@@ -88,56 +86,58 @@ def _kv(pairs: list[tuple[str, str]], *, hint: str = "") -> str:
     return "\n".join(out)
 
 
-def _section(title: str) -> str:
-    """Render a section header line."""
-    return f"  [dim]── {title} {'─' * max(1, 36 - len(title))}[/dim]"
-
-
 def _info_block(job: dict[str, Any]) -> str:
-    """Build the full info panel content for a job."""
+    """Build the info panel content for a job with visual sections."""
     lines: list[str] = []
     name = job.get("name", "")
     display = job.get("display_name") or name
+    icon, sty = _icon_style(job.get("status", ""))
+    status = job.get("status", "?")
 
-    # Identity
-    lines.append(_section("Identity"))
+    # Header with status badge
+    lines.append("")
+    lines.append(f"  [{sty} bold]{icon} {status}[/{sty} bold]")
+    lines.append("")
+
+    # Identity section
+    lines.append("  [bold cyan]Identity[/bold cyan]")
+    lines.append(f"  [dim]{'─' * 42}[/dim]")
     if display and display != name:
-        lines.append(f"  [bold]{'Display Name':>{_KW}}[/bold]  {display}")
-    lines.append(f"  [bold]{'Azure ID':>{_KW}}[/bold]  {name}")
+        lines.append(f"    [dim]Name[/dim]         {display}")
+    lines.append(f"    [dim]ID[/dim]           {name}")
     if job.get("experiment"):
-        lines.append(f"  [bold]{'Experiment':>{_KW}}[/bold]  {job['experiment']}")
+        lines.append(f"    [dim]Experiment[/dim]   {job['experiment']}")
 
     # Resources
     if job.get("compute"):
         lines.append("")
-        lines.append(_section("Resources"))
-        lines.append(f"  [bold]{'Compute':>{_KW}}[/bold]  {job['compute']}")
+        lines.append("  [bold cyan]Resources[/bold cyan]")
+        lines.append(f"  [dim]{'─' * 42}[/dim]")
+        lines.append(f"    [dim]Compute[/dim]      {job['compute']}")
 
     # Timing
     has_time = job.get("duration") or job.get("start_time")
     if has_time:
         lines.append("")
-        lines.append(_section("Timing"))
+        lines.append("  [bold cyan]Timing[/bold cyan]")
+        lines.append(f"  [dim]{'─' * 42}[/dim]")
         if job.get("duration"):
-            lines.append(f"  [bold]{'Duration':>{_KW}}[/bold]  {job['duration']}")
+            lines.append(f"    [dim]Duration[/dim]     {job['duration']}")
         if job.get("start_time"):
-            lines.append(f"  [bold]{'Started':>{_KW}}[/bold]  {job['start_time']}")
+            lines.append(f"    [dim]Started[/dim]      {job['start_time']}")
         if job.get("end_time"):
-            lines.append(f"  [bold]{'Ended':>{_KW}}[/bold]  {job['end_time']}")
+            lines.append(f"    [dim]Ended[/dim]        {job['end_time']}")
 
-    # Links
+    # Portal link
     url = job.get("portal_url", "")
     if url:
         lines.append("")
-        lines.append(_section("Links"))
+        lines.append("  [bold cyan]Links[/bold cyan]")
+        lines.append(f"  [dim]{'─' * 42}[/dim]")
         if "/runs/" in url:
             short = url.split("/runs/", 1)[1].split("?")[0]
             url = f"ml.azure.com/runs/{short}"
-        lines.append(f"  [bold]{'Portal':>{_KW}}[/bold]  {url}")
-
-    # Hint
-    lines.append("")
-    lines.append("  [dim]Enter: refresh  ·  l: logs  ·  c: cancel[/dim]")
+        lines.append(f"    [dim]Portal[/dim]       [underline]{url}[/underline]")
 
     return "\n".join(lines)
 
@@ -222,12 +222,6 @@ class AjDashboard(App):
     #jobs-pane:focus-within {
         border: round $accent;
     }
-    #search-input {
-        height: 1;
-        border: none;
-        padding: 0 1;
-        background: $boost;
-    }
     #job-list {
         height: 1fr;
         border: none;
@@ -237,8 +231,7 @@ class AjDashboard(App):
 
     /* ── workspace panel (always visible) ── */
     #ws-pane {
-        height: auto;
-        max-height: 3;
+        height: 3;
         margin-top: 1;
         border: round $accent 40%;
         border-title-color: $text-muted;
@@ -251,16 +244,14 @@ class AjDashboard(App):
 
     /* ── workspace switcher (toggle with w) ── */
     #ws-list-pane {
-        height: auto;
-        max-height: 16;
+        height: 1fr;
         margin-top: 1;
         border: round $accent;
         border-title-color: $accent;
         border-title-style: bold;
     }
     #ws-list {
-        height: auto;
-        max-height: 14;
+        height: 1fr;
         border: none;
         padding: 0;
         scrollbar-size: 1 1;
@@ -293,14 +284,18 @@ class AjDashboard(App):
     BINDINGS = [
         Binding("q", "quit", "Quit"),
         Binding("r", "refresh", "Refresh"),
-        Binding("slash", "search", "Search"),
-        Binding("f", "cycle_filter", "Filter"),
         Binding("c", "cancel_job", "Cancel"),
         Binding("l", "show_logs", "Logs"),
         Binding("i", "show_info", "Info"),
         Binding("w", "toggle_ws", "Workspace"),
+        Binding("1", "filter_all", "All", show=False),
+        Binding("2", "filter_running", "Running", show=False),
+        Binding("3", "filter_completed", "Completed", show=False),
+        Binding("4", "filter_failed", "Failed", show=False),
+        Binding("5", "filter_canceled", "Canceled", show=False),
         Binding("escape", "dismiss", "Back", show=False),
     ]
+    ENABLE_COMMAND_PALETTE = True
 
     def action_quit(self) -> None:
         """Cancel all background workers and exit cleanly."""
@@ -319,7 +314,6 @@ class AjDashboard(App):
         self._logs_job: str = ""
         self._ml_client: Any = None
         self._status_filter: str = ""
-        self._name_filter: str = ""
         self._view_mode: str = "info"
         # Pagination
         self._job_iter: Iterator | None = None
@@ -332,10 +326,6 @@ class AjDashboard(App):
         with Horizontal():
             with Vertical(id="left-col"):
                 with Vertical(id="jobs-pane"):
-                    yield Input(
-                        placeholder="Search...", id="search-input",
-                        classes="hidden",
-                    )
                     yield OptionList(id="job-list")
                 with Vertical(id="ws-pane"):
                     yield Static("", id="ws-current")
@@ -469,13 +459,6 @@ class AjDashboard(App):
         out = self._all_jobs
         if self._status_filter:
             out = [j for j in out if j.get("status") == self._status_filter]
-        if self._name_filter:
-            q = self._name_filter.lower()
-            out = [
-                j for j in out
-                if q in (j.get("display_name") or j.get("name", "")).lower()
-                or q in j.get("name", "").lower()
-            ]
         self._filtered = out
 
         ol = self.query_one("#job-list", OptionList)
@@ -514,8 +497,6 @@ class AjDashboard(App):
         parts = [label]
         if self._status_filter:
             parts.append(f"▸ {self._status_filter}")
-        if self._name_filter:
-            parts.append(f'"{self._name_filter}"')
         self.query_one("#jobs-pane").border_title = "  ".join(parts)
 
     # ---- workspace / client -------------------------------------------------
@@ -811,45 +792,13 @@ class AjDashboard(App):
         if not content.strip() and not error:
             lw.write("[dim]No logs available.[/dim]")
 
-    # ---- search -------------------------------------------------------------
-
-    def action_search(self) -> None:
-        inp = self.query_one("#search-input", Input)
-        if inp.has_class("hidden"):
-            inp.remove_class("hidden")
-            inp.value = self._name_filter
-            inp.focus()
-        else:
-            self._close_search()
-
-    def _close_search(self) -> None:
-        inp = self.query_one("#search-input", Input)
-        inp.add_class("hidden")
-        self.query_one("#job-list", OptionList).focus()
-
-    def on_input_changed(self, event: Input.Changed) -> None:
-        if event.input.id == "search-input":
-            self._name_filter = event.value
-            self._apply_filter()
-
-    def on_input_submitted(self, event: Input.Submitted) -> None:
-        if event.input.id == "search-input":
-            self._close_search()
-
     # ---- actions ------------------------------------------------------------
 
     def action_dismiss(self) -> None:
-        """Escape: close ws list → close search → switch to info → quit."""
+        """Escape: close ws list → switch to info → quit."""
         ws_list = self.query_one("#ws-list-pane")
         if not ws_list.has_class("hidden"):
             ws_list.add_class("hidden")
-            self.query_one("#job-list", OptionList).focus()
-            return
-        inp = self.query_one("#search-input", Input)
-        if not inp.has_class("hidden"):
-            inp.add_class("hidden")
-            self._name_filter = ""
-            self._apply_filter()
             self.query_one("#job-list", OptionList).focus()
             return
         if self._view_mode == "logs":
@@ -932,14 +881,30 @@ class AjDashboard(App):
             parts.append(f"{updated} updated")
         self.notify(", ".join(parts))
 
-    def action_cycle_filter(self) -> None:
-        try:
-            idx = _STATUS_CYCLE.index(self._status_filter)
-        except ValueError:
-            idx = 0
-        self._status_filter = _STATUS_CYCLE[(idx + 1) % len(_STATUS_CYCLE)]
-        self.notify(f"Filter: {self._status_filter or 'All'}")
+    def _set_filter(self, status: str) -> None:
+        self._status_filter = status
         self._apply_filter()
+        self.notify(f"Filter: {status or 'All'}")
+
+    def action_filter_all(self) -> None:
+        """Show all jobs."""
+        self._set_filter("")
+
+    def action_filter_running(self) -> None:
+        """Show only running jobs."""
+        self._set_filter("Running")
+
+    def action_filter_completed(self) -> None:
+        """Show only completed jobs."""
+        self._set_filter("Completed")
+
+    def action_filter_failed(self) -> None:
+        """Show only failed jobs."""
+        self._set_filter("Failed")
+
+    def action_filter_canceled(self) -> None:
+        """Show only canceled jobs."""
+        self._set_filter("Canceled")
 
     def action_cancel_job(self) -> None:
         if 0 <= self._selected_idx < len(self._filtered):
