@@ -19,6 +19,18 @@ Templates live in `.azure_jobs/template/` as YAML files. Each template has two t
 - **`base`** — optional. A template name (or list of names) to inherit from.
 - **`config`** — the actual job configuration passed to amlt.
 
+### Directory Structure
+
+Templates are organized by concern under `.azure_jobs/`:
+
+- **`template/`** — user-facing job profiles. Each file selects an account, storage, and environment, then adds cluster-specific config (target name, SKU, defaults).
+- **`account/`** — Azure identity and subscription.
+- **`storage/`** — blob mount definitions. `default.yaml` bundles all common mounts.
+- **`environment/`** — service type and runtime. `aml.yaml` (Azure ML) and `sing.yaml` (Singularity) define the Docker image, setup scripts, and service config. `base.yaml` holds shared job defaults.
+- **`scripts/`** — shell scripts referenced by environment setup.
+
+A typical template inherits four bases: `base` (code/ignore rules), `account.drl` (identity), `storage.default` (mounts), and `environment.aml` or `environment.sing` (runtime). Cluster-specific settings like `target.name` and `_extra` defaults live directly in the template.
+
 ### Inheritance
 
 A template can extend one or more bases. The config from all bases is merged together, then the child's config is merged on top. Chains can be arbitrarily deep (grandparent → parent → child).

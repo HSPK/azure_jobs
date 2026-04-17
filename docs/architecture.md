@@ -44,7 +44,7 @@ A job submission follows this path:
 
 - **Performance first** — `aj --help` runs in ~160ms. All heavy imports (Rich, Azure SDK) are lazy.
 - **`amlt` for submission only** — `amlt` handles code upload, Docker environments, Singularity, and storage mounts. We delegate to it for submission but plan to bypass it for status/cancel/logs.
-- **Template inheritance over duplication** — templates compose via `base` chains instead of copy-paste.
+- **Layered template design** — concerns are separated into account, storage, and environment layers. Templates compose these via `base` chains. Cluster-specific config (target name, SKU) lives in the template itself, not in a separate layer.
 - **Single config file** — `aj_config.json` stores everything: defaults, repo_id, workspace credentials.
 - **Append-only job log** — `record.jsonl` is simple, greppable, and never loses data.
 - **Minimal dependencies** — only `click`, `pyyaml`, and `rich`. Azure SDK will be an optional extra.
