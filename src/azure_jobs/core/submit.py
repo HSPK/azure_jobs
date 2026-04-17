@@ -445,18 +445,22 @@ class JobStatus:
     compute: str = ""
 
 
+def _format_duration(seconds: int) -> str:
+    """Format seconds into a human-readable duration string."""
+    if seconds >= 3600:
+        return f"{seconds // 3600}h {(seconds % 3600) // 60}m"
+    elif seconds >= 60:
+        return f"{seconds // 60}m {seconds % 60}s"
+    return f"{seconds}s"
+
+
 def get_job_status(
     azure_name: str,
     workspace: dict[str, str],
 ) -> JobStatus:
     """Query Azure ML for a job's current status.
 
-    Args:
-        azure_name: The Azure ML job name (returned_job.name).
-        workspace: dict with subscription_id, resource_group, workspace_name.
-
-    Returns:
-        JobStatus with current status information.
+    Uses the REST API for detailed error messages that the SDK hides.
     """
     _quiet_azure_sdk()
 
@@ -464,13 +468,17 @@ def get_job_status(
         from azure.ai.ml import MLClient
         from azure.identity import AzureCliCredential
 
+        sub_id = workspace.get("subscription_id", "")
+        rg = workspace.get("resource_group", "")
+        ws = workspace.get("workspace_name", "")
+
         with _suppress_sdk_output():
             credential = AzureCliCredential()
             ml_client = MLClient(
                 credential=credential,
-                subscription_id=workspace.get("subscription_id", ""),
-                resource_group_name=workspace.get("resource_group", ""),
-                workspace_name=workspace.get("workspace_name", ""),
+                subscription_id=sub_id,
+                resource_group_name=rg,
+                workspace_name=ws,
             )
             job = ml_client.jobs.get(azure_name)
 
@@ -478,60 +486,51 @@ def get_job_status(
         display_name = getattr(job, "display_name", "") or ""
         portal_url = getattr(job, "studio_url", "") or ""
         compute = getattr(job, "compute", "") or ""
-        # Extract just the compute name from ARM ID if present
         if "/" in compute:
             compute = compute.rstrip("/").rsplit("/", 1)[-1]
 
-        # Parse times
-        start_time = ""
-        end_time = ""
+        # Timing from properties (more reliable than creation_context)
+        props = getattr(job, "properties", {}) or {}
+        start_time = props.get("StartTimeUtc", "")
+        end_time = props.get("EndTimeUtc", "")
         duration_str = ""
-        if hasattr(job, "creation_context"):
-            ctx = job.creation_context
-            if hasattr(ctx, "created_at") and ctx.created_at:
-                start_time = str(ctx.created_at)
 
-        if hasattr(job, "services") and job.services:
-            pass  # services info if needed later
-
-        # Try to compute duration from properties
-        start_dt = getattr(job, "creation_context", None)
-        if start_dt and hasattr(start_dt, "created_at") and start_dt.created_at:
+        if start_time and end_time:
+            from datetime import datetime
+            try:
+                fmt = "%Y-%m-%d %H:%M:%S"
+                t0 = datetime.strptime(start_time, fmt)
+                t1 = datetime.strptime(end_time, fmt)
+                duration_str = _format_duration(int((t1 - t0).total_seconds()))
+            except ValueError:
+                pass
+        elif start_time:
             from datetime import datetime, timezone
-            created = start_dt.created_at
-            if status in ("Completed", "Failed", "Canceled"):
-                # Use modified_at as end time
-                modified = getattr(start_dt, "last_modified_at", None)
-                if modified:
-                    delta = modified - created
-                    total_secs = int(delta.total_seconds())
-                    if total_secs >= 3600:
-                        duration_str = f"{total_secs // 3600}h {(total_secs % 3600) // 60}m"
-                    elif total_secs >= 60:
-                        duration_str = f"{total_secs // 60}m {total_secs % 60}s"
-                    else:
-                        duration_str = f"{total_secs}s"
-                    end_time = str(modified)
-            else:
-                # Still running — show elapsed
-                now = datetime.now(timezone.utc)
-                if created.tzinfo is None:
-                    created = created.replace(tzinfo=timezone.utc)
-                delta = now - created
-                total_secs = int(delta.total_seconds())
-                if total_secs >= 3600:
-                    duration_str = f"{total_secs // 3600}h {(total_secs % 3600) // 60}m (running)"
-                elif total_secs >= 60:
-                    duration_str = f"{total_secs // 60}m {total_secs % 60}s (running)"
-                else:
-                    duration_str = f"{total_secs}s (running)"
+            try:
+                t0 = datetime.strptime(start_time, "%Y-%m-%d %H:%M:%S")
+                t0 = t0.replace(tzinfo=timezone.utc)
+                elapsed = int((datetime.now(timezone.utc) - t0).total_seconds())
+                duration_str = _format_duration(elapsed) + " (running)"
+            except ValueError:
+                pass
 
-        # Error info
+        # Get detailed error via REST API (SDK .error is often empty)
         error_msg = ""
         if status == "Failed":
-            err = getattr(job, "error", None)
-            if err:
-                error_msg = getattr(err, "message", str(err))
+            try:
+                with _suppress_sdk_output():
+                    rest_run = ml_client.jobs._runs_operations._operation.get(
+                        subscription_id=sub_id,
+                        resource_group_name=rg,
+                        workspace_name=ws,
+                        run_id=azure_name,
+                    )
+                if hasattr(rest_run, "as_dict"):
+                    d = rest_run.as_dict()
+                    err = d.get("error", {}).get("error", {})
+                    error_msg = err.get("message", "")
+            except Exception:
+                pass
 
         return JobStatus(
             azure_name=azure_name,

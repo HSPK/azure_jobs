@@ -166,7 +166,7 @@ def show_jobs_table(records: list[dict[str, Any]]) -> None:
         show_header=True,
         header_style="bold",
         show_lines=False,
-        pad_edge=False,
+        pad_edge=True,
         title="[bold]Jobs[/bold]",
         title_style="",
     )
@@ -268,6 +268,19 @@ _JOB_STATUS_ICON = {
 }
 
 
+def _short_portal_url(url: str) -> str:
+    """Render portal URL as a clickable Rich terminal link with short text."""
+    if not url:
+        return ""
+    # Extract the run ID from the URL for display text
+    # URL format: https://ml.azure.com/runs/<run_id>?wsid=...
+    display = url
+    if "/runs/" in url:
+        run_part = url.split("/runs/", 1)[1].split("?")[0]
+        display = f"ml.azure.com/runs/{run_part}"
+    return f"[link={url}]{display}[/link]"
+
+
 def show_job_status(job_status: Any) -> None:
     """Display job status as a rich panel."""
     status = job_status.status
@@ -288,7 +301,7 @@ def show_job_status(job_status: Any) -> None:
     if job_status.end_time:
         rows.append(("Ended", job_status.end_time))
     if job_status.portal_url:
-        rows.append(("Portal", job_status.portal_url))
+        rows.append(("Portal", _short_portal_url(job_status.portal_url)))
     if job_status.error:
         rows.append(("Error", f"[error]{job_status.error}[/error]"))
 
