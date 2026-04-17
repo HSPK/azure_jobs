@@ -14,15 +14,21 @@ All azure-ai-ml imports are lazy to keep CLI startup fast.
 
 from __future__ import annotations
 
-import io
-import logging
-import os
-import sys
-import warnings
-from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+# Re-export public names so existing importers (cli/jobs etc.) keep working
+# during the transition.  New code should import from core.client directly.
+from azure_jobs.core.client import (  # noqa: F401
+    create_ml_client,
+    quiet_azure_sdk,
+    suppress_sdk_output,
+)
+
+# Backward-compat aliases for private names (will be removed)
+_quiet_azure_sdk = quiet_azure_sdk
+_suppress_sdk_output = suppress_sdk_output
 
 
 @dataclass
@@ -77,41 +83,6 @@ class SubmitRequest:
     vc_resource_group: str = ""  # VC resource group (falls back to resource_group)
 
 
-def _quiet_azure_sdk() -> None:
-    """Suppress noisy Azure SDK warnings and experimental-class messages."""
-    # Suppress Python warnings from Azure SDK
-    warnings.filterwarnings("ignore", message=".*experimental.*")
-    warnings.filterwarnings("ignore", message=".*Class.*")
-    warnings.filterwarnings("ignore", category=DeprecationWarning, module="azure")
-    warnings.filterwarnings("ignore", category=FutureWarning, module="azure")
-    # Silence Azure loggers
-    for name in ("azure", "azure.ai.ml", "azure.identity", "azure.core", "msrest", "msal"):
-        logging.getLogger(name).setLevel(logging.ERROR)
-
-
-@contextmanager
-def _suppress_sdk_output():
-    """Redirect stderr to suppress Azure SDK noise (upload progress, warnings).
-
-    Captures stderr so tqdm upload bars and 'experimental class' messages
-    don't interleave with the spinner output.
-    """
-    _quiet_azure_sdk()
-    old_stderr = sys.stderr
-    sys.stderr = io.StringIO()
-    # Also suppress tqdm's file descriptor if it defaults to stderr
-    old_env = os.environ.get("TQDM_DISABLE")
-    os.environ["TQDM_DISABLE"] = "1"
-    try:
-        yield
-    finally:
-        sys.stderr = old_stderr
-        if old_env is None:
-            os.environ.pop("TQDM_DISABLE", None)
-        else:
-            os.environ["TQDM_DISABLE"] = old_env
-
-
 def _extract_error_message(exc: Exception) -> str:
     """Extract a concise error message from an Azure SDK exception.
 
@@ -141,17 +112,12 @@ class SubmitResult:
 
 
 def _get_ml_client(request: SubmitRequest) -> Any:
-    """Create an authenticated MLClient. Lazy import."""
-    from azure.ai.ml import MLClient
-    from azure.identity import AzureCliCredential
-
-    credential = AzureCliCredential()
-    return MLClient(
-        credential=credential,
-        subscription_id=request.subscription_id,
-        resource_group_name=request.resource_group,
-        workspace_name=request.workspace_name,
-    )
+    """Create an authenticated MLClient from a SubmitRequest."""
+    return create_ml_client({
+        "subscription_id": request.subscription_id,
+        "resource_group": request.resource_group,
+        "workspace_name": request.workspace_name,
+    })
 
 
 _SING_IMAGE_PREFIX = "amlt-sing/"
@@ -655,24 +621,9 @@ def get_job_status(
 
     Uses the REST API for detailed error messages that the SDK hides.
     """
-    _quiet_azure_sdk()
-
     try:
-        from azure.ai.ml import MLClient
-        from azure.identity import AzureCliCredential
-
-        sub_id = workspace.get("subscription_id", "")
-        rg = workspace.get("resource_group", "")
-        ws = workspace.get("workspace_name", "")
-
-        with _suppress_sdk_output():
-            credential = AzureCliCredential()
-            ml_client = MLClient(
-                credential=credential,
-                subscription_id=sub_id,
-                resource_group_name=rg,
-                workspace_name=ws,
-            )
+        ml_client = create_ml_client(workspace)
+        with suppress_sdk_output():
             job = ml_client.jobs.get(azure_name)
 
         status = getattr(job, "status", "Unknown")
@@ -696,11 +647,11 @@ def get_job_status(
         error_msg = ""
         if status == "Failed":
             try:
-                with _suppress_sdk_output():
+                with suppress_sdk_output():
                     rest_run = ml_client.jobs._runs_operations._operation.get(
-                        subscription_id=sub_id,
-                        resource_group_name=rg,
-                        workspace_name=ws,
+                        subscription_id=workspace.get("subscription_id", ""),
+                        resource_group_name=workspace.get("resource_group", ""),
+                        workspace_name=workspace.get("workspace_name", ""),
                         run_id=azure_name,
                     )
                 if hasattr(rest_run, "as_dict"):
@@ -739,19 +690,7 @@ def cancel_job(
     Returns:
         Final status string (e.g. "Canceled", "Completed", "Failed").
     """
-    _quiet_azure_sdk()
-
-    from azure.ai.ml import MLClient
-    from azure.identity import AzureCliCredential
-
-    with _suppress_sdk_output():
-        credential = AzureCliCredential()
-        ml_client = MLClient(
-            credential=credential,
-            subscription_id=workspace.get("subscription_id", ""),
-            resource_group_name=workspace.get("resource_group", ""),
-            workspace_name=workspace.get("workspace_name", ""),
-        )
+    ml_client = create_ml_client(workspace)
 
     # Check current status first
     job = ml_client.jobs.get(azure_name)
@@ -759,7 +698,7 @@ def cancel_job(
     if status in ("Completed", "Failed", "Canceled"):
         return status
 
-    with _suppress_sdk_output():
+    with suppress_sdk_output():
         lrop = ml_client.jobs.begin_cancel(azure_name)
         try:
             lrop.wait()
@@ -779,37 +718,12 @@ def get_job_logs(
     Uses ``ml_client.jobs.stream()`` which prints to stdout for running
     jobs, or fetches completed job output logs.
     """
-    _quiet_azure_sdk()
+    from azure_jobs.core.client import extract_json_error
 
-    from azure.ai.ml import MLClient
-    from azure.identity import AzureCliCredential
+    ml_client = create_ml_client(workspace)
 
-    with _suppress_sdk_output():
-        credential = AzureCliCredential()
-        ml_client = MLClient(
-            credential=credential,
-            subscription_id=workspace.get("subscription_id", ""),
-            resource_group_name=workspace.get("resource_group", ""),
-            workspace_name=workspace.get("workspace_name", ""),
-        )
-
-    # stream() prints to stdout and blocks until job finishes
     try:
         ml_client.jobs.stream(azure_name)
     except Exception as exc:
-        # For failed jobs, stream() raises JobException with the error.
-        # Extract and display the useful part.
-        msg = str(exc)
-        if "message" in msg:
-            import json as _json
-            try:
-                # Parse the embedded JSON error
-                start = msg.index("{")
-                end = msg.rindex("}") + 1
-                err = _json.loads(msg[start:end])
-                print(err.get("error", {}).get("message", msg).strip())
-            except (ValueError, _json.JSONDecodeError):
-                print(msg)
-        else:
-            print(msg)
+        print(extract_json_error(exc))
     return ""

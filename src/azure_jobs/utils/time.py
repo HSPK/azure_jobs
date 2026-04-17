@@ -38,23 +38,21 @@ def _resolve_tz(name: str) -> Any:
     return tz
 
 
-def get_display_tz() -> Any:
-    """Return the configured display timezone.
+_display_tz_name: str | None = None
 
-    Reads ``timezone`` from ``aj_config.json``; falls back to
-    ``Asia/Shanghai``.
-    """
-    from azure_jobs.core.config import read_config
-    cfg = read_config()
-    name = cfg.get("timezone", _DEFAULT_TZ)
-    return _resolve_tz(name)
+
+def get_display_tz() -> Any:
+    """Return the configured display timezone (cached after first read)."""
+    return _resolve_tz(get_display_tz_name())
 
 
 def get_display_tz_name() -> str:
-    """Return the configured timezone name string."""
-    from azure_jobs.core.config import read_config
-    cfg = read_config()
-    return cfg.get("timezone", _DEFAULT_TZ)
+    """Return the configured timezone name string (cached after first read)."""
+    global _display_tz_name
+    if _display_tz_name is None:
+        from azure_jobs.core.config import read_config
+        _display_tz_name = read_config().get("timezone", _DEFAULT_TZ)
+    return _display_tz_name
 
 
 # ---------------------------------------------------------------------------

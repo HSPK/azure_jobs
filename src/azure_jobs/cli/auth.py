@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import subprocess
 
 import click
@@ -18,6 +17,7 @@ def auth_group() -> None:
 @auth_group.command(name="status")
 def auth_status() -> None:
     """Show current Azure login status, subscription, and credential health."""
+    from azure_jobs.core.config import _az_json
     from azure_jobs.utils.ui import console
     from rich.panel import Panel
     from rich.table import Table
@@ -25,30 +25,10 @@ def auth_status() -> None:
     rows: list[tuple[str, str]] = []
 
     # ── 1. az CLI login ──
-    try:
-        result = subprocess.run(
-            ["az", "account", "show", "--output", "json"],
-            capture_output=True,
-            text=True,
-            timeout=15,
-        )
-    except FileNotFoundError:
-        console.print("[error]✗[/error] Azure CLI not installed")
-        console.print("  Install: https://aka.ms/installazurecli")
-        raise SystemExit(1)
-    except subprocess.TimeoutExpired:
-        console.print("[error]✗[/error] Azure CLI timed out")
-        raise SystemExit(1)
-
-    if result.returncode != 0:
-        console.print("[error]✗[/error] Not logged in")
+    account = _az_json(["account", "show"])
+    if account is None:
+        console.print("[error]✗[/error] Not logged in (or Azure CLI not installed)")
         console.print("  Run [bold]az login[/bold] to authenticate")
-        raise SystemExit(1)
-
-    try:
-        account = json.loads(result.stdout)
-    except json.JSONDecodeError:
-        console.print("[error]✗[/error] Failed to parse Azure account info")
         raise SystemExit(1)
 
     rows.append(("Status", "[bold green]✓ Logged in[/bold green]"))

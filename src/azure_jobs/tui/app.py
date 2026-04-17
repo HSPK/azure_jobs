@@ -694,21 +694,28 @@ class AjDashboard(App):
         self._apply_filter(restore_name=prev_name)
 
     def _apply_filter(self, *, restore_name: str = "") -> None:
-        out = self._all_jobs
-        if self._status_filter:
-            out = [j for j in out if j.get("status") == self._status_filter]
-        if self._experiment_filter:
-            out = [j for j in out if j.get("experiment") == self._experiment_filter]
-        if self._search_query:
-            q = self._search_query.lower()
-            out = [
-                j for j in out
-                if q in (j.get("display_name") or j.get("name", "")).lower()
-                or q in j.get("name", "").lower()
-                or q in j.get("experiment", "").lower()
-                or q in j.get("tags", "").lower()
-            ]
-        self._filtered = out
+        sf = self._status_filter
+        ef = self._experiment_filter
+        sq = self._search_query.lower() if self._search_query else ""
+
+        if not sf and not ef and not sq:
+            self._filtered = list(self._all_jobs)
+        else:
+            out: list[dict[str, Any]] = []
+            for j in self._all_jobs:
+                if sf and j.get("status") != sf:
+                    continue
+                if ef and j.get("experiment") != ef:
+                    continue
+                if sq and not (
+                    sq in (j.get("display_name") or j.get("name", "")).lower()
+                    or sq in j.get("name", "").lower()
+                    or sq in j.get("experiment", "").lower()
+                    or sq in j.get("tags", "").lower()
+                ):
+                    continue
+                out.append(j)
+            self._filtered = out
 
         ol = self.query_one("#job-list", OptionList)
         ol.clear_options()
@@ -803,17 +810,13 @@ class AjDashboard(App):
 
     def _create_ml_client(self, ws: dict[str, str]) -> Any:
         """Create a new MLClient for the given workspace dict."""
-        from azure_jobs.core.submit import _quiet_azure_sdk, _suppress_sdk_output
-        _quiet_azure_sdk()
-        from azure.ai.ml import MLClient
-        from azure.identity import AzureCliCredential
-        with _suppress_sdk_output():
-            return MLClient(
-                credential=AzureCliCredential(),
-                subscription_id=ws.get("subscription_id", self._subscription_id),
-                resource_group_name=ws.get("resource_group", ""),
-                workspace_name=ws.get("workspace_name", ws.get("name", "")),
-            )
+        from azure_jobs.core.client import create_ml_client
+        merged = {
+            "subscription_id": ws.get("subscription_id", self._subscription_id),
+            "resource_group": ws.get("resource_group", ""),
+            "workspace_name": ws.get("workspace_name", ws.get("name", "")),
+        }
+        return create_ml_client(merged)
 
     def _get_or_create_ml_client(self) -> Any:
         if self._ml_client is not None:
@@ -968,17 +971,17 @@ class AjDashboard(App):
             self.call_from_thread(self._on_single_fetched, name, updated)
 
     def _on_single_fetched(self, name: str, updated: dict[str, Any]) -> None:
-        for lst in (self._all_jobs, self._filtered):
-            for i, j in enumerate(lst):
-                if j.get("name") == name:
-                    lst[i] = updated
-                    break
-        # Refresh list item
+        # Update in _all_jobs
+        for i, j in enumerate(self._all_jobs):
+            if j.get("name") == name:
+                self._all_jobs[i] = updated
+                break
+        # Update in _filtered + refresh the OptionList entry in one pass
+        ol = self.query_one("#job-list", OptionList)
         for i, j in enumerate(self._filtered):
             if j.get("name") == name:
-                self.query_one("#job-list", OptionList).replace_option_prompt_at_index(
-                    i, _make_option(updated).prompt,
-                )
+                self._filtered[i] = updated
+                ol.replace_option_prompt_at_index(i, _make_option(updated).prompt)
                 break
         if 0 <= self._selected_idx < len(self._filtered):
             if self._filtered[self._selected_idx].get("name") == name:
@@ -1107,17 +1110,8 @@ class AjDashboard(App):
         try:
             ml.jobs.stream(azure_name)
         except Exception as exc:
-            msg = str(exc)
-            if "{" in msg:
-                import json
-                try:
-                    s, e = msg.index("{"), msg.rindex("}") + 1
-                    err = json.loads(msg[s:e])
-                    error_msg = err.get("error", {}).get("message", msg).strip()
-                except (ValueError, json.JSONDecodeError):
-                    error_msg = msg
-            else:
-                error_msg = msg
+            from azure_jobs.core.client import extract_json_error
+            error_msg = extract_json_error(exc)
         finally:
             sys.stdout = old_out
             capture.drain()

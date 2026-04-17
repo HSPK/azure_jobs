@@ -100,6 +100,11 @@ def job_logs(job_id: str) -> None:
     import io
     import sys
 
+    from azure_jobs.core.client import (
+        create_ml_client,
+        extract_json_error,
+        filter_log_lines,
+    )
     from azure_jobs.core.config import get_workspace_config
     from azure_jobs.utils.ui import console
 
@@ -107,18 +112,7 @@ def job_logs(job_id: str) -> None:
     workspace = get_workspace_config()
 
     with console.status("[bold cyan]Connecting…[/bold cyan]", spinner="dots"):
-        from azure_jobs.core.submit import _quiet_azure_sdk, _suppress_sdk_output
-        _quiet_azure_sdk()
-        with _suppress_sdk_output():
-            from azure.ai.ml import MLClient
-            from azure.identity import AzureCliCredential
-            credential = AzureCliCredential()
-            ml_client = MLClient(
-                credential=credential,
-                subscription_id=workspace.get("subscription_id", ""),
-                resource_group_name=workspace.get("resource_group", ""),
-                workspace_name=workspace.get("workspace_name", ""),
-            )
+        ml_client = create_ml_client(workspace)
 
     # Show header panel
     from azure_jobs.utils.ui import _short_portal_url
@@ -135,36 +129,11 @@ def job_logs(job_id: str) -> None:
     try:
         ml_client.jobs.stream(azure_name)
     except Exception as exc:
-        msg = str(exc)
-        if "{" in msg:
-            import json as _json
-            try:
-                start = msg.index("{")
-                end = msg.rindex("}") + 1
-                err = _json.loads(msg[start:end])
-                error_msg = err.get("error", {}).get("message", msg).strip()
-            except (ValueError, _json.JSONDecodeError):
-                error_msg = msg
-        else:
-            error_msg = msg
+        error_msg = extract_json_error(exc)
     finally:
         sys.stdout = old_stdout
 
-    # Filter and print log content
-    raw = buf.getvalue()
-    _SKIP_PREFIXES = ("RunId:", "Web View:", "Execution Summary", "=====")
-    lines = raw.split("\n")
-    filtered: list[str] = []
-    for line in lines:
-        if any(line.startswith(p) for p in _SKIP_PREFIXES):
-            continue
-        filtered.append(line)
-
-    # Trim leading/trailing blank lines
-    while filtered and not filtered[0].strip():
-        filtered.pop(0)
-    while filtered and not filtered[-1].strip():
-        filtered.pop()
+    filtered = filter_log_lines(buf.getvalue())
 
     if filtered:
         console.print("\n".join(filtered))

@@ -16,8 +16,12 @@ def _cfg_tz(tmp_path: Path):
 
     def _set(tz: str | None = None):
         import json
+        import azure_jobs.utils.time as _tmod
         data = {"timezone": tz} if tz else {}
         cf.write_text(json.dumps(data))
+        # Reset caches so the new config is picked up
+        _tmod._tz_cache.clear()
+        _tmod._display_tz_name = None
 
     cf.write_text("{}")
     with patch("azure_jobs.core.const.AJ_CONFIG", cf):
