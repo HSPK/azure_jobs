@@ -330,26 +330,43 @@ class VCInfo:
     quotas: list[SeriesQuota] = field(default_factory=list)
 
 
+def _list_all_subscriptions() -> list[str]:
+    """List ALL subscription IDs the user has access to.
+
+    Uses the ARM subscriptions API (same as amlt's ``SubscriptionClient``),
+    not ``az account list`` which only shows explicitly added subscriptions.
+    """
+    from azure_jobs.core.config import _az_json
+
+    data = _az_json(
+        [
+            "rest", "--method", "get", "--url",
+            "https://management.azure.com/subscriptions?api-version=2022-12-01",
+        ],
+        timeout=30,
+    )
+    if not data or not isinstance(data.get("value"), list):
+        return []
+    return [
+        s["subscriptionId"]
+        for s in data["value"]
+        if s.get("subscriptionId") and s.get("state") == "Enabled"
+    ]
+
+
 def discover_virtual_clusters(
     subscription_ids: list[str] | None = None,
 ) -> list[VCInfo]:
     """Discover all Singularity virtual clusters via Azure Resource Graph.
 
-    Uses the same approach as ``amlt``: query Resource Graph for all
-    ``microsoft.machinelearningservices/virtualclusters`` across ALL
-    subscriptions the user has access to.
+    Uses the same approach as ``amlt``: enumerate ALL subscriptions the user
+    has access to (via ARM subscriptions API), then query Resource Graph for
+    ``microsoft.machinelearningservices/virtualclusters`` across all of them.
     """
     from azure_jobs.core.config import _az_json
 
     if not subscription_ids:
-        # List ALL subscriptions (like amlt's get_user_subscriptions)
-        subs = _az_json(["account", "list", "--query", "[].id", "--all"], timeout=20)
-        if not subs or not isinstance(subs, list):
-            # Fallback to current subscription
-            acct = _az_json(["account", "show"])
-            subscription_ids = [acct["id"]] if acct and acct.get("id") else []
-        else:
-            subscription_ids = [s for s in subs if s]
+        subscription_ids = _list_all_subscriptions()
         if not subscription_ids:
             return []
 

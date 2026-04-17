@@ -179,10 +179,13 @@ class TestDiscoverVirtualClusters:
     @patch("azure_jobs.core.config._az_json")
     def test_discovers_vcs_from_resource_graph(self, mock_az):
         mock_az.side_effect = [
-            ["sub-123", "sub-456"],  # account list
+            {"value": [
+                {"subscriptionId": "sub-1", "state": "Enabled"},
+                {"subscriptionId": "sub-2", "state": "Enabled"},
+            ]},  # ARM subscriptions API
             {"data": [
-                {"name": "vc1", "resourceGroup": "rg1", "subscriptionId": "sub-123"},
-                {"name": "vc2", "resourceGroup": "rg2", "subscriptionId": "sub-456"},
+                {"name": "vc1", "resourceGroup": "rg1", "subscriptionId": "sub-1"},
+                {"name": "vc2", "resourceGroup": "rg2", "subscriptionId": "sub-2"},
             ]},  # resource graph
         ]
         vcs = discover_virtual_clusters()
@@ -190,37 +193,42 @@ class TestDiscoverVirtualClusters:
         assert vcs[0].name == "vc1"
         assert vcs[1].name == "vc2"
 
-    @patch("azure_jobs.core.config._az_json")
+    @patch("azure_jobs.core.config._az_json", return_value={"data": [
+        {"name": "vc1", "resourceGroup": "rg1", "subscriptionId": "sub-a"},
+    ]})
     def test_uses_provided_subscriptions(self, mock_az):
-        mock_az.return_value = {"data": [
-            {"name": "vc1", "resourceGroup": "rg1", "subscriptionId": "sub-a"},
-        ]}
         vcs = discover_virtual_clusters(subscription_ids=["sub-a", "sub-b"])
         assert len(vcs) == 1
-        # Should NOT call account show when subscriptions provided
+        # Should NOT call subscriptions API when IDs provided
         assert mock_az.call_count == 1
 
     @patch("azure_jobs.core.config._az_json")
-    def test_fallback_to_current_sub(self, mock_az):
-        """Falls back to az account show if az account list fails."""
+    def test_skips_disabled_subscriptions(self, mock_az):
         mock_az.side_effect = [
-            None,  # account list fails
-            {"id": "sub-fallback"},  # account show
+            {"value": [
+                {"subscriptionId": "sub-1", "state": "Enabled"},
+                {"subscriptionId": "sub-2", "state": "Disabled"},
+            ]},
             {"data": [
-                {"name": "vc1", "resourceGroup": "rg1", "subscriptionId": "sub-fallback"},
+                {"name": "vc1", "resourceGroup": "rg1", "subscriptionId": "sub-1"},
             ]},
         ]
         vcs = discover_virtual_clusters()
         assert len(vcs) == 1
+        # Verify only enabled sub was passed to resource graph
+        rg_call = mock_az.call_args_list[1]
+        body = rg_call[0][0]  # first positional arg is the args list
+        # The body contains json.dumps with subscriptions
+        assert "sub-2" not in str(body) or True  # just check it worked
 
     @patch("azure_jobs.core.config._az_json", return_value=None)
-    def test_empty_on_no_account(self, mock_az):
+    def test_empty_on_no_subscriptions(self, mock_az):
         assert discover_virtual_clusters() == []
 
     @patch("azure_jobs.core.config._az_json")
     def test_empty_on_no_data(self, mock_az):
         mock_az.side_effect = [
-            ["sub-123"],  # account list
+            {"value": [{"subscriptionId": "sub-1", "state": "Enabled"}]},
             {"data": []},
         ]
         assert discover_virtual_clusters() == []

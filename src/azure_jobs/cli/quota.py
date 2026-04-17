@@ -80,7 +80,10 @@ def _show_sing_quotas(show_all: bool, template: str | None) -> None:
 
     from rich.table import Table
 
-    with console.status("[bold cyan]Discovering virtual clusters…[/bold cyan]", spinner="dots"):
+    with console.status(
+        "[bold cyan]Listing subscriptions and discovering virtual clusters…[/bold cyan]",
+        spinner="dots",
+    ):
         vcs = _discover_vcs(template)
 
     if not vcs:
