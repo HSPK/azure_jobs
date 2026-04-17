@@ -45,7 +45,10 @@ def _show_templates() -> None:
         extra = conf.get("_extra", {})
         base = raw.get("base", None)
         if isinstance(base, list):
-            base = ", ".join(base)
+            if len(base) == 1:
+                base = base[0]
+            else:
+                base = f"{base[0]} [dim]+{len(base) - 1}[/dim]"
         sku = "—"
         jobs = conf.get("jobs", [])
         if jobs and isinstance(jobs[0], dict):
