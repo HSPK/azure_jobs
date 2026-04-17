@@ -377,14 +377,13 @@ def show_job_detail(job: dict[str, Any]) -> None:
     name = job.get("name", "")
     lines.append(f"  {status_badge(status)}")
 
-    # Error (boxed, right after status)
+    # Error (section header style, right after status)
     error_msg = job.get("error", "")
     if error_msg:
         lines.append("")
-        lines.append(f"  [red]┌─ Error {'─' * 34}[/red]")
+        lines.append(f"  [bold red]{'─' * 3} Error {'─' * (36 - len('Error'))}[/bold red]")
         for err_line in error_msg.splitlines():
-            lines.append(f"  [red]│[/red] {err_line}")
-        lines.append(f"  [red]└{'─' * 43}[/red]")
+            lines.append(f"  [red]{err_line}[/red]")
 
     # Overview
     lines.append("")

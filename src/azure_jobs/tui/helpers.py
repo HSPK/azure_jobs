@@ -86,13 +86,12 @@ def info_block(job: dict[str, Any]) -> str:
     # ── Status badge ──
     L.append(f"  {status_badge(status)}")
 
-    # ── Error (boxed, right after status) ──
+    # ── Error (section header style, right after status) ──
     if job.get("error"):
         L.append("")
-        L.append(f"  [red]┌─ Error {'─' * 28}[/red]")
+        L.append(f"  [bold red]{'─' * 3} Error {'─' * (30 - len('Error'))}[/bold red]")
         for err_line in job["error"].splitlines():
-            L.append(f"  [red]│[/red] {err_line}")
-        L.append(f"  [red]└{'─' * 37}[/red]")
+            L.append(f"  [red]{err_line}[/red]")
 
     # ── Overview ──
     L.append("")
