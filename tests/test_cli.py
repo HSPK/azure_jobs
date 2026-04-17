@@ -501,7 +501,7 @@ class TestJobLogsCommand:
         assert "no logs available" in result.output.lower()
 
     def test_logs_completed_job(self, aj_env):
-        """Completed jobs should fetch logs via SDK."""
+        """Completed jobs should download logs via log_download module."""
         from unittest.mock import MagicMock, patch as mock_patch
 
         mock_client = MagicMock()
@@ -509,16 +509,12 @@ class TestJobLogsCommand:
             "name": "some-job", "display_name": "my-train",
             "status": "Completed", "portal_url": "",
         }
-        mock_ml = MagicMock()
-        mock_ml.jobs.stream.return_value = None
         with mock_patch("azure_jobs.core.rest_client.create_rest_client", return_value=mock_client), \
-             mock_patch("azure_jobs.core.client.create_ml_client", return_value=mock_ml), \
-             mock_patch("azure_jobs.core.config.get_workspace_config", return_value={
-                 "subscription_id": "s", "resource_group": "r", "workspace_name": "w",
-             }):
+             mock_patch("azure_jobs.core.log_download.download_job_logs", return_value=("Hello from training", "")):
             runner = CliRunner()
             result = runner.invoke(main, ["job", "logs", "some-job"])
         assert result.exit_code == 0
+        assert "Hello from training" in result.output
 
 
 class TestRunCommand:

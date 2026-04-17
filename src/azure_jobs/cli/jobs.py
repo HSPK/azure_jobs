@@ -183,19 +183,11 @@ def job_cancel(job_id: str) -> None:
 @job_group.command(name="logs")
 @click.argument("job_id")
 def job_logs(job_id: str) -> None:
-    """Stream logs from a job.
+    """Show logs from a job.
 
-    Shows stdout/stderr output. For running jobs, streams until completion.
+    Downloads log files directly (fast, works for running jobs too).
     JOB_ID can be the short aj ID or the full Azure job name.
     """
-    import io
-    import sys
-
-    from azure_jobs.core.client import (
-        create_ml_client,
-        extract_json_error,
-        filter_log_lines,
-    )
     from azure_jobs.core.rest_client import create_rest_client
     from azure_jobs.utils.ui import console
 
@@ -228,28 +220,14 @@ def job_logs(job_id: str) -> None:
         )
         return
 
-    # Phase 2: SDK init + stream
-    from azure_jobs.core.config import get_workspace_config
-    workspace = get_workspace_config()
+    # Phase 2: download log files (fast, no polling)
+    from azure_jobs.core.log_download import download_job_logs
 
-    with console.status("[bold cyan]Loading Azure ML SDK…[/bold cyan]", spinner="dots"):
-        ml_client = create_ml_client(workspace)
+    with console.status("[bold cyan]Downloading logs…[/bold cyan]", spinner="dots"):
+        content, error_msg = download_job_logs(azure_name)
 
-    with console.status("[bold cyan]Fetching log output…[/bold cyan]", spinner="dots"):
-        old_stdout = sys.stdout
-        sys.stdout = buf = io.StringIO()
-        error_msg = ""
-        try:
-            ml_client.jobs.stream(azure_name)
-        except Exception as exc:
-            error_msg = extract_json_error(exc)
-        finally:
-            sys.stdout = old_stdout
-
-    filtered = filter_log_lines(buf.getvalue())
-
-    if filtered:
-        console.print("\n".join(filtered))
+    if content:
+        console.print(content)
         console.print()
 
     if error_msg:
@@ -260,7 +238,7 @@ def job_logs(job_id: str) -> None:
             border_style="red",
         ))
 
-    if not filtered and not error_msg:
+    if not content and not error_msg:
         console.print("[dim]No logs available for this job.[/dim]")
 
 

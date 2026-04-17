@@ -14,7 +14,6 @@ Right pane   bordered panel; border-title shows tab indicator (Info/Logs),
 
 from __future__ import annotations
 
-import sys
 from typing import Any
 
 from textual import work
@@ -37,7 +36,7 @@ from azure_jobs.tui.helpers import (
     kv,
     make_option,
 )
-from azure_jobs.tui.log_viewer import LogViewer, StreamCapture
+from azure_jobs.tui.log_viewer import LogViewer
 from azure_jobs.tui.modals import ConfirmCancel, HelpScreen, PickerModal
 from azure_jobs.tui.workspace import WorkspaceMixin
 
@@ -548,7 +547,7 @@ class AjDashboard(WorkspaceMixin, App):
 
     @work(thread=True, exclusive=True, group="logs")
     def _fetch_logs(self, azure_name: str) -> None:
-        """Fetch job logs with staged progress and incremental streaming."""
+        """Download job logs (fast, no blocking stream)."""
         worker = get_current_worker()
 
         # Phase 1: Check job status via REST (fast, no SDK)
@@ -568,83 +567,47 @@ class AjDashboard(WorkspaceMixin, App):
                         f"Press [bold]L[/bold] again when it starts running.[/dim]",
                     )
                     return
-                # Show the actual status while we init the SDK
                 icon, sty = icon_style(status)
                 self.call_from_thread(
                     self._log_status,
                     f"[{sty}]{icon} {status}[/{sty}]  "
-                    f"[dim]Initializing log stream…[/dim]",
+                    f"[dim]Downloading logs…[/dim]",
                 )
             except Exception:
-                pass  # Fall through to SDK
+                pass  # Fall through to download
 
         if worker.is_cancelled:
             return
 
-        # Phase 2: Create ML client (slow — SDK import + auth)
+        # Phase 2: Download log files (SDK download, not stream)
         self.call_from_thread(
-            self._log_status, "[dim]Loading Azure ML SDK…[/dim]",
-        )
-        ml = self._get_or_create_ml_client()
-        if ml is None:
-            self.call_from_thread(
-                self.notify, "Workspace not configured", severity="warning",
-            )
-            return
-        if worker.is_cancelled:
-            return
-
-        # Phase 3: Start streaming
-        self.call_from_thread(
-            self._log_status, "[dim]Fetching log output…[/dim]",
+            self._log_status, "[dim]Downloading log files…[/dim]",
         )
 
-        first_line_received = False
+        from azure_jobs.core.log_download import download_job_logs
 
-        def _on_first_line() -> None:
-            """Clear status message on first real log line."""
-            nonlocal first_line_received
-            if not first_line_received:
-                first_line_received = True
-                self.query_one("#log-content", LogViewer).clear()
-                self._log_streaming = True
-
-        def _line_cb(line: str) -> None:
-            self.call_from_thread(_on_first_line)
-            self.call_from_thread(self._append_log_line, line)
-
-        capture = StreamCapture(worker, self._SKIP_PREFIXES, _line_cb)
-        old_out = sys.stdout
-        sys.stdout = capture  # type: ignore[assignment]
-        error_msg = ""
-        try:
-            ml.jobs.stream(azure_name)
-        except Exception as exc:
-            from azure_jobs.core.client import extract_json_error
-            error_msg = extract_json_error(exc)
-        finally:
-            sys.stdout = old_out
-            capture.drain()
+        content, error_msg = download_job_logs(azure_name)
 
         if worker.is_cancelled:
             return
 
-        def _finish(err: str = error_msg) -> None:
+        def _show_result(text: str = content, err: str = error_msg) -> None:
             self._log_streaming = False
             lw = self.query_one("#log-content", LogViewer)
-            if not first_line_received:
-                lw.clear()  # Clear status message
-            if err:
-                self._append_log_error(err)
-            if self._log_line_count == 0 and not err:
-                lw.write("[dim]No logs available for this job.[/dim]")
-            elif self._log_line_count > 0:
+            lw.clear()
+            if text:
+                for line in text.split("\n"):
+                    self._append_log_line(line)
                 lw.write(
                     f"\n[dim]── End ({self._log_line_count} lines) ──[/dim]",
                     scroll_end=self._auto_scroll,
                 )
+            if err:
+                self._append_log_error(err)
+            if not text and not err:
+                lw.write("[dim]No logs available for this job.[/dim]")
 
-        self.call_from_thread(_finish)
+        self.call_from_thread(_show_result)
 
     # ---- actions ------------------------------------------------------------
 
