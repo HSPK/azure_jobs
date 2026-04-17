@@ -8,6 +8,7 @@ Stores tool defaults (template, nodes, processes), repo_id for
 from __future__ import annotations
 
 import json
+import subprocess
 from typing import Any
 
 import click
@@ -57,49 +58,90 @@ def save_defaults(
 # -- workspace ---------------------------------------------------------------
 
 
+def _detect_subscription() -> dict[str, str] | None:
+    """Try to get subscription info from ``az account show``."""
+    try:
+        result = subprocess.run(
+            ["az", "account", "show", "--output", "json"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode == 0:
+            data = json.loads(result.stdout)
+            return {
+                "subscription_id": data.get("id", ""),
+                "subscription_name": data.get("name", ""),
+            }
+    except (FileNotFoundError, subprocess.TimeoutExpired, json.JSONDecodeError):
+        pass
+    return None
+
+
 def get_workspace_config() -> dict[str, str]:
-    """Return workspace details, prompting interactively if missing.
+    """Return workspace details, auto-detecting and prompting as needed.
+
+    - ``subscription_id``: auto-detected from ``az account show``
+    - ``resource_group``: prompted once, saved
+    - ``workspace_name``: from template target, or config default
 
     Returns dict with keys: subscription_id, resource_group, workspace_name.
     """
     config = read_config()
     workspace = config.get("workspace", {})
+    changed = False
 
-    required = ["subscription_id", "resource_group", "workspace_name"]
-    missing = [k for k in required if not workspace.get(k)]
-
-    if missing:
-        click.echo()
-        click.secho(
-            "Azure workspace not configured. Let's set it up:",
-            fg="cyan",
-            bold=True,
-        )
-        click.echo()
-
-        if not workspace.get("subscription_id"):
+    # Auto-detect subscription from Azure CLI
+    if not workspace.get("subscription_id"):
+        az_info = _detect_subscription()
+        if az_info and az_info["subscription_id"]:
+            workspace["subscription_id"] = az_info["subscription_id"]
+            click.echo()
+            click.secho(
+                f"  ✓ Detected subscription: {az_info.get('subscription_name', '')} "
+                f"({az_info['subscription_id'][:8]}…)",
+                fg="green",
+            )
+            changed = True
+        else:
+            click.echo()
+            click.secho(
+                "Could not detect Azure subscription. Run `az login` first, "
+                "or enter manually:",
+                fg="yellow",
+            )
             workspace["subscription_id"] = click.prompt(
                 click.style("  Subscription ID", fg="white", bold=True),
                 type=str,
             )
-        if not workspace.get("resource_group"):
-            workspace["resource_group"] = click.prompt(
-                click.style("  Resource group", fg="white", bold=True),
-                type=str,
-            )
-        if not workspace.get("workspace_name"):
-            workspace["workspace_name"] = click.prompt(
-                click.style("  Workspace name", fg="white", bold=True),
-                type=str,
-            )
+            changed = True
 
+    # Prompt for resource group if missing
+    if not workspace.get("resource_group"):
+        click.echo()
+        workspace["resource_group"] = click.prompt(
+            click.style("  Resource group", fg="white", bold=True),
+            type=str,
+        )
+        changed = True
+
+    # Workspace name is optional at config level — templates provide it via target
+    # But we save a default if the user provides one
+    if not workspace.get("workspace_name"):
+        click.echo()
+        ws_name = click.prompt(
+            click.style("  Default workspace name (or empty to skip)", fg="white", bold=True),
+            type=str,
+            default="",
+            show_default=False,
+        )
+        if ws_name:
+            workspace["workspace_name"] = ws_name
+            changed = True
+
+    if changed:
         config["workspace"] = workspace
         write_config(config)
         click.echo()
-        click.secho(
-            f"  ✓ Saved to {const.AJ_CONFIG}",
-            fg="green",
-        )
+        click.secho(f"  ✓ Saved to {const.AJ_CONFIG}", fg="green")
         click.echo()
 
     return workspace

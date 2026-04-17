@@ -84,22 +84,53 @@ class TestGetWorkspaceConfig:
         assert result["resource_group"] == "rg-test"
         assert result["workspace_name"] == "ws-test"
 
-    def test_prompts_when_missing(self, config_env, monkeypatch):
-        inputs = iter(["sub-456", "rg-prod", "ws-prod"])
+    def test_auto_detects_subscription(self, config_env, monkeypatch):
+        """subscription_id is auto-detected from az account show."""
+        import subprocess as sp
+
+        def mock_run(cmd, **kw):
+            return sp.CompletedProcess(
+                args=cmd, returncode=0,
+                stdout=json.dumps({"id": "auto-sub", "name": "My Sub"}),
+                stderr="",
+            )
+
+        monkeypatch.setattr("azure_jobs.core.config.subprocess.run", mock_run)
+        inputs = iter(["rg-test", ""])
         monkeypatch.setattr("click.prompt", lambda *a, **kw: next(inputs))
         result = get_workspace_config()
-        assert result["subscription_id"] == "sub-456"
+        assert result["subscription_id"] == "auto-sub"
+        assert result["resource_group"] == "rg-test"
+
+    def test_prompts_subscription_when_az_fails(self, config_env, monkeypatch):
+        """Falls back to prompt if az CLI is not available."""
+        import subprocess as sp
+
+        def mock_run(cmd, **kw):
+            raise FileNotFoundError("az not found")
+
+        monkeypatch.setattr("azure_jobs.core.config.subprocess.run", mock_run)
+        inputs = iter(["manual-sub", "rg-prod", ""])
+        monkeypatch.setattr("click.prompt", lambda *a, **kw: next(inputs))
+        result = get_workspace_config()
+        assert result["subscription_id"] == "manual-sub"
         assert result["resource_group"] == "rg-prod"
-        assert result["workspace_name"] == "ws-prod"
-        saved = json.loads(config_env["config_fp"].read_text())
-        assert saved["workspace"]["subscription_id"] == "sub-456"
 
     def test_prompts_only_for_missing_fields(self, config_env, monkeypatch):
-        data = {"workspace": {"subscription_id": "sub-existing"}}
+        data = {"workspace": {"subscription_id": "sub-existing", "resource_group": "rg-existing"}}
         config_env["config_fp"].write_text(json.dumps(data))
-        inputs = iter(["rg-new", "ws-new"])
+        inputs = iter([""])  # empty = skip workspace_name
         monkeypatch.setattr("click.prompt", lambda *a, **kw: next(inputs))
         result = get_workspace_config()
         assert result["subscription_id"] == "sub-existing"
-        assert result["resource_group"] == "rg-new"
-        assert result["workspace_name"] == "ws-new"
+        assert result["resource_group"] == "rg-existing"
+
+    def test_saves_workspace_name_when_provided(self, config_env, monkeypatch):
+        data = {"workspace": {"subscription_id": "s", "resource_group": "r"}}
+        config_env["config_fp"].write_text(json.dumps(data))
+        inputs = iter(["my-workspace"])
+        monkeypatch.setattr("click.prompt", lambda *a, **kw: next(inputs))
+        result = get_workspace_config()
+        assert result["workspace_name"] == "my-workspace"
+        saved = json.loads(config_env["config_fp"].read_text())
+        assert saved["workspace"]["workspace_name"] == "my-workspace"
