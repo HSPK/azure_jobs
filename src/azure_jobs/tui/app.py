@@ -468,21 +468,6 @@ class AjDashboard(App):
         height: 1;
     }
 
-    /* ── workspace switcher (toggle with w) ── */
-    #ws-list-pane {
-        height: 1fr;
-        margin-top: 1;
-        border: round #ad7fa8;
-        border-title-color: #ad7fa8;
-        border-title-style: bold;
-    }
-    #ws-list {
-        height: 1fr;
-        border: none;
-        padding: 0;
-        scrollbar-size: 1 1;
-    }
-
     /* ── right ── */
     #right-pane {
         width: 1fr;
@@ -513,7 +498,7 @@ class AjDashboard(App):
         Binding("c", "cancel_job", "Cancel"),
         Binding("l", "show_logs", "Logs"),
         Binding("i", "show_info", "Info"),
-        Binding("w", "toggle_ws", "Workspace"),
+        Binding("w", "pick_workspace", "Workspace"),
         Binding("f", "pick_status", "Status"),
         Binding("e", "pick_experiment", "Experiment"),
         Binding("F", "clear_filters", "Clear", show=False),
@@ -561,8 +546,6 @@ class AjDashboard(App):
                         )
                 with Vertical(id="ws-pane"):
                     yield Static("", id="ws-current")
-                with Vertical(id="ws-list-pane", classes="hidden"):
-                    yield OptionList(id="ws-list")
             with Vertical(id="right-pane"):
                 with VerticalScroll(id="info-scroll"):
                     yield Static(id="info-content")
@@ -574,7 +557,6 @@ class AjDashboard(App):
 
     def on_mount(self) -> None:
         self.query_one("#ws-pane").border_title = "Workspace"
-        self.query_one("#ws-list-pane").border_title = "Switch Workspace"
         self._update_titles()
         self._update_tab_title()
         self.query_one("#info-content", Static).update(
@@ -815,20 +797,16 @@ class AjDashboard(App):
 
     # ---- workspace selector -------------------------------------------------
 
-    def action_toggle_ws(self) -> None:
-        ws_list_pane = self.query_one("#ws-list-pane")
-        if ws_list_pane.has_class("hidden"):
-            ws_list_pane.remove_class("hidden")
-            if not self._workspaces:
-                self._detect_workspaces()
-            else:
-                self.query_one("#ws-list", OptionList).focus()
+    def action_pick_workspace(self) -> None:
+        """Open workspace picker (detects workspaces on first call)."""
+        if not self._workspaces:
+            self.notify("Detecting workspaces…", timeout=3)
+            self._detect_workspaces_then_pick()
         else:
-            ws_list_pane.add_class("hidden")
-            self.query_one("#job-list", OptionList).focus()
+            self._show_ws_picker()
 
     @work(thread=True, exclusive=True, group="ws-detect")
-    def _detect_workspaces(self) -> None:
+    def _detect_workspaces_then_pick(self) -> None:
         worker = get_current_worker()
         from azure_jobs.core.config import _detect_subscription, _detect_workspaces
 
@@ -843,37 +821,43 @@ class AjDashboard(App):
         sub_id = sub["subscription_id"]
         wss = _detect_workspaces(sub_id)
         if not worker.is_cancelled:
-            self.call_from_thread(self._on_workspaces_detected, sub_id, wss)
+            self.call_from_thread(self._on_workspaces_ready, sub_id, wss)
 
-    def _on_workspaces_detected(
+    def _on_workspaces_ready(
         self, sub_id: str, workspaces: list[dict[str, str]],
     ) -> None:
         self._subscription_id = sub_id
         self._workspaces = workspaces
-        ol = self.query_one("#ws-list", OptionList)
-        ol.clear_options()
-        cur_name = (self._workspace or {}).get("workspace_name", "")
-        for ws in workspaces:
-            name = ws.get("name", "")
-            rg = ws.get("resource_group", "")
-            t = Text()
-            if name == cur_name:
-                t.append(" ● ", style="green")
-            else:
-                t.append("   ")
-            t.append(name, style="bold")
-            t.append(f"  {rg}", style="dim")
-            ol.add_option(Option(t, id=name))
-        ol.focus()
         if not workspaces:
             self.notify("No workspaces found", severity="warning")
+            return
+        self._show_ws_picker()
+
+    def _show_ws_picker(self) -> None:
+        cur_name = (self._workspace or {}).get("workspace_name", "")
+        items: list[tuple[str, str]] = []
+        for ws in self._workspaces:
+            name = ws.get("name", "")
+            rg = ws.get("resource_group", "")
+            label = f"[bold]{name}[/bold]  [dim]{rg}[/dim]"
+            items.append((name, label))
+        self.push_screen(
+            _PickerModal("Workspace", items, current=cur_name),
+            self._on_workspace_picked,
+        )
+
+    def _on_workspace_picked(self, value: str) -> None:
+        cur_name = (self._workspace or {}).get("workspace_name", "")
+        if value == cur_name or not value:
+            return
+        for idx, ws in enumerate(self._workspaces):
+            if ws.get("name") == value:
+                self._switch_workspace(idx)
+                return
 
     def on_option_list_option_selected(
         self, event: OptionList.OptionSelected,
     ) -> None:
-        if event.option_list.id == "ws-list":
-            self._switch_workspace(event.option_index)
-            return
         # Job list select → refresh single
         idx = event.option_index
         if 0 <= idx < len(self._filtered):
@@ -899,14 +883,11 @@ class AjDashboard(App):
         self._has_more = True
         self._logs_job = ""
 
-        # Collapse workspace list, refresh
-        self.query_one("#ws-list-pane").add_class("hidden")
         self._update_ws_label()
         self._update_titles()
         self.query_one("#info-content", Static).update(
             _kv([], hint="Loading jobs…")
         )
-        self._on_workspaces_detected(self._subscription_id, self._workspaces)
         self._init_fetch()
         self.query_one("#job-list", OptionList).focus()
         self.notify(f"Switched to {ws['name']}")
@@ -1052,7 +1033,7 @@ class AjDashboard(App):
     # ---- actions ------------------------------------------------------------
 
     def action_dismiss(self) -> None:
-        """Escape: close search → close ws list → switch to info → quit."""
+        """Escape: close search → switch to info → quit."""
         search_bar = self.query_one("#search-bar")
         if not search_bar.has_class("hidden"):
             search_bar.add_class("hidden")
@@ -1061,11 +1042,6 @@ class AjDashboard(App):
                 inp.value = ""
                 self._search_query = ""
                 self._apply_filter()
-            self.query_one("#job-list", OptionList).focus()
-            return
-        ws_list = self.query_one("#ws-list-pane")
-        if not ws_list.has_class("hidden"):
-            ws_list.add_class("hidden")
             self.query_one("#job-list", OptionList).focus()
             return
         if self._view_mode == "logs":

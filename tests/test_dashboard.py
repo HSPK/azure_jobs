@@ -164,31 +164,30 @@ async def test_escape_layered(_dash) -> None:
 
 
 @pytest.mark.asyncio
-async def test_escape_closes_ws_pane(_dash) -> None:
-    """Escape closes workspace list pane first."""
+async def test_workspace_picker(_dash) -> None:
+    """w opens workspace picker when workspaces are cached."""
     async with _dash.run_test(size=(120, 30)) as pilot:
         await _load_jobs(_dash, pilot)
         await pilot.pause()
-        ws_list = _dash.query_one("#ws-list-pane")
-        ws_list.remove_class("hidden")
+        _dash._subscription_id = "sub-123"
+        _dash._workspaces = [
+            {"name": "ws-a", "resource_group": "rg-1"},
+            {"name": "ws-b", "resource_group": "rg-2"},
+        ]
+        _dash._workspace = {
+            "subscription_id": "sub-123",
+            "resource_group": "rg-1",
+            "workspace_name": "ws-a",
+        }
+        _dash.action_pick_workspace()
         await pilot.pause()
-        _dash.action_dismiss()
+        from azure_jobs.tui.app import _PickerModal
+        screens = [s for s in _dash.screen_stack if isinstance(s, _PickerModal)]
+        assert len(screens) == 1
+        # Escape cancels
+        await pilot.press("escape")
         await pilot.pause()
-        assert ws_list.has_class("hidden")
-
-
-@pytest.mark.asyncio
-async def test_workspace_toggle(_dash) -> None:
-    """w toggles workspace list visibility."""
-    async with _dash.run_test(size=(120, 30)) as pilot:
-        ws_list = _dash.query_one("#ws-list-pane")
-        assert ws_list.has_class("hidden")
-        _dash.action_toggle_ws()
-        await pilot.pause()
-        assert not ws_list.has_class("hidden")
-        _dash.action_toggle_ws()
-        await pilot.pause()
-        assert ws_list.has_class("hidden")
+        assert _dash._workspace["workspace_name"] == "ws-a"  # unchanged
 
 
 @pytest.mark.asyncio
