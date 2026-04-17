@@ -8,6 +8,7 @@ import pytest
 from click.testing import CliRunner
 
 from azure_jobs.cli import main
+from azure_jobs.cli.quota import _portal_compute_url, _vm_sku_label
 from azure_jobs.core.sku import (
     SLA_TIERS,
     SeriesQuota,
@@ -302,3 +303,29 @@ class TestQuotaListCli:
     def test_aml_all_flag(self, mock_aml):
         self.runner.invoke(main, ["quota", "list", "--aml", "--all"])
         mock_aml.assert_called_once_with(True)
+
+
+# ---------------------------------------------------------------------------
+# AML helper tests
+# ---------------------------------------------------------------------------
+
+
+class TestAmlHelpers:
+    def test_vm_sku_label_gpu(self):
+        assert _vm_sku_label("Standard_ND96amsr_A100_v4") == "80G8-A100"
+
+    def test_vm_sku_label_h100(self):
+        assert _vm_sku_label("Standard_ND96isr_H100_v5") == "80G8-H100"
+
+    def test_vm_sku_label_cpu(self):
+        assert _vm_sku_label("Standard_DS3_v2") == "CPU"
+
+    def test_vm_sku_label_unknown(self):
+        assert _vm_sku_label("UnknownVm_XYZ") == ""
+
+    def test_portal_compute_url(self):
+        url = _portal_compute_url("sub1", "rg1", "ws1", "gpu-cluster")
+        assert "ml.azure.com/compute/gpu-cluster/details" in url
+        assert "sub1" in url
+        assert "rg1" in url
+        assert "ws1" in url

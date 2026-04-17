@@ -181,68 +181,215 @@ def _show_sing_quotas(show_all: bool, template: str | None) -> None:
 # AML quotas
 # ---------------------------------------------------------------------------
 
+# VM size → (accelerator, gpu_count, gpu_memory_gb) for common AML instance types
+_AML_VM_GPU: dict[str, tuple[str, int, int]] = {
+    # A100
+    "standard_nd96asr_v4": ("A100", 8, 40),
+    "standard_nd96amsr_a100_v4": ("A100", 8, 80),
+    "standard_nc24ads_a100_v4": ("A100", 1, 80),
+    "standard_nc48ads_a100_v4": ("A100", 2, 80),
+    "standard_nc96ads_a100_v4": ("A100", 4, 80),
+    # H100
+    "standard_nd96isr_h100_v5": ("H100", 8, 80),
+    # H200
+    "standard_nd96isr_h200_v5": ("H200", 8, 141),
+    # V100
+    "standard_nd40rs_v2": ("V100", 8, 32),
+    "standard_nc6s_v3": ("V100", 1, 16),
+    "standard_nc12s_v3": ("V100", 2, 16),
+    "standard_nc24s_v3": ("V100", 4, 16),
+    "standard_nc24rs_v3": ("V100", 4, 16),
+    # T4
+    "standard_nc4as_t4_v3": ("T4", 1, 16),
+    "standard_nc8as_t4_v3": ("T4", 1, 16),
+    "standard_nc16as_t4_v3": ("T4", 1, 16),
+    "standard_nc64as_t4_v3": ("T4", 4, 16),
+    # P100
+    "standard_nc6s_v2": ("P100", 1, 16),
+    "standard_nc12s_v2": ("P100", 2, 16),
+    "standard_nc24s_v2": ("P100", 4, 16),
+    "standard_nc24rs_v2": ("P100", 4, 16),
+    # K80
+    "standard_nc6": ("K80", 1, 12),
+    "standard_nc12": ("K80", 2, 12),
+    "standard_nc24": ("K80", 4, 12),
+    "standard_nc24r": ("K80", 4, 12),
+    # MI300X
+    "standard_nd96isr_mi300x_v4": ("MI300X", 8, 192),
+}
+
+
+def _vm_sku_label(vm_size: str) -> str:
+    """Derive a short SKU label (like amlt) from a VM size string."""
+    info = _AML_VM_GPU.get(vm_size.lower())
+    if info:
+        accel, count, mem = info
+        return f"{mem}G{count}-{accel}" if accel != "CPU" else "CPU"
+    # CPU heuristic
+    low = vm_size.lower()
+    if low.startswith(("standard_d", "standard_e", "standard_f")):
+        return "CPU"
+    return ""
+
+
+def _portal_compute_url(sub: str, rg: str, ws: str, cluster: str) -> str:
+    return (
+        f"https://ml.azure.com/compute/{cluster}/details"
+        f"?wsid=/subscriptions/{sub}/resourceGroups/{rg}"
+        f"/providers/Microsoft.MachineLearningServices/workspaces/{ws}"
+    )
+
+
 def _show_aml_quotas(show_all: bool) -> None:
-    """Display Azure ML workspace quotas."""
-    from azure_jobs.core.client import create_ml_client
+    """Display AML workspace compute clusters and family quotas."""
     from azure_jobs.core.config import get_workspace_config
+    from azure_jobs.core.rest_client import AzureARMClient
     from azure_jobs.utils.ui import console, warning
 
     from rich.table import Table
 
     ws = get_workspace_config()
+    sub = ws.get("subscription_id", "")
+    rg = ws.get("resource_group", "")
+    ws_name = ws.get("workspace_name", "")
 
-    with console.status("[bold cyan]Fetching AML quotas…[/bold cyan]", spinner="dots"):
-        ml = create_ml_client(ws)
-        ws_obj = ml.workspaces.get(ws.get("workspace_name", ""))
-        location = getattr(ws_obj, "location", "") or ""
-        if not location:
-            warning("Could not determine workspace location")
-            return
-        usages = list(ml.compute.list_usage(location=location))
+    arm = AzureARMClient()
 
-    if not usages:
-        warning("No quota information available")
-        return
+    # --- Section 1: Per-cluster compute info (like amlt target info aml) ---
+    with console.status(
+        "[bold cyan]Fetching compute clusters…[/bold cyan]", spinner="dots",
+    ):
+        try:
+            computes = arm.list_workspace_computes(sub, rg, ws_name)
+        except Exception as exc:
+            warning(f"Could not fetch computes: {exc}")
+            computes = []
 
-    table = Table(
-        title=f"[bold]AML Quotas[/bold]  [dim]{ws.get('workspace_name', '')} ({location})[/dim]",
-        title_style="",
-        show_header=True,
-        header_style="bold",
-        show_lines=False,
-        pad_edge=True,
-    )
-    table.add_column("VM Family", style="bold cyan", no_wrap=True)
-    table.add_column("Quota", justify="right", no_wrap=True)
-    table.add_column("Nodes", justify="right", no_wrap=True)
-    table.add_column("", no_wrap=True)  # bar
+    clusters = [
+        c for c in computes
+        if c.get("properties", {}).get("computeType") == "AmlCompute"
+    ]
 
-    for u in usages:
-        limit = getattr(u, "limit", 0) or 0
-        current = getattr(u, "current_value", 0) or 0
-        name_obj = getattr(u, "name", None)
-        family = getattr(name_obj, "value", "") if name_obj else ""
-        if not show_all and limit == 0:
-            continue
+    if clusters:
+        ct = Table(
+            title=f"[bold]AML Compute Clusters[/bold]  [dim]{ws_name}[/dim]",
+            title_style="",
+            show_header=True,
+            header_style="bold",
+            show_lines=False,
+            pad_edge=True,
+        )
+        ct.add_column("Cluster", style="bold cyan", no_wrap=True)
+        ct.add_column("VM Size", no_wrap=True)
+        ct.add_column("SKU", no_wrap=True)
+        ct.add_column("Nodes", justify="right", no_wrap=True)
+        ct.add_column("Priority", no_wrap=True)
+        ct.add_column("Location", no_wrap=True)
+        ct.add_column("Portal", no_wrap=True, overflow="fold")
 
-        avail = max(0, limit - current)
-        if avail > 0:
-            nodes_s = f"[green]{current}[/green][dim]/[/dim]{limit}"
-        elif limit > 0:
-            nodes_s = f"[red]{current}[/red][dim]/[/dim]{limit}"
-        else:
-            nodes_s = f"[dim]{current}/{limit}[/dim]"
+        for c in sorted(clusters, key=lambda x: x.get("name", "")):
+            name = c.get("name", "")
+            props = c.get("properties", {}).get("properties", {}) or {}
+            vm_size = props.get("vmSize", "") or ""
+            vm_pri = props.get("vmPriority", "") or ""
+            location = c.get("location", "") or ""
 
-        pct = (current / limit * 100) if limit > 0 else 0
-        bar_len = 15
-        filled = int(pct / 100 * bar_len)
-        bar_color = "green" if pct < 70 else ("yellow" if pct < 90 else "red")
-        bar = f"[{bar_color}]{'█' * filled}[/{bar_color}][dim]{'░' * (bar_len - filled)}[/dim]"
+            # Node counts
+            scale = props.get("scaleSettings", {}) or {}
+            max_nodes = scale.get("maxNodeCount", 0) or 0
+            node_state = props.get("nodeStateCounts", {}) or {}
+            busy = (
+                (node_state.get("runningNodeCount") or 0)
+                + (node_state.get("preparingNodeCount") or 0)
+                + (node_state.get("leavingNodeCount") or 0)
+            )
+            unusable = node_state.get("unusableNodeCount") or 0
+            idle = node_state.get("idleNodeCount") or 0
+            free = max(0, max_nodes - busy - unusable)
 
-        table.add_row(family, f"[green]{avail}[/green] free", nodes_s, bar)
+            if max_nodes == 0:
+                nodes_s = "[dim]0/0[/dim]"
+            else:
+                free_col = "red" if vm_pri == "LowPriority" else "green"
+                nodes_s = f"[{free_col}]{idle}[/{free_col}] idle  [cyan]{busy}[/cyan] busy  [dim]/ {max_nodes}[/dim]"
 
-    console.print()
-    console.print(table)
+            sku = _vm_sku_label(vm_size)
+            sku_s = f"[bold]{sku}[/bold]" if sku and sku != "CPU" else (sku or "[dim]—[/dim]")
+
+            pri_s = {
+                "LowPriority": "[yellow]Low[/yellow]",
+                "Dedicated": "[green]Dedicated[/green]",
+            }.get(vm_pri, vm_pri)
+
+            portal = _portal_compute_url(sub, rg, ws_name, name)
+            # Shorten for display
+            portal_s = f"[dim link={portal}]portal ↗[/dim]"
+
+            ct.add_row(name, vm_size, sku_s, nodes_s, pri_s, location, portal_s)
+
+        console.print()
+        console.print(ct)
+
+    # --- Section 2: Per-family quota usage ---
+    with console.status(
+        "[bold cyan]Fetching family quotas…[/bold cyan]", spinner="dots",
+    ):
+        try:
+            from azure_jobs.core.client import create_ml_client
+            ml = create_ml_client(ws)
+            ws_obj = ml.workspaces.get(ws_name)
+            location = getattr(ws_obj, "location", "") or ""
+            usages = list(ml.compute.list_usage(location=location)) if location else []
+        except Exception as exc:
+            warning(f"Could not fetch quotas: {exc}")
+            usages = []
+            location = ""
+
+    # Filter to non-zero (unless --all)
+    usages = [u for u in usages if show_all or (getattr(u, "limit", 0) or 0) > 0]
+
+    if usages:
+        qt = Table(
+            title=f"[bold]AML Family Quotas[/bold]  [dim]{location}[/dim]",
+            title_style="",
+            show_header=True,
+            header_style="bold",
+            show_lines=False,
+            pad_edge=True,
+        )
+        qt.add_column("VM Family", style="bold cyan", no_wrap=True)
+        qt.add_column("Free", justify="right", no_wrap=True)
+        qt.add_column("Nodes", justify="right", no_wrap=True)
+        qt.add_column("", no_wrap=True)  # bar
+
+        for u in usages:
+            limit = getattr(u, "limit", 0) or 0
+            current = getattr(u, "current_value", 0) or 0
+            name_obj = getattr(u, "name", None)
+            family = getattr(name_obj, "value", "") if name_obj else ""
+
+            avail = max(0, limit - current)
+            if avail > 0:
+                nodes_s = f"[green]{current}[/green][dim]/[/dim]{limit}"
+            elif limit > 0:
+                nodes_s = f"[red]{current}[/red][dim]/[/dim]{limit}"
+            else:
+                nodes_s = f"[dim]{current}/{limit}[/dim]"
+
+            pct = (current / limit * 100) if limit > 0 else 0
+            bar_len = 15
+            filled = int(pct / 100 * bar_len)
+            bar_color = "green" if pct < 70 else ("yellow" if pct < 90 else "red")
+            bar = f"[{bar_color}]{'█' * filled}[/{bar_color}][dim]{'░' * (bar_len - filled)}[/dim]"
+
+            qt.add_row(family, f"[green]{avail}[/green]", nodes_s, bar)
+
+        console.print()
+        console.print(qt)
+
+    if not clusters and not usages:
+        warning("No compute or quota information available")
+
     console.print()
 
 
