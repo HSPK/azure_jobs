@@ -196,33 +196,55 @@ def job_logs(job_id: str) -> None:
         extract_json_error,
         filter_log_lines,
     )
-    from azure_jobs.core.config import get_workspace_config
+    from azure_jobs.core.rest_client import create_rest_client
     from azure_jobs.utils.ui import console
 
+    _NO_LOG_STATUSES = ("Queued", "NotStarted", "Provisioning", "Preparing")
+
     azure_name = _resolve_job_id(job_id)
-    workspace = get_workspace_config()
 
-    with console.status("[bold cyan]Connecting…[/bold cyan]", spinner="dots"):
-        ml_client = create_ml_client(workspace)
+    # Phase 1: fast REST status check
+    with console.status("[bold cyan]Checking job status…[/bold cyan]", spinner="dots"):
+        client = create_rest_client()
+        job = client.get_job(azure_name)
 
-    # Show header panel
+    status = job.get("status", "")
+    display = job.get("display_name") or azure_name
+
+    # Show header
+    from azure_jobs.tui.helpers import icon_style
     from azure_jobs.utils.ui import _short_portal_url
-    portal = f"ml.azure.com/runs/{azure_name}"
+
+    icon, sty = icon_style(status)
+    portal = job.get("portal_url", "") or f"ml.azure.com/runs/{azure_name}"
     console.print()
-    console.print(f"[bold]Job Logs[/bold]  {azure_name}")
+    console.print(f"[bold]Job Logs[/bold]  {display}  [{sty}]{icon} {status}[/{sty}]")
     console.print(f"[dim]Portal  {_short_portal_url(portal)}[/dim]")
     console.print()
 
-    # Capture stream() output and filter SDK boilerplate
-    old_stdout = sys.stdout
-    sys.stdout = buf = io.StringIO()
-    error_msg = ""
-    try:
-        ml_client.jobs.stream(azure_name)
-    except Exception as exc:
-        error_msg = extract_json_error(exc)
-    finally:
-        sys.stdout = old_stdout
+    if status in _NO_LOG_STATUSES:
+        console.print(
+            f"[yellow]Job is {status.lower()} — no logs available yet.[/yellow]"
+        )
+        return
+
+    # Phase 2: SDK init + stream
+    from azure_jobs.core.config import get_workspace_config
+    workspace = get_workspace_config()
+
+    with console.status("[bold cyan]Loading Azure ML SDK…[/bold cyan]", spinner="dots"):
+        ml_client = create_ml_client(workspace)
+
+    with console.status("[bold cyan]Fetching log output…[/bold cyan]", spinner="dots"):
+        old_stdout = sys.stdout
+        sys.stdout = buf = io.StringIO()
+        error_msg = ""
+        try:
+            ml_client.jobs.stream(azure_name)
+        except Exception as exc:
+            error_msg = extract_json_error(exc)
+        finally:
+            sys.stdout = old_stdout
 
     filtered = filter_log_lines(buf.getvalue())
 
@@ -237,6 +259,9 @@ def job_logs(job_id: str) -> None:
             title="[bold red]Error[/bold red]",
             border_style="red",
         ))
+
+    if not filtered and not error_msg:
+        console.print("[dim]No logs available for this job.[/dim]")
 
 
 # ---------------------------------------------------------------------------

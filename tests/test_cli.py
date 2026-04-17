@@ -485,10 +485,34 @@ class TestJobCancelCommand:
 
 
 class TestJobLogsCommand:
-    def test_logs_command_runs(self, aj_env):
-        from unittest.mock import patch as mock_patch
+    def test_logs_queued_job_skips_sdk(self, aj_env):
+        """Queued jobs should show a message and not try SDK streaming."""
+        from unittest.mock import MagicMock, patch as mock_patch
 
-        with mock_patch("azure_jobs.core.submit.get_job_logs", return_value=""), \
+        mock_client = MagicMock()
+        mock_client.get_job.return_value = {
+            "name": "some-job", "display_name": "my-train",
+            "status": "Queued", "portal_url": "",
+        }
+        with mock_patch("azure_jobs.core.rest_client.create_rest_client", return_value=mock_client):
+            runner = CliRunner()
+            result = runner.invoke(main, ["job", "logs", "some-job"])
+        assert result.exit_code == 0
+        assert "no logs available" in result.output.lower()
+
+    def test_logs_completed_job(self, aj_env):
+        """Completed jobs should fetch logs via SDK."""
+        from unittest.mock import MagicMock, patch as mock_patch
+
+        mock_client = MagicMock()
+        mock_client.get_job.return_value = {
+            "name": "some-job", "display_name": "my-train",
+            "status": "Completed", "portal_url": "",
+        }
+        mock_ml = MagicMock()
+        mock_ml.jobs.stream.return_value = None
+        with mock_patch("azure_jobs.core.rest_client.create_rest_client", return_value=mock_client), \
+             mock_patch("azure_jobs.core.client.create_ml_client", return_value=mock_ml), \
              mock_patch("azure_jobs.core.config.get_workspace_config", return_value={
                  "subscription_id": "s", "resource_group": "r", "workspace_name": "w",
              }):
