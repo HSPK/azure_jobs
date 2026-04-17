@@ -99,10 +99,43 @@ def job_logs(job_id: str) -> None:
     """
     from azure_jobs.core.config import get_workspace_config
     from azure_jobs.core.submit import get_job_logs
+    from azure_jobs.utils.ui import console
 
     azure_name = _resolve_job_id(job_id)
     workspace = get_workspace_config()
-    get_job_logs(azure_name, workspace)
+
+    with console.status("[bold cyan]Connecting…[/bold cyan]", spinner="dots"):
+        # Pre-authenticate so the spinner shows during the slow part
+        from azure_jobs.core.submit import _quiet_azure_sdk, _suppress_sdk_output, _get_ml_client
+        from azure_jobs.core.submit import SubmitRequest
+        _quiet_azure_sdk()
+        with _suppress_sdk_output():
+            from azure.ai.ml import MLClient
+            from azure.identity import AzureCliCredential
+            credential = AzureCliCredential()
+            ml_client = MLClient(
+                credential=credential,
+                subscription_id=workspace.get("subscription_id", ""),
+                resource_group_name=workspace.get("resource_group", ""),
+                workspace_name=workspace.get("workspace_name", ""),
+            )
+
+    console.print(f"[dim]Streaming logs for {azure_name}…[/dim]")
+    try:
+        ml_client.jobs.stream(azure_name)
+    except Exception as exc:
+        msg = str(exc)
+        if "{" in msg:
+            import json as _json
+            try:
+                start = msg.index("{")
+                end = msg.rindex("}") + 1
+                err = _json.loads(msg[start:end])
+                console.print(f"[red]{err.get('error', {}).get('message', msg).strip()}[/red]")
+            except (ValueError, _json.JSONDecodeError):
+                console.print(f"[red]{msg}[/red]")
+        else:
+            console.print(f"[red]{msg}[/red]")
 
 
 def _resolve_job_id(job_id: str) -> str:
