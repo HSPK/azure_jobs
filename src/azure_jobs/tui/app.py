@@ -306,132 +306,7 @@ class _ConfirmCancel(ModalScreen[bool]):
         self.dismiss(False)
 
 
-_ALL_STATUSES = ["Running", "Completed", "Failed", "Canceled", "Queued"]
-
-
-class _FilterModal(ModalScreen[dict[str, str] | None]):
-    """Modal dialog for choosing status and experiment filters."""
-
-    CSS = """
-    _FilterModal {
-        align: center middle;
-    }
-    #filter-dialog {
-        width: 56;
-        height: auto;
-        max-height: 22;
-        border: thick #3465a4;
-        background: $surface;
-        padding: 1 2;
-    }
-    #filter-title {
-        width: 100%;
-        margin-bottom: 1;
-    }
-    .filter-section {
-        width: 100%;
-        margin-bottom: 1;
-    }
-    .filter-label {
-        margin-bottom: 0;
-    }
-    #filter-status, #filter-experiment {
-        height: auto;
-        max-height: 8;
-        border: tall $accent 40%;
-        padding: 0;
-        scrollbar-size: 1 1;
-    }
-    #filter-btns {
-        width: 100%;
-        height: 3;
-        align: center middle;
-    }
-    #filter-btns Button {
-        margin: 0 1;
-        min-width: 12;
-    }
-    """
-
-    BINDINGS = [
-        Binding("escape", "cancel_filter", "Cancel", show=False),
-    ]
-
-    def __init__(
-        self,
-        *,
-        current_status: str,
-        current_experiment: str,
-        experiments: list[str],
-        **kwargs: Any,
-    ) -> None:
-        super().__init__(**kwargs)
-        self._current_status = current_status
-        self._current_experiment = current_experiment
-        self._experiments = experiments
-        self._chosen_status = current_status
-        self._chosen_experiment = current_experiment
-
-    def compose(self) -> ComposeResult:
-        with Vertical(id="filter-dialog"):
-            yield Static("[bold]Filter Jobs[/bold]", id="filter-title")
-            with Vertical(classes="filter-section"):
-                yield Static("[dim]Status[/dim]", classes="filter-label")
-                ol_s = OptionList(id="filter-status")
-                yield ol_s
-            with Vertical(classes="filter-section"):
-                yield Static("[dim]Experiment[/dim]", classes="filter-label")
-                ol_e = OptionList(id="filter-experiment")
-                yield ol_e
-            with Horizontal(id="filter-btns"):
-                yield Button("Apply", variant="primary", id="btn-apply")
-                yield Button("Clear", variant="warning", id="btn-clear")
-                yield Button("Cancel", variant="default", id="btn-cancel-filter")
-
-    def on_mount(self) -> None:
-        # Populate status list
-        ol_s = self.query_one("#filter-status", OptionList)
-        mark = "● " if not self._current_status else "  "
-        ol_s.add_option(Option(Text(f"{mark}All"), id="status:"))
-        for s in _ALL_STATUSES:
-            icon, sty = _icon_style(s)
-            mark = "● " if s == self._current_status else "  "
-            t = Text()
-            t.append(mark)
-            t.append(f"{icon} {s}", style=sty)
-            ol_s.add_option(Option(t, id=f"status:{s}"))
-
-        # Populate experiment list
-        ol_e = self.query_one("#filter-experiment", OptionList)
-        mark = "● " if not self._current_experiment else "  "
-        ol_e.add_option(Option(Text(f"{mark}All"), id="exp:"))
-        for exp in self._experiments:
-            mark = "● " if exp == self._current_experiment else "  "
-            ol_e.add_option(Option(Text(f"{mark}{exp}"), id=f"exp:{exp}"))
-        ol_s.focus()
-
-    def on_option_list_option_selected(
-        self, event: OptionList.OptionSelected,
-    ) -> None:
-        opt_id = event.option.id or ""
-        if opt_id.startswith("status:"):
-            self._chosen_status = opt_id[7:]
-        elif opt_id.startswith("exp:"):
-            self._chosen_experiment = opt_id[4:]
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "btn-apply":
-            self.dismiss({
-                "status": self._chosen_status,
-                "experiment": self._chosen_experiment,
-            })
-        elif event.button.id == "btn-clear":
-            self.dismiss({"status": "", "experiment": ""})
-        else:
-            self.dismiss(None)
-
-    def action_cancel_filter(self) -> None:
-        self.dismiss(None)
+_STATUS_CYCLE = ["", "Running", "Completed", "Failed", "Canceled"]
 
 
 # ---- app --------------------------------------------------------------------
@@ -545,7 +420,9 @@ class AjDashboard(App):
         Binding("l", "show_logs", "Logs"),
         Binding("i", "show_info", "Info"),
         Binding("w", "toggle_ws", "Workspace"),
-        Binding("f", "open_filter", "Filter"),
+        Binding("f", "cycle_status", "Status"),
+        Binding("e", "cycle_experiment", "Experiment"),
+        Binding("F", "clear_filters", "Clear", show=False),
         Binding("slash", "search", "Search"),
         Binding("1", "filter_all", "All", show=False),
         Binding("2", "filter_running", "Running", show=False),
@@ -1210,7 +1087,7 @@ class AjDashboard(App):
         """Show only canceled jobs."""
         self._set_filter("Canceled")
 
-    # ---- search / filter modal ----------------------------------------------
+    # ---- search / filter cycling -----------------------------------------------
 
     def action_search(self) -> None:
         """Toggle the search bar."""
@@ -1234,33 +1111,50 @@ class AjDashboard(App):
             self.query_one("#search-bar").add_class("hidden")
             self.query_one("#job-list", OptionList).focus()
 
-    def action_open_filter(self) -> None:
-        """Open filter modal to choose status + experiment."""
-        experiments = sorted({
+    def action_cycle_status(self) -> None:
+        """Cycle status filter: All → Running → Completed → Failed → Canceled."""
+        try:
+            idx = _STATUS_CYCLE.index(self._status_filter)
+        except ValueError:
+            idx = 0
+        self._status_filter = _STATUS_CYCLE[(idx + 1) % len(_STATUS_CYCLE)]
+        self._apply_filter()
+        label = self._status_filter or "All"
+        self.notify(f"Status: {label}")
+
+    def action_cycle_experiment(self) -> None:
+        """Cycle experiment filter through unique experiments in loaded jobs."""
+        experiments = [""] + sorted({
             j.get("experiment", "") for j in self._all_jobs
             if j.get("experiment")
         })
-        self.push_screen(
-            _FilterModal(
-                current_status=self._status_filter,
-                current_experiment=self._experiment_filter,
-                experiments=experiments,
-            ),
-            self._on_filter_chosen,
-        )
-
-    def _on_filter_chosen(self, result: dict[str, str] | None) -> None:
-        if result is None:
+        if len(experiments) <= 1:
+            self.notify("No experiments to filter")
             return
-        self._status_filter = result.get("status", "")
-        self._experiment_filter = result.get("experiment", "")
+        try:
+            idx = experiments.index(self._experiment_filter)
+        except ValueError:
+            idx = 0
+        self._experiment_filter = experiments[(idx + 1) % len(experiments)]
         self._apply_filter()
-        parts = []
-        if self._status_filter:
-            parts.append(self._status_filter)
-        if self._experiment_filter:
-            parts.append(self._experiment_filter)
-        self.notify(f"Filter: {', '.join(parts) or 'All'}")
+        label = self._experiment_filter or "All"
+        self.notify(f"Experiment: {label}")
+
+    def action_clear_filters(self) -> None:
+        """Clear all filters (status, experiment, search)."""
+        changed = bool(self._status_filter or self._experiment_filter or self._search_query)
+        self._status_filter = ""
+        self._experiment_filter = ""
+        self._search_query = ""
+        # Also clear the search input if visible
+        search_bar = self.query_one("#search-bar")
+        if not search_bar.has_class("hidden"):
+            self.query_one("#search-input", Input).value = ""
+            search_bar.add_class("hidden")
+        if changed:
+            self._apply_filter()
+        self.notify("Filters cleared")
+        self.query_one("#job-list", OptionList).focus()
 
     def action_cancel_job(self) -> None:
         if 0 <= self._selected_idx < len(self._filtered):

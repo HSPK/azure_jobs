@@ -447,21 +447,54 @@ async def test_tab_title(_dash) -> None:
 
 
 @pytest.mark.asyncio
-async def test_filter_modal_opens(_dash) -> None:
-    """Filter action opens the filter modal."""
+async def test_cycle_status(_dash) -> None:
+    """f cycles through status filters."""
     async with _dash.run_test(size=(120, 30)) as pilot:
         await _load_jobs(_dash, pilot)
         await pilot.pause()
-        _dash.action_open_filter()
+        assert _dash._status_filter == ""
+        _dash.action_cycle_status()
         await pilot.pause()
-        from azure_jobs.tui.app import _FilterModal
-        screens = [s for s in _dash.screen_stack if isinstance(s, _FilterModal)]
-        assert len(screens) == 1
-        # Cancel out
-        await pilot.press("escape")
+        assert _dash._status_filter == "Running"
+        _dash.action_cycle_status()
         await pilot.pause()
-        screens = [s for s in _dash.screen_stack if isinstance(s, _FilterModal)]
-        assert len(screens) == 0
+        assert _dash._status_filter == "Completed"
+        ol = _dash.query_one("#job-list")
+        assert ol.option_count == 1  # eval-bert
+
+
+@pytest.mark.asyncio
+async def test_cycle_experiment(_dash) -> None:
+    """e cycles through experiment filters."""
+    async with _dash.run_test(size=(120, 30)) as pilot:
+        await _load_jobs(_dash, pilot)
+        await pilot.pause()
+        assert _dash._experiment_filter == ""
+        _dash.action_cycle_experiment()
+        await pilot.pause()
+        # First experiment alphabetically (cv or nlp)
+        assert _dash._experiment_filter in ("cv", "nlp")
+        ol = _dash.query_one("#job-list")
+        assert ol.option_count < 3
+
+
+@pytest.mark.asyncio
+async def test_clear_filters(_dash) -> None:
+    """F clears all filters."""
+    async with _dash.run_test(size=(120, 30)) as pilot:
+        await _load_jobs(_dash, pilot)
+        await pilot.pause()
+        _dash._status_filter = "Running"
+        _dash._experiment_filter = "nlp"
+        _dash._search_query = "train"
+        _dash._apply_filter()
+        await pilot.pause()
+        _dash.action_clear_filters()
+        await pilot.pause()
+        assert _dash._status_filter == ""
+        assert _dash._experiment_filter == ""
+        assert _dash._search_query == ""
+        assert _dash.query_one("#job-list").option_count == 3
 
 
 @pytest.mark.asyncio
