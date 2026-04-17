@@ -45,10 +45,11 @@ def _show_templates() -> None:
         extra = conf.get("_extra", {})
         base = raw.get("base", None)
         if isinstance(base, list):
-            if len(base) == 1:
-                base = base[0]
-            else:
-                base = f"{base[0]} [dim]+{len(base) - 1}[/dim]"
+            # Strip the common "base" entry and show short labels
+            # e.g. ["base", "account.drl", "environment.ath200", "storage.x"]
+            #   → "drl · ath200 · x"
+            parts = [b.split(".")[-1] for b in base if b != "base"]
+            base = " · ".join(parts) if parts else "base"
         sku = "—"
         jobs = conf.get("jobs", [])
         if jobs and isinstance(jobs[0], dict):
