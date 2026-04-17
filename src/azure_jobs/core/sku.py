@@ -176,23 +176,41 @@ _FAMILY_MAP: dict[str, dict[str, Any]] = {
 # ---------------------------------------------------------------------------
 
 _SERIES_GPU_INFO: dict[str, tuple[str, int]] = {
-    # A100 families
+    # --- GPU families (from amlt sing_instance_fallback.json) ---
+    # A100
     "ND_A100_v4": ("A100", 80),
     "NC_A100_v4": ("A100", 80),
     "NDAMv4": ("A100", 80),
+    "NDAMv4_SAT": ("A100", 80),
     "NDv4": ("A100", 40),
     # H100
     "ND_H100_v5": ("H100", 80),
     "NDH100v5": ("H100", 80),
+    "LMD_BM_GPUH100": ("H100", 80),
     # H200
     "ND_H200_v5": ("H200", 141),
     "NDH200v5": ("H200", 141),
     # V100
     "NDv2": ("V100", 32),
+    "NDv2g1": ("V100", 16),
     "ND_v2": ("V100", 32),
+    "NCv3": ("V100", 16),
     "NC_v3": ("V100", 16),
+    "DGX2": ("V100", 32),
+    "LAB_DGX1_V100": ("V100", 32),
+    "LAB_DGX2_V100": ("V100", 32),
+    "Dell_C4140": ("V100", 32),
+    "LAB_DELL_C4140_V100": ("V100", 32),
+    "LAB_HPE_XL270d_V100": ("V100", 32),
     # T4
     "NC_T4_v3": ("T4", 16),
+    "NCast4v3": ("T4", 16),
+    # P100
+    "NCv2": ("P100", 16),
+    # P40
+    "ND": ("P40", 24),
+    # K80
+    "NC": ("K80", 12),
     # A10
     "NC_A10_v3": ("A10", 24),
     # AMD MI series
@@ -200,11 +218,25 @@ _SERIES_GPU_INFO: dict[str, tuple[str, int]] = {
     "NDMI200v4": ("MI200", 64),
     "ND_MI300X_v4": ("MI300X", 192),
     "NDMI300Xv4": ("MI300X", 192),
-    # CPU families (gpu_memory=0)
+    "NDMI300Xv5": ("MI300X", 192),
+    "MI100": ("MI100", 32),
+    "LAB_MI100": ("MI100", 32),
+    "MI50": ("MI50", 32),
+    # OCI
+    "OCI_BM_GPUA100v2": ("A100", 80),
+    "OCI_BM_GPU4": ("A100", 40),
+    "LAB_LMD_HyperPlane_A100": ("A100", 40),
+    # --- CPU families ---
     "Eadsv5": ("CPU", 0),
     "Dadsv5": ("CPU", 0),
+    "Dv3": ("CPU", 0),
+    "Dv3_SAT": ("CPU", 0),
+    "Dv3_Spot": ("CPU", 0),
     "Dv5": ("CPU", 0),
+    "Ev3": ("CPU", 0),
     "Ev5": ("CPU", 0),
+    "GPG8": ("CPU", 0),
+    "GPG70C": ("CPU", 0),
 }
 
 

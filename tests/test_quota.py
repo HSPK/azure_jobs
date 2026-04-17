@@ -244,6 +244,11 @@ class TestDiscoverVirtualClusters:
 class TestQuotaListCli:
     def setup_method(self):
         self.runner = CliRunner()
+        self._arm_patcher = patch("azure_jobs.core.rest_client.AzureARMClient")
+        self._arm_patcher.start()
+
+    def teardown_method(self):
+        self._arm_patcher.stop()
 
     @patch("azure_jobs.cli.quota._discover_vcs", return_value=[])
     def test_sing_no_vcs_found(self, mock_disc):
@@ -279,6 +284,9 @@ class TestQuotaListCli:
         assert "vc2" in result.output
         assert "NDH100v5" in result.output
         assert "NDAMv4" in result.output
+        # Accelerator info should be populated
+        assert "H100" in result.output
+        assert "A100" in result.output
 
     def test_ql_alias_works(self):
         with patch("azure_jobs.cli.quota._discover_vcs", return_value=[]):

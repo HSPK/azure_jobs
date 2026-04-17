@@ -83,7 +83,7 @@ def _show_sing_quotas(show_all: bool, template: str | None) -> None:
     arm = AzureARMClient()
 
     with console.status(
-        "[bold cyan]Listing subscriptions and discovering virtual clusters…[/bold cyan]",
+        "[bold cyan]Discovering virtual clusters…[/bold cyan]",
         spinner="dots",
     ):
         vcs = _discover_vcs(template, arm_client=arm)
@@ -93,12 +93,13 @@ def _show_sing_quotas(show_all: bool, template: str | None) -> None:
         console.print("  Make sure you are logged in (`az login`) and have access to VCs")
         raise SystemExit(1)
 
-    console.print(f"\n  Found [bold]{len(vcs)}[/bold] virtual cluster(s)\n")
-
-    # Fetch quotas for each VC (reuses same ARM client / TCP session)
+    # Fetch quotas for each VC with (x/N) progress
     all_vc_quotas: list[tuple] = []
-    with console.status("[bold cyan]Fetching quotas…[/bold cyan]", spinner="dots"):
-        for vc in vcs:
+    for idx, vc in enumerate(vcs, 1):
+        with console.status(
+            f"[bold cyan]Fetching quotas ({idx}/{len(vcs)}) {vc.name}…[/bold cyan]",
+            spinner="dots",
+        ):
             quotas = fetch_vc_quotas(
                 vc_subscription_id=vc.subscription_id,
                 vc_resource_group=vc.resource_group,
@@ -131,7 +132,6 @@ def _show_sing_quotas(show_all: bool, template: str | None) -> None:
     table.add_column("VC", style="bold magenta", no_wrap=True)
     table.add_column("Series", style="bold cyan", no_wrap=True)
     table.add_column("Accelerator", no_wrap=True)
-    table.add_column("Memory", justify="right", no_wrap=True)
     for tier in active_tiers:
         color = {"Premium": "green", "Standard": "yellow", "Basic": "bright_red"}.get(tier, "white")
         table.add_column(f"[{color}]{tier}[/{color}]", justify="right", no_wrap=True)
@@ -140,7 +140,7 @@ def _show_sing_quotas(show_all: bool, template: str | None) -> None:
 
     for vc, quotas in all_vc_quotas:
         if not quotas:
-            empty_row: list[str] = [vc.name, "[dim]no quotas[/dim]", "", ""]
+            empty_row: list[str] = [vc.name, "[dim]no quotas[/dim]", ""]
             empty_row += [""] * len(active_tiers)
             if has_quota_limit:
                 empty_row.append("")
@@ -149,10 +149,11 @@ def _show_sing_quotas(show_all: bool, template: str | None) -> None:
 
         for i, sq in enumerate(quotas):
             vc_label = vc.name if i == 0 else ""
-            acc = sq.accelerator or "[dim]—[/dim]"
-            mem = f"{sq.gpu_memory}GB" if sq.gpu_memory else "[dim]—[/dim]"
+            acc = sq.accelerator or ""
+            mem = f" {sq.gpu_memory}GB" if sq.gpu_memory else ""
+            acc_cell = f"{acc}[dim]{mem}[/dim]" if acc else "[dim]—[/dim]"
 
-            row: list[str] = [vc_label, sq.series, acc, mem]
+            row: list[str] = [vc_label, sq.series, acc_cell]
             for tier in active_tiers:
                 tq = sq.tiers.get(tier)
                 if tq:
