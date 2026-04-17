@@ -96,12 +96,18 @@ def template_validate(name: str | None) -> None:
     for tp in targets:
         tname = tp.stem
         try:
+            raw = yaml.safe_load(tp.read_text()) or {}
             conf = read_conf(tp)
         except (ConfigError, FileNotFoundError) as exc:
             errors.append((tname, f"inheritance error: {exc}"))
             continue
 
-        # Check required structure
+        # Templates without a base key are building blocks, not submittable
+        if "base" not in raw:
+            ok_count += 1
+            continue
+
+        # Check required structure for submittable templates
         issues: list[str] = []
         if "jobs" not in conf:
             issues.append("missing 'jobs' key")

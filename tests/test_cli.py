@@ -182,8 +182,13 @@ class TestTemplateValidateCommand:
         assert "1 template(s) valid" in result.output
 
     def test_validate_single_missing_jobs(self, aj_env):
-        conf = {"target": {"service": "aml", "name": "gpu01"}}
-        write_template(aj_env["template_home"], "bad", conf)
+        # Submittable template (has base) but missing jobs
+        fp = aj_env["template_home"] / "bad.yaml"
+        fp.write_text(yaml.dump({
+            "base": "base",
+            "config": {"target": {"service": "aml", "name": "gpu01"}},
+        }))
+        write_template(aj_env["template_home"], "base", {})
         runner = CliRunner()
         result = runner.invoke(main, ["template", "validate", "bad"])
         assert result.exit_code != 0
@@ -194,13 +199,17 @@ class TestTemplateValidateCommand:
             "target": {"service": "aml", "name": "gpu01"},
             "jobs": [{"sku": "G1"}],
         }
-        bad = {"target": {"service": "aml", "name": "gpu02"}}
-        write_template(aj_env["template_home"], "good", good)
-        write_template(aj_env["template_home"], "bad", bad)
+        write_template(aj_env["template_home"], "base", {})
+        fp_good = aj_env["template_home"] / "good.yaml"
+        fp_good.write_text(yaml.dump({"base": "base", "config": good}))
+        fp_bad = aj_env["template_home"] / "bad.yaml"
+        fp_bad.write_text(yaml.dump({
+            "base": "base",
+            "config": {"target": {"service": "aml", "name": "gpu02"}},
+        }))
         runner = CliRunner()
         result = runner.invoke(main, ["template", "validate"])
         assert result.exit_code != 0
-        assert "1 template(s) valid" in result.output
         assert "bad" in result.output
 
     def test_validate_missing_template(self, aj_env):
@@ -210,23 +219,39 @@ class TestTemplateValidateCommand:
         assert "not found" in result.output
 
     def test_validate_missing_target(self, aj_env):
-        conf = {"jobs": [{"sku": "G1"}]}
-        write_template(aj_env["template_home"], "notarget", conf)
+        write_template(aj_env["template_home"], "base", {})
+        fp = aj_env["template_home"] / "notarget.yaml"
+        fp.write_text(yaml.dump({
+            "base": "base",
+            "config": {"jobs": [{"sku": "G1"}]},
+        }))
         runner = CliRunner()
         result = runner.invoke(main, ["template", "validate", "notarget"])
         assert result.exit_code != 0
         assert "missing 'target'" in result.output
 
     def test_validate_missing_sku(self, aj_env):
-        conf = {
-            "target": {"service": "aml", "name": "gpu01"},
-            "jobs": [{"name": "j1"}],
-        }
-        write_template(aj_env["template_home"], "nosku", conf)
+        write_template(aj_env["template_home"], "base", {})
+        fp = aj_env["template_home"] / "nosku.yaml"
+        fp.write_text(yaml.dump({
+            "base": "base",
+            "config": {
+                "target": {"service": "aml", "name": "gpu01"},
+                "jobs": [{"name": "j1"}],
+            },
+        }))
         runner = CliRunner()
         result = runner.invoke(main, ["template", "validate", "nosku"])
         assert result.exit_code != 0
         assert "missing 'sku'" in result.output
+
+    def test_validate_building_block_passes(self, aj_env):
+        """Templates without a base key are building blocks — always valid."""
+        write_template(aj_env["template_home"], "fragment", {"code": {"local_dir": "."}})
+        runner = CliRunner()
+        result = runner.invoke(main, ["template", "validate", "fragment"])
+        assert result.exit_code == 0
+        assert "1 template(s) valid" in result.output
 
 
 class TestTemplateDiffCommand:
