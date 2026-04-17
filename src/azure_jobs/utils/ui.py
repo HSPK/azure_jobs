@@ -177,7 +177,7 @@ def show_jobs_table(records: list[dict[str, Any]]) -> None:
     table.add_column("P", justify="right")
     table.add_column("When", style="dim", no_wrap=True)
     table.add_column("Command", ratio=1)
-    table.add_column("Note", style="dim")
+    table.add_column("Note", style="dim", max_width=40, no_wrap=True, overflow="ellipsis")
 
     for r in records:
         status = r.get("status", "unknown")
@@ -191,6 +191,12 @@ def show_jobs_table(records: list[dict[str, Any]]) -> None:
                 cmd_str += " …"
         when = _time_ago(r.get("created_at", ""))
         note = r.get("note", "")
+        if note:
+            # Extract just the main error message (first meaningful line)
+            first_line = note.split("\n")[0].strip()
+            if first_line.startswith("(") and ") " in first_line:
+                first_line = first_line.split(") ", 1)[1]
+            note = first_line
 
         table.add_row(
             r.get("id", "?"),

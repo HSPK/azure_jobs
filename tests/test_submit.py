@@ -10,6 +10,9 @@ from azure_jobs.core.submit import (
     SubmitRequest,
     SubmitResult,
     _build_command_str,
+    _extract_error_message,
+    _resolve_compute,
+    _build_resources,
     build_request_from_config,
 )
 
@@ -197,3 +200,97 @@ class TestSubmitMocked:
         assert "auth" in steps
         assert "submit" in steps
         assert "done" in steps
+
+
+class TestExtractErrorMessage:
+    def test_azure_error_with_code(self):
+        msg = (
+            "(UserError) Unknown compute target 'foo'.\n"
+            "Code: UserError\n"
+            "Message: Unknown compute target 'foo'."
+        )
+        assert _extract_error_message(Exception(msg)) == "Unknown compute target 'foo'."
+
+    def test_simple_error(self):
+        assert _extract_error_message(Exception("something broke")) == "something broke"
+
+    def test_multiline_without_code(self):
+        msg = "First line\nSecond line\nThird line"
+        assert _extract_error_message(Exception(msg)) == "First line"
+
+
+class TestResolveCompute:
+    def test_aml_returns_name(self):
+        r = SubmitRequest(name="j", compute="gpu01", service="aml")
+        assert _resolve_compute(r) == "gpu01"
+
+    def test_sing_returns_arm_id(self):
+        r = SubmitRequest(
+            name="j", compute="msrresrchvc", service="sing",
+            subscription_id="sub-123", resource_group="rg-1",
+        )
+        arm = _resolve_compute(r)
+        assert arm.startswith("/subscriptions/sub-123/")
+        assert "virtualclusters/msrresrchvc" in arm
+
+    def test_sing_uses_vc_overrides(self):
+        r = SubmitRequest(
+            name="j", compute="vc1", service="sing",
+            subscription_id="ws-sub", resource_group="ws-rg",
+            vc_subscription_id="vc-sub", vc_resource_group="vc-rg",
+        )
+        arm = _resolve_compute(r)
+        assert "/subscriptions/vc-sub/" in arm
+        assert "/resourceGroups/vc-rg/" in arm
+
+
+class TestBuildResources:
+    def test_aml_returns_none(self):
+        r = SubmitRequest(name="j", service="aml")
+        assert _build_resources(r) is None
+
+    def test_sing_returns_aisupercomputer(self):
+        r = SubmitRequest(
+            name="j", compute="vc1", service="sing",
+            subscription_id="s", resource_group="r",
+            nodes=2, sla_tier="Premium", priority="high",
+            env_vars={"_sku_raw": "2xG1"},
+        )
+        res = _build_resources(r)
+        assert "AISuperComputer" in res["properties"]
+        aisc = res["properties"]["AISuperComputer"]
+        assert aisc["instanceType"] == "Singularity.2xG1"
+        assert aisc["instanceCount"] == 2
+        assert aisc["slaTier"] == "Premium"
+        assert "virtualclusters/vc1" in aisc["VirtualClusterArmId"]
+
+
+class TestBuildRequestSingularity:
+    def test_sing_config_populates_vc_fields(self):
+        conf = {
+            "target": {
+                "name": "msrresrchvc",
+                "service": "sing",
+                "workspace_name": "FastAML",
+                "subscription_id": "vc-sub",
+                "resource_group": "vc-rg",
+            },
+            "environment": {"image": "img"},
+            "jobs": [{"sku": "2xC1"}],
+        }
+        ws = {"subscription_id": "ws-sub", "resource_group": "ws-rg"}
+        r = build_request_from_config(conf, name="j", workspace=ws)
+        assert r.service == "sing"
+        assert r.vc_subscription_id == "vc-sub"
+        assert r.vc_resource_group == "vc-rg"
+        assert r.env_vars.get("_sku_raw") == "2xC1"
+
+    def test_aml_config_no_sku_internal_key(self):
+        conf = {
+            "target": {"name": "c1", "service": "aml"},
+            "environment": {"image": "img"},
+            "jobs": [{"sku": "G1"}],
+        }
+        ws = {"subscription_id": "s", "resource_group": "r", "workspace_name": "w"}
+        r = build_request_from_config(conf, name="j", workspace=ws)
+        assert "_sku_raw" not in r.env_vars

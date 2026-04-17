@@ -6,6 +6,7 @@ Direct SDK submission without amlt. Handles:
 - Environment (Docker image)
 - Storage mounts (blob containers)
 - Distribution (PyTorch multi-node)
+- Singularity virtual cluster targets (ARM resource IDs + AISuperComputer resources)
 - Job creation and submission
 
 All azure-ai-ml imports are lazy to keep CLI startup fast.
@@ -13,6 +14,12 @@ All azure-ai-ml imports are lazy to keep CLI startup fast.
 
 from __future__ import annotations
 
+import io
+import logging
+import os
+import sys
+import warnings
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -64,6 +71,62 @@ class SubmitRequest:
 
     # Service type
     service: str = "aml"  # "aml" or "sing"
+
+    # Singularity-specific (only used when service == "sing")
+    vc_subscription_id: str = ""  # VC subscription (falls back to subscription_id)
+    vc_resource_group: str = ""  # VC resource group (falls back to resource_group)
+
+
+def _quiet_azure_sdk() -> None:
+    """Suppress noisy Azure SDK warnings and experimental-class messages."""
+    # Suppress Python warnings from Azure SDK
+    warnings.filterwarnings("ignore", message=".*experimental.*")
+    warnings.filterwarnings("ignore", message=".*Class.*")
+    warnings.filterwarnings("ignore", category=DeprecationWarning, module="azure")
+    warnings.filterwarnings("ignore", category=FutureWarning, module="azure")
+    # Silence Azure loggers
+    for name in ("azure", "azure.ai.ml", "azure.identity", "azure.core", "msrest", "msal"):
+        logging.getLogger(name).setLevel(logging.ERROR)
+
+
+@contextmanager
+def _suppress_sdk_output():
+    """Redirect stderr to suppress Azure SDK noise (upload progress, warnings).
+
+    Captures stderr so tqdm upload bars and 'experimental class' messages
+    don't interleave with the spinner output.
+    """
+    _quiet_azure_sdk()
+    old_stderr = sys.stderr
+    sys.stderr = io.StringIO()
+    # Also suppress tqdm's file descriptor if it defaults to stderr
+    old_env = os.environ.get("TQDM_DISABLE")
+    os.environ["TQDM_DISABLE"] = "1"
+    try:
+        yield
+    finally:
+        sys.stderr = old_stderr
+        if old_env is None:
+            os.environ.pop("TQDM_DISABLE", None)
+        else:
+            os.environ["TQDM_DISABLE"] = old_env
+
+
+def _extract_error_message(exc: Exception) -> str:
+    """Extract a concise error message from an Azure SDK exception.
+
+    Azure errors include verbose JSON with correlation IDs, inner errors, etc.
+    We extract just the main message line.
+    """
+    text = str(exc)
+    # Azure HttpResponseError: "(ErrorCode) Main message.\nCode: ...\nMessage: ..."
+    if "\n" in text:
+        first_line = text.split("\n")[0].strip()
+        # Remove the error code prefix like "(UserError) "
+        if first_line.startswith("(") and ") " in first_line:
+            return first_line.split(") ", 1)[1]
+        return first_line
+    return text
 
 
 @dataclass
@@ -146,6 +209,53 @@ def _build_distribution(request: SubmitRequest) -> Any | None:
     )
 
 
+def _resolve_compute(request: SubmitRequest) -> str:
+    """Return the compute target reference.
+
+    For AML: just the cluster name.
+    For Singularity: full ARM resource ID of the virtual cluster.
+    """
+    if request.service == "sing":
+        sub = request.vc_subscription_id or request.subscription_id
+        rg = request.vc_resource_group or request.resource_group
+        return (
+            f"/subscriptions/{sub}"
+            f"/resourceGroups/{rg}"
+            f"/providers/Microsoft.MachineLearningServices"
+            f"/virtualclusters/{request.compute}"
+        )
+    return request.compute
+
+
+def _build_resources(request: SubmitRequest) -> dict[str, Any] | None:
+    """Build the ``resources`` dict for Singularity targets.
+
+    AML targets return *None* (no special resources needed).
+    """
+    if request.service != "sing":
+        return None
+
+    arm_id = _resolve_compute(request)
+    sku = request.env_vars.get("_sku_raw", "") or "D1"
+    instance_type = f"Singularity.{sku}" if not sku.startswith("Singularity.") else sku
+
+    return {
+        "properties": {
+            "AISuperComputer": {
+                "instanceType": instance_type,
+                "instanceTypes": [instance_type],
+                "instanceCount": request.nodes,
+                "interactive": False,
+                "imageVersion": "",
+                "slaTier": request.sla_tier,
+                "Priority": request.priority,
+                "VirtualClusterArmId": arm_id,
+                "tensorboardLogDirectory": "outputs",
+            }
+        }
+    }
+
+
 def _build_identity(request: SubmitRequest) -> Any | None:
     """Build identity config."""
     from azure.ai.ml.entities import ManagedIdentityConfiguration, UserIdentityConfiguration
@@ -174,10 +284,11 @@ def submit(request: SubmitRequest, on_status: Any = None) -> SubmitResult:
             on_status(step, detail)
 
     try:
-        _status("auth", "Authenticating with Azure CLI…")
-        ml_client = _get_ml_client(request)
+        _status("auth", "Authenticating…")
+        with _suppress_sdk_output():
+            ml_client = _get_ml_client(request)
 
-        _status("environment", f"Preparing environment: {request.image}")
+        _status("environment", "Preparing environment…")
         environment = _build_environment(request)
 
         _status("storage", f"Configuring {len(request.storage)} storage mount(s)…")
@@ -187,9 +298,11 @@ def submit(request: SubmitRequest, on_status: Any = None) -> SubmitResult:
         command_str = _build_command_str(request)
         distribution = _build_distribution(request)
         identity = _build_identity(request)
+        compute = _resolve_compute(request)
+        resources = _build_resources(request)
 
-        # Build environment variables
-        env_vars = dict(request.env_vars)
+        # Build environment variables (drop internal keys starting with _)
+        env_vars = {k: v for k, v in request.env_vars.items() if not k.startswith("_")}
         if request.shm_size:
             env_vars.setdefault("SHM_SIZE", request.shm_size)
 
@@ -203,14 +316,14 @@ def submit(request: SubmitRequest, on_status: Any = None) -> SubmitResult:
 
         _status("submit", f"Submitting to {request.compute}…")
 
-        job = aml_command(
+        job_kwargs: dict[str, Any] = dict(
             display_name=request.name,
             description=request.description,
             experiment_name=request.experiment_name,
             code=request.code_dir,
             command=command_str,
             environment=environment,
-            compute=request.compute,
+            compute=compute,
             instance_count=request.nodes,
             distribution=distribution,
             inputs=inputs if inputs else None,
@@ -219,8 +332,12 @@ def submit(request: SubmitRequest, on_status: Any = None) -> SubmitResult:
             shm_size=request.shm_size,
             tags=tags if tags else None,
         )
+        if resources:
+            job_kwargs["resources"] = resources
 
-        returned_job = ml_client.jobs.create_or_update(job)
+        with _suppress_sdk_output():
+            job = aml_command(**job_kwargs)
+            returned_job = ml_client.jobs.create_or_update(job)
 
         portal_url = ""
         if hasattr(returned_job, "studio_url"):
@@ -238,7 +355,7 @@ def submit(request: SubmitRequest, on_status: Any = None) -> SubmitResult:
         return SubmitResult(
             job_name=request.name,
             status="failed",
-            error=str(exc),
+            error=_extract_error_message(exc),
         )
 
 
@@ -267,6 +384,13 @@ def build_request_from_config(
         if not code_dir or code_dir == "/":
             code_dir = "."
 
+    service = target.get("service", "aml")
+
+    # Pass raw SKU for Singularity instance type resolution (internal key, stripped before submit)
+    env_extra = dict(submit_args.get("env", {}))
+    if service == "sing":
+        env_extra["_sku_raw"] = job.get("sku", "")
+
     return SubmitRequest(
         name=name,
         description=name,
@@ -285,10 +409,12 @@ def build_request_from_config(
         priority=job.get("priority", "high"),
         tags=job.get("tags", []),
         shm_size=submit_args.get("container_args", {}).get("shm_size", "2048g"),
-        env_vars=submit_args.get("env", {}),
+        env_vars=env_extra,
         subscription_id=workspace.get("subscription_id", ""),
         resource_group=workspace.get("resource_group", ""),
         workspace_name=target.get("workspace_name", "")
         or workspace.get("workspace_name", ""),
-        service=target.get("service", "aml"),
+        service=service,
+        vc_subscription_id=target.get("subscription_id", ""),
+        vc_resource_group=target.get("resource_group", ""),
     )
