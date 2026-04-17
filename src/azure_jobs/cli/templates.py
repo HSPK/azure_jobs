@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import subprocess
+
 import click
 import yaml
 
 from azure_jobs.cli import main
 from azure_jobs.core import const
-from azure_jobs.core.config import get_defaults
-from azure_jobs.utils.ui import show_template_table, warning
+from azure_jobs.core.config import get_defaults, read_config
+from azure_jobs.utils.ui import console, info, show_template_table, success, warning
 
 
 @main.group(name="template")
@@ -39,7 +41,155 @@ def template_push(message: str | None) -> None:
     _do_push(message)
 
 
+@template_group.command(name="show")
+@click.argument("name", type=str)
+def template_show(name: str) -> None:
+    """Show the fully resolved config for a template."""
+    from azure_jobs.core.conf import ConfigError, read_conf
+
+    tp = const.AJ_TEMPLATE_HOME / f"{name}.yaml"
+    if not tp.exists():
+        raise click.ClickException(f"Template '{name}' not found")
+
+    try:
+        merged = read_conf(tp)
+    except (ConfigError, FileNotFoundError) as exc:
+        raise click.ClickException(str(exc))
+
+    # Show inheritance chain
+    raw = yaml.safe_load(tp.read_text()) or {}
+    base = raw.get("base", None)
+    if base:
+        if isinstance(base, str):
+            base = [base]
+        chain = " → ".join(base) + f" → {name}"
+        console.print(f"\n[dim]Inheritance:[/dim] {chain}")
+
+    # Pretty-print the resolved YAML
+    output = yaml.dump(merged, default_flow_style=False, sort_keys=False, allow_unicode=True)
+    from rich.syntax import Syntax
+    console.print()
+    console.print(Syntax(output, "yaml", theme="monokai", line_numbers=False))
+
+
+@template_group.command(name="validate")
+@click.argument("name", type=str, required=False, default=None)
+def template_validate(name: str | None) -> None:
+    """Validate template config (all templates if no name given)."""
+    from azure_jobs.core.conf import ConfigError, read_conf
+
+    if not const.AJ_TEMPLATE_HOME.exists():
+        raise click.ClickException(f"No templates found in {const.AJ_TEMPLATE_HOME}")
+
+    if name:
+        targets = [const.AJ_TEMPLATE_HOME / f"{name}.yaml"]
+        if not targets[0].exists():
+            raise click.ClickException(f"Template '{name}' not found")
+    else:
+        targets = sorted(const.AJ_TEMPLATE_HOME.glob("*.yaml"))
+        if not targets:
+            raise click.ClickException("No templates found")
+
+    errors: list[tuple[str, str]] = []
+    ok_count = 0
+
+    for tp in targets:
+        tname = tp.stem
+        try:
+            conf = read_conf(tp)
+        except (ConfigError, FileNotFoundError) as exc:
+            errors.append((tname, f"inheritance error: {exc}"))
+            continue
+
+        # Check required structure
+        issues: list[str] = []
+        if "jobs" not in conf:
+            issues.append("missing 'jobs' key")
+        elif not isinstance(conf["jobs"], list) or len(conf["jobs"]) == 0:
+            issues.append("'jobs' must be a non-empty list")
+        elif "sku" not in conf["jobs"][0]:
+            issues.append("first job missing 'sku' key")
+
+        if "target" not in conf:
+            issues.append("missing 'target' key")
+        elif not isinstance(conf.get("target"), dict):
+            issues.append("'target' must be a dict")
+        else:
+            if "service" not in conf["target"]:
+                issues.append("target missing 'service'")
+            if "name" not in conf["target"]:
+                issues.append("target missing 'name'")
+
+        if issues:
+            errors.append((tname, "; ".join(issues)))
+        else:
+            ok_count += 1
+
+    # Report results
+    if ok_count > 0:
+        success(f"{ok_count} template(s) valid")
+    for tname, msg in errors:
+        from azure_jobs.utils.ui import error as ui_error
+        ui_error(f"{tname}: {msg}")
+
+    if errors:
+        raise SystemExit(1)
+
+
+@template_group.command(name="diff")
+def template_diff() -> None:
+    """Show local changes compared to the remote repository."""
+    import tempfile
+
+    config = read_config()
+    repo_id = config.get("repo_id")
+    if not repo_id:
+        raise click.ClickException(
+            "No remote repo configured. Run `aj pull <repo>` first."
+        )
+    if not const.AJ_HOME.exists():
+        raise click.ClickException("No AJ home found. Run `aj pull` first.")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        try:
+            with console.status("[bold cyan]Fetching remote…[/bold cyan]", spinner="dots"):
+                subprocess.run(
+                    ["git", "clone", "--depth=1", repo_id, tmp],
+                    check=True, capture_output=True, text=True,
+                )
+        except subprocess.CalledProcessError as exc:
+            raise click.ClickException(
+                f"Failed to clone remote: {exc.stderr.strip()}"
+            )
+
+        result = subprocess.run(
+            ["diff", "-rq", "--exclude=.git", "--exclude=aj_config.json",
+             "--exclude=submission", "--exclude=record.jsonl",
+             tmp, str(const.AJ_HOME)],
+            capture_output=True, text=True,
+        )
+
+        if not result.stdout.strip():
+            info("No differences with remote")
+            return
+
+        # Show detailed diff
+        detail = subprocess.run(
+            ["diff", "-ru", "--exclude=.git", "--exclude=aj_config.json",
+             "--exclude=submission", "--exclude=record.jsonl",
+             "--color=never",
+             tmp, str(const.AJ_HOME)],
+            capture_output=True, text=True,
+        )
+        from rich.syntax import Syntax
+        console.print()
+        console.print(Syntax(detail.stdout, "diff", theme="monokai", line_numbers=False))
+
+
+# ---------------------------------------------------------------------------
 # Top-level aliases (backward compat / convenience)
+# ---------------------------------------------------------------------------
+
 @main.command(name="list", hidden=True)
 def list_templates() -> None:
     _show_templates()

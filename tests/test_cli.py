@@ -131,6 +131,136 @@ class TestTemplateListCommand:
         assert "default" in result.output
 
 
+class TestTemplateShowCommand:
+    def test_show_simple_template(self, aj_env):
+        write_template(aj_env["template_home"], "gpu", MINIMAL_JOB_CONF)
+        runner = CliRunner()
+        result = runner.invoke(main, ["template", "show", "gpu"])
+        assert result.exit_code == 0
+        assert "jobs" in result.output
+        assert "sku" in result.output
+
+    def test_show_with_inheritance(self, aj_env):
+        base_conf = {"target": {"service": "aml"}, "jobs": [{"sku": "G1"}]}
+        write_template(aj_env["template_home"], "base", base_conf)
+        child_fp = aj_env["template_home"] / "child.yaml"
+        child_fp.write_text(yaml.dump({
+            "base": "base",
+            "config": {"target": {"name": "myCluster"}},
+        }))
+        runner = CliRunner()
+        result = runner.invoke(main, ["template", "show", "child"])
+        assert result.exit_code == 0
+        assert "aml" in result.output
+        assert "myCluster" in result.output
+        assert "Inheritance" in result.output
+
+    def test_show_missing_template(self, aj_env):
+        runner = CliRunner()
+        result = runner.invoke(main, ["template", "show", "nonexistent"])
+        assert result.exit_code != 0
+        assert "not found" in result.output
+
+    def test_show_broken_inheritance(self, aj_env):
+        child_fp = aj_env["template_home"] / "broken.yaml"
+        child_fp.write_text(yaml.dump({"base": "missing_base", "config": {}}))
+        runner = CliRunner()
+        result = runner.invoke(main, ["template", "show", "broken"])
+        assert result.exit_code != 0
+
+
+class TestTemplateValidateCommand:
+    def test_validate_single_valid(self, aj_env):
+        conf = {
+            "target": {"service": "aml", "name": "gpu01"},
+            "jobs": [{"sku": "G1"}],
+        }
+        write_template(aj_env["template_home"], "gpu", conf)
+        runner = CliRunner()
+        result = runner.invoke(main, ["template", "validate", "gpu"])
+        assert result.exit_code == 0
+        assert "1 template(s) valid" in result.output
+
+    def test_validate_single_missing_jobs(self, aj_env):
+        conf = {"target": {"service": "aml", "name": "gpu01"}}
+        write_template(aj_env["template_home"], "bad", conf)
+        runner = CliRunner()
+        result = runner.invoke(main, ["template", "validate", "bad"])
+        assert result.exit_code != 0
+        assert "missing 'jobs'" in result.output
+
+    def test_validate_all(self, aj_env):
+        good = {
+            "target": {"service": "aml", "name": "gpu01"},
+            "jobs": [{"sku": "G1"}],
+        }
+        bad = {"target": {"service": "aml", "name": "gpu02"}}
+        write_template(aj_env["template_home"], "good", good)
+        write_template(aj_env["template_home"], "bad", bad)
+        runner = CliRunner()
+        result = runner.invoke(main, ["template", "validate"])
+        assert result.exit_code != 0
+        assert "1 template(s) valid" in result.output
+        assert "bad" in result.output
+
+    def test_validate_missing_template(self, aj_env):
+        runner = CliRunner()
+        result = runner.invoke(main, ["template", "validate", "nope"])
+        assert result.exit_code != 0
+        assert "not found" in result.output
+
+    def test_validate_missing_target(self, aj_env):
+        conf = {"jobs": [{"sku": "G1"}]}
+        write_template(aj_env["template_home"], "notarget", conf)
+        runner = CliRunner()
+        result = runner.invoke(main, ["template", "validate", "notarget"])
+        assert result.exit_code != 0
+        assert "missing 'target'" in result.output
+
+    def test_validate_missing_sku(self, aj_env):
+        conf = {
+            "target": {"service": "aml", "name": "gpu01"},
+            "jobs": [{"name": "j1"}],
+        }
+        write_template(aj_env["template_home"], "nosku", conf)
+        runner = CliRunner()
+        result = runner.invoke(main, ["template", "validate", "nosku"])
+        assert result.exit_code != 0
+        assert "missing 'sku'" in result.output
+
+
+class TestTemplateDiffCommand:
+    def test_diff_no_repo(self, aj_env):
+        aj_env["config_fp"].write_text(json.dumps({}))
+        runner = CliRunner()
+        result = runner.invoke(main, ["template", "diff"])
+        assert result.exit_code != 0
+        assert "No remote repo configured" in result.output
+
+    def test_diff_no_home(self, aj_env):
+        shutil.rmtree(aj_env["aj_home"])
+        runner = CliRunner()
+        result = runner.invoke(main, ["template", "diff"])
+        assert result.exit_code != 0
+
+    def test_diff_no_changes(self, aj_env):
+        aj_env["config_fp"].write_text(
+            json.dumps({"repo_id": "git@github.com:u/r.git"})
+        )
+        runner = CliRunner()
+
+        def mock_run(cmd, **kwargs):
+            if "clone" in cmd:
+                return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+            # diff -rq returns empty (no differences)
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+        with patch("azure_jobs.cli.templates.subprocess.run", side_effect=mock_run):
+            result = runner.invoke(main, ["template", "diff"])
+        assert result.exit_code == 0
+        assert "No differences" in result.output
+
+
 class TestJobListCommand:
     def test_job_list_empty(self, aj_env):
         runner = CliRunner()
