@@ -1,10 +1,8 @@
-"""Interactive TUI dashboard — lazydocker-style split panel.
+"""Interactive TUI dashboard for Azure Jobs.
 
-Left panel : navigable job list with live status icons
-Right panel: tabbed Info / Logs with full job details
-
-Design: both panels bordered, clean alignment, grouped info sections.
-MLClient created once, statuses batch-fetched via jobs.list().
+Primary data source is the Azure ML workspace API (``ml_client.jobs.list()``).
+Local records from ``record.jsonl`` are merged to show template/command info.
+Supports status filtering (``f`` key) and live detail/log viewing.
 """
 
 from __future__ import annotations
@@ -31,14 +29,6 @@ from textual.worker import get_current_worker
 
 # ---- status maps ------------------------------------------------------------
 
-_LOCAL_ICON = {"success": "✓", "submitted": "↑", "failed": "✗", "cancelled": "○"}
-_LOCAL_STYLE = {
-    "success": "green",
-    "submitted": "cyan",
-    "failed": "red",
-    "cancelled": "yellow",
-}
-
 _AZ_ICON = {
     "Completed": "✓",
     "Running": "▶",
@@ -49,6 +39,8 @@ _AZ_ICON = {
     "Canceled": "⊘",
     "CancelRequested": "⊘",
     "NotStarted": "○",
+    "Provisioning": "◉",
+    "Finalizing": "◉",
 }
 _AZ_STYLE = {
     "Completed": "green",
@@ -60,56 +52,110 @@ _AZ_STYLE = {
     "Canceled": "dim",
     "CancelRequested": "dim yellow",
     "NotStarted": "dim",
+    "Provisioning": "yellow",
+    "Finalizing": "cyan",
 }
 
-_KW = 10  # key-column width for info panel alignment
+_LOCAL_ICON = {"success": "✓", "submitted": "↑", "failed": "✗", "cancelled": "○"}
+_LOCAL_STYLE = {
+    "success": "green", "submitted": "cyan", "failed": "red", "cancelled": "yellow",
+}
+
+_KW = 10  # key-column width for info panel
+_STATUS_CYCLE = ["", "Running", "Completed", "Failed", "Canceled", "Queued"]
 
 
 # ---- helpers ----------------------------------------------------------------
 
 
-def _make_option(
-    record: dict[str, Any], live_status: str | None = None
-) -> Option:
-    """Build a compact, aligned OptionList item."""
-    job_id = record.get("id", "?")
-    template = record.get("template", "?")
+def _job_icon_style(job: dict[str, Any]) -> tuple[str, str]:
+    """Return (icon, style) for a job dict."""
+    st = job.get("status", "")
+    if st in _AZ_ICON:
+        return _AZ_ICON[st], _AZ_STYLE.get(st, "white")
+    return _LOCAL_ICON.get(st, "?"), _LOCAL_STYLE.get(st, "white")
 
-    if live_status:
-        icon = _AZ_ICON.get(live_status, "?")
-        style = _AZ_STYLE.get(live_status, "white")
-    else:
-        st = record.get("status", "?")
-        icon = _LOCAL_ICON.get(st, "?")
-        style = _LOCAL_STYLE.get(st, "white")
 
+def _make_option(job: dict[str, Any]) -> Option:
+    """Build a compact OptionList item: icon + display name."""
+    name = job.get("display_name") or job.get("name", "?")
+    icon, style = _job_icon_style(job)
     t = Text()
     t.append(f" {icon} ", style=style)
-    t.append(job_id, style="bold")
-    t.append("  ")
-    t.append(template, style="dim")
-    return Option(t, id=job_id)
+    t.append(name)
+    return Option(t, id=job.get("name", ""))
 
 
-def _kv_lines(
+def _kv(
     pairs: list[tuple[str, str]],
     *,
     hint: str = "",
 ) -> str:
-    """Format key-value pairs into aligned lines.
-
-    An empty key inserts a blank separator line.
-    """
-    lines: list[str] = []
+    """Aligned key-value lines.  Empty key => blank separator."""
+    out: list[str] = []
     for key, val in pairs:
         if key == "":
-            lines.append("")
+            out.append("")
         else:
-            lines.append(f"  [bold]{key:>{_KW}}[/bold]  {val}")
+            out.append(f"  [bold]{key:>{_KW}}[/bold]  {val}")
     if hint:
-        lines.append("")
-        lines.append(f"  [dim]{hint}[/dim]")
-    return "\n".join(lines)
+        out.append("")
+        out.append(f"  [dim]{hint}[/dim]")
+    return "\n".join(out)
+
+
+def _format_duration(seconds: int) -> str:
+    if seconds >= 3600:
+        return f"{seconds // 3600}h {(seconds % 3600) // 60}m"
+    if seconds >= 60:
+        return f"{seconds // 60}m {seconds % 60}s"
+    return f"{seconds}s"
+
+
+def _extract_job_dict(job: Any) -> dict[str, Any]:
+    """Convert an Azure ML Job object to a plain dict."""
+    props = getattr(job, "properties", {}) or {}
+    start = props.get("StartTimeUtc", "")
+    end = props.get("EndTimeUtc", "")
+    duration = ""
+    if start and end:
+        from datetime import datetime
+
+        try:
+            t0 = datetime.strptime(start, "%Y-%m-%d %H:%M:%S")
+            t1 = datetime.strptime(end, "%Y-%m-%d %H:%M:%S")
+            duration = _format_duration(int((t1 - t0).total_seconds()))
+        except ValueError:
+            pass
+    elif start:
+        from datetime import datetime, timezone
+
+        try:
+            t0 = datetime.strptime(start, "%Y-%m-%d %H:%M:%S").replace(
+                tzinfo=timezone.utc
+            )
+            elapsed = int(
+                (datetime.now(timezone.utc) - t0).total_seconds()
+            )
+            duration = _format_duration(elapsed) + " (running)"
+        except ValueError:
+            pass
+
+    compute = getattr(job, "compute", "") or ""
+    if "/" in compute:
+        compute = compute.rstrip("/").rsplit("/", 1)[-1]
+
+    return {
+        "name": getattr(job, "name", ""),
+        "display_name": getattr(job, "display_name", "") or "",
+        "status": getattr(job, "status", ""),
+        "compute": compute,
+        "portal_url": getattr(job, "studio_url", "") or "",
+        "start_time": start,
+        "end_time": end,
+        "duration": duration,
+        "experiment": getattr(job, "experiment_name", "") or "",
+    }
 
 
 # ---- app --------------------------------------------------------------------
@@ -173,6 +219,7 @@ class AjDashboard(App):
     BINDINGS = [
         Binding("q", "quit", "Quit"),
         Binding("r", "refresh", "Refresh"),
+        Binding("f", "cycle_filter", "Filter"),
         Binding("c", "cancel_job", "Cancel"),
         Binding("l", "show_logs", "Logs"),
         Binding("i", "show_info", "Info"),
@@ -182,12 +229,14 @@ class AjDashboard(App):
     def __init__(self, last: int = 50, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._last = last
-        self._records: list[dict[str, Any]] = []
+        self._all_jobs: list[dict[str, Any]] = []
+        self._filtered: list[dict[str, Any]] = []
+        self._local_map: dict[str, dict[str, Any]] = {}  # azure_name → record
         self._workspace: dict[str, str] | None = None
         self._selected_idx: int = -1
         self._logs_job: str = ""
         self._ml_client: Any = None
-        self._live_statuses: dict[str, str] = {}
+        self._status_filter: str = ""
 
     # ---- compose ------------------------------------------------------------
 
@@ -207,44 +256,48 @@ class AjDashboard(App):
         yield Footer()
 
     def on_mount(self) -> None:
-        self.query_one("#left-pane").border_title = "Jobs"
-        self._load_records()
-        self._init_azure()
+        self._update_title()
+        self._load_local_records()
+        self._fetch_azure_jobs()
 
     # ---- data loading -------------------------------------------------------
 
-    def _load_records(self) -> None:
+    def _load_local_records(self) -> None:
+        """Load local records for enrichment (instant, no API call)."""
         from azure_jobs.core.record import read_records
 
-        self._records = read_records(last=self._last)
-        self._populate_list()
+        records = read_records(last=self._last * 2)
+        self._local_map = {
+            r["azure_name"]: r for r in records if r.get("azure_name")
+        }
 
-    def _populate_list(self) -> None:
-        ol = self.query_one("#job-list", OptionList)
-        ol.clear_options()
-        for r in self._records:
-            az = r.get("azure_name", "")
-            ol.add_option(_make_option(r, self._live_statuses.get(az)))
+        # Show local records as immediate fallback
+        if not self._all_jobs:
+            for r in read_records(last=self._last):
+                st = r.get("status", "submitted")
+                status_map = {
+                    "success": "Completed",
+                    "failed": "Failed",
+                    "cancelled": "Canceled",
+                    "submitted": "Queued",
+                }
+                self._all_jobs.append({
+                    "name": r.get("azure_name", r.get("id", "")),
+                    "display_name": r.get("azure_name", r.get("id", "")),
+                    "status": status_map.get(st, st),
+                    "compute": "",
+                    "portal_url": r.get("portal", ""),
+                    "start_time": "",
+                    "end_time": "",
+                    "duration": "",
+                    "experiment": "",
+                    "_local": True,
+                })
+            self._apply_filter()
 
-        if self._records:
-            ol.highlighted = 0
-            self._selected_idx = 0
-            self._show_local_info(self._records[0])
-        else:
-            self.query_one("#info-content", Static).update(
-                _kv_lines(
-                    [], hint="No jobs found.  Run  aj run  to submit a job."
-                )
-            )
-        self.query_one("#left-pane").border_title = (
-            f"Jobs ({len(self._records)})"
-        )
-
-    # ---- Azure init (shared MLClient + batch fetch) -------------------------
-
-    @work(thread=True, exclusive=True, group="init")
-    def _init_azure(self) -> None:
-        """Create MLClient once, then batch-fetch live statuses."""
+    @work(thread=True, exclusive=True, group="fetch")
+    def _fetch_azure_jobs(self) -> None:
+        """Fetch jobs from Azure API in background."""
         ws = self._ensure_workspace()
         if ws is None:
             return
@@ -265,47 +318,60 @@ class AjDashboard(App):
                     workspace_name=ws.get("workspace_name", ""),
                 )
 
-        wanted = {
-            r.get("azure_name", "")
-            for r in self._records
-            if r.get("azure_name")
-        }
-        if not wanted:
-            return
-
+        jobs: list[dict[str, Any]] = []
         try:
-            scanned = 0
-            for job in self._ml_client.jobs.list(
-                max_results=self._last * 3
+            for job_obj in self._ml_client.jobs.list(
+                max_results=self._last,
             ):
-                name = getattr(job, "name", "")
-                if name in wanted:
-                    self._live_statuses[name] = getattr(
-                        job, "status", ""
-                    )
-                    wanted.discard(name)
-                    if not wanted:
-                        break
-                scanned += 1
-                if scanned > 200:
-                    break
+                jobs.append(_extract_job_dict(job_obj))
         except Exception:
             pass
 
-        if self._live_statuses and not get_current_worker().is_cancelled:
-            self.call_from_thread(self._update_live_statuses)
+        if jobs and not get_current_worker().is_cancelled:
+            self.call_from_thread(self._on_azure_jobs_loaded, jobs)
 
-    def _update_live_statuses(self) -> None:
+    def _on_azure_jobs_loaded(self, jobs: list[dict[str, Any]]) -> None:
+        """Replace local fallback with real Azure data."""
+        self._all_jobs = jobs
+        self._apply_filter()
+
+    def _apply_filter(self) -> None:
+        """Filter jobs by current status filter and repopulate the list."""
+        if self._status_filter:
+            self._filtered = [
+                j for j in self._all_jobs
+                if j.get("status") == self._status_filter
+            ]
+        else:
+            self._filtered = list(self._all_jobs)
+
         ol = self.query_one("#job-list", OptionList)
-        prev = ol.highlighted
         ol.clear_options()
-        for r in self._records:
-            az = r.get("azure_name", "")
-            ol.add_option(_make_option(r, self._live_statuses.get(az)))
-        if prev is not None and prev < len(self._records):
-            ol.highlighted = prev
-        if 0 <= self._selected_idx < len(self._records):
-            self._show_local_info(self._records[self._selected_idx])
+        for j in self._filtered:
+            ol.add_option(_make_option(j))
+
+        self._update_title()
+
+        if self._filtered:
+            ol.highlighted = 0
+            self._selected_idx = 0
+            self._show_job_info(self._filtered[0])
+        else:
+            self._selected_idx = -1
+            hint = "No jobs match the current filter." if self._status_filter else (
+                "No jobs found."
+            )
+            self.query_one("#info-content", Static).update(
+                _kv([], hint=hint)
+            )
+
+    def _update_title(self) -> None:
+        total = len(self._all_jobs)
+        shown = len(self._filtered)
+        title = f"Jobs ({shown})" if shown == total else f"Jobs ({shown}/{total})"
+        if self._status_filter:
+            title += f" [dim]▸ {self._status_filter}[/dim]"
+        self.query_one("#left-pane").border_title = title
 
     def _ensure_workspace(self) -> dict[str, str] | None:
         if self._workspace is not None:
@@ -345,188 +411,171 @@ class AjDashboard(App):
     # ---- navigation events --------------------------------------------------
 
     def on_option_list_option_highlighted(
-        self,
-        event: OptionList.OptionHighlighted,
+        self, event: OptionList.OptionHighlighted,
     ) -> None:
         idx = event.option_index
-        if 0 <= idx < len(self._records):
+        if 0 <= idx < len(self._filtered):
             self._selected_idx = idx
-            self._show_local_info(self._records[idx])
+            self._show_job_info(self._filtered[idx])
             self._logs_job = ""
 
     def on_option_list_option_selected(
-        self,
-        event: OptionList.OptionSelected,
+        self, event: OptionList.OptionSelected,
     ) -> None:
-        """Enter -> fetch live Azure status."""
+        """Enter -> fetch fresh status for selected job."""
         idx = event.option_index
-        if 0 <= idx < len(self._records):
+        if 0 <= idx < len(self._filtered):
             self._selected_idx = idx
             self.query_one("#info-content", Static).update(
-                _kv_lines([("", "")], hint="Fetching live status...")
+                _kv([("", "")], hint="Fetching live status...")
             )
-            self._fetch_status(self._records[idx])
+            self._fetch_single_status(self._filtered[idx])
 
     # ---- info panel ---------------------------------------------------------
 
-    def _show_local_info(self, record: dict[str, Any]) -> None:
-        """Show info from local records + cached live status (instant)."""
-        azure_name = record.get("azure_name", "")
-        live = self._live_statuses.get(azure_name)
-
-        if live:
-            icon = _AZ_ICON.get(live, "?")
-            sty = _AZ_STYLE.get(live, "white")
-            status_line = f"[{sty}]{icon} {live}[/{sty}]"
-        else:
-            st = record.get("status", "?")
-            icon = _LOCAL_ICON.get(st, "?")
-            sty = _LOCAL_STYLE.get(st, "white")
-            status_line = f"[{sty}]{icon} {st}[/{sty}]"
+    def _show_job_info(self, job: dict[str, Any]) -> None:
+        """Render job details in the info panel (instant from cache)."""
+        icon, sty = _job_icon_style(job)
+        status = job.get("status", "?")
+        name = job.get("name", "")
+        display_name = job.get("display_name", "")
 
         pairs: list[tuple[str, str]] = [
-            ("Status", status_line),
-            ("Job ID", record.get("id", "?")),
+            ("Status", f"[{sty}]{icon} {status}[/{sty}]"),
         ]
-        if azure_name:
-            pairs.append(("Azure ID", azure_name))
+        if display_name and display_name != name:
+            pairs.append(("Name", display_name))
+        pairs.append(("Azure ID", name))
+        if job.get("compute"):
+            pairs.append(("Compute", job["compute"]))
+        if job.get("experiment"):
+            pairs.append(("Experiment", job["experiment"]))
 
-        pairs.append(("", ""))
-
-        pairs.append(("Template", record.get("template", "?")))
-        pairs.append(("Nodes", str(record.get("nodes", "?"))))
-        pairs.append(("Procs", str(record.get("processes", "?"))))
-
-        cmd = record.get("command", "")
-        args = record.get("args", [])
-        if args:
-            cmd += " " + " ".join(args)
-        pairs.append(("Command", cmd))
-
-        pairs.append(("", ""))
-
-        from azure_jobs.utils.ui import _time_ago
-
-        pairs.append(("Submitted", _time_ago(record.get("created_at", ""))))
-
-        if record.get("note"):
+        # Merge local record data if available
+        local = self._local_map.get(name)
+        if local:
             pairs.append(("", ""))
-            pairs.append(("Note", f"[red]{record['note']}[/red]"))
+            pairs.append(("Template", local.get("template", "?")))
+            nodes = local.get("nodes", "")
+            procs = local.get("processes", "")
+            if nodes:
+                pairs.append(("Nodes", str(nodes)))
+            if procs:
+                pairs.append(("Procs", str(procs)))
+            cmd = local.get("command", "")
+            args = local.get("args", [])
+            if args:
+                cmd += " " + " ".join(args)
+            if cmd:
+                pairs.append(("Command", cmd))
 
-        self.query_one("#info-content", Static).update(
-            _kv_lines(pairs, hint="Enter: live status")
-        )
-
-    @work(thread=True, exclusive=True, group="status")
-    def _fetch_status(self, record: dict[str, Any]) -> None:
-        from azure_jobs.core.submit import get_job_status
-
-        ws = self._ensure_workspace()
-        if ws is None:
-            self.call_from_thread(
-                self.notify,
-                "Workspace not configured",
-                severity="warning",
-            )
-            return
-
-        azure_name = record.get("azure_name") or record.get("id", "")
-        result = get_job_status(azure_name, ws)
-
-        if not get_current_worker().is_cancelled:
-            self._live_statuses[azure_name] = result.status
-            self.call_from_thread(self._display_status, result)
-
-    def _display_status(self, status: Any) -> None:
-        st = status.status
-        sty = _AZ_STYLE.get(st, "white")
-        icon = _AZ_ICON.get(st, "?")
-
-        pairs: list[tuple[str, str]] = [
-            ("Status", f"[{sty}]{icon} {st}[/{sty}]"),
-        ]
-        if status.display_name:
-            pairs.append(("Name", status.display_name))
-        pairs.append(("Azure ID", status.azure_name))
-        if status.compute:
-            pairs.append(("Compute", status.compute))
-
-        pairs.append(("", ""))
-
-        if status.duration:
-            pairs.append(("Duration", status.duration))
-        if status.start_time:
-            pairs.append(("Started", status.start_time))
-        if status.end_time:
-            pairs.append(("Ended", status.end_time))
-
-        if status.portal_url:
+        # Timing
+        if job.get("duration") or job.get("start_time"):
             pairs.append(("", ""))
-            url = status.portal_url
+            if job.get("duration"):
+                pairs.append(("Duration", job["duration"]))
+            if job.get("start_time"):
+                pairs.append(("Started", job["start_time"]))
+            if job.get("end_time"):
+                pairs.append(("Ended", job["end_time"]))
+
+        # Portal
+        if job.get("portal_url"):
+            pairs.append(("", ""))
+            url = job["portal_url"]
             if "/runs/" in url:
                 rp = url.split("/runs/", 1)[1].split("?")[0]
                 url = f"ml.azure.com/runs/{rp}"
             pairs.append(("Portal", url))
 
-        if status.error:
-            pairs.append(("", ""))
-            pairs.append(("Error", f"[red]{status.error}[/red]"))
-
-        self.query_one("#info-content", Static).update(_kv_lines(pairs))
-        self._refresh_option_item()
-
-    def _refresh_option_item(self) -> None:
-        if not (0 <= self._selected_idx < len(self._records)):
-            return
-        ol = self.query_one("#job-list", OptionList)
-        r = self._records[self._selected_idx]
-        az = r.get("azure_name", "")
-        ol.replace_option_prompt_at_index(
-            self._selected_idx,
-            _make_option(r, self._live_statuses.get(az)).prompt,
+        self.query_one("#info-content", Static).update(
+            _kv(pairs, hint="Enter: refresh status")
         )
+
+    @work(thread=True, exclusive=True, group="status")
+    def _fetch_single_status(self, job: dict[str, Any]) -> None:
+        """Fetch fresh details for one job from Azure."""
+        ml = self._get_or_create_ml_client()
+        if ml is None:
+            self.call_from_thread(
+                self.notify, "Workspace not configured", severity="warning",
+            )
+            return
+
+        name = job.get("name", "")
+        try:
+            job_obj = ml.jobs.get(name)
+            updated = _extract_job_dict(job_obj)
+        except Exception as exc:
+            self.call_from_thread(
+                self.notify, f"Error: {exc}", severity="error",
+            )
+            return
+
+        if not get_current_worker().is_cancelled:
+            self.call_from_thread(self._on_status_fetched, name, updated)
+
+    def _on_status_fetched(
+        self, name: str, updated: dict[str, Any],
+    ) -> None:
+        """Update the job in our data and refresh the UI."""
+        # Update in _all_jobs
+        for i, j in enumerate(self._all_jobs):
+            if j.get("name") == name:
+                self._all_jobs[i] = updated
+                break
+
+        # Update in _filtered and refresh the option list item
+        for i, j in enumerate(self._filtered):
+            if j.get("name") == name:
+                self._filtered[i] = updated
+                ol = self.query_one("#job-list", OptionList)
+                ol.replace_option_prompt_at_index(
+                    i, _make_option(updated).prompt,
+                )
+                break
+
+        # Refresh info panel if this job is still selected
+        if 0 <= self._selected_idx < len(self._filtered):
+            if self._filtered[self._selected_idx].get("name") == name:
+                self._show_job_info(updated)
 
     # ---- logs panel ---------------------------------------------------------
 
     def action_show_logs(self) -> None:
         self.query_one(TabbedContent).active = "tab-logs"
-        if 0 <= self._selected_idx < len(self._records):
-            record = self._records[self._selected_idx]
-            azure_name = record.get("azure_name") or record.get("id", "")
-            self._logs_job = azure_name
+        if 0 <= self._selected_idx < len(self._filtered):
+            job = self._filtered[self._selected_idx]
+            name = job.get("name", "")
+            self._logs_job = name
             log_w = self.query_one("#log-content", RichLog)
             log_w.clear()
             log_w.write("[dim]Fetching logs...[/dim]")
-            self._fetch_logs(azure_name)
+            self._fetch_logs(name)
 
     def action_show_info(self) -> None:
         self.query_one(TabbedContent).active = "tab-info"
 
     def on_tabbed_content_tab_activated(
-        self,
-        event: TabbedContent.TabActivated,
+        self, event: TabbedContent.TabActivated,
     ) -> None:
         if event.pane.id == "tab-logs":
-            if 0 <= self._selected_idx < len(self._records):
-                record = self._records[self._selected_idx]
-                azure_name = (
-                    record.get("azure_name") or record.get("id", "")
-                )
-                if azure_name != self._logs_job:
-                    self._logs_job = azure_name
+            if 0 <= self._selected_idx < len(self._filtered):
+                job = self._filtered[self._selected_idx]
+                name = job.get("name", "")
+                if name != self._logs_job:
+                    self._logs_job = name
                     log_w = self.query_one("#log-content", RichLog)
                     log_w.clear()
                     log_w.write("[dim]Fetching logs...[/dim]")
-                    self._fetch_logs(azure_name)
+                    self._fetch_logs(name)
 
     @work(thread=True, exclusive=True, group="logs")
     def _fetch_logs(self, azure_name: str) -> None:
         ml = self._get_or_create_ml_client()
         if ml is None:
             self.call_from_thread(
-                self.notify,
-                "Workspace not configured",
-                severity="warning",
+                self.notify, "Workspace not configured", severity="warning",
             )
             return
 
@@ -568,7 +617,7 @@ class AjDashboard(App):
 
         if not get_current_worker().is_cancelled:
             self.call_from_thread(
-                self._display_logs, "\n".join(lines), error_msg
+                self._display_logs, "\n".join(lines), error_msg,
             )
 
     def _display_logs(self, content: str, error: str) -> None:
@@ -586,41 +635,72 @@ class AjDashboard(App):
     # ---- actions ------------------------------------------------------------
 
     def action_refresh(self) -> None:
-        self._live_statuses.clear()
-        self._load_records()
-        self._init_azure()
+        self._all_jobs.clear()
+        self._filtered.clear()
+        self._load_local_records()
+        self._fetch_azure_jobs()
         self.notify("Refreshing...")
 
+    def action_cycle_filter(self) -> None:
+        """Cycle through status filters: All → Running → ... → All."""
+        try:
+            idx = _STATUS_CYCLE.index(self._status_filter)
+        except ValueError:
+            idx = 0
+        self._status_filter = _STATUS_CYCLE[(idx + 1) % len(_STATUS_CYCLE)]
+        label = self._status_filter or "All"
+        self.notify(f"Filter: {label}")
+        self._apply_filter()
+
     def action_cancel_job(self) -> None:
-        if 0 <= self._selected_idx < len(self._records):
-            record = self._records[self._selected_idx]
+        if 0 <= self._selected_idx < len(self._filtered):
+            job = self._filtered[self._selected_idx]
             self.query_one("#info-content", Static).update(
-                _kv_lines([("", "")], hint="Cancelling job...")
+                _kv([("", "")], hint="Cancelling job...")
             )
-            self._do_cancel(record)
+            self._do_cancel(job)
 
     @work(thread=True, exclusive=True, group="cancel")
-    def _do_cancel(self, record: dict[str, Any]) -> None:
-        ws = self._ensure_workspace()
-        if ws is None:
+    def _do_cancel(self, job: dict[str, Any]) -> None:
+        ml = self._get_or_create_ml_client()
+        if ml is None:
             self.call_from_thread(
-                self.notify,
-                "Workspace not configured",
-                severity="warning",
+                self.notify, "Workspace not configured", severity="warning",
             )
             return
 
-        from azure_jobs.core.submit import cancel_job
+        name = job.get("name", "")
+        display = job.get("display_name") or name
 
-        azure_name = record.get("azure_name") or record.get("id", "")
-        result = cancel_job(azure_name, ws)
+        try:
+            # Check if already terminal
+            current = ml.jobs.get(name)
+            st = getattr(current, "status", "")
+            if st in ("Completed", "Failed", "Canceled"):
+                self.call_from_thread(
+                    self.notify, f"{display}: already {st}",
+                )
+                return
+
+            lrop = ml.jobs.begin_cancel(name)
+            try:
+                lrop.wait()
+            except Exception:
+                pass
+
+            final = ml.jobs.get(name)
+            result = getattr(final, "status", "Unknown")
+        except Exception as exc:
+            self.call_from_thread(
+                self.notify, f"Error: {exc}", severity="error",
+            )
+            return
 
         if not get_current_worker().is_cancelled:
             self.call_from_thread(
-                self.notify,
-                f"Job {record.get('id', '?')}: {result}",
+                self.notify, f"{display}: {result}",
             )
-            self.call_from_thread(self._refresh_after_cancel, record)
-
-    def _refresh_after_cancel(self, record: dict[str, Any]) -> None:
-        self._fetch_status(record)
+            # Refresh this job's data
+            self.call_from_thread(
+                lambda: self._fetch_single_status(job),
+            )
