@@ -105,13 +105,13 @@ def _show_sing_quotas(show_all: bool, template: str | None) -> None:
 
     # Determine which SLA tiers are active across ALL VCs
     active_tiers: list[str] = []
-    has_overall = False
+    has_quota_limit = False
     for _vc, quotas in all_vc_quotas:
         for tier in SLA_TIERS:
             if tier not in active_tiers and any(tier in sq.tiers for sq in quotas):
                 active_tiers.append(tier)
-        if not has_overall and any(sq.overall for sq in quotas):
-            has_overall = True
+        if not has_quota_limit and any(sq.overall for sq in quotas):
+            has_quota_limit = True
 
     # Build one table with VC grouping
     table = Table(
@@ -129,15 +129,14 @@ def _show_sing_quotas(show_all: bool, template: str | None) -> None:
     for tier in active_tiers:
         color = {"Premium": "green", "Standard": "yellow", "Basic": "bright_red"}.get(tier, "white")
         table.add_column(f"[{color}]{tier}[/{color}]", justify="right", no_wrap=True)
-    if has_overall:
-        table.add_column("[cyan]Overall[/cyan]", justify="right", no_wrap=True)
+    if has_quota_limit:
+        table.add_column("[cyan]Quota[/cyan]", justify="right", no_wrap=True)
 
     for vc, quotas in all_vc_quotas:
         if not quotas:
-            # Show VC with no-quota note
             empty_row: list[str] = [vc.name, "[dim]no quotas[/dim]", "", ""]
             empty_row += [""] * len(active_tiers)
-            if has_overall:
+            if has_quota_limit:
                 empty_row.append("")
             table.add_row(*empty_row)
             continue
@@ -154,9 +153,10 @@ def _show_sing_quotas(show_all: bool, template: str | None) -> None:
                     row.append(_fmt_used_limit(tq.used, tq.limit))
                 else:
                     row.append("[dim]·[/dim]")
-            if has_overall:
+            if has_quota_limit:
                 if sq.overall:
-                    row.append(_fmt_used_limit(sq.overall.used, sq.overall.limit))
+                    # Quota column shows just the limit cap (user max)
+                    row.append(f"[cyan]{sq.overall.limit}[/cyan]")
                 else:
                     row.append("[dim]·[/dim]")
 

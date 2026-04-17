@@ -179,10 +179,10 @@ class TestDiscoverVirtualClusters:
     @patch("azure_jobs.core.config._az_json")
     def test_discovers_vcs_from_resource_graph(self, mock_az):
         mock_az.side_effect = [
-            {"id": "sub-123"},  # account show
+            ["sub-123", "sub-456"],  # account list
             {"data": [
                 {"name": "vc1", "resourceGroup": "rg1", "subscriptionId": "sub-123"},
-                {"name": "vc2", "resourceGroup": "rg2", "subscriptionId": "sub-123"},
+                {"name": "vc2", "resourceGroup": "rg2", "subscriptionId": "sub-456"},
             ]},  # resource graph
         ]
         vcs = discover_virtual_clusters()
@@ -200,6 +200,19 @@ class TestDiscoverVirtualClusters:
         # Should NOT call account show when subscriptions provided
         assert mock_az.call_count == 1
 
+    @patch("azure_jobs.core.config._az_json")
+    def test_fallback_to_current_sub(self, mock_az):
+        """Falls back to az account show if az account list fails."""
+        mock_az.side_effect = [
+            None,  # account list fails
+            {"id": "sub-fallback"},  # account show
+            {"data": [
+                {"name": "vc1", "resourceGroup": "rg1", "subscriptionId": "sub-fallback"},
+            ]},
+        ]
+        vcs = discover_virtual_clusters()
+        assert len(vcs) == 1
+
     @patch("azure_jobs.core.config._az_json", return_value=None)
     def test_empty_on_no_account(self, mock_az):
         assert discover_virtual_clusters() == []
@@ -207,7 +220,7 @@ class TestDiscoverVirtualClusters:
     @patch("azure_jobs.core.config._az_json")
     def test_empty_on_no_data(self, mock_az):
         mock_az.side_effect = [
-            {"id": "sub-123"},
+            ["sub-123"],  # account list
             {"data": []},
         ]
         assert discover_virtual_clusters() == []

@@ -336,17 +336,22 @@ def discover_virtual_clusters(
     """Discover all Singularity virtual clusters via Azure Resource Graph.
 
     Uses the same approach as ``amlt``: query Resource Graph for all
-    ``microsoft.machinelearningservices/virtualclusters`` across subscriptions.
-    If *subscription_ids* is ``None``, uses the current ``az account`` subscription.
+    ``microsoft.machinelearningservices/virtualclusters`` across ALL
+    subscriptions the user has access to.
     """
     from azure_jobs.core.config import _az_json
 
     if not subscription_ids:
-        # Fall back to current subscription
-        acct = _az_json(["account", "show"])
-        if not acct or not acct.get("id"):
+        # List ALL subscriptions (like amlt's get_user_subscriptions)
+        subs = _az_json(["account", "list", "--query", "[].id", "--all"], timeout=20)
+        if not subs or not isinstance(subs, list):
+            # Fallback to current subscription
+            acct = _az_json(["account", "show"])
+            subscription_ids = [acct["id"]] if acct and acct.get("id") else []
+        else:
+            subscription_ids = [s for s in subs if s]
+        if not subscription_ids:
             return []
-        subscription_ids = [acct["id"]]
 
     # Azure Resource Graph query (same as amlt)
     query = (
