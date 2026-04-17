@@ -366,7 +366,7 @@ def _build_resources(request: SubmitRequest, on_status: Any = None) -> dict[str,
                 "Priority": request.priority,
                 "EnableAzmlInt": False,
                 "VirtualClusterArmId": arm_id,
-                "tensorboardLogDirectory": "outputs",
+                "tensorboardLogDirectory": "/scratch/outputs",
             }
         }
     }
