@@ -29,8 +29,7 @@ _LOG_FILES = [
     "azureml-logs/75_job_post-tvmps.txt",
 ]
 
-# SDK boilerplate prefixes to strip
-_SKIP_PREFIXES = ("RunId:", "Web View:", "Execution Summary", "=====")
+from azure_jobs.core.client import SKIP_LOG_PREFIXES
 
 # States where ``ml_client.jobs.download()`` works
 _DOWNLOAD_STATES = frozenset(
@@ -191,7 +190,7 @@ def _filter_content(raw: str) -> str:
     """Strip SDK boilerplate lines from log content."""
     lines = []
     for line in raw.split("\n"):
-        if any(line.startswith(p) for p in _SKIP_PREFIXES):
+        if any(line.startswith(p) for p in SKIP_LOG_PREFIXES):
             continue
         lines.append(line)
     while lines and not lines[0].strip():

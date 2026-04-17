@@ -110,7 +110,6 @@ class AjDashboard(WorkspaceMixin, App):
         self._subscription_id: str = ""
         self._selected_idx: int = -1
         self._logs_job: str = ""
-        self._ml_client: Any = None
         self._rest_client: Any = None
         self._log_line_count: int = 0
         self._auto_scroll: bool = True
@@ -524,8 +523,6 @@ class AjDashboard(WorkspaceMixin, App):
                 self._show_job_info(updated)
 
     # ---- right pane: logs ---------------------------------------------------
-
-    _SKIP_PREFIXES = ("RunId:", "Web View:", "Execution Summary", "=====")
 
     # Statuses where log output cannot exist yet
     _NO_LOG_STATUSES = ("Queued", "NotStarted", "Provisioning", "Preparing")

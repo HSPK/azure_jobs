@@ -49,25 +49,6 @@ class WorkspaceMixin:
                 "[dim]Not configured[/dim]"
             )
 
-    def _create_ml_client(self: "AjDashboard", ws: dict[str, str]) -> Any:
-        """Create a new MLClient for the given workspace dict."""
-        from azure_jobs.core.client import create_ml_client
-        merged = {
-            "subscription_id": ws.get("subscription_id", self._subscription_id),
-            "resource_group": ws.get("resource_group", ""),
-            "workspace_name": ws.get("workspace_name", ws.get("name", "")),
-        }
-        return create_ml_client(merged)
-
-    def _get_or_create_ml_client(self: "AjDashboard") -> Any:
-        if self._ml_client is not None:
-            return self._ml_client
-        ws = self._ensure_workspace()
-        if ws is None:
-            return None
-        self._ml_client = self._create_ml_client(ws)
-        return self._ml_client
-
     # ---- workspace selector -------------------------------------------------
 
     def action_pick_workspace(self: "AjDashboard") -> None:
@@ -137,7 +118,6 @@ class WorkspaceMixin:
             "resource_group": ws["resource_group"],
             "workspace_name": ws["name"],
         }
-        self._ml_client = None
         self._rest_client = None
         self._all_jobs.clear()
         self._filtered.clear()
