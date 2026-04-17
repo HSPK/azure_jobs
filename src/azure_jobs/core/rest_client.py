@@ -225,10 +225,19 @@ class AzureMLJobsClient:
     # ---- single job ---------------------------------------------------------
 
     def get_job(self, name: str) -> dict[str, Any]:
-        """Fetch a single job by name, enriched with error from Run History."""
+        """Fetch a single job by name, enriched with error from Run History.
+
+        If *name* is not found (404), tries to find by display_name.
+        """
         self._ensure_token()
         url = f"{self._base}/jobs/{name}?api-version={_API_VERSION}"
         resp = self._session.get(url, timeout=30)
+        if resp.status_code == 404:
+            # name might be a display_name — try to resolve
+            real_name = self._find_by_display_name(name)
+            if real_name:
+                return self.get_job(real_name)
+            resp.raise_for_status()  # raise the original 404
         resp.raise_for_status()
         job = _extract_rest_job(resp.json())
 
@@ -241,6 +250,20 @@ class AzureMLJobsClient:
             except Exception:
                 pass  # best-effort; don't block info display
         return job
+
+    def _find_by_display_name(self, display_name: str) -> str:
+        """Search recent jobs for one matching *display_name*, return its name."""
+        self._ensure_token()
+        # Fetch a few pages of recent jobs to find the match
+        next_link: str | None = None
+        for _ in range(5):  # up to ~50 jobs
+            jobs, next_link = self.list_jobs_page(next_link, top=10)
+            for j in jobs:
+                if j.get("display_name") == display_name:
+                    return j.get("name", "")
+            if not next_link:
+                break
+        return ""
 
     # ---- cancel -------------------------------------------------------------
 
