@@ -257,7 +257,8 @@ class TestBuildResources:
         r = SubmitRequest(name="j", service="aml")
         assert _build_resources(r) is None
 
-    def test_sing_returns_aisupercomputer(self):
+    @patch("azure_jobs.core.sku.resolve_instance_type", return_value=["ND40rs_v2", "ND40s_v3"])
+    def test_sing_returns_aisupercomputer(self, mock_resolve):
         r = SubmitRequest(
             name="j", compute="vc1", service="sing",
             subscription_id="s", resource_group="r",
@@ -267,12 +268,15 @@ class TestBuildResources:
         res = _build_resources(r)
         assert "AISuperComputer" in res["properties"]
         aisc = res["properties"]["AISuperComputer"]
-        assert aisc["instanceType"] == "Singularity.2xG1"
+        assert aisc["instanceType"] == "Singularity.ND40rs_v2,Singularity.ND40s_v3"
+        assert aisc["instanceTypes"] == ["Singularity.ND40rs_v2", "Singularity.ND40s_v3"]
         assert aisc["instanceCount"] == 2
         assert aisc["slaTier"] == "Premium"
         assert "virtualclusters/vc1" in aisc["VirtualClusterArmId"]
+        mock_resolve.assert_called_once_with("2xG1")
 
-    def test_sing_image_version_from_amlt_sing_prefix(self):
+    @patch("azure_jobs.core.sku.resolve_instance_type", return_value=["D2_v3"])
+    def test_sing_image_version_from_amlt_sing_prefix(self, mock_resolve):
         r = SubmitRequest(
             name="j", compute="vc1", service="sing",
             subscription_id="s", resource_group="r",
@@ -283,7 +287,8 @@ class TestBuildResources:
         aisc = res["properties"]["AISuperComputer"]
         assert aisc["imageVersion"] == "acpt-torch2.7.1-py3.10-cuda12.6-ubuntu22.04"
 
-    def test_sing_image_version_empty_for_non_sing_image(self):
+    @patch("azure_jobs.core.sku.resolve_instance_type", return_value=["D2_v3"])
+    def test_sing_image_version_empty_for_non_sing_image(self, mock_resolve):
         r = SubmitRequest(
             name="j", compute="vc1", service="sing",
             subscription_id="s", resource_group="r",
@@ -293,6 +298,18 @@ class TestBuildResources:
         res = _build_resources(r)
         aisc = res["properties"]["AISuperComputer"]
         assert aisc["imageVersion"] == ""
+
+    @patch("azure_jobs.core.sku.resolve_instance_type", return_value=[])
+    def test_sing_fallback_strips_node_prefix(self, mock_resolve):
+        """When API resolution fails, strip {nodes}x prefix and use raw SKU."""
+        r = SubmitRequest(
+            name="j", compute="vc1", service="sing",
+            subscription_id="s", resource_group="r",
+            env_vars={"_sku_raw": "2xC1"},
+        )
+        res = _build_resources(r)
+        aisc = res["properties"]["AISuperComputer"]
+        assert aisc["instanceType"] == "Singularity.C1"
 
 
 class TestBuildRequestSingularity:

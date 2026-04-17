@@ -316,19 +316,32 @@ def _resolve_compute(request: SubmitRequest) -> str:
     return request.compute
 
 
-def _build_resources(request: SubmitRequest) -> dict[str, Any] | None:
+def _build_resources(request: SubmitRequest, on_status: Any = None) -> dict[str, Any] | None:
     """Build the ``resources`` dict for Singularity targets.
 
     AML targets return *None* (no special resources needed).
-    For Singularity curated images (``amlt-sing/...``), the ``imageVersion``
-    field tells the platform which image to use at runtime.
+    Resolves amlt SKU shorthand (e.g. ``1xC1``, ``1x80G8-A100-NvLink``)
+    to actual Singularity instance type names via the Singularity API.
     """
     if request.service != "sing":
         return None
 
     arm_id = _resolve_compute(request)
-    sku = request.env_vars.get("_sku_raw", "") or "D1"
-    instance_type = f"Singularity.{sku}" if not sku.startswith("Singularity.") else sku
+    sku_raw = request.env_vars.get("_sku_raw", "") or "C1"
+
+    # Resolve SKU shorthand to instance type names
+    from azure_jobs.core.sku import resolve_instance_type
+
+    if on_status:
+        on_status("sku", f"Resolving SKU {sku_raw}…")
+    instance_names = resolve_instance_type(sku_raw)
+    if instance_names:
+        instance_types = [f"Singularity.{n}" for n in instance_names]
+    else:
+        # Fallback: use the raw SKU (stripped of node count) directly
+        stripped = sku_raw.strip()
+        stripped = stripped.split("x", 1)[-1] if "x" in stripped else stripped
+        instance_types = [f"Singularity.{stripped}"]
 
     # For amlt-sing/ images, pass the alias so Singularity resolves at runtime
     image_version = ""
@@ -339,8 +352,8 @@ def _build_resources(request: SubmitRequest) -> dict[str, Any] | None:
     return {
         "properties": {
             "AISuperComputer": {
-                "instanceType": instance_type,
-                "instanceTypes": [instance_type],
+                "instanceType": ",".join(instance_types[:4]),
+                "instanceTypes": instance_types[:4],
                 "instanceCount": request.nodes,
                 "interactive": False,
                 "imageVersion": image_version,
@@ -448,7 +461,7 @@ def submit(request: SubmitRequest, on_status: Any = None) -> SubmitResult:
         distribution = _build_distribution(request)
         identity = _build_identity(request)
         compute = _resolve_compute(request)
-        resources = _build_resources(request)
+        resources = _build_resources(request, on_status=_status)
 
         # Build environment variables — keep Azure-specific keys, drop only
         # our internal markers like _sku_raw
