@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import os
 import shutil
+import stat
 import subprocess
 
 import click
@@ -25,6 +27,12 @@ def resolve_repo_url(repo_id: str) -> str:
 _LOCAL_ONLY = {"aj_config.json", "submission", "record.jsonl"}
 
 
+def _rm_readonly(func, path, _exc_info):  # noqa: ANN001
+    """Clear read-only flag and retry removal (Windows .git files)."""
+    os.chmod(path, stat.S_IWRITE)
+    func(path)
+
+
 def _do_pull(repo_id: str | None, force: bool) -> None:
     """Core pull logic shared by template pull and top-level alias."""
     config = read_config()
@@ -40,7 +48,7 @@ def _do_pull(repo_id: str | None, force: bool) -> None:
         return
     if const.AJ_HOME.exists() and force:
         info(f"Removing existing {const.AJ_HOME}")
-        shutil.rmtree(const.AJ_HOME)
+        shutil.rmtree(const.AJ_HOME, onerror=_rm_readonly)
 
     const.AJ_HOME.mkdir(parents=True, exist_ok=True)
     try:
@@ -57,7 +65,7 @@ def _do_pull(repo_id: str | None, force: bool) -> None:
     # Remove .git — keep .azure_jobs as a plain directory
     git_fp = const.AJ_HOME / ".git"
     if git_fp.exists() and git_fp.is_dir():
-        shutil.rmtree(git_fp)
+        shutil.rmtree(git_fp, onerror=_rm_readonly)
 
     const.AJ_CONFIG.parent.mkdir(parents=True, exist_ok=True)
     write_config(config)

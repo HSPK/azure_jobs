@@ -150,17 +150,21 @@ async def test_info_shows_cloud_fields(_dash) -> None:
 
 
 @pytest.mark.asyncio
-async def test_escape_layered(_dash) -> None:
-    """Escape: logs → info (layered dismiss)."""
+async def test_escape_opens_help(_dash) -> None:
+    """Escape opens the help/keybinding overlay."""
     async with _dash.run_test(size=(120, 30)) as pilot:
         await _load_jobs(_dash, pilot)
         await pilot.pause()
-        _dash.action_show_logs()
+        _dash.action_show_help()
         await pilot.pause()
-        assert _dash._view_mode == "logs"
-        _dash.action_dismiss()
+        from azure_jobs.tui.modals import HelpScreen
+        screens = [s for s in _dash.screen_stack if isinstance(s, HelpScreen)]
+        assert len(screens) == 1
+        # Pressing escape again closes it
+        await pilot.press("escape")
         await pilot.pause()
-        assert _dash._view_mode == "info"
+        screens = [s for s in _dash.screen_stack if isinstance(s, HelpScreen)]
+        assert len(screens) == 0
 
 
 @pytest.mark.asyncio
@@ -272,15 +276,18 @@ async def test_info_shows_full_name(_dash) -> None:
 
 @pytest.mark.asyncio
 async def test_page_loaded_appends(_dash) -> None:
-    """_on_page_loaded appends to existing jobs."""
+    """_on_page_fetched appends a new page and shows it."""
     async with _dash.run_test(size=(120, 30)) as pilot:
         _dash.workers.cancel_all()
         await pilot.pause()
         _dash._on_jobs_loaded([dict(_JOBS[0])])
         assert len(_dash._all_jobs) == 1
-        _dash._on_page_loaded([dict(_JOBS[1])])
+        _dash._on_page_fetched([dict(_JOBS[1])])
         assert len(_dash._all_jobs) == 2
-        assert _dash.query_one("#job-list").option_count == 2
+        assert len(_dash._pages) == 2
+        # Current page shows the newly fetched page
+        assert _dash._current_page == 1
+        assert _dash.query_one("#job-list").option_count == 1
 
 
 def test_info_block_sections() -> None:
@@ -379,13 +386,13 @@ async def test_search_filters_by_keyword(_dash) -> None:
         await pilot.pause()
         # Set search query directly (Input captures keypresses)
         _dash._search_query = "bert"
-        _dash._apply_filter()
+        _dash._show_current_page()
         await pilot.pause()
         ol = _dash.query_one("#job-list")
         assert ol.option_count == 1  # only eval-bert
         # Clear search
         _dash._search_query = ""
-        _dash._apply_filter()
+        _dash._show_current_page()
         await pilot.pause()
         assert ol.option_count == 3
 
@@ -397,12 +404,12 @@ async def test_experiment_filter(_dash) -> None:
         await _load_jobs(_dash, pilot)
         await pilot.pause()
         _dash._experiment_filter = "cv"
-        _dash._apply_filter()
+        _dash._show_current_page()
         await pilot.pause()
         ol = _dash.query_one("#job-list")
         assert ol.option_count == 1  # only train-vision (cv)
         _dash._experiment_filter = ""
-        _dash._apply_filter()
+        _dash._show_current_page()
         await pilot.pause()
         assert ol.option_count == 3
 
@@ -415,12 +422,12 @@ async def test_combined_filters(_dash) -> None:
         await pilot.pause()
         # Filter by experiment=nlp → 2 jobs
         _dash._experiment_filter = "nlp"
-        _dash._apply_filter()
+        _dash._show_current_page()
         await pilot.pause()
         assert _dash.query_one("#job-list").option_count == 2
         # Add status=Failed → 1 job
         _dash._status_filter = "Failed"
-        _dash._apply_filter()
+        _dash._show_current_page()
         await pilot.pause()
         assert _dash.query_one("#job-list").option_count == 1
 
@@ -484,7 +491,7 @@ async def test_clear_filters(_dash) -> None:
         _dash._status_filter = "Running"
         _dash._experiment_filter = "nlp"
         _dash._search_query = "train"
-        _dash._apply_filter()
+        _dash._show_current_page()
         await pilot.pause()
         _dash.action_clear_filters()
         await pilot.pause()

@@ -8,6 +8,7 @@ Stores tool defaults (template, nodes, processes), repo_id for
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 from typing import Any
 
@@ -58,11 +59,20 @@ def save_defaults(
 # -- workspace ---------------------------------------------------------------
 
 
+def _find_az() -> str:
+    """Return the full path to the ``az`` CLI (resolves ``az.cmd`` on Windows)."""
+    path = shutil.which("az")
+    if path is None:
+        raise FileNotFoundError("Azure CLI not found")
+    return path
+
+
 def _az_json(args: list[str], timeout: int = 15) -> Any | None:
     """Run an ``az`` CLI command and return parsed JSON, or *None* on failure."""
     try:
+        az = _find_az()
         result = subprocess.run(
-            ["az", *args, "--output", "json"],
+            [az, *args, "--output", "json"],
             capture_output=True, text=True, timeout=timeout,
         )
         if result.returncode == 0:

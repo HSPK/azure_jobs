@@ -88,7 +88,8 @@ def auth_login() -> None:
 
     console.print("[info]ℹ[/info] Opening Azure login…")
     try:
-        subprocess.run(["az", "login"], check=False)
+        from azure_jobs.core.config import _find_az
+        subprocess.run([_find_az(), "login"], check=False)
     except FileNotFoundError:
         console.print("[error]✗[/error] Azure CLI not installed")
         console.print("  Install: https://aka.ms/installazurecli")
@@ -101,8 +102,9 @@ def auth_logout() -> None:
     from azure_jobs.utils.ui import console
 
     try:
+        from azure_jobs.core.config import _find_az
         result = subprocess.run(
-            ["az", "logout"],
+            [_find_az(), "logout"],
             capture_output=True,
             text=True,
             timeout=15,

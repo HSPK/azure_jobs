@@ -1,6 +1,6 @@
 """Interactive TUI dashboard for Azure Jobs.
 
-Data: ``ml_client.jobs.list(list_view_type=ALL)`` → cloud-only, paginated.
+Data: REST API direct calls → cloud-only, paginated.
 Mouse disabled — keyboard-only for low-latency server usage.
 
 Layout
@@ -14,414 +14,54 @@ Right pane   bordered panel; border-title shows tab indicator (Info/Logs),
 
 from __future__ import annotations
 
-import io
 import sys
-from typing import Any, Iterator
+from typing import Any
 
-from rich.text import Text
 from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
-from textual.screen import ModalScreen
 from textual.widgets import (
-    Button,
     Footer,
     Input,
     OptionList,
-    RichLog,
     Static,
 )
-from textual.widgets.option_list import Option
 from textual.worker import get_current_worker
 
-# ---- status maps ------------------------------------------------------------
+from azure_jobs.tui.helpers import (
+    STATUS_CYCLE,
+    icon_style,
+    info_block,
+    kv,
+    make_option,
+)
+from azure_jobs.tui.log_viewer import LogViewer, StreamCapture
+from azure_jobs.tui.modals import ConfirmCancel, HelpScreen, PickerModal
 
-_AZ_ICON = {
-    "Completed": "✓", "Running": "▶", "Starting": "◉", "Preparing": "◉",
-    "Queued": "◷", "Failed": "✗", "Canceled": "⊘", "CancelRequested": "⊘",
-    "NotStarted": "○", "Provisioning": "◉", "Finalizing": "◉",
-}
-_AZ_STYLE = {
-    "Completed": "green", "Running": "cyan", "Starting": "cyan",
-    "Preparing": "yellow", "Queued": "yellow", "Failed": "red",
-    "Canceled": "dim", "CancelRequested": "dim yellow",
-    "NotStarted": "dim", "Provisioning": "yellow", "Finalizing": "cyan",
-}
+# ---- backward-compat re-exports (test code may import private names) --------
 
-_KW = 14
-_LEFT_WIDTH = 38
-_NAME_MAX = _LEFT_WIDTH - 8
-_PAGE_SIZE = 30
-
-
-# ---- helpers ----------------------------------------------------------------
-
-
-def _icon_style(status: str) -> tuple[str, str]:
-    return _AZ_ICON.get(status, "?"), _AZ_STYLE.get(status, "white")
-
-
-def _trunc(s: str, maxlen: int = _NAME_MAX) -> str:
-    """Truncate with ellipsis in the middle if too long."""
-    if len(s) <= maxlen:
-        return s
-    half = (maxlen - 3) // 2
-    return s[:half] + "..." + s[-(maxlen - 3 - half):]
-
-
-def _make_option(job: dict[str, Any]) -> Option:
-    """Compact list item: icon + truncated display name."""
-    name = job.get("display_name") or job.get("name", "?")
-    icon, sty = _icon_style(job.get("status", ""))
-    t = Text()
-    t.append(f" {icon} ", style=sty)
-    t.append(_trunc(name))
-    return Option(t, id=job.get("name", ""))
-
-
-def _kv(pairs: list[tuple[str, str]], *, hint: str = "") -> str:
-    """Aligned key-value lines. Empty key = blank separator."""
-    out: list[str] = []
-    for k, v in pairs:
-        out.append("" if k == "" else f"  [bold]{k:>{_KW}}[/bold]  {v}")
-    if hint:
-        out += ["", f"  [dim]{hint}[/dim]"]
-    return "\n".join(out)
-
-
-def _info_block(job: dict[str, Any]) -> str:
-    """Build the info panel content for a job with visual sections."""
-    lines: list[str] = []
-    name = job.get("name", "")
-    display = job.get("display_name") or name
-    icon, sty = _icon_style(job.get("status", ""))
-    status = job.get("status", "?")
-
-    # ── Status badge ──
-    lines.append("")
-    lines.append(f"  [{sty} bold]{icon} {status}[/{sty} bold]")
-    if job.get("error"):
-        lines.append(f"  [red]{job['error']}[/red]")
-    lines.append("")
-
-    # ── Identity ──
-    lines.append("  [bold cyan]Identity[/bold cyan]")
-    lines.append(f"  [dim]{'─' * 42}[/dim]")
-    if display and display != name:
-        lines.append(f"    [dim]Name[/dim]           {display}")
-    lines.append(f"    [dim]ID[/dim]             {name}")
-    if job.get("type"):
-        lines.append(f"    [dim]Type[/dim]           {job['type']}")
-    if job.get("experiment"):
-        lines.append(f"    [dim]Experiment[/dim]     {job['experiment']}")
-    if job.get("description"):
-        lines.append(f"    [dim]Description[/dim]    {job['description']}")
-    if job.get("tags"):
-        lines.append(f"    [dim]Tags[/dim]           {job['tags']}")
-
-    # ── Configuration ──
-    has_config = job.get("environment") or job.get("command")
-    if has_config:
-        lines.append("")
-        lines.append("  [bold cyan]Configuration[/bold cyan]")
-        lines.append(f"  [dim]{'─' * 42}[/dim]")
-        if job.get("environment"):
-            lines.append(f"    [dim]Environment[/dim]    {job['environment']}")
-        if job.get("command"):
-            cmd = job["command"]
-            if len(cmd) > 80:
-                cmd = cmd[:77] + "..."
-            lines.append(f"    [dim]Command[/dim]        {cmd}")
-
-    # ── Resources ──
-    if job.get("compute"):
-        lines.append("")
-        lines.append("  [bold cyan]Resources[/bold cyan]")
-        lines.append(f"  [dim]{'─' * 42}[/dim]")
-        lines.append(f"    [dim]Compute[/dim]        {job['compute']}")
-
-    # ── Timing ──
-    has_time = job.get("duration") or job.get("start_time") or job.get("created")
-    if has_time:
-        lines.append("")
-        lines.append("  [bold cyan]Timing[/bold cyan]")
-        lines.append(f"  [dim]{'─' * 42}[/dim]")
-        if job.get("created"):
-            lines.append(f"    [dim]Created[/dim]        {job['created']}")
-        if job.get("start_time"):
-            lines.append(f"    [dim]Started[/dim]        {job['start_time']}")
-        if job.get("end_time"):
-            lines.append(f"    [dim]Ended[/dim]          {job['end_time']}")
-        if job.get("duration"):
-            lines.append(f"    [dim]Duration[/dim]       {job['duration']}")
-
-    # ── Links ──
-    url = job.get("portal_url", "")
-    if url:
-        lines.append("")
-        lines.append("  [bold cyan]Links[/bold cyan]")
-        lines.append(f"  [dim]{'─' * 42}[/dim]")
-        if "/runs/" in url:
-            short = url.split("/runs/", 1)[1].split("?")[0]
-            url = f"ml.azure.com/runs/{short}"
-        lines.append(f"    [dim]Portal[/dim]         [underline]{url}[/underline]")
-
-    lines.append("")
-    return "\n".join(lines)
-
-
-def _fmt_dur(secs: int) -> str:
-    from azure_jobs.utils.time import format_duration
-    return format_duration(secs)
-
-
-def _extract_job(job_obj: Any) -> dict[str, Any]:
-    """Convert an Azure ML Job SDK object → plain dict."""
-    from azure_jobs.utils.time import calc_duration, format_time
-
-    props = getattr(job_obj, "properties", {}) or {}
-    start = props.get("StartTimeUtc", "")
-    end = props.get("EndTimeUtc", "")
-    duration = calc_duration(start, end)
-    # Convert UTC timestamps to display timezone
-    start_display = format_time(start)
-    end_display = format_time(end)
-
-    compute = getattr(job_obj, "compute", "") or ""
-    if "/" in compute:
-        compute = compute.rstrip("/").rsplit("/", 1)[-1]
-
-    # Tags → compact string
-    tags = getattr(job_obj, "tags", None) or {}
-    tags_str = ", ".join(f"{k}={v}" for k, v in tags.items()) if tags else ""
-
-    # Environment — may be string or object with .name
-    env_raw = getattr(job_obj, "environment", None) or ""
-    if hasattr(env_raw, "name"):
-        env_str = getattr(env_raw, "name", str(env_raw))
-    else:
-        env_str = str(env_raw) if env_raw else ""
-    # Trim long ARM IDs to just the resource name
-    if env_str and "/" in env_str:
-        env_str = env_str.rstrip("/").rsplit("/", 1)[-1]
-    # Strip version suffix from environment references like "env:1"
-    if ":" in env_str:
-        env_str = env_str.rsplit(":", 1)[0]
-
-    # Creation time
-    ctx = getattr(job_obj, "creation_context", None)
-    created = ""
-    if ctx:
-        ct = getattr(ctx, "created_at", None)
-        if ct:
-            created = format_time(str(ct)[:19])
-
-    # Error message for failed jobs
-    error_msg = ""
-    err = getattr(job_obj, "error", None)
-    if err:
-        error_msg = getattr(err, "message", str(err))[:200]
-
-    return {
-        "name": getattr(job_obj, "name", ""),
-        "display_name": getattr(job_obj, "display_name", "") or "",
-        "status": getattr(job_obj, "status", ""),
-        "compute": compute,
-        "portal_url": getattr(job_obj, "studio_url", "") or "",
-        "start_time": start_display,
-        "end_time": end_display,
-        "duration": duration,
-        "experiment": getattr(job_obj, "experiment_name", "") or "",
-        "type": getattr(job_obj, "type", "") or "",
-        "description": (getattr(job_obj, "description", "") or "")[:200],
-        "tags": tags_str,
-        "environment": env_str,
-        "command": (getattr(job_obj, "command", "") or "")[:200],
-        "created": created,
-        "error": error_msg,
-    }
-
-
-# ---- cancel confirmation modal ----------------------------------------------
-
-
-class _ConfirmCancel(ModalScreen[bool]):
-    """Modal dialog asking user to confirm job cancellation."""
-
-    CSS = """
-    _ConfirmCancel {
-        align: center middle;
-    }
-    #confirm-dialog {
-        width: 56;
-        height: auto;
-        max-height: 12;
-        border: thick $accent;
-        background: $surface;
-        padding: 1 2;
-    }
-    #confirm-msg {
-        width: 100%;
-        margin-bottom: 1;
-    }
-    #confirm-btns {
-        width: 100%;
-        height: 3;
-        align: center middle;
-    }
-    #confirm-btns Button {
-        margin: 0 1;
-        min-width: 12;
-    }
-    """
-
-    BINDINGS = [
-        Binding("y", "confirm", "Yes", show=False),
-        Binding("n", "cancel_dialog", "No", show=False),
-        Binding("escape", "cancel_dialog", "Cancel", show=False),
-    ]
-
-    def __init__(self, job_display: str, **kwargs: Any) -> None:
-        super().__init__(**kwargs)
-        self._job_display = job_display
-
-    def compose(self) -> ComposeResult:
-        with Vertical(id="confirm-dialog"):
-            yield Static(
-                f"Cancel job [bold]{self._job_display}[/bold]?",
-                id="confirm-msg",
-            )
-            with Horizontal(id="confirm-btns"):
-                yield Button("[Y]es", variant="error", id="btn-yes")
-                yield Button("[N]o", variant="default", id="btn-no")
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        self.dismiss(event.button.id == "btn-yes")
-
-    def action_confirm(self) -> None:
-        self.dismiss(True)
-
-    def action_cancel_dialog(self) -> None:
-        self.dismiss(False)
-
-
-_STATUS_CYCLE = ["", "Running", "Completed", "Failed", "Canceled"]
-
-
-class _PickerModal(ModalScreen[str]):
-    """Lightweight keyboard-first picker: arrow keys + Enter, or 1-9 for quick select."""
-
-    CSS = """
-    _PickerModal {
-        align: center middle;
-    }
-    #picker-box {
-        width: 40;
-        height: auto;
-        max-height: 18;
-        border: round #3465a4;
-        background: $surface;
-        padding: 1 2;
-    }
-    #picker-title {
-        width: 100%;
-        margin-bottom: 1;
-    }
-    #picker-list {
-        height: auto;
-        max-height: 12;
-        border: none;
-        padding: 0;
-        scrollbar-size: 1 1;
-    }
-    """
-
-    BINDINGS = [
-        Binding("escape", "cancel_picker", "Cancel", show=False),
-        Binding("1", "pick_1", show=False),
-        Binding("2", "pick_2", show=False),
-        Binding("3", "pick_3", show=False),
-        Binding("4", "pick_4", show=False),
-        Binding("5", "pick_5", show=False),
-        Binding("6", "pick_6", show=False),
-        Binding("7", "pick_7", show=False),
-        Binding("8", "pick_8", show=False),
-        Binding("9", "pick_9", show=False),
-    ]
-
-    def __init__(
-        self,
-        title: str,
-        items: list[tuple[str, str]],
-        current: str = "",
-        **kwargs: Any,
-    ) -> None:
-        """items: list of (value, label) pairs. First should be ("", "All")."""
-        super().__init__(**kwargs)
-        self._title = title
-        self._items = items
-        self._current = current
-
-    def compose(self) -> ComposeResult:
-        with Vertical(id="picker-box"):
-            yield Static(f"[bold]{self._title}[/bold]", id="picker-title")
-            yield OptionList(id="picker-list")
-
-    def on_mount(self) -> None:
-        ol = self.query_one("#picker-list", OptionList)
-        highlight_idx = 0
-        for i, (value, label) in enumerate(self._items):
-            num = f"[dim]{i + 1}[/dim] "
-            mark = "[green]●[/green] " if value == self._current else "  "
-            ol.add_option(Option(Text.from_markup(f" {num}{mark}{label}"), id=value))
-            if value == self._current:
-                highlight_idx = i
-        ol.highlighted = highlight_idx
-        ol.focus()
-
-    def on_option_list_option_selected(
-        self, event: OptionList.OptionSelected,
-    ) -> None:
-        self.dismiss(event.option.id or "")
-
-    def _pick(self, n: int) -> None:
-        if 0 <= n < len(self._items):
-            self.dismiss(self._items[n][0])
-
-    def action_pick_1(self) -> None: self._pick(0)
-    def action_pick_2(self) -> None: self._pick(1)
-    def action_pick_3(self) -> None: self._pick(2)
-    def action_pick_4(self) -> None: self._pick(3)
-    def action_pick_5(self) -> None: self._pick(4)
-    def action_pick_6(self) -> None: self._pick(5)
-    def action_pick_7(self) -> None: self._pick(6)
-    def action_pick_8(self) -> None: self._pick(7)
-    def action_pick_9(self) -> None: self._pick(8)
-
-    def action_cancel_picker(self) -> None:
-        self.dismiss(self._current)
-
-
-# ---- log viewer with vim keys ----------------------------------------------
-
-
-class _LogViewer(RichLog):
-    """RichLog subclass with vim-style keyboard navigation.
-
-    Bindings are only active when this widget has focus (i.e. logs tab open).
-    """
-
-    BINDINGS = [
-        Binding("j", "scroll_down", "↓", show=False),
-        Binding("k", "scroll_up", "↑", show=False),
-        Binding("G", "scroll_end", "End", show=False),
-        Binding("g", "scroll_home", "Top", show=False),
-        Binding("ctrl+d", "page_down", "PgDn", show=False),
-        Binding("ctrl+u", "page_up", "PgUp", show=False),
-        Binding("ctrl+f", "page_down", "PgDn", show=False),
-        Binding("ctrl+b", "page_up", "PgUp", show=False),
-    ]
+from azure_jobs.tui.helpers import (  # noqa: F401, E402
+    AZ_ICON as _AZ_ICON,
+    AZ_STYLE as _AZ_STYLE,
+    KW as _KW,
+    LEFT_WIDTH as _LEFT_WIDTH,
+    NAME_MAX as _NAME_MAX,
+    PAGE_SIZE as _PAGE_SIZE,
+    extract_job as _extract_job,
+    fmt_dur as _fmt_dur,
+    icon_style as _icon_style,
+    info_block as _info_block,
+    kv as _kv,
+    make_option as _make_option,
+    trunc as _trunc,
+)
+from azure_jobs.tui.modals import (  # noqa: F401, E402
+    ConfirmCancel as _ConfirmCancel,
+    PickerModal as _PickerModal,
+)
+from azure_jobs.tui.log_viewer import LogViewer as _LogViewer  # noqa: F401, E402
+_STATUS_CYCLE = STATUS_CYCLE
 
 
 # ---- app --------------------------------------------------------------------
@@ -517,15 +157,19 @@ class AjDashboard(App):
         Binding("q", "quit", "Quit"),
         Binding("r", "refresh", "Refresh"),
         Binding("c", "cancel_job", "Cancel"),
-        Binding("l", "show_logs", "Logs"),
+        Binding("l", "focus_logs", "Logs"),
+        Binding("L", "show_logs", "Stream", show=False),
         Binding("i", "show_info", "Info"),
+        Binding("j", "focus_jobs", "Jobs"),
         Binding("s", "toggle_scroll", "Scroll", show=False),
         Binding("w", "pick_workspace", "Workspace"),
         Binding("f", "pick_status", "Status"),
         Binding("e", "pick_experiment", "Experiment"),
         Binding("F", "clear_filters", "Clear", show=False),
         Binding("slash", "search", "Search"),
-        Binding("escape", "dismiss", "Back", show=False),
+        Binding("escape", "show_help", "Help"),
+        Binding("right", "next_page", "Next"),
+        Binding("left", "prev_page", "Prev"),
     ]
     ENABLE_COMMAND_PALETTE = True
 
@@ -545,6 +189,7 @@ class AjDashboard(App):
         self._selected_idx: int = -1
         self._logs_job: str = ""
         self._ml_client: Any = None
+        self._rest_client: Any = None
         self._log_line_count: int = 0
         self._auto_scroll: bool = True
         self._log_streaming: bool = False
@@ -552,8 +197,10 @@ class AjDashboard(App):
         self._experiment_filter: str = ""
         self._search_query: str = ""
         self._view_mode: str = "info"
-        # Pagination
-        self._job_iter: Iterator | None = None
+        # Pagination — page-based with left/right navigation
+        self._pages: list[list[dict[str, Any]]] = []
+        self._current_page: int = 0
+        self._next_link: str | None = None
         self._has_more: bool = True
         self._fetching: bool = False
 
@@ -574,7 +221,7 @@ class AjDashboard(App):
             with Vertical(id="right-pane"):
                 with VerticalScroll(id="info-scroll"):
                     yield Static(id="info-content")
-                yield _LogViewer(
+                yield LogViewer(
                     id="log-content", highlight=True, markup=True,
                     wrap=True, auto_scroll=True, classes="hidden",
                 )
@@ -585,7 +232,7 @@ class AjDashboard(App):
         self._update_titles()
         self._update_tab_title()
         self.query_one("#info-content", Static).update(
-            _kv([], hint="Loading jobs…")
+            kv([], hint="Loading jobs…")
         )
         self._init_fetch()
 
@@ -593,13 +240,16 @@ class AjDashboard(App):
 
     def _update_loading(self, msg: str) -> None:
         """Update the info panel with a loading stage message."""
-        self.query_one("#info-content", Static).update(
-            _kv([], hint=msg)
-        )
+        try:
+            self.query_one("#info-content", Static).update(
+                kv([], hint=msg)
+            )
+        except Exception:
+            pass
 
     @work(thread=True, exclusive=True, group="fetch")
     def _init_fetch(self) -> None:
-        """Authenticate, create iterator, fetch first page."""
+        """Authenticate, create REST client, fetch first page."""
         worker = get_current_worker()
 
         self.call_from_thread(self._update_loading, "Reading workspace config…")
@@ -619,9 +269,24 @@ class AjDashboard(App):
         # Update workspace panel on UI
         self.call_from_thread(self._update_ws_label)
 
-        if self._ml_client is None:
-            self.call_from_thread(self._update_loading, "Authenticating…")
-            self._ml_client = self._create_ml_client(ws)
+        self.call_from_thread(
+            self._update_loading, "Authenticating…",
+        )
+
+        from azure_jobs.core.rest_client import AzureMLJobsClient
+
+        try:
+            self._rest_client = AzureMLJobsClient(
+                subscription_id=ws.get("subscription_id", self._subscription_id),
+                resource_group=ws.get("resource_group", ""),
+                workspace_name=ws.get("workspace_name", ws.get("name", "")),
+            )
+        except Exception as exc:
+            if not worker.is_cancelled:
+                self.call_from_thread(
+                    self._update_loading, f"[red]Error:[/red] {str(exc)[:100]}",
+                )
+            return
         if worker.is_cancelled:
             return
 
@@ -630,79 +295,84 @@ class AjDashboard(App):
             f"Fetching jobs from [bold]{ws.get('workspace_name', '')}[/bold]…",
         )
 
-        from azure.ai.ml.constants import ListViewType
+        self._pages.clear()
+        self._current_page = 0
+        self._next_link = None
+        self._has_more = True
+        self._fetch_page_rest(worker)
 
+    def _fetch_page_rest(self, worker: Any) -> None:
+        """Fetch one page via REST API (runs in thread)."""
+        if self._rest_client is None or not self._has_more:
+            return
         try:
-            self._job_iter = iter(self._ml_client.jobs.list(
-                list_view_type=ListViewType.ALL,
-            ))
+            jobs, nxt = self._rest_client.list_jobs_page(
+                next_link=self._next_link,
+            )
         except Exception as exc:
+            self._has_more = False
             if not worker.is_cancelled:
                 self.call_from_thread(
                     self._update_loading, f"[red]Error:[/red] {str(exc)[:100]}",
                 )
             return
 
-        self._has_more = True
-        self._fetch_page_sync(worker)
-
-    def _fetch_page_sync(self, worker: Any) -> None:
-        """Consume up to _PAGE_SIZE items from the live iterator (runs in thread)."""
-        if self._job_iter is None or not self._has_more:
+        if worker.is_cancelled:
             return
-        new: list[dict[str, Any]] = []
-        try:
-            for _ in range(_PAGE_SIZE):
-                if worker.is_cancelled:
-                    return
-                job_obj = next(self._job_iter)
-                new.append(_extract_job(job_obj))
-        except StopIteration:
-            self._has_more = False
-        except Exception:
+
+        self._next_link = nxt
+        if not nxt:
             self._has_more = False
 
-        if new and not worker.is_cancelled:
-            self.call_from_thread(self._on_page_loaded, new)
-        elif not new and not self._all_jobs and not worker.is_cancelled:
+        if jobs:
+            self.call_from_thread(self._on_page_fetched, jobs)
+        elif not self._pages:
             self.call_from_thread(
                 self._update_loading, "No jobs found in this workspace.",
             )
 
     @work(thread=True, exclusive=True, group="fetch-more")
     def _fetch_next_page(self) -> None:
-        """Fetch next page in background (triggered by scroll)."""
+        """Fetch next page in background (triggered by right arrow)."""
         worker = get_current_worker()
         try:
-            self._fetch_page_sync(worker)
+            self._fetch_page_rest(worker)
         finally:
             self._fetching = False
 
-    def _on_page_loaded(self, new_jobs: list[dict[str, Any]]) -> None:
-        prev_name = ""
-        if 0 <= self._selected_idx < len(self._filtered):
-            prev_name = self._filtered[self._selected_idx].get("name", "")
+    def _on_page_fetched(self, new_jobs: list[dict[str, Any]]) -> None:
+        """Called when a new REST page arrives — append and display it."""
+        self._pages.append(new_jobs)
         self._all_jobs.extend(new_jobs)
-        self._apply_filter(restore_name=prev_name)
+        self._current_page = len(self._pages) - 1
+        self._show_current_page()
 
     def _on_jobs_loaded(self, jobs: list[dict[str, Any]]) -> None:
         """Full replace (used by tests and refresh)."""
-        prev_name = ""
-        if 0 <= self._selected_idx < len(self._filtered):
-            prev_name = self._filtered[self._selected_idx].get("name", "")
-        self._all_jobs = jobs
-        self._apply_filter(restore_name=prev_name)
+        self._pages = [jobs]
+        self._all_jobs = list(jobs)
+        self._current_page = 0
+        self._has_more = False
+        self._show_current_page()
 
-    def _apply_filter(self, *, restore_name: str = "") -> None:
+    def _current_page_jobs(self) -> list[dict[str, Any]]:
+        """Return jobs for the current page."""
+        if not self._pages or self._current_page >= len(self._pages):
+            return []
+        return self._pages[self._current_page]
+
+    def _show_current_page(self, restore_name: str = "") -> None:
+        """Display the current page in the OptionList."""
+        page_jobs = self._current_page_jobs()
+
+        # Apply filters
         sf = self._status_filter
         ef = self._experiment_filter
         sq = self._search_query.lower() if self._search_query else ""
 
-        if not sf and not ef and not sq:
-            self._filtered = list(self._all_jobs)
-        else:
+        if sf or ef or sq:
             out: list[dict[str, Any]] = []
-            for j in self._all_jobs:
+            for j in page_jobs:
                 if sf and j.get("status") != sf:
                     continue
                 if ef and j.get("experiment") != ef:
@@ -716,11 +386,13 @@ class AjDashboard(App):
                     continue
                 out.append(j)
             self._filtered = out
+        else:
+            self._filtered = list(page_jobs)
 
         ol = self.query_one("#job-list", OptionList)
         ol.clear_options()
         for j in self._filtered:
-            ol.add_option(_make_option(j))
+            ol.add_option(make_option(j))
 
         self._update_titles()
 
@@ -739,17 +411,19 @@ class AjDashboard(App):
         else:
             self._selected_idx = -1
             self.query_one("#info-content", Static).update(
-                _kv([], hint="No matching jobs.")
+                kv([], hint="No matching jobs.")
             )
             self._update_tab_title()
             self._update_job_subtitle(None)
 
     def _update_titles(self) -> None:
-        total, shown = len(self._all_jobs), len(self._filtered)
-        label = f"Jobs ({shown})" if shown == total else f"Jobs ({shown}/{total})"
+        total_pages = len(self._pages)
+        current = self._current_page + 1  # 1-indexed for display
+        page_label = f"Page {current}/{total_pages}"
         if self._has_more:
-            label += "+"
-        parts = [label]
+            page_label += "+"
+        shown = len(self._filtered)
+        parts = [page_label, f"({shown} jobs)"]
         if self._status_filter:
             parts.append(f"▸ {self._status_filter}")
         if self._experiment_filter:
@@ -776,7 +450,7 @@ class AjDashboard(App):
         if job is None:
             rp.border_subtitle = ""
             return
-        icon, sty = _icon_style(job.get("status", ""))
+        icon, sty = icon_style(job.get("status", ""))
         status = job.get("status", "?")
         display = job.get("display_name") or job.get("name", "")
         rp.border_subtitle = f"{display}  [{sty}]{icon} {status}[/{sty}]"
@@ -874,7 +548,7 @@ class AjDashboard(App):
             label = f"[bold]{name}[/bold]  [dim]{rg}[/dim]"
             items.append((name, label))
         self.push_screen(
-            _PickerModal("Workspace", items, current=cur_name),
+            PickerModal("Workspace", items, current=cur_name),
             self._on_workspace_picked,
         )
 
@@ -895,7 +569,7 @@ class AjDashboard(App):
         if 0 <= idx < len(self._filtered):
             self._selected_idx = idx
             self.query_one("#info-content", Static).update(
-                _kv([("", "")], hint="Refreshing...")
+                kv([("", "")], hint="Refreshing...")
             )
             self._fetch_single(self._filtered[idx])
 
@@ -909,16 +583,19 @@ class AjDashboard(App):
             "workspace_name": ws["name"],
         }
         self._ml_client = None
+        self._rest_client = None
         self._all_jobs.clear()
         self._filtered.clear()
-        self._job_iter = None
+        self._pages.clear()
+        self._current_page = 0
+        self._next_link = None
         self._has_more = True
         self._logs_job = ""
 
         self._update_ws_label()
         self._update_titles()
         self.query_one("#info-content", Static).update(
-            _kv([], hint="Loading jobs…")
+            kv([], hint="Loading jobs…")
         )
         self._init_fetch()
         self.query_one("#job-list", OptionList).focus()
@@ -936,34 +613,40 @@ class AjDashboard(App):
             self._selected_idx = idx
             self._show_job_info(self._filtered[idx])
             self._logs_job = ""
-            self._maybe_load_more(idx)
 
-    def _maybe_load_more(self, idx: int) -> None:
-        """Trigger pagination when the highlighted item is near the bottom."""
-        if (self._has_more and not self._fetching
-                and idx >= len(self._filtered) - 5):
+    def action_next_page(self) -> None:
+        """Switch to the next page (→ key)."""
+        if self._current_page + 1 < len(self._pages):
+            self._current_page += 1
+            self._show_current_page()
+        elif self._has_more and not self._fetching:
             self._fetching = True
-            self.notify("Loading more…", timeout=2)
+            self.notify("Loading next page…", timeout=2)
             self._fetch_next_page()
+
+    def action_prev_page(self) -> None:
+        """Switch to the previous page (← key)."""
+        if self._current_page > 0:
+            self._current_page -= 1
+            self._show_current_page()
 
     # ---- right pane: info ---------------------------------------------------
 
     def _show_job_info(self, job: dict[str, Any]) -> None:
         self._update_job_subtitle(job)
         self._update_tab_title()
-        self.query_one("#info-content", Static).update(_info_block(job))
+        self.query_one("#info-content", Static).update(info_block(job))
 
     @work(thread=True, exclusive=True, group="status")
     def _fetch_single(self, job: dict[str, Any]) -> None:
-        ml = self._get_or_create_ml_client()
-        if ml is None:
+        if self._rest_client is None:
             self.call_from_thread(
                 self.notify, "Workspace not configured", severity="warning",
             )
             return
         name = job.get("name", "")
         try:
-            updated = _extract_job(ml.jobs.get(name))
+            updated = self._rest_client.get_job(name)
         except Exception as exc:
             self.call_from_thread(self.notify, str(exc)[:80], severity="error")
             return
@@ -971,17 +654,22 @@ class AjDashboard(App):
             self.call_from_thread(self._on_single_fetched, name, updated)
 
     def _on_single_fetched(self, name: str, updated: dict[str, Any]) -> None:
-        # Update in _all_jobs
+        # Update in _all_jobs and in the page cache
         for i, j in enumerate(self._all_jobs):
             if j.get("name") == name:
                 self._all_jobs[i] = updated
                 break
+        for page in self._pages:
+            for i, j in enumerate(page):
+                if j.get("name") == name:
+                    page[i] = updated
+                    break
         # Update in _filtered + refresh the OptionList entry in one pass
         ol = self.query_one("#job-list", OptionList)
         for i, j in enumerate(self._filtered):
             if j.get("name") == name:
                 self._filtered[i] = updated
-                ol.replace_option_prompt_at_index(i, _make_option(updated).prompt)
+                ol.replace_option_prompt_at_index(i, make_option(updated).prompt)
                 break
         if 0 <= self._selected_idx < len(self._filtered):
             if self._filtered[self._selected_idx].get("name") == name:
@@ -994,7 +682,7 @@ class AjDashboard(App):
     def action_show_logs(self) -> None:
         self._view_mode = "logs"
         self.query_one("#info-scroll").add_class("hidden")
-        lw = self.query_one("#log-content", _LogViewer)
+        lw = self.query_one("#log-content", LogViewer)
         lw.remove_class("hidden")
         lw.focus()
         self._update_tab_title()
@@ -1027,13 +715,13 @@ class AjDashboard(App):
     def _append_log_line(self, line: str) -> None:
         """Append a single numbered log line to the RichLog widget."""
         self._log_line_count += 1
-        lw = self.query_one("#log-content", _LogViewer)
+        lw = self.query_one("#log-content", LogViewer)
         num = f"[dim]{self._log_line_count:>5}[/dim] [dim]│[/dim] "
         lw.write(f"{num}{line}", scroll_end=self._auto_scroll)
 
     def _append_log_error(self, error: str) -> None:
         """Append error lines inline with line numbers (red styled)."""
-        lw = self.query_one("#log-content", _LogViewer)
+        lw = self.query_one("#log-content", LogViewer)
         for raw_line in error.splitlines():
             self._log_line_count += 1
             num = f"[red]{self._log_line_count:>5}[/red] [dim]│[/dim] "
@@ -1055,55 +743,15 @@ class AjDashboard(App):
 
         # Clear the "Connecting…" message
         def _begin_stream() -> None:
-            self.query_one("#log-content", _LogViewer).clear()
+            self.query_one("#log-content", LogViewer).clear()
             self._log_streaming = True
 
         self.call_from_thread(_begin_stream)
 
-        # Custom file-like that intercepts stdout writes and streams to TUI
-        app_ref = self
-        skip = self._SKIP_PREFIXES
+        def _line_cb(line: str) -> None:
+            self.call_from_thread(self._append_log_line, line)
 
-        class _StreamCapture(io.TextIOBase):
-            """Intercepts stdout writes and streams lines to the TUI."""
-
-            def __init__(self) -> None:
-                self._buf = ""
-
-            # Attributes the Azure SDK may inspect
-            encoding = "utf-8"
-
-            def writable(self) -> bool:
-                return True
-
-            def isatty(self) -> bool:
-                return False
-
-            def write(self, s: str) -> int:
-                if worker.is_cancelled:
-                    return len(s)
-                self._buf += s
-                # Normalise \r\n → \n then split
-                self._buf = self._buf.replace("\r\n", "\n").replace("\r", "\n")
-                while "\n" in self._buf:
-                    line, self._buf = self._buf.split("\n", 1)
-                    if any(line.startswith(p) for p in skip):
-                        continue
-                    app_ref.call_from_thread(app_ref._append_log_line, line)
-                return len(s)
-
-            def flush(self) -> None:
-                pass
-
-            def drain(self) -> None:
-                """Flush remaining partial line."""
-                rest = self._buf.strip()
-                self._buf = ""
-                if rest and not worker.is_cancelled:
-                    if not any(rest.startswith(p) for p in skip):
-                        app_ref.call_from_thread(app_ref._append_log_line, rest)
-
-        capture = _StreamCapture()
+        capture = StreamCapture(worker, self._SKIP_PREFIXES, _line_cb)
         old_out = sys.stdout
         sys.stdout = capture  # type: ignore[assignment]
         error_msg = ""
@@ -1121,7 +769,7 @@ class AjDashboard(App):
 
         def _finish(err: str = error_msg) -> None:
             self._log_streaming = False
-            lw = self.query_one("#log-content", _LogViewer)
+            lw = self.query_one("#log-content", LogViewer)
             if err:
                 self._append_log_error(err)
             if self._log_line_count == 0 and not err:
@@ -1136,8 +784,8 @@ class AjDashboard(App):
 
     # ---- actions ------------------------------------------------------------
 
-    def action_dismiss(self) -> None:
-        """Escape: close search → switch to info → quit."""
+    def action_show_help(self) -> None:
+        """ESC: if search bar is open, close it; otherwise show help overlay."""
         search_bar = self.query_one("#search-bar")
         if not search_bar.has_class("hidden"):
             search_bar.add_class("hidden")
@@ -1145,50 +793,52 @@ class AjDashboard(App):
             if inp.value:
                 inp.value = ""
                 self._search_query = ""
-                self._apply_filter()
+                self._show_current_page()
             self.query_one("#job-list", OptionList).focus()
             return
-        if self._view_mode == "logs":
-            self.action_show_info()
-            return
-        self.action_quit()
+        self.push_screen(HelpScreen())
+
+    def action_dismiss(self) -> None:
+        """Backward compat — redirect to help."""
+        self.action_show_help()
+
+    def action_focus_jobs(self) -> None:
+        """Focus the job list panel."""
+        self.query_one("#job-list", OptionList).focus()
+
+    def action_focus_logs(self) -> None:
+        """Focus the logs panel (switch to logs view if needed)."""
+        if self._view_mode != "logs":
+            self.action_show_logs()
+        else:
+            self.query_one("#log-content", LogViewer).focus()
 
     def action_refresh(self) -> None:
-        """Incremental refresh — fetch new jobs without clearing current data."""
-        self._job_iter = None
-        self._has_more = True
+        """Incremental refresh — re-fetch first page via REST."""
         self.notify("Refreshing…")
         self._do_incremental_refresh()
 
     @work(thread=True, exclusive=True, group="fetch")
     def _do_incremental_refresh(self) -> None:
-        """Re-fetch and merge — keeps existing jobs, adds/updates new ones."""
+        """Re-fetch first page and merge/update current data."""
         worker = get_current_worker()
-        ws = self._ensure_workspace()
-        if ws is None:
+        if self._rest_client is None:
             self.call_from_thread(
                 self.notify, "No workspace configured", severity="warning",
             )
             return
-        if self._ml_client is None:
-            self._ml_client = self._create_ml_client(ws)
         if worker.is_cancelled:
             return
-
-        from azure.ai.ml.constants import ListViewType
 
         existing = {j["name"] for j in self._all_jobs}
         new_jobs: list[dict[str, Any]] = []
         updated = 0
         try:
-            for job_obj in self._ml_client.jobs.list(
-                list_view_type=ListViewType.ALL,
-            ):
+            jobs, _ = self._rest_client.list_jobs_page()
+            for d in jobs:
                 if worker.is_cancelled:
                     return
-                d = _extract_job(job_obj)
                 if d["name"] in existing:
-                    # Update status of existing job
                     for j in self._all_jobs:
                         if j["name"] == d["name"] and j["status"] != d["status"]:
                             j.update(d)
@@ -1196,9 +846,6 @@ class AjDashboard(App):
                             break
                 else:
                     new_jobs.append(d)
-                # Stop after scanning enough to find new jobs
-                if len(new_jobs) + updated >= _PAGE_SIZE:
-                    break
         except Exception:
             pass
 
@@ -1217,10 +864,22 @@ class AjDashboard(App):
     ) -> None:
         if new_jobs:
             self._all_jobs = new_jobs + self._all_jobs
+            # Prepend new jobs to first page
+            if self._pages:
+                self._pages[0] = new_jobs + self._pages[0]
+            else:
+                self._pages.append(new_jobs)
+        # Update page cache for status changes
+        for page in self._pages:
+            for i, j in enumerate(page):
+                for aj in self._all_jobs:
+                    if aj["name"] == j["name"] and aj is not j:
+                        page[i] = aj
+                        break
         prev_name = ""
         if 0 <= self._selected_idx < len(self._filtered):
             prev_name = self._filtered[self._selected_idx].get("name", "")
-        self._apply_filter(restore_name=prev_name)
+        self._show_current_page(restore_name=prev_name)
         parts = []
         if new_jobs:
             parts.append(f"+{len(new_jobs)} new")
@@ -1230,7 +889,7 @@ class AjDashboard(App):
 
     def _set_filter(self, status: str) -> None:
         self._status_filter = status
-        self._apply_filter()
+        self._show_current_page()
 
     # ---- search / filter pickers ---------------------------------------------
 
@@ -1249,7 +908,7 @@ class AjDashboard(App):
     def on_input_changed(self, event: Input.Changed) -> None:
         if event.input.id == "search-input":
             self._search_query = event.value
-            self._apply_filter()
+            self._show_current_page()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         if event.input.id == "search-input":
@@ -1259,18 +918,18 @@ class AjDashboard(App):
     def action_pick_status(self) -> None:
         """Open status picker."""
         items: list[tuple[str, str]] = [("", "All")]
-        for s in _STATUS_CYCLE[1:]:
-            icon, sty = _icon_style(s)
+        for s in STATUS_CYCLE[1:]:
+            icon, sty = icon_style(s)
             items.append((s, f"[{sty}]{icon} {s}[/{sty}]"))
         self.push_screen(
-            _PickerModal("Status", items, current=self._status_filter),
+            PickerModal("Status", items, current=self._status_filter),
             self._on_status_picked,
         )
 
     def _on_status_picked(self, value: str) -> None:
         if value != self._status_filter:
             self._status_filter = value
-            self._apply_filter()
+            self._show_current_page()
             self.notify(f"Status: {value or 'All'}")
 
     def action_pick_experiment(self) -> None:
@@ -1286,14 +945,14 @@ class AjDashboard(App):
         for exp in experiments:
             items.append((exp, exp))
         self.push_screen(
-            _PickerModal("Experiment", items, current=self._experiment_filter),
+            PickerModal("Experiment", items, current=self._experiment_filter),
             self._on_experiment_picked,
         )
 
     def _on_experiment_picked(self, value: str) -> None:
         if value != self._experiment_filter:
             self._experiment_filter = value
-            self._apply_filter()
+            self._show_current_page()
             self.notify(f"Experiment: {value or 'All'}")
 
     def action_clear_filters(self) -> None:
@@ -1307,7 +966,7 @@ class AjDashboard(App):
             self.query_one("#search-input", Input).value = ""
             search_bar.add_class("hidden")
         if changed:
-            self._apply_filter()
+            self._show_current_page()
         self.notify("Filters cleared")
         self.query_one("#job-list", OptionList).focus()
 
@@ -1315,7 +974,7 @@ class AjDashboard(App):
         if 0 <= self._selected_idx < len(self._filtered):
             job = self._filtered[self._selected_idx]
             display = job.get("display_name") or job.get("name", "?")
-            self.push_screen(_ConfirmCancel(display), self._on_cancel_confirmed)
+            self.push_screen(ConfirmCancel(display), self._on_cancel_confirmed)
 
     def _on_cancel_confirmed(self, confirmed: bool) -> None:
         if not confirmed:
@@ -1323,7 +982,7 @@ class AjDashboard(App):
         if 0 <= self._selected_idx < len(self._filtered):
             job = self._filtered[self._selected_idx]
             self.query_one("#info-content", Static).update(
-                _kv([("", "")], hint="Cancelling…")
+                kv([("", "")], hint="Cancelling…")
             )
             self._do_cancel(job)
 
