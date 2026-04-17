@@ -193,6 +193,88 @@ def _fetch_vc_families(
         return []
 
 
+@dataclass
+class QuotaInfo:
+    """Single VM family quota entry."""
+
+    family: str
+    limit: int = 0
+    used: int = 0
+    gpu_model: str = ""
+    gpu_memory: int = 0
+    gpu_count: int = 0
+    is_cpu: bool = False
+
+    @property
+    def available(self) -> int:
+        return max(0, self.limit - self.used)
+
+    @property
+    def description(self) -> str:
+        """Human-readable description from _FAMILY_MAP or instance fields."""
+        if self.is_cpu:
+            return "CPU"
+        info = _FAMILY_MAP.get(self.family, {})
+        if info.get("cpu"):
+            return "CPU"
+        model = info.get("gpu_model") or self.gpu_model or "GPU"
+        mem = info.get("gpu_memory") or self.gpu_memory or 0
+        nv = " NvLink" if info.get("nvlink") else ""
+        gpus = info.get("instances_by_gpu", {})
+        count = max(gpus.keys()) if gpus else (self.gpu_count or "?")
+        mem_s = f" {mem}GB" if mem else ""
+        return f"{count}× {model}{mem_s}{nv}"
+
+
+def fetch_vc_quotas(
+    vc_subscription_id: str,
+    vc_resource_group: str,
+    vc_name: str,
+    *,
+    include_zero: bool = False,
+) -> list[QuotaInfo]:
+    """Fetch full quota info for a Singularity virtual cluster.
+
+    Returns a list of :class:`QuotaInfo` with limit, used, and GPU details.
+    """
+    from azure_jobs.core.config import _az_json
+
+    data = _az_json(
+        [
+            "rest", "--method", "get", "--url",
+            f"https://management.azure.com/subscriptions/{vc_subscription_id}"
+            f"/resourceGroups/{vc_resource_group}"
+            f"/providers/Microsoft.MachineLearningServices"
+            f"/virtualclusters/{vc_name}?api-version=2021-03-01-preview",
+        ],
+        timeout=30,
+    )
+    if not data:
+        return []
+
+    managed = data.get("properties", {}).get("managed", {})
+    quotas = managed.get("defaultGroupPolicyOverallQuotas", {}).get("limits", [])
+    results: list[QuotaInfo] = []
+    for q in quotas:
+        fam = q.get("id", "")
+        limit = q.get("limit", 0)
+        used = q.get("currentValue", 0)
+        if not include_zero and limit == 0:
+            continue
+        info = _FAMILY_MAP.get(fam, {})
+        gpus = info.get("instances_by_gpu", {})
+        results.append(QuotaInfo(
+            family=fam,
+            limit=limit,
+            used=used,
+            gpu_model=info.get("gpu_model", "") or "",
+            gpu_memory=info.get("gpu_memory", 0) or 0,
+            gpu_count=max(gpus.keys()) if gpus else 0,
+            is_cpu=bool(info.get("cpu")),
+        ))
+    return results
+
+
 def _match_family(spec: SkuSpec, family_id: str, family_info: dict) -> str | None:
     """Try to match a SkuSpec against a family, returning the instance name or None."""
     if spec.is_cpu:
