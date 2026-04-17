@@ -33,28 +33,8 @@ console = Console(theme=_THEME, highlight=False)
 
 def _time_ago(iso_str: str) -> str:
     """Convert an ISO 8601 timestamp to a human-readable relative time."""
-    try:
-        then = datetime.fromisoformat(iso_str)
-        if then.tzinfo is None:
-            then = then.replace(tzinfo=timezone.utc)
-        delta = datetime.now(timezone.utc) - then
-        secs = int(delta.total_seconds())
-        if secs < 60:
-            return "just now"
-        if secs < 3600:
-            m = secs // 60
-            return f"{m}m ago"
-        if secs < 86400:
-            h = secs // 3600
-            return f"{h}h ago"
-        d = secs // 86400
-        if d == 1:
-            return "yesterday"
-        if d < 30:
-            return f"{d}d ago"
-        return iso_str[:10]
-    except (ValueError, TypeError):
-        return str(iso_str)[:10]
+    from azure_jobs.utils.time import time_ago
+    return time_ago(iso_str)
 
 
 # ---------------------------------------------------------------------------

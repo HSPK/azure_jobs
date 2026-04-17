@@ -170,35 +170,21 @@ def _info_block(job: dict[str, Any]) -> str:
 
 
 def _fmt_dur(secs: int) -> str:
-    if secs >= 3600:
-        return f"{secs // 3600}h {(secs % 3600) // 60}m"
-    if secs >= 60:
-        return f"{secs // 60}m {secs % 60}s"
-    return f"{secs}s"
+    from azure_jobs.utils.time import format_duration
+    return format_duration(secs)
 
 
 def _extract_job(job_obj: Any) -> dict[str, Any]:
     """Convert an Azure ML Job SDK object → plain dict."""
+    from azure_jobs.utils.time import calc_duration, format_time
+
     props = getattr(job_obj, "properties", {}) or {}
     start = props.get("StartTimeUtc", "")
     end = props.get("EndTimeUtc", "")
-    duration = ""
-    if start and end:
-        from datetime import datetime
-        try:
-            duration = _fmt_dur(int(
-                (datetime.strptime(end, "%Y-%m-%d %H:%M:%S")
-                 - datetime.strptime(start, "%Y-%m-%d %H:%M:%S")).total_seconds()
-            ))
-        except ValueError:
-            pass
-    elif start:
-        from datetime import datetime, timezone
-        try:
-            t0 = datetime.strptime(start, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
-            duration = _fmt_dur(int((datetime.now(timezone.utc) - t0).total_seconds())) + " ↻"
-        except ValueError:
-            pass
+    duration = calc_duration(start, end)
+    # Convert UTC timestamps to display timezone
+    start_display = format_time(start)
+    end_display = format_time(end)
 
     compute = getattr(job_obj, "compute", "") or ""
     if "/" in compute:
@@ -227,7 +213,7 @@ def _extract_job(job_obj: Any) -> dict[str, Any]:
     if ctx:
         ct = getattr(ctx, "created_at", None)
         if ct:
-            created = str(ct)[:19]  # "YYYY-MM-DD HH:MM:SS"
+            created = format_time(str(ct)[:19])
 
     # Error message for failed jobs
     error_msg = ""
@@ -241,8 +227,8 @@ def _extract_job(job_obj: Any) -> dict[str, Any]:
         "status": getattr(job_obj, "status", ""),
         "compute": compute,
         "portal_url": getattr(job_obj, "studio_url", "") or "",
-        "start_time": start,
-        "end_time": end,
+        "start_time": start_display,
+        "end_time": end_display,
         "duration": duration,
         "experiment": getattr(job_obj, "experiment_name", "") or "",
         "type": getattr(job_obj, "type", "") or "",

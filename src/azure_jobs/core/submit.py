@@ -643,11 +643,8 @@ class JobStatus:
 
 def _format_duration(seconds: int) -> str:
     """Format seconds into a human-readable duration string."""
-    if seconds >= 3600:
-        return f"{seconds // 3600}h {(seconds % 3600) // 60}m"
-    elif seconds >= 60:
-        return f"{seconds // 60}m {seconds % 60}s"
-    return f"{seconds}s"
+    from azure_jobs.utils.time import format_duration
+    return format_duration(seconds)
 
 
 def get_job_status(
@@ -689,26 +686,11 @@ def get_job_status(
         props = getattr(job, "properties", {}) or {}
         start_time = props.get("StartTimeUtc", "")
         end_time = props.get("EndTimeUtc", "")
-        duration_str = ""
 
-        if start_time and end_time:
-            from datetime import datetime
-            try:
-                fmt = "%Y-%m-%d %H:%M:%S"
-                t0 = datetime.strptime(start_time, fmt)
-                t1 = datetime.strptime(end_time, fmt)
-                duration_str = _format_duration(int((t1 - t0).total_seconds()))
-            except ValueError:
-                pass
-        elif start_time:
-            from datetime import datetime, timezone
-            try:
-                t0 = datetime.strptime(start_time, "%Y-%m-%d %H:%M:%S")
-                t0 = t0.replace(tzinfo=timezone.utc)
-                elapsed = int((datetime.now(timezone.utc) - t0).total_seconds())
-                duration_str = _format_duration(elapsed) + " (running)"
-            except ValueError:
-                pass
+        from azure_jobs.utils.time import calc_duration, format_time
+        duration_str = calc_duration(start_time, end_time)
+        start_time = format_time(start_time)
+        end_time = format_time(end_time)
 
         # Get detailed error via REST API (SDK .error is often empty)
         error_msg = ""
