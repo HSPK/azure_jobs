@@ -96,7 +96,7 @@ def info_block(job: dict[str, Any]) -> str:
     # ── Overview ──
     L.append("")
     L.append(_hdr("Overview"))
-    L.append(_kv("Name", f"[bold]{display}[/bold]"))
+    L.append(_kv("Display Name", f"[bold]{display}[/bold]"))
     if display != name:
         L.append(_kv("Run ID", f"[dim]{name}[/dim]"))
     if job.get("experiment"):

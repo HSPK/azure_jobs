@@ -388,7 +388,7 @@ def show_job_detail(job: dict[str, Any]) -> None:
     # Overview
     lines.append("")
     lines.append(_hdr("Overview"))
-    lines.append(_kv("Name", f"[bold]{display}[/bold]"))
+    lines.append(_kv("Display Name", f"[bold]{display}[/bold]"))
     if display != name:
         lines.append(_kv("Run ID", f"[dim]{name}[/dim]"))
     if job.get("experiment"):
