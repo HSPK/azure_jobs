@@ -65,7 +65,8 @@ class AzureMLJobsClient:
         there are no more pages.
         """
         if next_link:
-            url = next_link
+            # Replace $top in server-returned nextLink to match our page size
+            url = self._patch_top(next_link, top)
         else:
             url = (
                 f"{self._base}/jobs"
@@ -80,6 +81,15 @@ class AzureMLJobsClient:
 
         jobs = [_extract_rest_job(j) for j in data.get("value", [])]
         return jobs, data.get("nextLink")
+
+    @staticmethod
+    def _patch_top(url: str, top: int) -> str:
+        """Ensure ``$top=<top>`` in a server-returned nextLink URL."""
+        import re
+        if re.search(r'[\$%24]top=', url):
+            return re.sub(r'([\$%24]top=)\d+', rf'\g<1>{top}', url)
+        sep = "&" if "?" in url else "?"
+        return f"{url}{sep}$top={top}"
 
     # ---- single job ---------------------------------------------------------
 
