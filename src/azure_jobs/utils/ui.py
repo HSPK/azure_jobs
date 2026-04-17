@@ -345,10 +345,14 @@ def show_cloud_jobs_table(
         status = j.get("status", "")
         style = _JOB_STATUS_STYLE.get(status, "white")
         icon = _JOB_STATUS_ICON.get(status, "?")
+        display = j.get("display_name", "")
+        portal = j.get("portal_url", "")
+        if portal and display:
+            display = f"[link={portal}]{display}[/link]"
         table.add_row(
             f"[{style}]{icon} {status}[/{style}]",
             _trunc(j.get("name", ""), 32),
-            j.get("display_name", ""),
+            display,
             j.get("experiment", ""),
             j.get("compute", ""),
             j.get("duration", ""),
