@@ -89,6 +89,18 @@ class TestSeriesQuota:
         sq = SeriesQuota(series="NDH100v5")
         assert sq.accelerator == "H100"
 
+    def test_accelerator_api_format(self):
+        sq = SeriesQuota(series="ND_A100_v4")
+        assert sq.accelerator == "A100"
+
+    def test_accelerator_inferred_from_name(self):
+        sq = SeriesQuota(series="ND_H100_custom_v6")
+        assert sq.accelerator == "H100"
+
+    def test_accelerator_cpu_series(self):
+        sq = SeriesQuota(series="Eadsv5")
+        assert sq.accelerator == "CPU"
+
     def test_accelerator_unknown_series(self):
         sq = SeriesQuota(series="UNKNOWN_SERIES_XYZ")
         assert sq.accelerator == ""
@@ -96,6 +108,14 @@ class TestSeriesQuota:
     def test_gpu_memory_from_family_map(self):
         sq = SeriesQuota(series="NDH100v5")
         assert sq.gpu_memory == 80
+
+    def test_gpu_memory_api_format(self):
+        sq = SeriesQuota(series="ND_A100_v4")
+        assert sq.gpu_memory == 80
+
+    def test_gpu_memory_unknown(self):
+        sq = SeriesQuota(series="UNKNOWN")
+        assert sq.gpu_memory == 0
 
 
 # ---------------------------------------------------------------------------

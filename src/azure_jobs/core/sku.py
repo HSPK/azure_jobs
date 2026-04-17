@@ -167,6 +167,58 @@ _FAMILY_MAP: dict[str, dict[str, Any]] = {
     },
 }
 
+# ---------------------------------------------------------------------------
+# API series ID → (gpu_model, gpu_memory_gb) lookup
+# ---------------------------------------------------------------------------
+# The Azure VC quota API returns series IDs like "ND_A100_v4" which differ
+# from the internal _FAMILY_MAP keys (e.g. "NDAMv4").  This table maps the
+# *API-format* IDs so that accelerator and memory columns are populated.
+# ---------------------------------------------------------------------------
+
+_SERIES_GPU_INFO: dict[str, tuple[str, int]] = {
+    # A100 families
+    "ND_A100_v4": ("A100", 80),
+    "NC_A100_v4": ("A100", 80),
+    "NDAMv4": ("A100", 80),
+    "NDv4": ("A100", 40),
+    # H100
+    "ND_H100_v5": ("H100", 80),
+    "NDH100v5": ("H100", 80),
+    # H200
+    "ND_H200_v5": ("H200", 141),
+    "NDH200v5": ("H200", 141),
+    # V100
+    "NDv2": ("V100", 32),
+    "ND_v2": ("V100", 32),
+    "NC_v3": ("V100", 16),
+    # T4
+    "NC_T4_v3": ("T4", 16),
+    # A10
+    "NC_A10_v3": ("A10", 24),
+    # AMD MI series
+    "ND_MI200_v4": ("MI200", 64),
+    "NDMI200v4": ("MI200", 64),
+    "ND_MI300X_v4": ("MI300X", 192),
+    "NDMI300Xv4": ("MI300X", 192),
+    # CPU families (gpu_memory=0)
+    "Eadsv5": ("CPU", 0),
+    "Dadsv5": ("CPU", 0),
+    "Dv5": ("CPU", 0),
+    "Ev5": ("CPU", 0),
+}
+
+
+def _infer_gpu_model(series: str) -> str:
+    """Best-effort extraction of GPU model from an unknown series ID."""
+    s = series.upper().replace("_", "")
+    for model in ("MI300X", "MI200", "H200", "H100", "A100", "A10", "T4", "V100"):
+        if model in s:
+            return model
+    # Check for CPU-like patterns
+    if s.startswith(("E", "D", "F")) and not s.startswith(("ND", "NC", "NV")):
+        return "CPU"
+    return ""
+
 
 def _fetch_vc_families(
     vc_subscription_id: str,
@@ -229,16 +281,17 @@ class SeriesQuota:
 
     @property
     def accelerator(self) -> str:
-        """GPU accelerator name from _FAMILY_MAP."""
-        info = _FAMILY_MAP.get(self.series, {})
-        if info.get("cpu"):
-            return "CPU"
-        return info.get("gpu_model", "")
+        """GPU accelerator name, resolved from _SERIES_GPU_INFO or the series name."""
+        info = _SERIES_GPU_INFO.get(self.series)
+        if info:
+            return info[0]
+        return _infer_gpu_model(self.series)
 
     @property
     def gpu_memory(self) -> int:
-        """GPU memory in GB from _FAMILY_MAP."""
-        return _FAMILY_MAP.get(self.series, {}).get("gpu_memory", 0) or 0
+        """GPU memory in GB from _SERIES_GPU_INFO."""
+        info = _SERIES_GPU_INFO.get(self.series)
+        return info[1] if info else 0
 
     def has_any_quota(self) -> bool:
         """Return True if any tier has a non-zero limit."""

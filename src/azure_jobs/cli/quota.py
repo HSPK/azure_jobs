@@ -168,10 +168,9 @@ def _show_sing_quotas(show_all: bool, template: str | None) -> None:
 
             table.add_row(*row)
 
-        # Add separator between VCs (empty row)
+        # Divider line between VC groups
         if vc != all_vc_quotas[-1][0]:
-            sep: list[str] = [""] * len(table.columns)
-            table.add_row(*sep)
+            table.add_section()
 
     console.print(table)
     console.print()
