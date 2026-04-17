@@ -12,9 +12,9 @@ import yaml
 from azure_jobs.cli import main
 from azure_jobs.core import const
 from azure_jobs.core.conf import read_conf
-from azure_jobs.core.config import get_defaults, save_defaults
+from azure_jobs.core.config import get_defaults, get_workspace_config, save_defaults
 from azure_jobs.core.record import SubmissionRecord, log_record
-from azure_jobs.utils.ui import console, dim, info, show_submission_preview, success
+from azure_jobs.utils.ui import console, dim, error, info, show_submission_preview, success
 
 
 def validate_config(conf: dict, template_fp: Path) -> None:
@@ -133,7 +133,7 @@ def build_command_list(
 @click.option(
     "-d", "--dry-run", is_flag=True, help="Dry run the command without executing"
 )
-@click.option("-y", "--yes", is_flag=True, help="Skip confirmation prompts")
+@click.option("-y", "--yes", is_flag=True, hidden=True, help="(Deprecated, no-op)")
 @click.option("-L", "--run-local", is_flag=True, help="Run the command locally")
 @click.argument("command", nargs=1)
 @click.argument("args", nargs=-1)
@@ -233,7 +233,16 @@ def run(
         dim(f"Config written to {submission_fp}")
         return
 
-    amlt_command: list[str | Path] = ["amlt", "run", submission_fp, sid]
+    # ── Submit to Azure ML ──────────────────────────────────────────
+    from azure_jobs.core.submit import SubmitResult, build_request_from_config, submit
+
+    workspace = get_workspace_config()
+    request = build_request_from_config(conf, name=name, workspace=workspace)
+    # Override with resolved values
+    request.nodes = nodes_int
+    request.processes_per_node = processes_int
+    request.command = conf["jobs"][0]["command"]
+
     rec = SubmissionRecord(
         id=sid,
         template=template,
@@ -241,36 +250,42 @@ def run(
         processes=processes_int,
         portal="azure",
         created_at=datetime.now(timezone.utc).isoformat(),
-        status="success",
+        status="submitted",
         command=command,
         args=list(args),
     )
+
+    current_step = ""
+
+    def on_status(step: str, detail: str) -> None:
+        nonlocal current_step
+        current_step = detail
+
     try:
-        with console.status("[bold cyan]Submitting job to Azure…[/bold cyan]", spinner="dots"):
-            if yes:
-                with subprocess.Popen(
-                    ["yes"], stdout=subprocess.PIPE
-                ) as yes_proc:
-                    subprocess.run(
-                        amlt_command,
-                        stdin=yes_proc.stdout,
-                        check=True,
-                    )
-            else:
-                subprocess.run(amlt_command, check=True)
-        success(f"Job [bold]{sid}[/bold] submitted successfully")
-    except subprocess.CalledProcessError as exc:
+        with console.status("", spinner="dots") as status_ctx:
+            def _on_status(step: str, detail: str) -> None:
+                on_status(step, detail)
+                status_ctx.update(f"[bold cyan]{detail}[/bold cyan]")
+
+            result: SubmitResult = submit(request, on_status=_on_status)
+
+        if result.status == "failed":
+            rec.status = "failed"
+            rec.note = result.error
+            error(f"Submission failed: {result.error}")
+            raise SystemExit(1)
+
+        rec.status = "submitted"
+        if result.portal_url:
+            rec.portal = result.portal_url
+        success(f"Job [bold]{result.job_name}[/bold] submitted")
+        if result.portal_url:
+            dim(f"Portal: {result.portal_url}")
+    except SystemExit:
+        raise
+    except Exception as exc:
         rec.status = "failed"
-        rec.note = f"amlt exit code {exc.returncode}"
-        raise click.ClickException(
-            f"amlt submission failed (exit code {exc.returncode})"
-        )
-    except FileNotFoundError:
-        rec.status = "failed"
-        rec.note = "amlt not found"
-        raise click.ClickException(
-            "amlt is not installed or not on PATH. "
-            "Install it with: pip install amlt"
-        )
+        rec.note = str(exc)
+        raise click.ClickException(f"Submission failed: {exc}")
     finally:
         log_record(rec)

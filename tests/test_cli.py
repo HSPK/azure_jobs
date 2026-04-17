@@ -509,15 +509,21 @@ class TestRunCommand:
 
     def test_record_logged_on_submit(self, aj_env):
         write_template(aj_env["template_home"], "default", MINIMAL_JOB_CONF)
+        aj_env["config_fp"].write_text(json.dumps({
+            "defaults": {"template": "default"},
+            "workspace": {"subscription_id": "s", "resource_group": "r", "workspace_name": "w"},
+        }))
         runner = CliRunner()
-        with patch("azure_jobs.cli.run.subprocess.run"):
+        from azure_jobs.core.submit import SubmitResult
+        mock_result = SubmitResult(job_name="test-job", status="submitted", portal_url="https://example.com")
+        with patch("azure_jobs.core.submit.submit", return_value=mock_result):
             result = runner.invoke(main, ["run", "echo", "hello"])
         assert result.exit_code == 0
         assert aj_env["record_fp"].exists()
         record = json.loads(aj_env["record_fp"].read_text().strip())
         assert record["template"] == "default"
         assert record["command"] == "echo"
-        assert record["status"] == "success"
+        assert record["status"] == "submitted"
 
 
 class TestPullCommand:
@@ -731,43 +737,37 @@ class TestRunErrorPaths:
         assert result.exit_code != 0
         assert "Empty configuration" in result.output
 
-    def test_amlt_not_found(self, aj_env):
-        """When amlt binary is not on PATH, should give a helpful error."""
+    def test_submit_failure_surfaces_error(self, aj_env):
+        """When submission fails, error should be shown to user."""
         write_template(aj_env["template_home"], "default", MINIMAL_JOB_CONF)
+        aj_env["config_fp"].write_text(json.dumps({
+            "defaults": {"template": "default"},
+            "workspace": {"subscription_id": "s", "resource_group": "r", "workspace_name": "w"},
+        }))
         runner = CliRunner()
-        with patch(
-            "azure_jobs.cli.run.subprocess.run",
-            side_effect=FileNotFoundError("amlt not found"),
-        ), patch("azure_jobs.cli.run.subprocess.Popen"):
-            result = runner.invoke(main, ["run", "echo", "hello"])
-        assert result.exit_code != 0
-        assert "amlt" in result.output.lower()
-
-    def test_amlt_failure_surfaces_error(self, aj_env):
-        """When amlt returns non-zero, error should be shown to user."""
-        write_template(aj_env["template_home"], "default", MINIMAL_JOB_CONF)
-        runner = CliRunner()
-        with patch(
-            "azure_jobs.cli.run.subprocess.run",
-            side_effect=subprocess.CalledProcessError(1, "amlt"),
-        ), patch("azure_jobs.cli.run.subprocess.Popen"):
+        from azure_jobs.core.submit import SubmitResult
+        mock_result = SubmitResult(job_name="test", status="failed", error="auth failed")
+        with patch("azure_jobs.core.submit.submit", return_value=mock_result):
             result = runner.invoke(main, ["run", "echo", "hello"])
         assert result.exit_code != 0
         assert "failed" in result.output.lower()
 
-    def test_amlt_failure_logs_failed_record(self, aj_env):
+    def test_submit_failure_logs_failed_record(self, aj_env):
         """Failed submissions should still be logged with status='failed' and note."""
         write_template(aj_env["template_home"], "default", MINIMAL_JOB_CONF)
+        aj_env["config_fp"].write_text(json.dumps({
+            "defaults": {"template": "default"},
+            "workspace": {"subscription_id": "s", "resource_group": "r", "workspace_name": "w"},
+        }))
         runner = CliRunner()
-        with patch(
-            "azure_jobs.cli.run.subprocess.run",
-            side_effect=subprocess.CalledProcessError(1, "amlt"),
-        ), patch("azure_jobs.cli.run.subprocess.Popen"):
+        from azure_jobs.core.submit import SubmitResult
+        mock_result = SubmitResult(job_name="test", status="failed", error="compute not found")
+        with patch("azure_jobs.core.submit.submit", return_value=mock_result):
             runner.invoke(main, ["run", "echo", "hello"])
         assert aj_env["record_fp"].exists()
         record = json.loads(aj_env["record_fp"].read_text().strip())
         assert record["status"] == "failed"
-        assert "exit code" in record.get("note", "")
+        assert "compute not found" in record.get("note", "")
 
     def test_unsupported_script_type(self, aj_env):
         write_template(aj_env["template_home"], "default", MINIMAL_JOB_CONF)
