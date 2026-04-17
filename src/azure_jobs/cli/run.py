@@ -218,6 +218,7 @@ def run(
         yaml.dump(conf, f, default_flow_style=False)
 
     show_submission_preview(
+        job_id=sid,
         job_name=name,
         template=template,
         sku=conf["jobs"][0]["sku"],
@@ -260,11 +261,13 @@ def run(
         success(f"Job [bold]{sid}[/bold] submitted successfully")
     except subprocess.CalledProcessError as exc:
         rec.status = "failed"
+        rec.note = f"amlt exit code {exc.returncode}"
         raise click.ClickException(
             f"amlt submission failed (exit code {exc.returncode})"
         )
     except FileNotFoundError:
         rec.status = "failed"
+        rec.note = "amlt not found"
         raise click.ClickException(
             "amlt is not installed or not on PATH. "
             "Install it with: pip install amlt"

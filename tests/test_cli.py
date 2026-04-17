@@ -756,7 +756,7 @@ class TestRunErrorPaths:
         assert "failed" in result.output.lower()
 
     def test_amlt_failure_logs_failed_record(self, aj_env):
-        """Failed submissions should still be logged with status='failed'."""
+        """Failed submissions should still be logged with status='failed' and note."""
         write_template(aj_env["template_home"], "default", MINIMAL_JOB_CONF)
         runner = CliRunner()
         with patch(
@@ -767,6 +767,7 @@ class TestRunErrorPaths:
         assert aj_env["record_fp"].exists()
         record = json.loads(aj_env["record_fp"].read_text().strip())
         assert record["status"] == "failed"
+        assert "exit code" in record.get("note", "")
 
     def test_unsupported_script_type(self, aj_env):
         write_template(aj_env["template_home"], "default", MINIMAL_JOB_CONF)

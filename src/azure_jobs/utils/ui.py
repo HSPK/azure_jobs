@@ -64,6 +64,7 @@ def _time_ago(iso_str: str) -> str:
 
 def show_submission_preview(
     *,
+    job_id: str,
     job_name: str,
     template: str,
     sku: str,
@@ -78,6 +79,7 @@ def show_submission_preview(
     grid.add_column(style="key", justify="right")
     grid.add_column(style="value")
 
+    grid.add_row("Job ID", f"[bold]{job_id}[/bold]")
     grid.add_row("Job name", job_name)
     grid.add_row("Template", template)
     grid.add_row("SKU", sku)
@@ -172,8 +174,10 @@ def show_jobs_table(records: list[dict[str, Any]]) -> None:
     table.add_column("Status", no_wrap=True)
     table.add_column("Template")
     table.add_column("N", justify="right")
+    table.add_column("P", justify="right")
     table.add_column("When", style="dim", no_wrap=True)
     table.add_column("Command", ratio=1)
+    table.add_column("Note", style="dim")
 
     for r in records:
         status = r.get("status", "unknown")
@@ -186,14 +190,17 @@ def show_jobs_table(records: list[dict[str, Any]]) -> None:
             if len(args) > 3:
                 cmd_str += " …"
         when = _time_ago(r.get("created_at", ""))
+        note = r.get("note", "")
 
         table.add_row(
             r.get("id", "?"),
             f"[{style}]{icon} {status}[/{style}]",
             r.get("template", "?"),
             str(r.get("nodes", "")),
+            str(r.get("processes", "")),
             when,
             cmd_str,
+            note,
         )
 
     console.print()

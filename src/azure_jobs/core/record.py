@@ -18,6 +18,7 @@ class SubmissionRecord:
     status: str
     command: str
     args: list[str] = field(default_factory=list)
+    note: str = ""
 
 
 def log_record(record: SubmissionRecord) -> None:
