@@ -404,6 +404,21 @@ class TestPullCommand:
         assert result.exit_code == 0
         assert "https://example.com/repo.git" in mock_run.call_args[0][0]
 
+    def test_template_pull_subcommand(self, aj_env):
+        runner = CliRunner()
+        with patch("azure_jobs.cli.pull.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            result = runner.invoke(main, ["template", "pull", "-f", "user/repo"])
+        assert result.exit_code == 0
+        assert "git@github.com:user/repo.git" in mock_run.call_args[0][0]
+
+    def test_template_push_subcommand_no_repo(self, aj_env):
+        aj_env["config_fp"].write_text(json.dumps({}))
+        runner = CliRunner()
+        result = runner.invoke(main, ["template", "push"])
+        assert result.exit_code != 0
+        assert "No remote repo configured" in result.output
+
 
 class TestResolveRepoUrl:
     def test_shorthand(self):

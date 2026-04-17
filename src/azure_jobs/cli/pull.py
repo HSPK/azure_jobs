@@ -5,7 +5,6 @@ import subprocess
 
 import click
 
-from azure_jobs.cli import main
 from azure_jobs.core import const
 from azure_jobs.core.config import read_config, write_config
 from azure_jobs.utils.ui import console, info, success, warning
@@ -22,13 +21,12 @@ def resolve_repo_url(repo_id: str) -> str:
     return repo_id
 
 
-@main.command()
-@click.argument("repo_id", type=str, required=False, default=None)
-@click.option(
-    "-f", "--force", is_flag=True, help="Force re-clone (discard local changes)"
-)
-def pull(repo_id: str | None, force: bool) -> None:
-    """Pull templates from a git repository."""
+# Files that are local-only and should not be pushed to the remote repo
+_LOCAL_ONLY = {"aj_config.json", "submission", "record.jsonl"}
+
+
+def _do_pull(repo_id: str | None, force: bool) -> None:
+    """Core pull logic shared by template pull and top-level alias."""
     config = read_config()
     if repo_id is None:
         repo_id = config.get("repo_id")
@@ -66,14 +64,8 @@ def pull(repo_id: str | None, force: bool) -> None:
     success(f"Templates cloned to {const.AJ_HOME}")
 
 
-# Files that are local-only and should not be pushed to the remote repo
-_LOCAL_ONLY = {"aj_config.json", "submission", "record.jsonl"}
-
-
-@main.command()
-@click.option("-m", "--message", default=None, help="Commit message")
-def push(message: str | None) -> None:
-    """Push local template changes to the remote repository."""
+def _do_push(message: str | None) -> None:
+    """Core push logic shared by template push and top-level alias."""
     import tempfile
 
     if not const.AJ_HOME.exists():
@@ -87,7 +79,6 @@ def push(message: str | None) -> None:
         )
 
     with tempfile.TemporaryDirectory() as tmp:
-        # Clone the remote into a temp dir
         try:
             with console.status("[bold cyan]Syncing with remote…[/bold cyan]", spinner="dots"):
                 subprocess.run(
@@ -99,7 +90,6 @@ def push(message: str | None) -> None:
                 f"Failed to clone remote: {exc.stderr.strip()}"
             )
 
-        # Clear tracked content (keep .git), then copy local files in
         from pathlib import Path
         for item in Path(tmp).iterdir():
             if item.name == ".git":
@@ -118,7 +108,6 @@ def push(message: str | None) -> None:
             else:
                 shutil.copy2(item, dst)
 
-        # Check for changes
         status = subprocess.run(
             ["git", "-C", tmp, "status", "--porcelain"],
             capture_output=True, text=True,
@@ -127,7 +116,6 @@ def push(message: str | None) -> None:
             info("No changes to push")
             return
 
-        # Commit and push
         subprocess.run(
             ["git", "-C", tmp, "add", "-A"],
             check=True, capture_output=True, text=True,

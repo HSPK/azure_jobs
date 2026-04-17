@@ -20,10 +20,46 @@ def template_list() -> None:
     _show_templates()
 
 
-# Backward-compat top-level alias
+@template_group.command(name="pull")
+@click.argument("repo_id", type=str, required=False, default=None)
+@click.option(
+    "-f", "--force", is_flag=True, help="Force re-clone (discard local changes)"
+)
+def template_pull(repo_id: str | None, force: bool) -> None:
+    """Pull templates from a git repository."""
+    from azure_jobs.cli.pull import _do_pull
+    _do_pull(repo_id, force)
+
+
+@template_group.command(name="push")
+@click.option("-m", "--message", default=None, help="Commit message")
+def template_push(message: str | None) -> None:
+    """Push local template changes to the remote repository."""
+    from azure_jobs.cli.pull import _do_push
+    _do_push(message)
+
+
+# Top-level aliases (backward compat / convenience)
 @main.command(name="list", hidden=True)
 def list_templates() -> None:
     _show_templates()
+
+
+@main.command(name="pull", hidden=True)
+@click.argument("repo_id", type=str, required=False, default=None)
+@click.option(
+    "-f", "--force", is_flag=True, help="Force re-clone (discard local changes)"
+)
+def pull_alias(repo_id: str | None, force: bool) -> None:
+    from azure_jobs.cli.pull import _do_pull
+    _do_pull(repo_id, force)
+
+
+@main.command(name="push", hidden=True)
+@click.option("-m", "--message", default=None, help="Commit message")
+def push_alias(message: str | None) -> None:
+    from azure_jobs.cli.pull import _do_push
+    _do_push(message)
 
 
 def _show_templates() -> None:
