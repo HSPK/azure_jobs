@@ -1,11 +1,11 @@
 """Interactive TUI dashboard for Azure Jobs.
 
-Data: ``ml_client.jobs.list(list_view_type=ALL)`` → all workspace jobs.
-Local ``record.jsonl`` merged to show template/command info.
+Data: ``ml_client.jobs.list(list_view_type=ALL)`` → cloud-only, no local records.
 
 Layout
 ------
 Left pane   bordered OptionList with search (/) and status filter (f).
+            Bottom-left shows workspace selector (w to toggle).
 Right pane  bordered panel; border-title = job name + status.
             Content toggles between Info (i) and Logs (l) views.
 """
@@ -43,11 +43,6 @@ _AZ_STYLE = {
     "Preparing": "yellow", "Queued": "yellow", "Failed": "red",
     "Canceled": "dim", "CancelRequested": "dim yellow",
     "NotStarted": "dim", "Provisioning": "yellow", "Finalizing": "cyan",
-}
-
-_LOCAL_STATUS_MAP = {
-    "success": "Completed", "failed": "Failed",
-    "cancelled": "Canceled", "submitted": "Queued",
 }
 
 _KW = 10
@@ -168,6 +163,24 @@ class AjDashboard(App):
         padding: 0;
         scrollbar-size: 1 1;
     }
+    #ws-pane {
+        height: auto;
+        max-height: 10;
+        border-top: solid $accent 40%;
+        padding: 0;
+    }
+    #ws-list {
+        height: auto;
+        max-height: 8;
+        border: none;
+        padding: 0;
+        scrollbar-size: 1 1;
+    }
+    #ws-label {
+        height: 1;
+        padding: 0 1;
+        color: $text-muted;
+    }
 
     /* ── right ── */
     #right-pane {
@@ -201,6 +214,7 @@ class AjDashboard(App):
         Binding("c", "cancel_job", "Cancel"),
         Binding("l", "show_logs", "Logs"),
         Binding("i", "show_info", "Info"),
+        Binding("w", "toggle_ws", "Workspace"),
         Binding("escape", "dismiss", "Back", show=False),
     ]
 
@@ -209,8 +223,9 @@ class AjDashboard(App):
         self._last = last
         self._all_jobs: list[dict[str, Any]] = []
         self._filtered: list[dict[str, Any]] = []
-        self._local_map: dict[str, dict[str, Any]] = {}
         self._workspace: dict[str, str] | None = None
+        self._workspaces: list[dict[str, str]] = []
+        self._subscription_id: str = ""
         self._selected_idx: int = -1
         self._logs_job: str = ""
         self._ml_client: Any = None
@@ -227,6 +242,9 @@ class AjDashboard(App):
                     placeholder="Search...", id="search-input", classes="hidden",
                 )
                 yield OptionList(id="job-list")
+                with Vertical(id="ws-pane", classes="hidden"):
+                    yield Static(" Workspaces", id="ws-label")
+                    yield OptionList(id="ws-list")
             with Vertical(id="right-pane"):
                 with VerticalScroll(id="info-scroll"):
                     yield Static(id="info-content")
@@ -239,50 +257,24 @@ class AjDashboard(App):
     def on_mount(self) -> None:
         self._update_titles()
         self.query_one("#right-pane").border_subtitle = "Info"
-        self._load_local_records()
+        self.query_one("#info-content", Static).update(
+            _kv([], hint="Loading jobs…")
+        )
         self._fetch_azure_jobs()
 
     # ---- data ---------------------------------------------------------------
-
-    def _load_local_records(self) -> None:
-        from azure_jobs.core.record import read_records
-
-        records = read_records(last=self._last * 2)
-        self._local_map = {
-            r["azure_name"]: r for r in records if r.get("azure_name")
-        }
-        # Immediate fallback while Azure loads
-        if not self._all_jobs:
-            for r in read_records(last=self._last):
-                st = _LOCAL_STATUS_MAP.get(r.get("status", ""), "Queued")
-                self._all_jobs.append({
-                    "name": r.get("azure_name", r.get("id", "")),
-                    "display_name": r.get("azure_name", r.get("id", "")),
-                    "status": st, "compute": "", "portal_url": r.get("portal", ""),
-                    "start_time": "", "end_time": "", "duration": "",
-                    "experiment": "", "_local": True,
-                })
-            self._apply_filter()
 
     @work(thread=True, exclusive=True, group="fetch")
     def _fetch_azure_jobs(self) -> None:
         ws = self._ensure_workspace()
         if ws is None:
+            self.call_from_thread(
+                self.notify, "No workspace configured – press w", severity="warning",
+            )
             return
 
-        from azure_jobs.core.submit import _quiet_azure_sdk, _suppress_sdk_output
-        _quiet_azure_sdk()
-
         if self._ml_client is None:
-            from azure.ai.ml import MLClient
-            from azure.identity import AzureCliCredential
-            with _suppress_sdk_output():
-                self._ml_client = MLClient(
-                    credential=AzureCliCredential(),
-                    subscription_id=ws.get("subscription_id", ""),
-                    resource_group_name=ws.get("resource_group", ""),
-                    workspace_name=ws.get("workspace_name", ""),
-                )
+            self._ml_client = self._create_ml_client(ws)
 
         from azure.ai.ml.constants import ListViewType
 
@@ -344,7 +336,10 @@ class AjDashboard(App):
             parts.append(f"▸ {self._status_filter}")
         if self._name_filter:
             parts.append(f'"{self._name_filter}"')
-        self.query_one("#left-pane").border_title = "  ".join(parts)
+        lp = self.query_one("#left-pane")
+        lp.border_title = "  ".join(parts)
+        ws_name = (self._workspace or {}).get("workspace_name", "")
+        lp.border_subtitle = ws_name or ""
 
     # ---- workspace / client -------------------------------------------------
 
@@ -355,8 +350,23 @@ class AjDashboard(App):
         ws = read_config().get("workspace", {})
         if all(ws.get(k) for k in ("subscription_id", "resource_group", "workspace_name")):
             self._workspace = ws
+            self._subscription_id = ws["subscription_id"]
             return ws
         return None
+
+    def _create_ml_client(self, ws: dict[str, str]) -> Any:
+        """Create a new MLClient for the given workspace dict."""
+        from azure_jobs.core.submit import _quiet_azure_sdk, _suppress_sdk_output
+        _quiet_azure_sdk()
+        from azure.ai.ml import MLClient
+        from azure.identity import AzureCliCredential
+        with _suppress_sdk_output():
+            return MLClient(
+                credential=AzureCliCredential(),
+                subscription_id=ws.get("subscription_id", self._subscription_id),
+                resource_group_name=ws.get("resource_group", ""),
+                workspace_name=ws.get("workspace_name", ws.get("name", "")),
+            )
 
     def _get_or_create_ml_client(self) -> Any:
         if self._ml_client is not None:
@@ -364,33 +374,71 @@ class AjDashboard(App):
         ws = self._ensure_workspace()
         if ws is None:
             return None
-        from azure_jobs.core.submit import _quiet_azure_sdk, _suppress_sdk_output
-        _quiet_azure_sdk()
-        from azure.ai.ml import MLClient
-        from azure.identity import AzureCliCredential
-        with _suppress_sdk_output():
-            self._ml_client = MLClient(
-                credential=AzureCliCredential(),
-                subscription_id=ws.get("subscription_id", ""),
-                resource_group_name=ws.get("resource_group", ""),
-                workspace_name=ws.get("workspace_name", ""),
-            )
+        self._ml_client = self._create_ml_client(ws)
         return self._ml_client
 
-    # ---- navigation ---------------------------------------------------------
+    # ---- workspace selector -------------------------------------------------
 
-    def on_option_list_option_highlighted(
-        self, event: OptionList.OptionHighlighted,
+    def action_toggle_ws(self) -> None:
+        ws_pane = self.query_one("#ws-pane")
+        if ws_pane.has_class("hidden"):
+            ws_pane.remove_class("hidden")
+            if not self._workspaces:
+                self._detect_workspaces()
+            else:
+                self.query_one("#ws-list", OptionList).focus()
+        else:
+            ws_pane.add_class("hidden")
+            self.query_one("#job-list", OptionList).focus()
+
+    @work(thread=True, exclusive=True, group="ws-detect")
+    def _detect_workspaces(self) -> None:
+        from azure_jobs.core.config import _detect_subscription, _detect_workspaces
+
+        sub = _detect_subscription()
+        if not sub:
+            self.call_from_thread(
+                self.notify, "Cannot detect Azure subscription", severity="warning",
+            )
+            return
+        sub_id = sub["subscription_id"]
+        wss = _detect_workspaces(sub_id)
+        if not get_current_worker().is_cancelled:
+            self.call_from_thread(self._on_workspaces_detected, sub_id, wss)
+
+    def _on_workspaces_detected(
+        self, sub_id: str, workspaces: list[dict[str, str]],
     ) -> None:
-        idx = event.option_index
-        if 0 <= idx < len(self._filtered):
-            self._selected_idx = idx
-            self._show_job_info(self._filtered[idx])
-            self._logs_job = ""
+        self._subscription_id = sub_id
+        self._workspaces = workspaces
+        ol = self.query_one("#ws-list", OptionList)
+        ol.clear_options()
+        cur_name = (self._workspace or {}).get("workspace_name", "")
+        for ws in workspaces:
+            name = ws.get("name", "")
+            rg = ws.get("resource_group", "")
+            loc = ws.get("location", "")
+            t = Text()
+            if name == cur_name:
+                t.append(" ● ", style="green")
+            else:
+                t.append("   ")
+            t.append(name, style="bold")
+            t.append(f"  {rg}", style="dim")
+            if loc:
+                t.append(f"  ({loc})", style="dim italic")
+            ol.add_option(Option(t, id=name))
+        ol.focus()
+        if not workspaces:
+            self.notify("No workspaces found", severity="warning")
 
     def on_option_list_option_selected(
         self, event: OptionList.OptionSelected,
     ) -> None:
+        if event.option_list.id == "ws-list":
+            self._switch_workspace(event.option_index)
+            return
+        # Job list select → refresh single
         idx = event.option_index
         if 0 <= idx < len(self._filtered):
             self._selected_idx = idx
@@ -398,6 +446,44 @@ class AjDashboard(App):
                 _kv([("", "")], hint="Refreshing...")
             )
             self._fetch_single(self._filtered[idx])
+
+    def _switch_workspace(self, idx: int) -> None:
+        if idx < 0 or idx >= len(self._workspaces):
+            return
+        ws = self._workspaces[idx]
+        self._workspace = {
+            "subscription_id": self._subscription_id,
+            "resource_group": ws["resource_group"],
+            "workspace_name": ws["name"],
+        }
+        self._ml_client = None  # force recreate
+        self._all_jobs.clear()
+        self._filtered.clear()
+        self._logs_job = ""
+
+        # Collapse workspace panel, refresh
+        self.query_one("#ws-pane").add_class("hidden")
+        self._update_titles()
+        self.query_one("#info-content", Static).update(
+            _kv([], hint="Loading jobs…")
+        )
+        self._on_workspaces_detected(self._subscription_id, self._workspaces)
+        self._fetch_azure_jobs()
+        self.query_one("#job-list", OptionList).focus()
+        self.notify(f"Switched to {ws['name']}")
+
+    # ---- navigation ---------------------------------------------------------
+
+    def on_option_list_option_highlighted(
+        self, event: OptionList.OptionHighlighted,
+    ) -> None:
+        if event.option_list.id != "job-list":
+            return
+        idx = event.option_index
+        if 0 <= idx < len(self._filtered):
+            self._selected_idx = idx
+            self._show_job_info(self._filtered[idx])
+            self._logs_job = ""
 
     # ---- right pane: info ---------------------------------------------------
 
@@ -420,25 +506,6 @@ class AjDashboard(App):
         if job.get("experiment"):
             pairs.append(("Experiment", job["experiment"]))
         pairs.append(("Azure ID", name))
-
-        # Local record enrichment
-        local = self._local_map.get(name)
-        if local:
-            pairs.append(("", ""))
-            if local.get("template"):
-                pairs.append(("Template", local["template"]))
-            nodes = local.get("nodes", "")
-            procs = local.get("processes", "")
-            if nodes:
-                pairs.append(("Nodes", str(nodes)))
-            if procs:
-                pairs.append(("Procs", str(procs)))
-            cmd = local.get("command", "")
-            args = local.get("args", [])
-            if args:
-                cmd += " " + " ".join(args)
-            if cmd:
-                pairs.append(("Command", cmd))
 
         if job.get("duration") or job.get("start_time"):
             pairs.append(("", ""))
@@ -600,7 +667,12 @@ class AjDashboard(App):
     # ---- actions ------------------------------------------------------------
 
     def action_dismiss(self) -> None:
-        """Escape: close search → switch to info → quit."""
+        """Escape: close ws pane → close search → switch to info → quit."""
+        ws_pane = self.query_one("#ws-pane")
+        if not ws_pane.has_class("hidden"):
+            ws_pane.add_class("hidden")
+            self.query_one("#job-list", OptionList).focus()
+            return
         inp = self.query_one("#search-input", Input)
         if not inp.has_class("hidden"):
             inp.add_class("hidden")
@@ -616,7 +688,9 @@ class AjDashboard(App):
     def action_refresh(self) -> None:
         self._all_jobs.clear()
         self._filtered.clear()
-        self._load_local_records()
+        self.query_one("#info-content", Static).update(
+            _kv([], hint="Loading jobs…")
+        )
         self._fetch_azure_jobs()
         self.notify("Refreshing...")
 
