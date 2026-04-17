@@ -334,8 +334,7 @@ def show_cloud_jobs_table(
         title=f"[bold]{title}[/bold]", title_style="",
     )
     table.add_column("Status", no_wrap=True)
-    table.add_column("Name", style="cyan", no_wrap=True)
-    table.add_column("Display Name", max_width=30, overflow="ellipsis")
+    table.add_column("Display Name", style="cyan", max_width=40, overflow="ellipsis")
     table.add_column("Experiment", style="dim", max_width=25, overflow="ellipsis")
     table.add_column("Compute", style="dim")
     table.add_column("Duration", style="dim", no_wrap=True)
@@ -345,13 +344,12 @@ def show_cloud_jobs_table(
         status = j.get("status", "")
         style = _JOB_STATUS_STYLE.get(status, "white")
         icon = _JOB_STATUS_ICON.get(status, "?")
-        display = j.get("display_name", "")
+        display = j.get("display_name") or j.get("name", "")
         portal = j.get("portal_url", "")
         if portal and display:
             display = f"[link={portal}]{display}[/link]"
         table.add_row(
             f"[{style}]{icon} {status}[/{style}]",
-            _trunc(j.get("name", ""), 32),
             display,
             j.get("experiment", ""),
             j.get("compute", ""),

@@ -354,7 +354,7 @@ class TestJobListCommand:
             runner = CliRunner()
             result = runner.invoke(main, ["job", "list"])
         assert result.exit_code == 0
-        assert "azure_jobs_abc12345" in result.output
+        assert "train-gpt" in result.output
         assert "Completed" in result.output
 
     def test_job_list_filter_by_status(self, aj_env):
