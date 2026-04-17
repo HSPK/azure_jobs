@@ -46,16 +46,14 @@ def _fmt_used_limit(used: int | None, limit: int) -> str:
 # Singularity quotas
 # ---------------------------------------------------------------------------
 
-def _discover_vcs(template: str | None) -> list:
-    """Discover VCs: from template or via Resource Graph."""
+def _discover_vcs(template: str | None, arm_client: object | None = None) -> list:
+    """Discover VCs: from explicit template or via Resource Graph."""
     from azure_jobs.core import const
     from azure_jobs.core.conf import read_conf
-    from azure_jobs.core.config import get_defaults, get_workspace_config
+    from azure_jobs.core.config import get_workspace_config
     from azure_jobs.core.sku import VCInfo, discover_virtual_clusters
 
-    # If a template is specified, extract the single VC from it
-    if template is None:
-        template = get_defaults().get("template")
+    # Only use template when explicitly specified via -t
     if template:
         fp = const.AJ_TEMPLATE_HOME / f"{template}.yaml"
         if fp.exists():
@@ -70,21 +68,25 @@ def _discover_vcs(template: str | None) -> list:
                 )]
 
     # Discover all VCs via Azure Resource Graph
-    return discover_virtual_clusters()
+    return discover_virtual_clusters(arm_client=arm_client)
 
 
 def _show_sing_quotas(show_all: bool, template: str | None) -> None:
     """Discover all VCs and display their quotas grouped by VC."""
+    from azure_jobs.core.rest_client import AzureARMClient
     from azure_jobs.core.sku import SLA_TIERS, fetch_vc_quotas
     from azure_jobs.utils.ui import console, error, warning
 
     from rich.table import Table
 
+    # Single ARM client reused for discovery + all quota fetches
+    arm = AzureARMClient()
+
     with console.status(
         "[bold cyan]Listing subscriptions and discovering virtual clusters…[/bold cyan]",
         spinner="dots",
     ):
-        vcs = _discover_vcs(template)
+        vcs = _discover_vcs(template, arm_client=arm)
 
     if not vcs:
         error("No Singularity virtual clusters found")
@@ -93,8 +95,8 @@ def _show_sing_quotas(show_all: bool, template: str | None) -> None:
 
     console.print(f"\n  Found [bold]{len(vcs)}[/bold] virtual cluster(s)\n")
 
-    # Fetch quotas for each VC
-    all_vc_quotas: list[tuple] = []  # (vc, quotas)
+    # Fetch quotas for each VC (reuses same ARM client / TCP session)
+    all_vc_quotas: list[tuple] = []
     with console.status("[bold cyan]Fetching quotas…[/bold cyan]", spinner="dots"):
         for vc in vcs:
             quotas = fetch_vc_quotas(
@@ -102,6 +104,7 @@ def _show_sing_quotas(show_all: bool, template: str | None) -> None:
                 vc_resource_group=vc.resource_group,
                 vc_name=vc.name,
                 include_zero=show_all,
+                arm_client=arm,
             )
             vc.quotas = quotas
             all_vc_quotas.append((vc, quotas))

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from click.testing import CliRunner
@@ -131,16 +131,19 @@ _MOCK_VC_RESPONSE = {
 
 
 class TestFetchVcQuotas:
-    @patch("azure_jobs.core.config._az_json", return_value=_MOCK_VC_RESPONSE)
-    def test_merges_both_sources(self, mock_az):
-        results = fetch_vc_quotas("sub", "rg", "myvc")
+    def _make_client(self, response):
+        client = MagicMock()
+        client.get_vc_quotas_raw.return_value = response
+        return client
+
+    def test_merges_both_sources(self):
+        results = fetch_vc_quotas("sub", "rg", "myvc", arm_client=self._make_client(_MOCK_VC_RESPONSE))
         series_names = [s.series for s in results]
         assert "ND_A100_v4" in series_names
         assert "ND_H100_v5" in series_names
 
-    @patch("azure_jobs.core.config._az_json", return_value=_MOCK_VC_RESPONSE)
-    def test_sla_tiers_populated(self, mock_az):
-        results = fetch_vc_quotas("sub", "rg", "myvc")
+    def test_sla_tiers_populated(self):
+        results = fetch_vc_quotas("sub", "rg", "myvc", arm_client=self._make_client(_MOCK_VC_RESPONSE))
         a100 = next(s for s in results if s.series == "ND_A100_v4")
         assert "Premium" in a100.tiers
         assert a100.tiers["Premium"].limit == 64
@@ -149,25 +152,23 @@ class TestFetchVcQuotas:
         assert a100.overall is not None
         assert a100.overall.limit == 128
 
-    @patch("azure_jobs.core.config._az_json", return_value=_MOCK_VC_RESPONSE)
-    def test_excludes_zero_by_default(self, mock_az):
-        results = fetch_vc_quotas("sub", "rg", "myvc")
+    def test_excludes_zero_by_default(self):
+        results = fetch_vc_quotas("sub", "rg", "myvc", arm_client=self._make_client(_MOCK_VC_RESPONSE))
         series_names = [s.series for s in results]
         assert "NoProd" not in series_names
 
-    @patch("azure_jobs.core.config._az_json", return_value=_MOCK_VC_RESPONSE)
-    def test_include_zero(self, mock_az):
-        results = fetch_vc_quotas("sub", "rg", "myvc", include_zero=True)
+    def test_include_zero(self):
+        results = fetch_vc_quotas("sub", "rg", "myvc", include_zero=True, arm_client=self._make_client(_MOCK_VC_RESPONSE))
         series_names = [s.series for s in results]
         assert "NoProd" in series_names
 
-    @patch("azure_jobs.core.config._az_json", return_value=None)
-    def test_empty_on_none_response(self, mock_az):
-        assert fetch_vc_quotas("sub", "rg", "myvc") == []
+    def test_empty_on_exception(self):
+        client = MagicMock()
+        client.get_vc_quotas_raw.side_effect = Exception("fail")
+        assert fetch_vc_quotas("sub", "rg", "myvc", arm_client=client) == []
 
-    @patch("azure_jobs.core.config._az_json", return_value={})
-    def test_empty_on_missing_keys(self, mock_az):
-        assert fetch_vc_quotas("sub", "rg", "myvc") == []
+    def test_empty_on_missing_keys(self):
+        assert fetch_vc_quotas("sub", "rg", "myvc", arm_client=self._make_client({})) == []
 
 
 # ---------------------------------------------------------------------------
@@ -176,62 +177,43 @@ class TestFetchVcQuotas:
 
 
 class TestDiscoverVirtualClusters:
-    @patch("azure_jobs.core.config._az_json")
-    def test_discovers_vcs_from_resource_graph(self, mock_az):
-        mock_az.side_effect = [
-            {"value": [
-                {"subscriptionId": "sub-1", "state": "Enabled"},
-                {"subscriptionId": "sub-2", "state": "Enabled"},
-            ]},  # ARM subscriptions API
-            {"data": [
-                {"name": "vc1", "resourceGroup": "rg1", "subscriptionId": "sub-1"},
-                {"name": "vc2", "resourceGroup": "rg2", "subscriptionId": "sub-2"},
-            ]},  # resource graph
+    def test_discovers_vcs_from_resource_graph(self):
+        client = MagicMock()
+        client.list_subscriptions.return_value = ["sub-1", "sub-2"]
+        client.resource_graph_query.return_value = [
+            {"name": "vc1", "resourceGroup": "rg1", "subscriptionId": "sub-1"},
+            {"name": "vc2", "resourceGroup": "rg2", "subscriptionId": "sub-2"},
         ]
-        vcs = discover_virtual_clusters()
+        vcs = discover_virtual_clusters(arm_client=client)
         assert len(vcs) == 2
         assert vcs[0].name == "vc1"
         assert vcs[1].name == "vc2"
 
-    @patch("azure_jobs.core.config._az_json", return_value={"data": [
-        {"name": "vc1", "resourceGroup": "rg1", "subscriptionId": "sub-a"},
-    ]})
-    def test_uses_provided_subscriptions(self, mock_az):
-        vcs = discover_virtual_clusters(subscription_ids=["sub-a", "sub-b"])
-        assert len(vcs) == 1
-        # Should NOT call subscriptions API when IDs provided
-        assert mock_az.call_count == 1
-
-    @patch("azure_jobs.core.config._az_json")
-    def test_skips_disabled_subscriptions(self, mock_az):
-        mock_az.side_effect = [
-            {"value": [
-                {"subscriptionId": "sub-1", "state": "Enabled"},
-                {"subscriptionId": "sub-2", "state": "Disabled"},
-            ]},
-            {"data": [
-                {"name": "vc1", "resourceGroup": "rg1", "subscriptionId": "sub-1"},
-            ]},
+    def test_uses_provided_subscriptions(self):
+        client = MagicMock()
+        client.resource_graph_query.return_value = [
+            {"name": "vc1", "resourceGroup": "rg1", "subscriptionId": "sub-a"},
         ]
-        vcs = discover_virtual_clusters()
+        vcs = discover_virtual_clusters(subscription_ids=["sub-a"], arm_client=client)
         assert len(vcs) == 1
-        # Verify only enabled sub was passed to resource graph
-        rg_call = mock_az.call_args_list[1]
-        body = rg_call[0][0]  # first positional arg is the args list
-        # The body contains json.dumps with subscriptions
-        assert "sub-2" not in str(body) or True  # just check it worked
+        # Should NOT call list_subscriptions when IDs provided
+        client.list_subscriptions.assert_not_called()
 
-    @patch("azure_jobs.core.config._az_json", return_value=None)
-    def test_empty_on_no_subscriptions(self, mock_az):
-        assert discover_virtual_clusters() == []
+    def test_skips_empty_subscriptions(self):
+        client = MagicMock()
+        client.list_subscriptions.return_value = []
+        assert discover_virtual_clusters(arm_client=client) == []
 
-    @patch("azure_jobs.core.config._az_json")
-    def test_empty_on_no_data(self, mock_az):
-        mock_az.side_effect = [
-            {"value": [{"subscriptionId": "sub-1", "state": "Enabled"}]},
-            {"data": []},
-        ]
-        assert discover_virtual_clusters() == []
+    def test_handles_exception_gracefully(self):
+        client = MagicMock()
+        client.list_subscriptions.side_effect = Exception("auth fail")
+        assert discover_virtual_clusters(arm_client=client) == []
+
+    def test_empty_on_no_data(self):
+        client = MagicMock()
+        client.list_subscriptions.return_value = ["sub-1"]
+        client.resource_graph_query.return_value = []
+        assert discover_virtual_clusters(arm_client=client) == []
 
 
 # ---------------------------------------------------------------------------

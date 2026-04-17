@@ -13,7 +13,6 @@ Resolution strategy:
 
 from __future__ import annotations
 
-import json
 import logging
 import re
 from dataclasses import dataclass, field
@@ -176,17 +175,11 @@ def _fetch_vc_families(
 ) -> list[str]:
     """Query the virtual cluster's available instance families from quotas."""
     try:
-        from azure_jobs.core.config import _az_json
+        from azure_jobs.core.rest_client import AzureARMClient
 
-        data = _az_json([
-            "rest", "--method", "get", "--url",
-            f"https://management.azure.com/subscriptions/{vc_subscription_id}"
-            f"/resourceGroups/{vc_resource_group}"
-            f"/providers/Microsoft.MachineLearningServices"
-            f"/virtualclusters/{vc_name}?api-version=2021-03-01-preview",
-        ])
-        if not data:
-            return []
+        data = AzureARMClient().get_vc_quotas_raw(
+            vc_subscription_id, vc_resource_group, vc_name,
+        )
         managed = data.get("properties", {}).get("managed", {})
         quotas = managed.get("defaultGroupPolicyOverallQuotas", {}).get("limits", [])
         return [q["id"] for q in quotas if q.get("limit", 0) > 0]
@@ -260,6 +253,7 @@ def fetch_vc_quotas(
     vc_name: str,
     *,
     include_zero: bool = False,
+    arm_client: Any = None,
 ) -> list[SeriesQuota]:
     """Fetch quota info for a Singularity virtual cluster.
 
@@ -270,19 +264,15 @@ def fetch_vc_quotas(
     """
     from collections import defaultdict
 
-    from azure_jobs.core.config import _az_json
+    if arm_client is None:
+        from azure_jobs.core.rest_client import AzureARMClient
+        arm_client = AzureARMClient()
 
-    data = _az_json(
-        [
-            "rest", "--method", "get", "--url",
-            f"https://management.azure.com/subscriptions/{vc_subscription_id}"
-            f"/resourceGroups/{vc_resource_group}"
-            f"/providers/Microsoft.MachineLearningServices"
-            f"/virtualclusters/{vc_name}?api-version=2021-03-01-preview",
-        ],
-        timeout=30,
-    )
-    if not data:
+    try:
+        data = arm_client.get_vc_quotas_raw(
+            vc_subscription_id, vc_resource_group, vc_name,
+        )
+    except Exception:
         return []
 
     managed = data.get("properties", {}).get("managed", {})
@@ -330,32 +320,9 @@ class VCInfo:
     quotas: list[SeriesQuota] = field(default_factory=list)
 
 
-def _list_all_subscriptions() -> list[str]:
-    """List ALL subscription IDs the user has access to.
-
-    Uses the ARM subscriptions API (same as amlt's ``SubscriptionClient``),
-    not ``az account list`` which only shows explicitly added subscriptions.
-    """
-    from azure_jobs.core.config import _az_json
-
-    data = _az_json(
-        [
-            "rest", "--method", "get", "--url",
-            "https://management.azure.com/subscriptions?api-version=2022-12-01",
-        ],
-        timeout=30,
-    )
-    if not data or not isinstance(data.get("value"), list):
-        return []
-    return [
-        s["subscriptionId"]
-        for s in data["value"]
-        if s.get("subscriptionId") and s.get("state") == "Enabled"
-    ]
-
-
 def discover_virtual_clusters(
     subscription_ids: list[str] | None = None,
+    arm_client: Any = None,
 ) -> list[VCInfo]:
     """Discover all Singularity virtual clusters via Azure Resource Graph.
 
@@ -363,37 +330,29 @@ def discover_virtual_clusters(
     has access to (via ARM subscriptions API), then query Resource Graph for
     ``microsoft.machinelearningservices/virtualclusters`` across all of them.
     """
-    from azure_jobs.core.config import _az_json
+    if arm_client is None:
+        from azure_jobs.core.rest_client import AzureARMClient
+        arm_client = AzureARMClient()
 
     if not subscription_ids:
-        subscription_ids = _list_all_subscriptions()
+        try:
+            subscription_ids = arm_client.list_subscriptions()
+        except Exception:
+            return []
         if not subscription_ids:
             return []
 
-    # Azure Resource Graph query (same as amlt)
     query = (
         "resources "
         "| where type == 'microsoft.machinelearningservices/virtualclusters' "
         "| order by name asc "
         "| project name, resourceGroup, subscriptionId"
     )
-    data = _az_json(
-        [
-            "rest", "--method", "post", "--url",
-            "https://management.azure.com/providers/Microsoft.ResourceGraph"
-            "/resources?api-version=2021-03-01",
-            "--body",
-            json.dumps({
-                "query": query,
-                "subscriptions": subscription_ids,
-            }),
-        ],
-        timeout=30,
-    )
-    if not data:
+    try:
+        rows = arm_client.resource_graph_query(query, subscription_ids)
+    except Exception:
         return []
 
-    rows = data.get("data", [])
     return [
         VCInfo(
             name=r.get("name", ""),
