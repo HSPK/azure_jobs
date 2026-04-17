@@ -235,3 +235,49 @@ def get_workspace_config() -> dict[str, str]:
         click.echo()
 
     return workspace
+
+
+def resolve_workspace(name: str | None = None) -> dict[str, str]:
+    """Return a workspace dict, optionally looking up *name* by detection.
+
+    - ``name=None`` → current config (via ``get_workspace_config``).
+    - ``name="my-ws"`` → detect workspaces in current subscription and
+      find the one matching *name*.  Falls back to overriding
+      ``workspace_name`` in the existing config if detection fails.
+    """
+    if name is None:
+        return get_workspace_config()
+
+    cfg = read_config()
+    ws = cfg.get("workspace", {})
+    sub_id = ws.get("subscription_id", "")
+
+    if not sub_id:
+        sub = _detect_subscription()
+        if not sub:
+            raise ValueError("Cannot detect subscription. Run `az login` first.")
+        sub_id = sub["subscription_id"]
+
+    # Try to find full details from detected workspaces
+    detected = _detect_workspaces(sub_id)
+    for w in detected:
+        if w["name"] == name:
+            return {
+                "subscription_id": sub_id,
+                "resource_group": w["resource_group"],
+                "workspace_name": w["name"],
+            }
+
+    # Fallback: use current resource_group with the given name
+    rg = ws.get("resource_group", "")
+    if rg:
+        return {
+            "subscription_id": sub_id,
+            "resource_group": rg,
+            "workspace_name": name,
+        }
+
+    raise ValueError(
+        f"Workspace '{name}' not found. "
+        "Run `aj ws list` to see available workspaces."
+    )

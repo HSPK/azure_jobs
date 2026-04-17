@@ -19,7 +19,8 @@ def exp_group() -> None:
     "-n", "--last", default=200, show_default=True,
     help="Number of recent jobs to scan for experiments",
 )
-def exp_list(last: int) -> None:
+@click.option("--ws", "ws_name", default=None, help="Workspace name override")
+def exp_list(last: int, ws_name: str | None) -> None:
     """List experiments in the current workspace.
 
     Scans recent jobs and groups them by experiment name.
@@ -34,14 +35,17 @@ def exp_list(last: int) -> None:
         "Canceled": "dim", "Queued": "yellow",
     }
 
-    client = create_rest_client()
+    client = create_rest_client(ws_name=ws_name)
     experiments: dict[str, dict[str, Any]] = {}
     next_link = None
     fetched = 0
+    max_pages = max(1, last // 100 + 1)
 
-    with console.status("[bold cyan]Fetching experiments…[/bold cyan]", spinner="dots"):
-        while fetched < last:
+    with console.status("[bold cyan]Fetching experiments…[/bold cyan]", spinner="dots") as st:
+        for _ in range(max_pages):
             page_size = min(100, last - fetched)
+            if page_size <= 0:
+                break
             jobs, next_link = client.list_jobs_page(
                 next_link=next_link, top=page_size,
             )
@@ -57,6 +61,10 @@ def exp_list(last: int) -> None:
                     }
                 experiments[exp]["count"] += 1
             fetched += len(jobs)
+            st.update(
+                f"[bold cyan]Scanning… {fetched} jobs, "
+                f"{len(experiments)} experiments[/bold cyan]"
+            )
             if not next_link:
                 break
 
@@ -97,7 +105,8 @@ def exp_list(last: int) -> None:
     "-n", "--last", default=30, show_default=True,
     help="Number of jobs to show for the experiment",
 )
-def exp_show(name: str, last: int) -> None:
+@click.option("--ws", "ws_name", default=None, help="Workspace name override")
+def exp_show(name: str, last: int, ws_name: str | None) -> None:
     """Show recent jobs for a specific experiment.
 
     NAME is the experiment name (case-sensitive).
@@ -105,19 +114,18 @@ def exp_show(name: str, last: int) -> None:
     from azure_jobs.core.rest_client import create_rest_client
     from azure_jobs.utils.ui import console, show_cloud_jobs_table, warning
 
-    client = create_rest_client()
+    client = create_rest_client(ws_name=ws_name)
     matched: list[dict[str, Any]] = []
     next_link = None
     scanned = 0
-    max_scan = last * 10  # scan up to 10x for filtering
+    max_pages = 5
 
     with console.status(
         f"[bold cyan]Fetching jobs for '{name}'…[/bold cyan]", spinner="dots",
-    ):
-        while len(matched) < last and scanned < max_scan:
-            page_size = min(100, max_scan - scanned)
+    ) as st:
+        for _ in range(max_pages):
             jobs, next_link = client.list_jobs_page(
-                next_link=next_link, top=page_size,
+                next_link=next_link, top=100,
             )
             if not jobs:
                 break
@@ -127,7 +135,11 @@ def exp_show(name: str, last: int) -> None:
                     if len(matched) >= last:
                         break
             scanned += len(jobs)
-            if not next_link:
+            st.update(
+                f"[bold cyan]Scanning… {scanned} scanned, "
+                f"{len(matched)} matched[/bold cyan]"
+            )
+            if not next_link or len(matched) >= last:
                 break
 
     if not matched:

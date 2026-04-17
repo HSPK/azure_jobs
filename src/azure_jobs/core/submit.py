@@ -15,20 +15,11 @@ All azure-ai-ml imports are lazy to keep CLI startup fast.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any
 
 # Re-export public names so existing importers (cli/jobs etc.) keep working
 # during the transition.  New code should import from core.client directly.
-from azure_jobs.core.client import (  # noqa: F401
-    create_ml_client,
-    quiet_azure_sdk,
-    suppress_sdk_output,
-)
-
-# Backward-compat aliases for private names (will be removed)
-_quiet_azure_sdk = quiet_azure_sdk
-_suppress_sdk_output = suppress_sdk_output
+from azure_jobs.core.client import create_ml_client, suppress_sdk_output
 
 
 @dataclass
@@ -113,11 +104,13 @@ class SubmitResult:
 
 def _get_ml_client(request: SubmitRequest) -> Any:
     """Create an authenticated MLClient from a SubmitRequest."""
-    return create_ml_client({
-        "subscription_id": request.subscription_id,
-        "resource_group": request.resource_group,
-        "workspace_name": request.workspace_name,
-    })
+    return create_ml_client(
+        {
+            "subscription_id": request.subscription_id,
+            "resource_group": request.resource_group,
+            "workspace_name": request.workspace_name,
+        }
+    )
 
 
 _SING_IMAGE_PREFIX = "amlt-sing/"
@@ -282,7 +275,9 @@ def _resolve_compute(request: SubmitRequest) -> str:
     return request.compute
 
 
-def _build_resources(request: SubmitRequest, on_status: Any = None) -> dict[str, Any] | None:
+def _build_resources(
+    request: SubmitRequest, on_status: Any = None
+) -> dict[str, Any] | None:
     """Build the ``resources`` dict for Singularity targets.
 
     AML targets return *None* (no special resources needed).
@@ -318,7 +313,7 @@ def _build_resources(request: SubmitRequest, on_status: Any = None) -> dict[str,
     image_version = ""
     image = request.image or ""
     if image.startswith(_SING_IMAGE_PREFIX):
-        image_version = image[len(_SING_IMAGE_PREFIX):]
+        image_version = image[len(_SING_IMAGE_PREFIX) :]
 
     return {
         "properties": {
@@ -385,7 +380,10 @@ def _build_identity(request: SubmitRequest) -> Any | None:
     if request.service == "sing":
         return None
 
-    from azure.ai.ml.entities import ManagedIdentityConfiguration, UserIdentityConfiguration
+    from azure.ai.ml.entities import (
+        ManagedIdentityConfiguration,
+        UserIdentityConfiguration,
+    )
 
     if request.identity == "managed":
         return ManagedIdentityConfiguration()
@@ -415,15 +413,15 @@ def submit(request: SubmitRequest, on_status: Any = None) -> SubmitResult:
 
     try:
         _status("auth", "Authenticating…")
-        with _suppress_sdk_output():
+        with suppress_sdk_output():
             ml_client = _get_ml_client(request)
 
         _status("environment", "Preparing environment…")
-        with _suppress_sdk_output():
+        with suppress_sdk_output():
             environment = _build_environment(request, ml_client)
 
         _status("storage", f"Configuring {len(request.storage)} storage mount(s)…")
-        with _suppress_sdk_output():
+        with suppress_sdk_output():
             inputs, outputs, poc_props, dataref_env = _build_storage_mounts(
                 request, ml_client
             )
@@ -456,7 +454,7 @@ def submit(request: SubmitRequest, on_status: Any = None) -> SubmitResult:
         identity_prefix = ""
         if request.service == "sing":
             _status("identity", "Resolving Singularity identity…")
-            with _suppress_sdk_output():
+            with suppress_sdk_output():
                 client_id = _resolve_sing_identity(request, ml_client)
             if client_id:
                 identity_prefix = (
@@ -505,7 +503,7 @@ def submit(request: SubmitRequest, on_status: Any = None) -> SubmitResult:
         if resources:
             job_kwargs["resources"] = resources
 
-        with _suppress_sdk_output():
+        with suppress_sdk_output():
             job = aml_command(**job_kwargs)
             returned_job = ml_client.jobs.create_or_update(job)
 
@@ -552,7 +550,9 @@ def build_request_from_config(
     code_dir = code.get("local_dir", ".")
     if code_dir.startswith("$CONFIG_DIR"):
         # $CONFIG_DIR was an amlt convention — resolve relative to cwd
-        code_dir = code_dir.replace("$CONFIG_DIR/../../", "").replace("$CONFIG_DIR", ".")
+        code_dir = code_dir.replace("$CONFIG_DIR/../../", "").replace(
+            "$CONFIG_DIR", "."
+        )
         if not code_dir or code_dir == "/":
             code_dir = "."
 
@@ -610,6 +610,7 @@ class JobStatus:
 def _format_duration(seconds: int) -> str:
     """Format seconds into a human-readable duration string."""
     from azure_jobs.utils.time import format_duration
+
     return format_duration(seconds)
 
 
@@ -639,6 +640,7 @@ def get_job_status(
         end_time = props.get("EndTimeUtc", "")
 
         from azure_jobs.utils.time import calc_duration, format_time
+
         duration_str = calc_duration(start_time, end_time)
         start_time = format_time(start_time)
         end_time = format_time(end_time)

@@ -62,18 +62,29 @@ def ws_list() -> None:
 
 
 @ws_group.command(name="show")
-def ws_show() -> None:
-    """Show the currently configured workspace."""
+@click.argument("name", required=False)
+def ws_show(name: str | None) -> None:
+    """Show workspace details.
+
+    Without arguments, shows the currently configured workspace.
+    With NAME, looks up that workspace in the subscription.
+    """
     from rich.panel import Panel
     from rich.table import Table
 
-    from azure_jobs.core.config import read_config
+    from azure_jobs.core.config import read_config, resolve_workspace
     from azure_jobs.utils.ui import console, warning
 
-    ws = read_config().get("workspace", {})
-    if not ws or not ws.get("workspace_name"):
-        warning("No workspace configured. Run `aj ws set` to configure.")
-        return
+    if name:
+        try:
+            ws = resolve_workspace(name)
+        except ValueError as exc:
+            raise click.ClickException(str(exc))
+    else:
+        ws = read_config().get("workspace", {})
+        if not ws or not ws.get("workspace_name"):
+            warning("No workspace configured. Run `aj ws set` to configure.")
+            return
 
     grid = Table.grid(padding=(0, 2))
     grid.add_column(style="bold white", justify="right")
@@ -82,9 +93,10 @@ def ws_show() -> None:
     grid.add_row("Resource Group", ws.get("resource_group", "—"))
     grid.add_row("Subscription", ws.get("subscription_id", "—"))
 
+    title = f"Workspace: {ws.get('workspace_name', '')}" if name else "Current Workspace"
     console.print()
     console.print(Panel(
-        grid, title="[bold]Current Workspace[/bold]",
+        grid, title=f"[bold]{title}[/bold]",
         border_style="cyan", expand=False,
     ))
     console.print()

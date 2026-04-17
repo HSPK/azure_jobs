@@ -36,19 +36,24 @@ def job_group() -> None:
     "-e", "--experiment", default=None,
     help="Filter by experiment name",
 )
-def job_list(last: int, status: str | None, experiment: str | None) -> None:
+@click.option("--ws", "ws_name", default=None, help="Workspace name override")
+def job_list(
+    last: int, status: str | None, experiment: str | None, ws_name: str | None,
+) -> None:
     """List recent jobs in the cloud workspace."""
     from azure_jobs.core.rest_client import create_rest_client
     from azure_jobs.utils.ui import console, show_cloud_jobs_table
 
-    client = create_rest_client()
+    client = create_rest_client(ws_name=ws_name)
     all_jobs: list[dict[str, Any]] = []
     next_link = None
-    max_scan = last * 10  # scan extra pages when filtering
+    scanned = 0
+    filtering = bool(status or experiment)
+    max_pages = 5 if filtering else 1
+    page_size = min(100, last) if not filtering else 100
 
-    with console.status("[bold cyan]Fetching jobs…[/bold cyan]", spinner="dots"):
-        while len(all_jobs) < last:
-            page_size = min(100, max_scan)
+    with console.status("[bold cyan]Fetching jobs…[/bold cyan]", spinner="dots") as st:
+        for _ in range(max_pages):
             jobs, next_link = client.list_jobs_page(
                 next_link=next_link, top=page_size,
             )
@@ -62,6 +67,12 @@ def job_list(last: int, status: str | None, experiment: str | None) -> None:
                 all_jobs.append(j)
                 if len(all_jobs) >= last:
                     break
+            scanned += len(jobs)
+            if filtering:
+                st.update(
+                    f"[bold cyan]Scanning… {scanned} scanned, "
+                    f"{len(all_jobs)} matched[/bold cyan]"
+                )
             if not next_link or len(all_jobs) >= last:
                 break
 
@@ -70,7 +81,8 @@ def job_list(last: int, status: str | None, experiment: str | None) -> None:
 
 @job_group.command(name="show")
 @click.argument("name")
-def job_show(name: str) -> None:
+@click.option("--ws", "ws_name", default=None, help="Workspace name override")
+def job_show(name: str, ws_name: str | None) -> None:
     """Show detailed info for a job.
 
     NAME can be the short aj ID (e.g. f8e7eb32) or the full Azure job name.
@@ -79,7 +91,7 @@ def job_show(name: str) -> None:
     from azure_jobs.utils.ui import console, show_job_detail
 
     name = _resolve_job_id(name)
-    client = create_rest_client()
+    client = create_rest_client(ws_name=ws_name)
 
     with console.status("[bold cyan]Fetching job…[/bold cyan]", spinner="dots"):
         job = client.get_job(name)
@@ -260,9 +272,12 @@ def _alias_js(job_id: str) -> None:
 @click.option("-n", "--last", default=30)
 @click.option("-s", "--status", default=None)
 @click.option("-e", "--experiment", default=None)
-def _alias_jl(last: int, status: str | None, experiment: str | None) -> None:
+@click.option("--ws", "ws_name", default=None)
+def _alias_jl(
+    last: int, status: str | None, experiment: str | None, ws_name: str | None,
+) -> None:
     """Shortcut for ``aj job list`` (cloud)."""
-    job_list.callback(last, status, experiment)
+    job_list.callback(last, status, experiment, ws_name)
 
 
 @main.command(name="jc", hidden=True)

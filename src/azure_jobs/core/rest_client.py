@@ -21,15 +21,18 @@ _SCOPE = "https://management.azure.com/.default"
 
 def create_rest_client(
     workspace: dict[str, Any] | None = None,
+    *,
+    ws_name: str | None = None,
 ) -> "AzureMLJobsClient":
     """Factory: create a REST client from workspace config.
 
+    If *ws_name* is given, resolves the workspace by name.
     If *workspace* is ``None``, auto-detects via ``get_workspace_config()``
     (may prompt interactively).
     """
     if workspace is None:
-        from azure_jobs.core.config import get_workspace_config
-        workspace = get_workspace_config()
+        from azure_jobs.core.config import resolve_workspace
+        workspace = resolve_workspace(ws_name)
     required = ("subscription_id", "resource_group", "workspace_name")
     missing = [k for k in required if not workspace.get(k)]
     if missing:
