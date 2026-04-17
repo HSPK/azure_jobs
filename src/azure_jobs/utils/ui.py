@@ -298,3 +298,138 @@ def show_job_status(job_status: Any) -> None:
         expand=False,
     ))
     console.print()
+
+
+# ---------------------------------------------------------------------------
+# Cloud job tables & detail panels
+# ---------------------------------------------------------------------------
+
+
+def _trunc(s: str, maxlen: int = 30) -> str:
+    """Truncate with ellipsis in the middle."""
+    if len(s) <= maxlen:
+        return s
+    half = (maxlen - 1) // 2
+    return s[:half] + "…" + s[-(maxlen - half - 1):]
+
+
+def show_cloud_jobs_table(
+    jobs: list[dict[str, Any]], *, title: str = "Jobs",
+) -> None:
+    """Display cloud jobs in a rich table."""
+    if not jobs:
+        warning("No jobs found")
+        return
+
+    table = Table(
+        show_header=True, header_style="bold", pad_edge=True,
+        title=f"[bold]{title}[/bold]", title_style="",
+    )
+    table.add_column("Status", no_wrap=True)
+    table.add_column("Name", style="cyan", no_wrap=True)
+    table.add_column("Display Name", max_width=30, overflow="ellipsis")
+    table.add_column("Experiment", style="dim", max_width=25, overflow="ellipsis")
+    table.add_column("Compute", style="dim")
+    table.add_column("Duration", style="dim", no_wrap=True)
+    table.add_column("Created", style="dim", no_wrap=True)
+
+    for j in jobs:
+        status = j.get("status", "")
+        style = _JOB_STATUS_STYLE.get(status, "white")
+        icon = _JOB_STATUS_ICON.get(status, "?")
+        table.add_row(
+            f"[{style}]{icon} {status}[/{style}]",
+            _trunc(j.get("name", ""), 32),
+            j.get("display_name", ""),
+            j.get("experiment", ""),
+            j.get("compute", ""),
+            j.get("duration", ""),
+            j.get("created", ""),
+        )
+
+    console.print()
+    console.print(table)
+    console.print()
+
+
+def show_job_detail(job: dict[str, Any]) -> None:
+    """Display detailed cloud job info as a rich panel."""
+    lines: list[str] = []
+
+    # Status badge
+    status = job.get("status", "Unknown")
+    style = _JOB_STATUS_STYLE.get(status, "white")
+    icon = _JOB_STATUS_ICON.get(status, "?")
+    lines.append(f"  [{style} bold]{icon} {status}[/{style} bold]")
+
+    # Error
+    error_msg = job.get("error", "")
+    if error_msg:
+        lines.append("")
+        lines.append("  [bold red]Error[/bold red]")
+        lines.append(f"  [dim]{'─' * 50}[/dim]")
+        lines.append(f"  [red]{error_msg}[/red]")
+
+    # Identity
+    _section = "  [bold cyan]{}[/bold cyan]"
+    _sep = f"  [dim]{'─' * 50}[/dim]"
+
+    lines.append("")
+    lines.append(_section.format("Identity"))
+    lines.append(_sep)
+    for label, key in [
+        ("Name", "name"), ("Display Name", "display_name"),
+        ("Type", "type"), ("Experiment", "experiment"),
+        ("Description", "description"), ("Tags", "tags"),
+    ]:
+        val = job.get(key, "")
+        if val:
+            lines.append(f"    [dim]{label:<16}[/dim]{val}")
+
+    # Configuration
+    if job.get("environment") or job.get("command"):
+        lines.append("")
+        lines.append(_section.format("Configuration"))
+        lines.append(_sep)
+        if job.get("environment"):
+            lines.append(f"    [dim]{'Environment':<16}[/dim]{job['environment']}")
+        if job.get("command"):
+            lines.append(f"    [dim]{'Command':<16}[/dim]{job['command']}")
+
+    # Resources
+    if job.get("compute"):
+        lines.append("")
+        lines.append(_section.format("Resources"))
+        lines.append(_sep)
+        lines.append(f"    [dim]{'Compute':<16}[/dim]{job['compute']}")
+
+    # Timing
+    if job.get("duration") or job.get("start_time") or job.get("created"):
+        lines.append("")
+        lines.append(_section.format("Timing"))
+        lines.append(_sep)
+        for label, key in [
+            ("Created", "created"), ("Started", "start_time"),
+            ("Ended", "end_time"), ("Duration", "duration"),
+            ("Queue time", "queue_time"),
+        ]:
+            val = job.get(key, "")
+            if val:
+                lines.append(f"    [dim]{label:<16}[/dim]{val}")
+
+    # Links
+    if job.get("portal_url"):
+        lines.append("")
+        lines.append(_section.format("Links"))
+        lines.append(_sep)
+        lines.append(
+            f"    [dim]{'Portal':<16}[/dim]"
+            f"{_short_portal_url(job['portal_url'])}"
+        )
+
+    console.print()
+    console.print(Panel(
+        "\n".join(lines), title="[bold]Job Detail[/bold]",
+        border_style="cyan", expand=False,
+    ))
+    console.print()

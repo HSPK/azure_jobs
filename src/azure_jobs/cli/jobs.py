@@ -1,42 +1,95 @@
 from __future__ import annotations
 
+from typing import Any
+
 import click
 
 from azure_jobs.cli import main
 from azure_jobs.core.record import read_records
-from azure_jobs.utils.ui import show_jobs_table, show_job_status
+from azure_jobs.utils.ui import show_jobs_table
 
 
 @main.group(name="job")
 def job_group() -> None:
-    """View and manage submitted jobs."""
+    """View and manage Azure ML jobs."""
+
+
+# ---------------------------------------------------------------------------
+# Cloud job commands
+# ---------------------------------------------------------------------------
 
 
 @job_group.command(name="list")
 @click.option(
-    "-n", "--last", default=20, show_default=True,
-    help="Number of recent jobs to show",
-)
-@click.option(
-    "-t", "--template", default=None,
-    help="Filter by template name",
+    "-n", "--last", default=30, show_default=True,
+    help="Number of jobs to show",
 )
 @click.option(
     "-s", "--status", default=None,
-    type=click.Choice(["success", "failed"], case_sensitive=False),
-    help="Filter by status",
+    type=click.Choice(
+        ["Running", "Completed", "Failed", "Canceled", "Queued"],
+        case_sensitive=False,
+    ),
+    help="Filter by job status",
 )
-def job_list(last: int, template: str | None, status: str | None) -> None:
-    """Show recent job submissions."""
-    records = read_records(last=last * 3 if (template or status) else last)
+@click.option(
+    "-e", "--experiment", default=None,
+    help="Filter by experiment name",
+)
+def job_list(last: int, status: str | None, experiment: str | None) -> None:
+    """List recent jobs in the cloud workspace."""
+    from azure_jobs.core.rest_client import create_rest_client
+    from azure_jobs.utils.ui import console, show_cloud_jobs_table
 
-    if template:
-        records = [r for r in records if r.get("template") == template]
-    if status:
-        records = [r for r in records if r.get("status") == status.lower()]
+    client = create_rest_client()
+    all_jobs: list[dict[str, Any]] = []
+    next_link = None
+    max_scan = last * 10  # scan extra pages when filtering
 
-    records = records[:last]
-    show_jobs_table(records)
+    with console.status("[bold cyan]Fetching jobs…[/bold cyan]", spinner="dots"):
+        while len(all_jobs) < last:
+            page_size = min(100, max_scan)
+            jobs, next_link = client.list_jobs_page(
+                next_link=next_link, top=page_size,
+            )
+            if not jobs:
+                break
+            for j in jobs:
+                if status and j.get("status", "").lower() != status.lower():
+                    continue
+                if experiment and j.get("experiment", "") != experiment:
+                    continue
+                all_jobs.append(j)
+                if len(all_jobs) >= last:
+                    break
+            if not next_link or len(all_jobs) >= last:
+                break
+
+    show_cloud_jobs_table(all_jobs[:last])
+
+
+@job_group.command(name="show")
+@click.argument("name")
+def job_show(name: str) -> None:
+    """Show detailed info for a job.
+
+    NAME can be the short aj ID (e.g. f8e7eb32) or the full Azure job name.
+    """
+    from azure_jobs.core.rest_client import create_rest_client
+    from azure_jobs.utils.ui import console, show_job_detail
+
+    name = _resolve_job_id(name)
+    client = create_rest_client()
+
+    with console.status("[bold cyan]Fetching job…[/bold cyan]", spinner="dots"):
+        job = client.get_job(name)
+
+    show_job_detail(job)
+
+
+# ---------------------------------------------------------------------------
+# Existing commands (status, cancel, logs)
+# ---------------------------------------------------------------------------
 
 
 @job_group.command(name="status")
@@ -50,6 +103,7 @@ def job_status(job_id: str) -> None:
 
     from azure_jobs.core.config import get_workspace_config
     from azure_jobs.core.submit import get_job_status
+    from azure_jobs.utils.ui import show_job_status as _show
 
     console = Console()
     azure_name = _resolve_job_id(job_id)
@@ -58,7 +112,7 @@ def job_status(job_id: str) -> None:
     with console.status("[bold cyan]Querying job status…[/bold cyan]", spinner="dots"):
         result = get_job_status(azure_name, workspace)
 
-    show_job_status(result)
+    _show(result)
 
 
 @job_group.command(name="cancel")
@@ -148,6 +202,40 @@ def job_logs(job_id: str) -> None:
         ))
 
 
+# ---------------------------------------------------------------------------
+# Local records (accessible via ``aj list``)
+# ---------------------------------------------------------------------------
+
+
+def _show_local_records(
+    last: int, template: str | None, status: str | None,
+) -> None:
+    """Display local submission records."""
+    records = read_records(last=last * 3 if (template or status) else last)
+    if template:
+        records = [r for r in records if r.get("template") == template]
+    if status:
+        records = [r for r in records if r.get("status") == status.lower()]
+    records = records[:last]
+    show_jobs_table(records)
+
+
+@main.command(name="list")
+@click.option("-n", "--last", default=20, show_default=True,
+              help="Number of recent records to show")
+@click.option("-t", "--template", default=None, help="Filter by template")
+@click.option("-s", "--status", default=None,
+              type=click.Choice(["success", "failed"], case_sensitive=False))
+def list_local(last: int, template: str | None, status: str | None) -> None:
+    """Show recent local job submissions."""
+    _show_local_records(last, template, status)
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
 def _resolve_job_id(job_id: str) -> str:
     """Resolve a short aj ID to the Azure job name via record.jsonl."""
     records = read_records()
@@ -158,7 +246,7 @@ def _resolve_job_id(job_id: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Top-level shortcuts: aj js, aj jl, aj jc, aj jlogs
+# Top-level shortcuts
 # ---------------------------------------------------------------------------
 
 @main.command(name="js", hidden=True)
@@ -169,12 +257,12 @@ def _alias_js(job_id: str) -> None:
 
 
 @main.command(name="jl", hidden=True)
-@click.option("-n", "--last", default=20)
-@click.option("-t", "--template", default=None)
+@click.option("-n", "--last", default=30)
 @click.option("-s", "--status", default=None)
-def _alias_jl(last: int, template: str | None, status: str | None) -> None:
-    """Shortcut for ``aj job list``."""
-    job_list.callback(last, template, status)
+@click.option("-e", "--experiment", default=None)
+def _alias_jl(last: int, status: str | None, experiment: str | None) -> None:
+    """Shortcut for ``aj job list`` (cloud)."""
+    job_list.callback(last, status, experiment)
 
 
 @main.command(name="jc", hidden=True)

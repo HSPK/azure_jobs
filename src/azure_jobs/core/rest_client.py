@@ -19,6 +19,31 @@ _API_VERSION = "2024-01-01-preview"
 _SCOPE = "https://management.azure.com/.default"
 
 
+def create_rest_client(
+    workspace: dict[str, Any] | None = None,
+) -> "AzureMLJobsClient":
+    """Factory: create a REST client from workspace config.
+
+    If *workspace* is ``None``, auto-detects via ``get_workspace_config()``
+    (may prompt interactively).
+    """
+    if workspace is None:
+        from azure_jobs.core.config import get_workspace_config
+        workspace = get_workspace_config()
+    required = ("subscription_id", "resource_group", "workspace_name")
+    missing = [k for k in required if not workspace.get(k)]
+    if missing:
+        raise ValueError(
+            f"Workspace config incomplete — missing: {', '.join(missing)}. "
+            "Run `aj ws set` to configure."
+        )
+    return AzureMLJobsClient(
+        subscription_id=workspace["subscription_id"],
+        resource_group=workspace["resource_group"],
+        workspace_name=workspace["workspace_name"],
+    )
+
+
 class AzureMLJobsClient:
     """Thin REST wrapper for ``/workspaces/{ws}/jobs``."""
 

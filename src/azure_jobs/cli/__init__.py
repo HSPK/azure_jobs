@@ -17,3 +17,5 @@ from . import images  # noqa: E402, F401
 from . import dashboard  # noqa: E402, F401
 from . import config  # noqa: E402, F401
 from . import auth  # noqa: E402, F401
+from . import workspace  # noqa: E402, F401
+from . import experiment  # noqa: E402, F401

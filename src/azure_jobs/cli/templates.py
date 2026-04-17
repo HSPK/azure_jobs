@@ -222,9 +222,10 @@ def template_diff() -> None:
 # Top-level aliases (backward compat / convenience)
 # ---------------------------------------------------------------------------
 
-@main.command(name="list", hidden=True)
-def list_templates() -> None:
-    _show_templates()
+@main.command(name="tl", hidden=True)
+def _alias_tl() -> None:
+    """Shortcut for ``aj template list``."""
+    template_list.callback()
 
 
 @main.command(name="pull", hidden=True)
