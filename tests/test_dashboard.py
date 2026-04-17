@@ -119,26 +119,22 @@ async def test_view_toggle(_dash) -> None:
 
 
 @pytest.mark.asyncio
-async def test_filter_by_number_keys(_dash) -> None:
+async def test_status_picker(_dash) -> None:
+    """f opens status picker, callback applies filter."""
     async with _dash.run_test(size=(120, 30)) as pilot:
         await _load_jobs(_dash, pilot)
         await pilot.pause()
-        # 4 = Failed: only 1 job (def67890 is Failed)
-        _dash.action_filter_failed()
+        # Simulate picker result directly
+        _dash._on_status_picked("Failed")
         await pilot.pause()
         assert _dash._status_filter == "Failed"
         ol = _dash.query_one("#job-list")
         assert ol.option_count == 1
-        # 1 = All: back to all 3
-        _dash.action_filter_all()
+        # Clear
+        _dash._on_status_picked("")
         await pilot.pause()
         assert _dash._status_filter == ""
         assert ol.option_count == 3
-        # 3 = Completed: only eval-bert
-        _dash.action_filter_completed()
-        await pilot.pause()
-        assert _dash._status_filter == "Completed"
-        assert ol.option_count == 1
 
 
 
@@ -447,35 +443,37 @@ async def test_tab_title(_dash) -> None:
 
 
 @pytest.mark.asyncio
-async def test_cycle_status(_dash) -> None:
-    """f cycles through status filters."""
+async def test_status_picker_modal(_dash) -> None:
+    """f opens picker modal."""
     async with _dash.run_test(size=(120, 30)) as pilot:
         await _load_jobs(_dash, pilot)
         await pilot.pause()
-        assert _dash._status_filter == ""
-        _dash.action_cycle_status()
+        _dash.action_pick_status()
         await pilot.pause()
-        assert _dash._status_filter == "Running"
-        _dash.action_cycle_status()
+        from azure_jobs.tui.app import _PickerModal
+        screens = [s for s in _dash.screen_stack if isinstance(s, _PickerModal)]
+        assert len(screens) == 1
+        # Escape cancels
+        await pilot.press("escape")
         await pilot.pause()
-        assert _dash._status_filter == "Completed"
-        ol = _dash.query_one("#job-list")
-        assert ol.option_count == 1  # eval-bert
+        screens = [s for s in _dash.screen_stack if isinstance(s, _PickerModal)]
+        assert len(screens) == 0
 
 
 @pytest.mark.asyncio
-async def test_cycle_experiment(_dash) -> None:
-    """e cycles through experiment filters."""
+async def test_experiment_picker(_dash) -> None:
+    """e opens experiment picker, callback applies filter."""
     async with _dash.run_test(size=(120, 30)) as pilot:
         await _load_jobs(_dash, pilot)
         await pilot.pause()
-        assert _dash._experiment_filter == ""
-        _dash.action_cycle_experiment()
+        _dash._on_experiment_picked("cv")
         await pilot.pause()
-        # First experiment alphabetically (cv or nlp)
-        assert _dash._experiment_filter in ("cv", "nlp")
+        assert _dash._experiment_filter == "cv"
         ol = _dash.query_one("#job-list")
-        assert ol.option_count < 3
+        assert ol.option_count == 1  # only train-vision (cv)
+        _dash._on_experiment_picked("")
+        await pilot.pause()
+        assert ol.option_count == 3
 
 
 @pytest.mark.asyncio
@@ -514,3 +512,10 @@ async def test_search_bar_toggle(_dash) -> None:
         assert search_bar.has_class("hidden")
 
 
+def test_picker_modal_instantiation() -> None:
+    """_PickerModal can be instantiated with items and current value."""
+    from azure_jobs.tui.app import _PickerModal
+    items = [("", "All"), ("Running", "Running"), ("Failed", "Failed")]
+    modal = _PickerModal("Test", items, current="")
+    assert modal._items == items
+    assert modal._current == ""

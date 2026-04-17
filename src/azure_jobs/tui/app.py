@@ -309,6 +309,100 @@ class _ConfirmCancel(ModalScreen[bool]):
 _STATUS_CYCLE = ["", "Running", "Completed", "Failed", "Canceled"]
 
 
+class _PickerModal(ModalScreen[str]):
+    """Lightweight keyboard-first picker: arrow keys + Enter, or 1-9 for quick select."""
+
+    CSS = """
+    _PickerModal {
+        align: center middle;
+    }
+    #picker-box {
+        width: 40;
+        height: auto;
+        max-height: 18;
+        border: round #3465a4;
+        background: $surface;
+        padding: 1 2;
+    }
+    #picker-title {
+        width: 100%;
+        margin-bottom: 1;
+    }
+    #picker-list {
+        height: auto;
+        max-height: 12;
+        border: none;
+        padding: 0;
+        scrollbar-size: 1 1;
+    }
+    """
+
+    BINDINGS = [
+        Binding("escape", "cancel_picker", "Cancel", show=False),
+        Binding("1", "pick_1", show=False),
+        Binding("2", "pick_2", show=False),
+        Binding("3", "pick_3", show=False),
+        Binding("4", "pick_4", show=False),
+        Binding("5", "pick_5", show=False),
+        Binding("6", "pick_6", show=False),
+        Binding("7", "pick_7", show=False),
+        Binding("8", "pick_8", show=False),
+        Binding("9", "pick_9", show=False),
+    ]
+
+    def __init__(
+        self,
+        title: str,
+        items: list[tuple[str, str]],
+        current: str = "",
+        **kwargs: Any,
+    ) -> None:
+        """items: list of (value, label) pairs. First should be ("", "All")."""
+        super().__init__(**kwargs)
+        self._title = title
+        self._items = items
+        self._current = current
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="picker-box"):
+            yield Static(f"[bold]{self._title}[/bold]", id="picker-title")
+            yield OptionList(id="picker-list")
+
+    def on_mount(self) -> None:
+        ol = self.query_one("#picker-list", OptionList)
+        highlight_idx = 0
+        for i, (value, label) in enumerate(self._items):
+            num = f"[dim]{i + 1}[/dim] "
+            mark = "[green]●[/green] " if value == self._current else "  "
+            ol.add_option(Option(Text.from_markup(f" {num}{mark}{label}"), id=value))
+            if value == self._current:
+                highlight_idx = i
+        ol.highlighted = highlight_idx
+        ol.focus()
+
+    def on_option_list_option_selected(
+        self, event: OptionList.OptionSelected,
+    ) -> None:
+        self.dismiss(event.option.id or "")
+
+    def _pick(self, n: int) -> None:
+        if 0 <= n < len(self._items):
+            self.dismiss(self._items[n][0])
+
+    def action_pick_1(self) -> None: self._pick(0)
+    def action_pick_2(self) -> None: self._pick(1)
+    def action_pick_3(self) -> None: self._pick(2)
+    def action_pick_4(self) -> None: self._pick(3)
+    def action_pick_5(self) -> None: self._pick(4)
+    def action_pick_6(self) -> None: self._pick(5)
+    def action_pick_7(self) -> None: self._pick(6)
+    def action_pick_8(self) -> None: self._pick(7)
+    def action_pick_9(self) -> None: self._pick(8)
+
+    def action_cancel_picker(self) -> None:
+        self.dismiss(self._current)
+
+
 # ---- app --------------------------------------------------------------------
 
 
@@ -420,15 +514,10 @@ class AjDashboard(App):
         Binding("l", "show_logs", "Logs"),
         Binding("i", "show_info", "Info"),
         Binding("w", "toggle_ws", "Workspace"),
-        Binding("f", "cycle_status", "Status"),
-        Binding("e", "cycle_experiment", "Experiment"),
+        Binding("f", "pick_status", "Status"),
+        Binding("e", "pick_experiment", "Experiment"),
         Binding("F", "clear_filters", "Clear", show=False),
         Binding("slash", "search", "Search"),
-        Binding("1", "filter_all", "All", show=False),
-        Binding("2", "filter_running", "Running", show=False),
-        Binding("3", "filter_completed", "Completed", show=False),
-        Binding("4", "filter_failed", "Failed", show=False),
-        Binding("5", "filter_canceled", "Canceled", show=False),
         Binding("escape", "dismiss", "Back", show=False),
     ]
     ENABLE_COMMAND_PALETTE = True
@@ -767,7 +856,6 @@ class AjDashboard(App):
         for ws in workspaces:
             name = ws.get("name", "")
             rg = ws.get("resource_group", "")
-            loc = ws.get("location", "")
             t = Text()
             if name == cur_name:
                 t.append(" ● ", style="green")
@@ -775,8 +863,6 @@ class AjDashboard(App):
                 t.append("   ")
             t.append(name, style="bold")
             t.append(f"  {rg}", style="dim")
-            if loc:
-                t.append(f"  ({loc})", style="dim italic")
             ol.add_option(Option(t, id=name))
         ol.focus()
         if not workspaces:
@@ -1065,29 +1151,8 @@ class AjDashboard(App):
     def _set_filter(self, status: str) -> None:
         self._status_filter = status
         self._apply_filter()
-        self.notify(f"Filter: {status or 'All'}")
 
-    def action_filter_all(self) -> None:
-        """Show all jobs."""
-        self._set_filter("")
-
-    def action_filter_running(self) -> None:
-        """Show only running jobs."""
-        self._set_filter("Running")
-
-    def action_filter_completed(self) -> None:
-        """Show only completed jobs."""
-        self._set_filter("Completed")
-
-    def action_filter_failed(self) -> None:
-        """Show only failed jobs."""
-        self._set_filter("Failed")
-
-    def action_filter_canceled(self) -> None:
-        """Show only canceled jobs."""
-        self._set_filter("Canceled")
-
-    # ---- search / filter cycling -----------------------------------------------
+    # ---- search / filter pickers ---------------------------------------------
 
     def action_search(self) -> None:
         """Toggle the search bar."""
@@ -1111,34 +1176,45 @@ class AjDashboard(App):
             self.query_one("#search-bar").add_class("hidden")
             self.query_one("#job-list", OptionList).focus()
 
-    def action_cycle_status(self) -> None:
-        """Cycle status filter: All → Running → Completed → Failed → Canceled."""
-        try:
-            idx = _STATUS_CYCLE.index(self._status_filter)
-        except ValueError:
-            idx = 0
-        self._status_filter = _STATUS_CYCLE[(idx + 1) % len(_STATUS_CYCLE)]
-        self._apply_filter()
-        label = self._status_filter or "All"
-        self.notify(f"Status: {label}")
+    def action_pick_status(self) -> None:
+        """Open status picker."""
+        items: list[tuple[str, str]] = [("", "All")]
+        for s in _STATUS_CYCLE[1:]:
+            icon, sty = _icon_style(s)
+            items.append((s, f"[{sty}]{icon} {s}[/{sty}]"))
+        self.push_screen(
+            _PickerModal("Status", items, current=self._status_filter),
+            self._on_status_picked,
+        )
 
-    def action_cycle_experiment(self) -> None:
-        """Cycle experiment filter through unique experiments in loaded jobs."""
-        experiments = [""] + sorted({
+    def _on_status_picked(self, value: str) -> None:
+        if value != self._status_filter:
+            self._status_filter = value
+            self._apply_filter()
+            self.notify(f"Status: {value or 'All'}")
+
+    def action_pick_experiment(self) -> None:
+        """Open experiment picker."""
+        experiments = sorted({
             j.get("experiment", "") for j in self._all_jobs
             if j.get("experiment")
         })
-        if len(experiments) <= 1:
+        if not experiments:
             self.notify("No experiments to filter")
             return
-        try:
-            idx = experiments.index(self._experiment_filter)
-        except ValueError:
-            idx = 0
-        self._experiment_filter = experiments[(idx + 1) % len(experiments)]
-        self._apply_filter()
-        label = self._experiment_filter or "All"
-        self.notify(f"Experiment: {label}")
+        items: list[tuple[str, str]] = [("", "All")]
+        for exp in experiments:
+            items.append((exp, exp))
+        self.push_screen(
+            _PickerModal("Experiment", items, current=self._experiment_filter),
+            self._on_experiment_picked,
+        )
+
+    def _on_experiment_picked(self, value: str) -> None:
+        if value != self._experiment_filter:
+            self._experiment_filter = value
+            self._apply_filter()
+            self.notify(f"Experiment: {value or 'All'}")
 
     def action_clear_filters(self) -> None:
         """Clear all filters (status, experiment, search)."""
@@ -1146,7 +1222,6 @@ class AjDashboard(App):
         self._status_filter = ""
         self._experiment_filter = ""
         self._search_query = ""
-        # Also clear the search input if visible
         search_bar = self.query_one("#search-bar")
         if not search_bar.has_class("hidden"):
             self.query_one("#search-input", Input).value = ""
