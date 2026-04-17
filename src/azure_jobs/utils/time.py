@@ -134,6 +134,21 @@ def format_duration(seconds: int) -> str:
     return f"{seconds}s"
 
 
+def _parse_utc(s: str) -> datetime:
+    """Parse a UTC time string.  Handles both ``T`` and space separators."""
+    s = s.strip()
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
+        try:
+            return datetime.strptime(s, fmt).replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+    # Last resort: fromisoformat (Python 3.7+)
+    dt = datetime.fromisoformat(s)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
 def calc_duration(start_utc: str, end_utc: str) -> str:
     """Calculate duration between two UTC time strings.
 
@@ -142,17 +157,16 @@ def calc_duration(start_utc: str, end_utc: str) -> str:
     """
     if not start_utc:
         return ""
-    fmt = _DISPLAY_FMT
     if start_utc and end_utc:
         try:
-            t0 = datetime.strptime(start_utc, fmt).replace(tzinfo=timezone.utc)
-            t1 = datetime.strptime(end_utc, fmt).replace(tzinfo=timezone.utc)
+            t0 = _parse_utc(start_utc)
+            t1 = _parse_utc(end_utc)
             return format_duration(int((t1 - t0).total_seconds()))
         except ValueError:
             return ""
     # Running job — show elapsed time
     try:
-        t0 = datetime.strptime(start_utc, fmt).replace(tzinfo=timezone.utc)
+        t0 = _parse_utc(start_utc)
         elapsed = int((datetime.now(timezone.utc) - t0).total_seconds())
         return format_duration(elapsed) + " ↻"
     except ValueError:

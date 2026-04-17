@@ -380,6 +380,7 @@ def show_job_detail(job: dict[str, Any]) -> None:
     for label, key in [
         ("Name", "name"), ("Display Name", "display_name"),
         ("Type", "type"), ("Experiment", "experiment"),
+        ("Created by", "created_by"),
         ("Description", "description"), ("Tags", "tags"),
     ]:
         val = job.get(key, "")
@@ -402,6 +403,13 @@ def show_job_detail(job: dict[str, Any]) -> None:
         lines.append(_section.format("Resources"))
         lines.append(_sep)
         lines.append(f"    [dim]{'Compute':<16}[/dim]{job['compute']}")
+
+    # Outputs
+    if job.get("outputs"):
+        lines.append("")
+        lines.append(_section.format("Outputs"))
+        lines.append(_sep)
+        lines.append(f"    {job['outputs']}")
 
     # Timing
     if job.get("duration") or job.get("start_time") or job.get("created"):

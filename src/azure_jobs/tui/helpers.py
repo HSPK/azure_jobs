@@ -111,6 +111,8 @@ def info_block(job: dict[str, Any]) -> str:
         lines.append(f"    [dim]Type[/dim]           {job['type']}")
     if job.get("experiment"):
         lines.append(f"    [dim]Experiment[/dim]     {job['experiment']}")
+    if job.get("created_by"):
+        lines.append(f"    [dim]Created by[/dim]     {job['created_by']}")
     if job.get("description"):
         lines.append(f"    [dim]Description[/dim]    {job['description']}")
     if job.get("tags"):
@@ -136,6 +138,13 @@ def info_block(job: dict[str, Any]) -> str:
         lines.append("  [bold cyan]Resources[/bold cyan]")
         lines.append(f"  [dim]{'─' * 42}[/dim]")
         lines.append(f"    [dim]Compute[/dim]        {job['compute']}")
+
+    # ── Outputs ──
+    if job.get("outputs"):
+        lines.append("")
+        lines.append("  [bold cyan]Outputs[/bold cyan]")
+        lines.append(f"  [dim]{'─' * 42}[/dim]")
+        lines.append(f"    {job['outputs']}")
 
     # ── Timing ──
     has_time = job.get("duration") or job.get("start_time") or job.get("created")

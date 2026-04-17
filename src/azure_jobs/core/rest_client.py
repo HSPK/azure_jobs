@@ -86,6 +86,7 @@ class AzureMLJobsClient:
         self._data_token: str = ""
         self._data_token_expires: float = 0.0
         self._location: str | None = None
+        self._data_plane_base: str = ""  # set by _get_location
         self._session: requests.Session = requests.Session()
 
     # ---- auth ---------------------------------------------------------------
@@ -107,11 +108,34 @@ class AzureMLJobsClient:
         return {}  # token is on the session already
 
     def _ensure_data_token(self) -> str:
-        """Get auth token for the data plane (``ml.azure.com`` scope)."""
+        """Get auth token for the data plane.
+
+        The scope differs by cloud:
+        - Public: ``https://ml.azure.com/.default``
+        - China:  ``https://ml.azure.cn/.default``
+        Derived from ``_data_plane_base`` so it works for any cloud.
+        """
         if self._data_token and time.time() < self._data_token_expires - 60:
             return self._data_token
+        # Derive scope from data plane domain
+        self._get_location()  # ensure _data_plane_base is set
+        if self._data_plane_base:
+            from urllib.parse import urlparse
+            host = urlparse(self._data_plane_base).hostname or ""
+            # e.g. "chinaeast2.api.ml.azure.cn" → "ml.azure.cn"
+            parts = host.split(".")
+            # Find 'ml' or 'api' prefix, use the domain after the regional part
+            # Pattern: {region}.api.ml.{domain} → ml.{domain}
+            if "ml" in parts:
+                ml_idx = parts.index("ml")
+                scope_host = ".".join(parts[ml_idx:])
+            else:
+                scope_host = "ml.azure.com"
+            scope = f"https://{scope_host}/.default"
+        else:
+            scope = _ML_SCOPE
         from azure.identity import AzureCliCredential
-        tok = AzureCliCredential().get_token(_ML_SCOPE)
+        tok = AzureCliCredential().get_token(scope)
         self._data_token = tok.token
         self._data_token_expires = tok.expires_on
         return self._data_token
@@ -124,7 +148,13 @@ class AzureMLJobsClient:
         url = f"{self._base}?api-version={_API_VERSION}"
         resp = self._session.get(url, timeout=15)
         resp.raise_for_status()
-        self._location = resp.json().get("location", "")
+        ws = resp.json()
+        self._location = ws.get("location", "")
+        # Cache discovery URL for data-plane base
+        disc = (ws.get("properties", {}).get("discoveryUrl", "") or "").rstrip("/")
+        if disc.endswith("/discovery"):
+            disc = disc[: -len("/discovery")]
+        self._data_plane_base = disc  # e.g. https://chinaeast2.api.ml.azure.cn
         return self._location
 
     # ---- list jobs ----------------------------------------------------------
@@ -247,13 +277,17 @@ class AzureMLJobsClient:
         """Return ``{log_path: signed_url}`` for a run via Run History API.
 
         Works for **running** jobs (unlike ``ml_client.jobs.download()``).
-        The History API lives on the data plane at
-        ``https://{location}.api.azureml.ms``.
+        Uses the workspace's ``discoveryUrl`` to derive the data-plane base,
+        so it works for any cloud (public, China sovereign, etc.).
         """
-        location = self._get_location()
+        self._get_location()  # ensure _data_plane_base is set
+        if not self._data_plane_base:
+            return {}
         token = self._ensure_data_token()
-        base = f"https://{location}.api.azureml.ms"
-        url = f"{base}/history/v1.0/{self._scope_path}/runs/{job_name}"
+        url = (
+            f"{self._data_plane_base}/history/v1.0/"
+            f"{self._scope_path}/runs/{job_name}"
+        )
         resp = requests.get(
             url,
             headers={"Authorization": f"Bearer {token}"},
@@ -306,6 +340,9 @@ def _extract_rest_job(raw: dict[str, Any]) -> dict[str, Any]:
     # Created (sys_data already extracted above for queue_time)
     created = format_time(created_raw[:19]) if created_raw else ""
 
+    # Created by (user)
+    created_by = sys_data.get("createdBy", "") or ""
+
     # Error — dig into nested innerError for more detail
     error_msg = ""
     err = props.get("error", None)
@@ -325,6 +362,23 @@ def _extract_rest_job(raw: dict[str, Any]) -> dict[str, Any]:
     studio = services.get("Studio", {}) or {}
     portal_url = studio.get("endpoint", "") or ""
 
+    # Outputs — summarize as "key: type" pairs
+    outputs_raw = props.get("outputs", {}) or {}
+    outputs_parts: list[str] = []
+    for okey, oval in outputs_raw.items():
+        if isinstance(oval, dict):
+            otype = oval.get("jobOutputType", oval.get("type", ""))
+            uri = oval.get("uri", "")
+            if uri:
+                # Trim long ARM/azureml URIs to just the last segment
+                short_uri = uri.rsplit("/", 1)[-1] if "/" in uri else uri
+                outputs_parts.append(f"{okey} ({otype}: {short_uri})")
+            elif otype:
+                outputs_parts.append(f"{okey} ({otype})")
+            else:
+                outputs_parts.append(okey)
+    outputs_str = ", ".join(outputs_parts)
+
     return {
         "name": name,
         "display_name": props.get("displayName", "") or "",
@@ -342,5 +396,7 @@ def _extract_rest_job(raw: dict[str, Any]) -> dict[str, Any]:
         "environment": env_str,
         "command": (props.get("command", "") or "")[:200],
         "created": created,
+        "created_by": created_by,
+        "outputs": outputs_str,
         "error": error_msg,
     }
