@@ -450,8 +450,12 @@ class AjDashboard(WorkspaceMixin, App):
         idx = event.option_index
         if 0 <= idx < len(self._filtered):
             self._selected_idx = idx
-            self._show_job_info(self._filtered[idx])
+            job = self._filtered[idx]
+            self._show_job_info(job)
             self._logs_job = ""
+            # Auto-fetch detail for failed jobs missing error info
+            if job.get("status") == "Failed" and not job.get("error"):
+                self._fetch_single(job)
 
     def action_next_page(self) -> None:
         """Switch to the next page (→ key)."""
