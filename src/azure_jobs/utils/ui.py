@@ -7,13 +7,12 @@ so that `aj --help` stays fast.
 
 from __future__ import annotations
 
-from pathlib import Path
+from datetime import datetime, timezone
 from typing import Any
 
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
-from rich.text import Text
 from rich.theme import Theme
 
 _THEME = Theme(
@@ -30,6 +29,32 @@ _THEME = Theme(
 )
 
 console = Console(theme=_THEME, highlight=False)
+
+
+def _time_ago(iso_str: str) -> str:
+    """Convert an ISO 8601 timestamp to a human-readable relative time."""
+    try:
+        then = datetime.fromisoformat(iso_str)
+        if then.tzinfo is None:
+            then = then.replace(tzinfo=timezone.utc)
+        delta = datetime.now(timezone.utc) - then
+        secs = int(delta.total_seconds())
+        if secs < 60:
+            return "just now"
+        if secs < 3600:
+            m = secs // 60
+            return f"{m}m ago"
+        if secs < 86400:
+            h = secs // 3600
+            return f"{h}h ago"
+        d = secs // 86400
+        if d == 1:
+            return "yesterday"
+        if d < 30:
+            return f"{d}d ago"
+        return iso_str[:10]
+    except (ValueError, TypeError):
+        return str(iso_str)[:10]
 
 
 # ---------------------------------------------------------------------------
@@ -73,18 +98,32 @@ def show_submission_preview(
 # ---------------------------------------------------------------------------
 
 
-def show_template_table(templates: list[dict[str, Any]]) -> None:
+def show_template_table(
+    templates: list[dict[str, Any]],
+    *,
+    default_template: str | None = None,
+) -> None:
     """Display templates in a rich table."""
-    table = Table(title="Available Templates", show_lines=False, pad_edge=False)
+    table = Table(
+        show_header=True,
+        header_style="bold",
+        show_lines=False,
+        pad_edge=False,
+        title="[bold]Templates[/bold]",
+        title_style="",
+    )
     table.add_column("Name", style="highlight")
     table.add_column("Base", style="dim")
     table.add_column("Nodes", justify="right")
     table.add_column("Procs", justify="right")
-    table.add_column("SKU Pattern", style="dim")
+    table.add_column("SKU", style="dim")
 
     for t in templates:
+        name = t["name"]
+        if default_template and name == default_template:
+            name = f"{name} [dim](default)[/dim]"
         table.add_row(
-            t["name"],
+            name,
             t.get("base", "—"),
             str(t.get("nodes", "—")),
             str(t.get("processes", "—")),
@@ -107,33 +146,53 @@ _STATUS_STYLE = {
     "cancelled": "yellow",
 }
 
+_STATUS_ICON = {
+    "success": "✓",
+    "submitted": "↑",
+    "failed": "✗",
+    "cancelled": "○",
+}
+
 
 def show_jobs_table(records: list[dict[str, Any]]) -> None:
     """Display job records in a rich table."""
-    table = Table(title="Job History", show_lines=False, pad_edge=False)
-    table.add_column("ID", style="highlight")
+    if not records:
+        warning("No jobs found")
+        return
+
+    table = Table(
+        show_header=True,
+        header_style="bold",
+        show_lines=False,
+        pad_edge=False,
+        title="[bold]Jobs[/bold]",
+        title_style="",
+    )
+    table.add_column("ID", style="highlight", no_wrap=True)
+    table.add_column("Status", no_wrap=True)
     table.add_column("Template")
-    table.add_column("Nodes", justify="right")
-    table.add_column("Status")
-    table.add_column("Submitted", style="dim")
-    table.add_column("Command")
+    table.add_column("N", justify="right")
+    table.add_column("When", style="dim", no_wrap=True)
+    table.add_column("Command", ratio=1)
 
     for r in records:
         status = r.get("status", "unknown")
         style = _STATUS_STYLE.get(status, "white")
+        icon = _STATUS_ICON.get(status, "?")
         cmd_str = r.get("command", "")
         args = r.get("args", [])
         if args:
-            cmd_str += " " + " ".join(args[:2])
-            if len(args) > 2:
+            cmd_str += " " + " ".join(args[:3])
+            if len(args) > 3:
                 cmd_str += " …"
+        when = _time_ago(r.get("created_at", ""))
 
         table.add_row(
             r.get("id", "?"),
+            f"[{style}]{icon} {status}[/{style}]",
             r.get("template", "?"),
-            str(r.get("nodes", "?")),
-            f"[{style}]{status}[/{style}]",
-            r.get("created_at", "?")[:19],
+            str(r.get("nodes", "")),
+            when,
             cmd_str,
         )
 

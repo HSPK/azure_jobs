@@ -112,6 +112,81 @@ class TestListCommand:
         assert "No templates found" in result.output
 
 
+class TestTemplateListCommand:
+    def test_template_list_shows_table(self, aj_env):
+        write_template(aj_env["template_home"], "gpu", MINIMAL_JOB_CONF)
+        runner = CliRunner()
+        result = runner.invoke(main, ["template", "list"])
+        assert result.exit_code == 0
+        assert "gpu" in result.output
+        assert "Templates" in result.output
+
+    def test_template_list_marks_default(self, aj_env):
+        write_template(aj_env["template_home"], "gpu", MINIMAL_JOB_CONF)
+        write_template(aj_env["template_home"], "cpu", MINIMAL_JOB_CONF)
+        aj_env["config_fp"].write_text(json.dumps({"defaults": {"template": "gpu"}}))
+        runner = CliRunner()
+        result = runner.invoke(main, ["template", "list"])
+        assert result.exit_code == 0
+        assert "default" in result.output
+
+
+class TestJobListCommand:
+    def test_job_list_empty(self, aj_env):
+        runner = CliRunner()
+        result = runner.invoke(main, ["job", "list"])
+        assert result.exit_code == 0
+        assert "No jobs found" in result.output
+
+    def test_job_list_shows_records(self, aj_env):
+        record = {
+            "id": "abc12345",
+            "template": "gpu",
+            "nodes": 2,
+            "processes": 4,
+            "portal": "azure",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "status": "success",
+            "command": "python",
+            "args": ["train.py"],
+        }
+        aj_env["record_fp"].write_text(json.dumps(record) + "\n")
+        runner = CliRunner()
+        result = runner.invoke(main, ["job", "list"])
+        assert result.exit_code == 0
+        assert "abc12345" in result.output
+        assert "gpu" in result.output
+        assert "success" in result.output
+
+    def test_job_list_filter_by_template(self, aj_env):
+        r1 = json.dumps({"id": "a1", "template": "gpu", "nodes": 1, "processes": 1,
+                          "portal": "azure", "created_at": "2026-01-01T00:00:00",
+                          "status": "success", "command": "echo", "args": []})
+        r2 = json.dumps({"id": "b2", "template": "cpu", "nodes": 1, "processes": 1,
+                          "portal": "azure", "created_at": "2026-01-01T01:00:00",
+                          "status": "success", "command": "echo", "args": []})
+        aj_env["record_fp"].write_text(r1 + "\n" + r2 + "\n")
+        runner = CliRunner()
+        result = runner.invoke(main, ["job", "list", "-t", "gpu"])
+        assert result.exit_code == 0
+        assert "a1" in result.output
+        assert "b2" not in result.output
+
+    def test_job_list_filter_by_status(self, aj_env):
+        r1 = json.dumps({"id": "ok1", "template": "t", "nodes": 1, "processes": 1,
+                          "portal": "azure", "created_at": "2026-01-01T00:00:00",
+                          "status": "success", "command": "echo", "args": []})
+        r2 = json.dumps({"id": "fail1", "template": "t", "nodes": 1, "processes": 1,
+                          "portal": "azure", "created_at": "2026-01-01T01:00:00",
+                          "status": "failed", "command": "echo", "args": []})
+        aj_env["record_fp"].write_text(r1 + "\n" + r2 + "\n")
+        runner = CliRunner()
+        result = runner.invoke(main, ["job", "list", "-s", "failed"])
+        assert result.exit_code == 0
+        assert "fail1" in result.output
+        assert "ok1" not in result.output
+
+
 class TestRunCommand:
     def test_no_template_specified(self, aj_env):
         """When no -t and no default in config, should error."""
