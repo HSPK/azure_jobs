@@ -10,10 +10,13 @@ from azure_jobs.core.submit import (
     SubmitRequest,
     SubmitResult,
     _build_command_str,
+    _build_environment,
     _build_identity,
     _extract_error_message,
     _resolve_compute,
     _build_resources,
+    _SING_DUMMY_IMAGE,
+    _SING_IMAGE_PREFIX,
     build_request_from_config,
 )
 
@@ -266,6 +269,28 @@ class TestBuildResources:
         assert aisc["slaTier"] == "Premium"
         assert "virtualclusters/vc1" in aisc["VirtualClusterArmId"]
 
+    def test_sing_image_version_from_amlt_sing_prefix(self):
+        r = SubmitRequest(
+            name="j", compute="vc1", service="sing",
+            subscription_id="s", resource_group="r",
+            image="amlt-sing/acpt-torch2.7.1-py3.10-cuda12.6-ubuntu22.04",
+            env_vars={"_sku_raw": "1xC1"},
+        )
+        res = _build_resources(r)
+        aisc = res["properties"]["AISuperComputer"]
+        assert aisc["imageVersion"] == "acpt-torch2.7.1-py3.10-cuda12.6-ubuntu22.04"
+
+    def test_sing_image_version_empty_for_non_sing_image(self):
+        r = SubmitRequest(
+            name="j", compute="vc1", service="sing",
+            subscription_id="s", resource_group="r",
+            image="pytorch:2.0",
+            env_vars={"_sku_raw": "1xC1"},
+        )
+        res = _build_resources(r)
+        aisc = res["properties"]["AISuperComputer"]
+        assert aisc["imageVersion"] == ""
+
 
 class TestBuildRequestSingularity:
     def test_sing_config_populates_vc_fields(self):
@@ -312,3 +337,38 @@ class TestBuildIdentity:
         r = SubmitRequest(name="j", service="aml", identity="user")
         result = _build_identity(r)
         assert result is not None
+
+
+class TestBuildEnvironment:
+    def test_sing_curated_image_uses_dummy(self):
+        """amlt-sing/ images should be replaced with dummy MCR image."""
+        r = SubmitRequest(
+            name="j", service="sing",
+            image="amlt-sing/acpt-torch2.7.1-py3.10-cuda12.6-ubuntu22.04",
+        )
+        ml = MagicMock()
+        # Simulate no cached environment
+        ml.environments.get.side_effect = Exception("not found")
+        ml.environments.create_or_update.side_effect = Exception("skip")
+        env = _build_environment(r, ml)
+        assert env.image == _SING_DUMMY_IMAGE
+
+    def test_regular_image_unchanged(self):
+        """Non-sing images should be used as-is."""
+        r = SubmitRequest(name="j", service="aml", image="pytorch:2.0")
+        ml = MagicMock()
+        ml.environments.get.side_effect = Exception("not found")
+        ml.environments.create_or_update.side_effect = Exception("skip")
+        env = _build_environment(r, ml)
+        assert env.image == "pytorch:2.0"
+
+    def test_registry_prepended(self):
+        r = SubmitRequest(
+            name="j", service="aml",
+            image="pytorch:2.0", image_registry="docker.io",
+        )
+        ml = MagicMock()
+        ml.environments.get.side_effect = Exception("not found")
+        ml.environments.create_or_update.side_effect = Exception("skip")
+        env = _build_environment(r, ml)
+        assert env.image == "docker.io/pytorch:2.0"

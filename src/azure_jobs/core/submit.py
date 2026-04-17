@@ -154,8 +154,19 @@ def _get_ml_client(request: SubmitRequest) -> Any:
     )
 
 
-def _build_environment(request: SubmitRequest) -> Any:
-    """Build an Azure ML Environment from a Docker image."""
+_SING_IMAGE_PREFIX = "amlt-sing/"
+# Dummy environment image for Singularity — the actual image is specified
+# via imageVersion in the AISuperComputer resources dict.
+_SING_DUMMY_IMAGE = "mcr.microsoft.com/azureml/openmpi4.1.0-ubuntu20.04:latest"
+
+
+def _build_environment(request: SubmitRequest, ml_client: Any) -> Any:
+    """Build and register an Azure ML Environment from a Docker image.
+
+    For Singularity curated images (``amlt-sing/...``), uses a dummy MCR image
+    that passes Azure ML validation.  The real image is selected at runtime
+    by the Singularity platform via the ``imageVersion`` resource property.
+    """
     from azure.ai.ml.entities import Environment
 
     if request.image_registry:
@@ -163,7 +174,33 @@ def _build_environment(request: SubmitRequest) -> Any:
     else:
         image = request.image
 
-    return Environment(image=image)
+    # Singularity curated images: use dummy MCR image for Azure ML
+    if image.startswith(_SING_IMAGE_PREFIX) and request.service == "sing":
+        image = _SING_DUMMY_IMAGE
+
+    # Deterministic version from image string for caching
+    import hashlib
+
+    version = hashlib.sha256(image.encode()).hexdigest()[:16]
+    env_name = request.experiment_name or "aj"
+
+    # Reuse existing environment if available
+    try:
+        cached = ml_client.environments.get(name=env_name, version=version)
+        if isinstance(cached, Environment):
+            return cached
+    except Exception:
+        pass
+
+    env = Environment(name=env_name, version=version, image=image)
+    try:
+        registered = ml_client.environments.create_or_update(env)
+        if isinstance(registered, Environment):
+            return registered
+    except Exception:
+        pass
+    # Fallback: return unregistered environment
+    return env
 
 
 def _build_storage_mounts(request: SubmitRequest) -> dict[str, Any]:
@@ -232,6 +269,8 @@ def _build_resources(request: SubmitRequest) -> dict[str, Any] | None:
     """Build the ``resources`` dict for Singularity targets.
 
     AML targets return *None* (no special resources needed).
+    For Singularity curated images (``amlt-sing/...``), the ``imageVersion``
+    field tells the platform which image to use at runtime.
     """
     if request.service != "sing":
         return None
@@ -240,6 +279,12 @@ def _build_resources(request: SubmitRequest) -> dict[str, Any] | None:
     sku = request.env_vars.get("_sku_raw", "") or "D1"
     instance_type = f"Singularity.{sku}" if not sku.startswith("Singularity.") else sku
 
+    # For amlt-sing/ images, pass the alias so Singularity resolves at runtime
+    image_version = ""
+    image = request.image or ""
+    if image.startswith(_SING_IMAGE_PREFIX):
+        image_version = image[len(_SING_IMAGE_PREFIX):]
+
     return {
         "properties": {
             "AISuperComputer": {
@@ -247,7 +292,7 @@ def _build_resources(request: SubmitRequest) -> dict[str, Any] | None:
                 "instanceTypes": [instance_type],
                 "instanceCount": request.nodes,
                 "interactive": False,
-                "imageVersion": "",
+                "imageVersion": image_version,
                 "slaTier": request.sla_tier,
                 "Priority": request.priority,
                 "VirtualClusterArmId": arm_id,
@@ -296,7 +341,8 @@ def submit(request: SubmitRequest, on_status: Any = None) -> SubmitResult:
             ml_client = _get_ml_client(request)
 
         _status("environment", "Preparing environment…")
-        environment = _build_environment(request)
+        with _suppress_sdk_output():
+            environment = _build_environment(request, ml_client)
 
         _status("storage", f"Configuring {len(request.storage)} storage mount(s)…")
         inputs = _build_storage_mounts(request)
