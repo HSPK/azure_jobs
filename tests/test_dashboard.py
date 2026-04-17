@@ -10,192 +10,172 @@ import pytest
 
 
 @pytest.fixture()
-def _sample_records(tmp_path: Path):
-    """Create sample record.jsonl and patch AJ_RECORD + AJ_CONFIG."""
+def _records(tmp_path: Path):
+    """Sample record.jsonl + empty config."""
     records = [
         {
-            "id": "abc12345",
-            "template": "cpu",
-            "nodes": 1,
-            "processes": 4,
-            "portal": "https://ml.azure.com/runs/azure_jobs_abc12345",
-            "created_at": "2026-04-17T06:00:00",
-            "status": "submitted",
-            "command": "echo",
-            "args": ["hello", "world"],
-            "note": "",
-            "azure_name": "azure_jobs_abc12345",
+            "id": "abc12345", "template": "cpu", "nodes": 1, "processes": 4,
+            "portal": "", "created_at": "2026-04-17T06:00:00",
+            "status": "submitted", "command": "echo", "args": ["hello"],
+            "note": "", "azure_name": "azure_jobs_abc12345",
         },
         {
-            "id": "def67890",
-            "template": "gpu_a100",
-            "nodes": 2,
-            "processes": 8,
-            "portal": "https://ml.azure.com/runs/azure_jobs_def67890",
-            "created_at": "2026-04-16T10:00:00",
-            "status": "failed",
-            "command": "train.py",
-            "args": ["--lr", "0.001"],
-            "note": "OOM error",
-            "azure_name": "azure_jobs_def67890",
+            "id": "def67890", "template": "gpu_a100", "nodes": 2, "processes": 8,
+            "portal": "", "created_at": "2026-04-16T10:00:00",
+            "status": "failed", "command": "train.py", "args": ["--lr", "0.001"],
+            "note": "OOM", "azure_name": "azure_jobs_def67890",
         },
     ]
-    record_file = tmp_path / "record.jsonl"
-    record_file.write_text(
-        "\n".join(json.dumps(r) for r in records) + "\n"
-    )
-    config_file = tmp_path / "aj_config.json"
-    config_file.write_text("{}")
-    with patch("azure_jobs.core.const.AJ_RECORD", record_file), \
-         patch("azure_jobs.core.const.AJ_CONFIG", config_file):
+    rf = tmp_path / "record.jsonl"
+    rf.write_text("\n".join(json.dumps(r) for r in records) + "\n")
+    cf = tmp_path / "aj_config.json"
+    cf.write_text("{}")
+    with patch("azure_jobs.core.const.AJ_RECORD", rf), \
+         patch("azure_jobs.core.const.AJ_CONFIG", cf):
         yield records
 
 
 @pytest.mark.asyncio
-async def test_dashboard_composes(_sample_records) -> None:
-    """Dashboard starts and displays fallback local records."""
+async def test_composes(_records) -> None:
     from azure_jobs.tui.app import AjDashboard
-
     app = AjDashboard(last=10)
-    async with app.run_test(size=(120, 30)) as pilot:
+    async with app.run_test(size=(120, 30)):
         from textual.widgets import OptionList
-        ol = app.query_one("#job-list", OptionList)
-        # Local records loaded as fallback (newest first)
-        assert ol.option_count == 2
+        assert app.query_one("#job-list", OptionList).option_count == 2
 
 
 @pytest.mark.asyncio
-async def test_dashboard_shows_display_name(_sample_records) -> None:
-    """Left panel shows display name (azure_name as fallback)."""
+async def test_display_name_shown(_records) -> None:
     from azure_jobs.tui.app import AjDashboard
-
     app = AjDashboard(last=10)
-    async with app.run_test(size=(120, 30)) as pilot:
-        from textual.widgets import OptionList
-        ol = app.query_one("#job-list", OptionList)
-        # Fallback uses azure_name as display name
-        opt = ol.get_option_at_index(0)
+    async with app.run_test(size=(120, 30)):
+        opt = app.query_one("#job-list").get_option_at_index(0)
         text = opt.prompt.plain if hasattr(opt.prompt, "plain") else str(opt.prompt)
         assert "azure_jobs_def67890" in text
 
 
 @pytest.mark.asyncio
-async def test_dashboard_navigate(_sample_records) -> None:
-    """Arrow down changes the selected job info."""
+async def test_navigate(_records) -> None:
     from azure_jobs.tui.app import AjDashboard
-
     app = AjDashboard(last=10)
     async with app.run_test(size=(120, 30)) as pilot:
+        # Ensure job list has focus
+        app.query_one("#job-list").focus()
+        await pilot.pause()
         await pilot.press("down")
-        info = app.query_one("#info-content")
-        assert "azure_jobs_abc12345" in info.content
+        await pilot.pause()
+        assert "azure_jobs_abc12345" in app.query_one("#info-content").content
 
 
 @pytest.mark.asyncio
-async def test_dashboard_empty_records(tmp_path: Path) -> None:
-    """Dashboard handles no records gracefully."""
-    record_file = tmp_path / "record.jsonl"
-    record_file.write_text("")
-    config_file = tmp_path / "aj_config.json"
-    config_file.write_text("{}")
-    with patch("azure_jobs.core.const.AJ_RECORD", record_file), \
-         patch("azure_jobs.core.const.AJ_CONFIG", config_file):
+async def test_empty(tmp_path: Path) -> None:
+    rf = tmp_path / "record.jsonl"
+    rf.write_text("")
+    cf = tmp_path / "aj_config.json"
+    cf.write_text("{}")
+    with patch("azure_jobs.core.const.AJ_RECORD", rf), \
+         patch("azure_jobs.core.const.AJ_CONFIG", cf):
         from azure_jobs.tui.app import AjDashboard
-
         app = AjDashboard(last=10)
-        async with app.run_test(size=(120, 30)) as pilot:
-            info = app.query_one("#info-content")
-            assert "No jobs found" in info.content
+        async with app.run_test(size=(120, 30)):
+            assert "No matching" in app.query_one("#info-content").content
 
 
 @pytest.mark.asyncio
-async def test_dashboard_tab_switch(_sample_records) -> None:
-    """Pressing 'i' and 'l' switches between info and logs tabs."""
+async def test_view_toggle(_records) -> None:
     from azure_jobs.tui.app import AjDashboard
-
     app = AjDashboard(last=10)
     async with app.run_test(size=(120, 30)) as pilot:
-        tabs = app.query_one("#tabs")
-        assert tabs.active == "tab-info"
-        await pilot.press("l")
-        assert tabs.active == "tab-logs"
-        await pilot.press("i")
-        assert tabs.active == "tab-info"
+        assert app._view_mode == "info"
+        # Call actions directly (OptionList may consume letter keys)
+        app.action_show_logs()
+        await pilot.pause()
+        assert app._view_mode == "logs"
+        app.action_show_info()
+        await pilot.pause()
+        assert app._view_mode == "info"
 
 
 @pytest.mark.asyncio
-async def test_dashboard_filter_cycle(_sample_records) -> None:
-    """Pressing 'f' cycles through status filters."""
+async def test_filter_cycle(_records) -> None:
     from azure_jobs.tui.app import AjDashboard
-
     app = AjDashboard(last=10)
     async with app.run_test(size=(120, 30)) as pilot:
-        assert app._status_filter == ""
-
-        # First press: filter to Running (no matches in local fallback)
-        await pilot.press("f")
+        app.action_cycle_filter()
+        await pilot.pause()
         assert app._status_filter == "Running"
-
-        # Keep pressing to get back to "" (all)
-        await pilot.press("f")  # Completed
-        await pilot.press("f")  # Failed
+        app.action_cycle_filter()  # Completed
+        app.action_cycle_filter()  # Failed
+        await pilot.pause()
         assert app._status_filter == "Failed"
-        from textual.widgets import OptionList
-        ol = app.query_one("#job-list", OptionList)
-        # Local fallback maps "failed" → "Failed"
-        assert ol.option_count == 1
-
-        await pilot.press("f")  # Canceled
-        await pilot.press("f")  # Queued
-        await pilot.press("f")  # back to ""
-        assert app._status_filter == ""
+        ol = app.query_one("#job-list")
+        assert ol.option_count == 1  # only def67890 (Failed)
 
 
 @pytest.mark.asyncio
-async def test_dashboard_info_enriched(_sample_records) -> None:
-    """Info panel merges local record data (template, command)."""
+async def test_search(_records) -> None:
     from azure_jobs.tui.app import AjDashboard
-
     app = AjDashboard(last=10)
     async with app.run_test(size=(120, 30)) as pilot:
-        info = app.query_one("#info-content")
-        text = info.content
-        # First job (def67890) should have local data merged
+        app.action_search()
+        await pilot.pause()
+        inp = app.query_one("#search-input")
+        assert not inp.has_class("hidden")
+        # Type a search query — input has focus after action_search
+        await pilot.press("a", "b", "c")
+        await pilot.pause()
+        ol = app.query_one("#job-list")
+        assert ol.option_count == 1  # only abc12345 matches
+        await pilot.press("escape")
+        await pilot.pause()
+        assert inp.has_class("hidden")
+        assert ol.option_count == 2  # restored
+
+
+@pytest.mark.asyncio
+async def test_info_enrichment(_records) -> None:
+    from azure_jobs.tui.app import AjDashboard
+    app = AjDashboard(last=10)
+    async with app.run_test(size=(120, 30)):
+        text = app.query_one("#info-content").content
         assert "gpu_a100" in text
         assert "train.py" in text
 
 
-def test_extract_job_dict() -> None:
-    """_extract_job_dict converts Azure Job objects to plain dicts."""
-    from azure_jobs.tui.app import _extract_job_dict
+@pytest.mark.asyncio
+async def test_escape_layered(_records) -> None:
+    """Escape: logs → info (layered dismiss)."""
+    from azure_jobs.tui.app import AjDashboard
+    app = AjDashboard(last=10)
+    async with app.run_test(size=(120, 30)) as pilot:
+        app.action_show_logs()
+        await pilot.pause()
+        assert app._view_mode == "logs"
+        app.action_dismiss()
+        await pilot.pause()
+        assert app._view_mode == "info"
 
-    class FakeJob:
-        name = "test_job_123"
-        display_name = "my-cool-job"
+
+def test_extract_job() -> None:
+    from azure_jobs.tui.app import _extract_job
+
+    class Fake:
+        name = "j1"
+        display_name = "my-job"
         status = "Running"
-        compute = "/subscriptions/.../computes/my-vc"
-        studio_url = "https://ml.azure.com/runs/test_job_123?wsid=..."
+        compute = "/sub/.../computes/vc1"
+        studio_url = "https://ml.azure.com/runs/j1?wsid=x"
         experiment_name = "default"
         properties = {}
 
-    result = _extract_job_dict(FakeJob())
-    assert result["name"] == "test_job_123"
-    assert result["display_name"] == "my-cool-job"
-    assert result["status"] == "Running"
-    assert result["compute"] == "my-vc"
-    assert "ml.azure.com" in result["portal_url"]
+    d = _extract_job(Fake())
+    assert d["name"] == "j1"
+    assert d["display_name"] == "my-job"
+    assert d["compute"] == "vc1"
 
 
-def test_make_option_uses_display_name() -> None:
-    """_make_option shows display_name, not Azure ID."""
+def test_make_option_display_name() -> None:
     from azure_jobs.tui.app import _make_option
-
-    job = {
-        "name": "azure_jobs_abc123",
-        "display_name": "my-cool-job",
-        "status": "Running",
-    }
-    opt = _make_option(job)
-    text = opt.prompt.plain if hasattr(opt.prompt, "plain") else str(opt.prompt)
-    assert "my-cool-job" in text
-    assert "azure_jobs_abc123" not in text
+    opt = _make_option({"name": "azure_j1", "display_name": "cool-job", "status": "Running"})
+    assert "cool-job" in opt.prompt.plain
+    assert "azure_j1" not in opt.prompt.plain

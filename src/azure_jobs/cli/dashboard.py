@@ -9,7 +9,7 @@ from azure_jobs.cli import main
 
 @main.command(name="dash")
 @click.option(
-    "-n", "--last", default=50, show_default=True,
+    "-n", "--last", default=100, show_default=True,
     help="Number of recent jobs to show",
 )
 def dashboard(last: int) -> None:
@@ -21,7 +21,7 @@ def dashboard(last: int) -> None:
 
 
 @main.command(name="d", hidden=True)
-@click.option("-n", "--last", default=50)
+@click.option("-n", "--last", default=100)
 def _alias_d(last: int) -> None:
     """Shortcut for ``aj dash``."""
     dashboard.callback(last)
