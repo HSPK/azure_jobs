@@ -14,3 +14,4 @@ from . import run  # noqa: E402, F401
 from . import templates  # noqa: E402, F401
 from . import jobs  # noqa: E402, F401
 from . import images  # noqa: E402, F401
+from . import dashboard  # noqa: E402, F401
