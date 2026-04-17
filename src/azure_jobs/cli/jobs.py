@@ -110,14 +110,23 @@ def job_show(name: str, ws_name: str | None) -> None:
 
     NAME can be the short aj ID (e.g. f8e7eb32) or the full Azure job name.
     """
+    from requests.exceptions import HTTPError
+
     from azure_jobs.core.rest_client import create_rest_client
-    from azure_jobs.utils.ui import console, show_job_detail
+    from azure_jobs.utils.ui import console, error, show_job_detail
 
     name = _resolve_job_id(name)
     client = create_rest_client(ws_name=ws_name)
 
-    with console.status("[bold cyan]Fetching job…[/bold cyan]", spinner="dots"):
-        job = client.get_job(name)
+    try:
+        with console.status("[bold cyan]Fetching job…[/bold cyan]", spinner="dots"):
+            job = client.get_job(name)
+    except HTTPError as exc:
+        if exc.response is not None and exc.response.status_code == 404:
+            error(f"Job not found: [bold]{name}[/bold]")
+        else:
+            error(f"Failed to fetch job: {exc}")
+        raise SystemExit(1)
 
     show_job_detail(job)
 
@@ -134,14 +143,23 @@ def job_status(job_id: str) -> None:
 
     JOB_ID can be the short aj ID (e.g. f8e7eb32) or the full Azure job name.
     """
+    from requests.exceptions import HTTPError
+
     from azure_jobs.core.rest_client import create_rest_client
-    from azure_jobs.utils.ui import console, show_job_detail
+    from azure_jobs.utils.ui import console, error, show_job_detail
 
     azure_name = _resolve_job_id(job_id)
     client = create_rest_client()
 
-    with console.status("[bold cyan]Querying job status…[/bold cyan]", spinner="dots"):
-        job = client.get_job(azure_name)
+    try:
+        with console.status("[bold cyan]Querying job status…[/bold cyan]", spinner="dots"):
+            job = client.get_job(azure_name)
+    except HTTPError as exc:
+        if exc.response is not None and exc.response.status_code == 404:
+            error(f"Job not found: [bold]{azure_name}[/bold]")
+        else:
+            error(f"Failed to fetch job: {exc}")
+        raise SystemExit(1)
 
     show_job_detail(job)
 
