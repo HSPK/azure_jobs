@@ -97,17 +97,17 @@ def job_logs(job_id: str) -> None:
     Shows stdout/stderr output. For running jobs, streams until completion.
     JOB_ID can be the short aj ID or the full Azure job name.
     """
+    import io
+    import sys
+
     from azure_jobs.core.config import get_workspace_config
-    from azure_jobs.core.submit import get_job_logs
     from azure_jobs.utils.ui import console
 
     azure_name = _resolve_job_id(job_id)
     workspace = get_workspace_config()
 
     with console.status("[bold cyan]Connecting…[/bold cyan]", spinner="dots"):
-        # Pre-authenticate so the spinner shows during the slow part
-        from azure_jobs.core.submit import _quiet_azure_sdk, _suppress_sdk_output, _get_ml_client
-        from azure_jobs.core.submit import SubmitRequest
+        from azure_jobs.core.submit import _quiet_azure_sdk, _suppress_sdk_output
         _quiet_azure_sdk()
         with _suppress_sdk_output():
             from azure.ai.ml import MLClient
@@ -120,7 +120,18 @@ def job_logs(job_id: str) -> None:
                 workspace_name=workspace.get("workspace_name", ""),
             )
 
-    console.print(f"[dim]Streaming logs for {azure_name}…[/dim]")
+    # Show header panel
+    from azure_jobs.utils.ui import _short_portal_url
+    portal = f"ml.azure.com/runs/{azure_name}"
+    console.print()
+    console.print(f"[bold]Job Logs[/bold]  {azure_name}")
+    console.print(f"[dim]Portal  {_short_portal_url(portal)}[/dim]")
+    console.print()
+
+    # Capture stream() output and filter SDK boilerplate
+    old_stdout = sys.stdout
+    sys.stdout = buf = io.StringIO()
+    error_msg = ""
     try:
         ml_client.jobs.stream(azure_name)
     except Exception as exc:
@@ -131,11 +142,41 @@ def job_logs(job_id: str) -> None:
                 start = msg.index("{")
                 end = msg.rindex("}") + 1
                 err = _json.loads(msg[start:end])
-                console.print(f"[red]{err.get('error', {}).get('message', msg).strip()}[/red]")
+                error_msg = err.get("error", {}).get("message", msg).strip()
             except (ValueError, _json.JSONDecodeError):
-                console.print(f"[red]{msg}[/red]")
+                error_msg = msg
         else:
-            console.print(f"[red]{msg}[/red]")
+            error_msg = msg
+    finally:
+        sys.stdout = old_stdout
+
+    # Filter and print log content
+    raw = buf.getvalue()
+    _SKIP_PREFIXES = ("RunId:", "Web View:", "Execution Summary", "=====")
+    lines = raw.split("\n")
+    filtered: list[str] = []
+    for line in lines:
+        if any(line.startswith(p) for p in _SKIP_PREFIXES):
+            continue
+        filtered.append(line)
+
+    # Trim leading/trailing blank lines
+    while filtered and not filtered[0].strip():
+        filtered.pop(0)
+    while filtered and not filtered[-1].strip():
+        filtered.pop()
+
+    if filtered:
+        console.print("\n".join(filtered))
+        console.print()
+
+    if error_msg:
+        from rich.panel import Panel
+        console.print(Panel(
+            f"[red]{error_msg}[/red]",
+            title="[bold red]Error[/bold red]",
+            border_style="red",
+        ))
 
 
 def _resolve_job_id(job_id: str) -> str:
