@@ -49,7 +49,6 @@ from azure_jobs.tui.helpers import (  # noqa: F401, E402
     LEFT_WIDTH as _LEFT_WIDTH,
     NAME_MAX as _NAME_MAX,
     PAGE_SIZE as _PAGE_SIZE,
-    extract_job as _extract_job,
     fmt_dur as _fmt_dur,
     icon_style as _icon_style,
     info_block as _info_block,

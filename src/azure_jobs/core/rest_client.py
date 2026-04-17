@@ -258,7 +258,7 @@ class AzureMLJobsClient:
             f"{self._data_plane_base}/history/v1.0/"
             f"{self._scope_path}/runs/{job_name}"
         )
-        resp = requests.get(
+        resp = self._session.get(
             url,
             headers={"Authorization": f"Bearer {token}"},
             timeout=30,

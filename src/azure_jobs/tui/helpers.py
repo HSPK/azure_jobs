@@ -11,19 +11,9 @@ from typing import Any
 from rich.text import Text
 from textual.widgets.option_list import Option
 
-# ---- status maps ------------------------------------------------------------
+from azure_jobs.utils.ui import AZ_ICON, AZ_STYLE, icon_style, short_portal_url
 
-AZ_ICON: dict[str, str] = {
-    "Completed": "✓", "Running": "▶", "Starting": "◉", "Preparing": "◉",
-    "Queued": "◷", "Failed": "✗", "Canceled": "⊘", "CancelRequested": "⊘",
-    "NotStarted": "○", "Provisioning": "◉", "Finalizing": "◉",
-}
-AZ_STYLE: dict[str, str] = {
-    "Completed": "green", "Running": "cyan", "Starting": "cyan",
-    "Preparing": "yellow", "Queued": "yellow", "Failed": "red",
-    "Canceled": "dim", "CancelRequested": "dim yellow",
-    "NotStarted": "dim", "Provisioning": "yellow", "Finalizing": "cyan",
-}
+# ---- TUI-specific constants ------------------------------------------------
 
 STATUS_CYCLE = ["", "Running", "Completed", "Failed", "Canceled"]
 
@@ -45,8 +35,7 @@ def get_page_size() -> int:
 # ---- pure functions ---------------------------------------------------------
 
 
-def icon_style(status: str) -> tuple[str, str]:
-    return AZ_ICON.get(status, "?"), AZ_STYLE.get(status, "white")
+# icon_style imported from utils.ui
 
 
 def trunc(s: str, maxlen: int = NAME_MAX) -> str:
@@ -161,10 +150,8 @@ def info_block(job: dict[str, Any]) -> str:
     url = job.get("portal_url", "")
     if url:
         L.append(f"  [bold]{'─' * 46}[/bold]")
-        if "/runs/" in url:
-            short = url.split("/runs/", 1)[1].split("?")[0]
-            url = f"ml.azure.com/runs/{short}"
-        L.append(_kv("Portal", f"[underline]{url}[/underline]"))
+        short = short_portal_url(url, rich_link=False)
+        L.append(_kv("Portal", f"[underline]{short}[/underline]"))
 
     L.append("")
     return "\n".join(L)
@@ -173,76 +160,6 @@ def info_block(job: dict[str, Any]) -> str:
 def fmt_dur(secs: int) -> str:
     from azure_jobs.utils.time import format_duration
     return format_duration(secs)
-
-
-def extract_job(job_obj: Any) -> dict[str, Any]:
-    """Convert an Azure ML Job SDK object → plain dict.
-
-    Kept for backward compat — the TUI now uses the REST client, but this
-    is still imported by tests.
-    """
-    from azure_jobs.utils.time import calc_duration, format_time
-
-    props = getattr(job_obj, "properties", {}) or {}
-    start = props.get("StartTimeUtc", "")
-    end = props.get("EndTimeUtc", "")
-    duration = calc_duration(start, end)
-    start_display = format_time(start)
-    end_display = format_time(end)
-
-    compute = getattr(job_obj, "compute", "") or ""
-    if "/" in compute:
-        compute = compute.rstrip("/").rsplit("/", 1)[-1]
-
-    tags = getattr(job_obj, "tags", None) or {}
-    tags_str = ", ".join(f"{k}={v}" for k, v in tags.items()) if tags else ""
-
-    env_raw = getattr(job_obj, "environment", None) or ""
-    if hasattr(env_raw, "name"):
-        env_str = getattr(env_raw, "name", str(env_raw))
-    else:
-        env_str = str(env_raw) if env_raw else ""
-    if env_str and "/" in env_str:
-        env_str = env_str.rstrip("/").rsplit("/", 1)[-1]
-    if ":" in env_str:
-        env_str = env_str.rsplit(":", 1)[0]
-
-    ctx = getattr(job_obj, "creation_context", None)
-    created = ""
-    if ctx:
-        ct = getattr(ctx, "created_at", None)
-        if ct:
-            created = format_time(str(ct)[:19])
-
-    # Queue time (created → started)
-    queue_time = ""
-    if created and start:
-        queue_time = calc_duration(str(ct)[:19], start) if ctx and ct else ""
-
-    error_msg = ""
-    err = getattr(job_obj, "error", None)
-    if err:
-        error_msg = getattr(err, "message", str(err))[:200]
-
-    return {
-        "name": getattr(job_obj, "name", ""),
-        "display_name": getattr(job_obj, "display_name", "") or "",
-        "status": getattr(job_obj, "status", ""),
-        "compute": compute,
-        "portal_url": getattr(job_obj, "studio_url", "") or "",
-        "start_time": start_display,
-        "end_time": end_display,
-        "duration": duration,
-        "queue_time": queue_time,
-        "experiment": getattr(job_obj, "experiment_name", "") or "",
-        "type": getattr(job_obj, "type", "") or "",
-        "description": (getattr(job_obj, "description", "") or "")[:200],
-        "tags": tags_str,
-        "environment": env_str,
-        "command": (getattr(job_obj, "command", "") or "")[:200],
-        "created": created,
-        "error": error_msg,
-    }
 
 
 # ---- backward-compat aliases (tests import private names) -------------------
@@ -258,4 +175,3 @@ _trunc = trunc
 _make_option = make_option
 _kv = kv
 _info_block = info_block
-_extract_job = extract_job

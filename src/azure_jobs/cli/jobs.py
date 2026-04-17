@@ -204,14 +204,13 @@ def job_logs(job_id: str) -> None:
     display = job.get("display_name") or azure_name
 
     # Show header
-    from azure_jobs.tui.helpers import icon_style
-    from azure_jobs.utils.ui import _short_portal_url
+    from azure_jobs.utils.ui import icon_style, short_portal_url
 
     icon, sty = icon_style(status)
     portal = job.get("portal_url", "") or f"ml.azure.com/runs/{azure_name}"
     console.print()
     console.print(f"[bold]Job Logs[/bold]  {display}  [{sty}]{icon} {status}[/{sty}]")
-    console.print(f"[dim]Portal  {_short_portal_url(portal)}[/dim]")
+    console.print(f"[dim]Portal  {short_portal_url(portal)}[/dim]")
     console.print()
 
     if status in _NO_LOG_STATUSES:

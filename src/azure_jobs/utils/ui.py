@@ -223,42 +223,43 @@ def dim(msg: str) -> None:
 # Job status display
 # ---------------------------------------------------------------------------
 
-_JOB_STATUS_STYLE = {
-    "Completed": "bold green",
-    "Running": "bold cyan",
-    "Starting": "bold cyan",
-    "Preparing": "bold yellow",
-    "Queued": "yellow",
-    "Failed": "bold red",
-    "Canceled": "dim",
-    "CancelRequested": "dim yellow",
-    "NotStarted": "dim",
+AZ_ICON: dict[str, str] = {
+    "Completed": "✓", "Running": "▶", "Starting": "◉", "Preparing": "◉",
+    "Queued": "◷", "Failed": "✗", "Canceled": "⊘", "CancelRequested": "⊘",
+    "NotStarted": "○", "Provisioning": "◉", "Finalizing": "◉",
+}
+AZ_STYLE: dict[str, str] = {
+    "Completed": "bold green", "Running": "bold cyan", "Starting": "bold cyan",
+    "Preparing": "bold yellow", "Queued": "yellow", "Failed": "bold red",
+    "Canceled": "dim", "CancelRequested": "dim yellow",
+    "NotStarted": "dim", "Provisioning": "bold yellow", "Finalizing": "bold cyan",
 }
 
-_JOB_STATUS_ICON = {
-    "Completed": "✓",
-    "Running": "▶",
-    "Starting": "◉",
-    "Preparing": "◉",
-    "Queued": "◷",
-    "Failed": "✗",
-    "Canceled": "⊘",
-    "CancelRequested": "⊘",
-    "NotStarted": "○",
-}
+# backward-compat aliases
+_JOB_STATUS_STYLE = AZ_STYLE
+_JOB_STATUS_ICON = AZ_ICON
 
 
-def _short_portal_url(url: str) -> str:
-    """Render portal URL as a clickable Rich terminal link with short text."""
+def icon_style(status: str) -> tuple[str, str]:
+    """Return (icon, rich_style) for a job status string."""
+    return AZ_ICON.get(status, "?"), AZ_STYLE.get(status, "white")
+
+
+def short_portal_url(url: str, *, rich_link: bool = True) -> str:
+    """Shorten portal URL. If *rich_link* is True, wrap in Rich ``[link]`` markup."""
     if not url:
         return ""
-    # Extract the run ID from the URL for display text
-    # URL format: https://ml.azure.com/runs/<run_id>?wsid=...
     display = url
     if "/runs/" in url:
         run_part = url.split("/runs/", 1)[1].split("?")[0]
         display = f"ml.azure.com/runs/{run_part}"
-    return f"[link={url}]{display}[/link]"
+    if rich_link:
+        return f"[link={url}]{display}[/link]"
+    return display
+
+
+# backward-compat alias
+_short_portal_url = short_portal_url
 
 
 def show_job_status(job_status: Any) -> None:

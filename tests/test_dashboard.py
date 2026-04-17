@@ -212,23 +212,6 @@ async def test_switch_workspace(_dash) -> None:
         assert _dash._workspace["subscription_id"] == "sub-123"
 
 
-def test_extract_job() -> None:
-    from azure_jobs.tui.app import _extract_job
-
-    class Fake:
-        name = "j1"
-        display_name = "my-job"
-        status = "Running"
-        compute = "/sub/.../computes/vc1"
-        studio_url = "https://ml.azure.com/runs/j1?wsid=x"
-        experiment_name = "default"
-        properties = {}
-
-    d = _extract_job(Fake())
-    assert d["name"] == "j1"
-    assert d["display_name"] == "my-job"
-    assert d["compute"] == "vc1"
-
 
 def test_make_option_display_name() -> None:
     from azure_jobs.tui.app import _make_option
@@ -329,34 +312,6 @@ def test_info_block_new_fields() -> None:
     assert "python train.py" in block
     assert "OOM killed" in block
     assert "Created" in block
-
-
-def test_extract_job_new_fields() -> None:
-    """_extract_job captures type, description, tags, environment, command."""
-    from azure_jobs.tui.app import _extract_job
-
-    class Fake:
-        name = "j1"
-        display_name = "my-job"
-        status = "Running"
-        compute = "gpu"
-        studio_url = ""
-        experiment_name = "default"
-        properties = {}
-        type = "command"
-        description = "A test job"
-        tags = {"project": "alpha"}
-        environment = "curated-env"
-        command = "python train.py"
-        creation_context = None
-        error = None
-
-    d = _extract_job(Fake())
-    assert d["type"] == "command"
-    assert d["description"] == "A test job"
-    assert "project=alpha" in d["tags"]
-    assert d["environment"] == "curated-env"
-    assert d["command"] == "python train.py"
 
 
 @pytest.mark.asyncio
