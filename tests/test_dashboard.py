@@ -44,20 +44,24 @@ def _sample_records(tmp_path: Path) -> list[dict]:
     record_file.write_text(
         "\n".join(json.dumps(r) for r in records) + "\n"
     )
-    with patch("azure_jobs.core.const.AJ_RECORD", record_file):
+    # Also patch AJ_CONFIG to prevent workspace loading side-effects
+    config_file = tmp_path / "aj_config.json"
+    config_file.write_text("{}")
+    with patch("azure_jobs.core.const.AJ_RECORD", record_file), \
+         patch("azure_jobs.core.const.AJ_CONFIG", config_file):
         yield records
 
 
 @pytest.mark.asyncio
 async def test_dashboard_composes(_sample_records: list[dict]) -> None:
-    """The dashboard app starts and displays the job table."""
+    """The dashboard app starts and displays the job list."""
     from azure_jobs.tui.app import AjDashboard
 
     app = AjDashboard(last=10)
     async with app.run_test(size=(120, 30)) as pilot:
-        # Table should be populated
-        table = app.query_one("#job-table")
-        assert table.row_count == 2
+        from textual.widgets import OptionList
+        ol = app.query_one("#job-list", OptionList)
+        assert ol.option_count == 2
 
         # Info panel should show the first highlighted job
         # read_records returns newest-first, so def67890 is first
@@ -87,7 +91,10 @@ async def test_dashboard_empty_records(tmp_path: Path) -> None:
     """Dashboard handles no records gracefully."""
     record_file = tmp_path / "record.jsonl"
     record_file.write_text("")
-    with patch("azure_jobs.core.const.AJ_RECORD", record_file):
+    config_file = tmp_path / "aj_config.json"
+    config_file.write_text("{}")
+    with patch("azure_jobs.core.const.AJ_RECORD", record_file), \
+         patch("azure_jobs.core.const.AJ_CONFIG", config_file):
         from azure_jobs.tui.app import AjDashboard
 
         app = AjDashboard(last=10)
@@ -105,8 +112,9 @@ async def test_dashboard_refresh(_sample_records: list[dict]) -> None:
     app = AjDashboard(last=10)
     async with app.run_test(size=(120, 30)) as pilot:
         await pilot.press("r")
-        table = app.query_one("#job-table")
-        assert table.row_count == 2
+        from textual.widgets import OptionList
+        ol = app.query_one("#job-list", OptionList)
+        assert ol.option_count == 2
 
 
 @pytest.mark.asyncio
@@ -124,3 +132,21 @@ async def test_dashboard_tab_switch(_sample_records: list[dict]) -> None:
 
         await pilot.press("i")
         assert tabs.active == "tab-info"
+
+
+@pytest.mark.asyncio
+async def test_dashboard_local_info_fields(_sample_records: list[dict]) -> None:
+    """Info panel displays all expected local record fields."""
+    from azure_jobs.tui.app import AjDashboard
+
+    app = AjDashboard(last=10)
+    async with app.run_test(size=(120, 30)) as pilot:
+        info = app.query_one("#info-content")
+        text = info.content
+        # First record is def67890 (newest-first)
+        assert "def67890" in text
+        assert "azure_jobs_def67890" in text
+        assert "gpu_a100" in text
+        assert "OOM error" in text
+        assert "Nodes" in text
+        assert "Procs" in text
