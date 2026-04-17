@@ -275,15 +275,45 @@ class TestTemplateDiffCommand:
         runner = CliRunner()
 
         def mock_run(cmd, **kwargs):
+            # Only git clone is subprocess now; diff uses Python difflib
             if "clone" in cmd:
+                # Create a clone dir that mirrors AJ_HOME so no diffs
+                from azure_jobs.core import const as _const
+                dest = cmd[-1]
+                import shutil as _sh
+                _sh.copytree(str(_const.AJ_HOME), dest, dirs_exist_ok=True)
                 return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
-            # diff -rq returns empty (no differences)
             return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
 
         with patch("azure_jobs.cli.templates.subprocess.run", side_effect=mock_run):
             result = runner.invoke(main, ["template", "diff"])
         assert result.exit_code == 0
         assert "No differences" in result.output
+
+    def test_diff_shows_changes(self, aj_env):
+        aj_env["config_fp"].write_text(
+            json.dumps({"repo_id": "git@github.com:u/r.git"})
+        )
+        # Write a local-only file so difflib finds a difference
+        (aj_env["aj_home"] / "template").mkdir(parents=True, exist_ok=True)
+        (aj_env["aj_home"] / "template" / "base.yaml").write_text("local: true\n")
+        runner = CliRunner()
+
+        def mock_run(cmd, **kwargs):
+            if "clone" in cmd:
+                dest = cmd[-1]
+                Path(dest).mkdir(parents=True, exist_ok=True)
+                tdir = Path(dest) / "template"
+                tdir.mkdir()
+                (tdir / "base.yaml").write_text("remote: true\n")
+                return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+        with patch("azure_jobs.cli.templates.subprocess.run", side_effect=mock_run):
+            result = runner.invoke(main, ["template", "diff"])
+        assert result.exit_code == 0
+        # Should contain diff markers
+        assert "remote" in result.output or "local" in result.output
 
 
 class TestJobListCommand:

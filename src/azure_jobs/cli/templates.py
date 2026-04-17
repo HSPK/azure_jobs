@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+from pathlib import Path
 
 import click
 import yaml
@@ -145,6 +146,8 @@ def template_validate(name: str | None) -> None:
 @template_group.command(name="diff")
 def template_diff() -> None:
     """Show local changes compared to the remote repository."""
+    import difflib
+    import filecmp
     import tempfile
 
     config = read_config()
@@ -155,6 +158,28 @@ def template_diff() -> None:
         )
     if not const.AJ_HOME.exists():
         raise click.ClickException("No AJ home found. Run `aj pull` first.")
+
+    _EXCLUDE = {".git", "aj_config.json", "submission", "record.jsonl"}
+
+    def _collect_files(root: Path) -> dict[str, Path]:
+        """Walk *root* and return {relative_posix_path: absolute_path}."""
+        files: dict[str, Path] = {}
+        for p in root.rglob("*"):
+            if not p.is_file():
+                continue
+            rel = p.relative_to(root)
+            if any(part in _EXCLUDE for part in rel.parts):
+                continue
+            files[rel.as_posix()] = p
+        return files
+
+    def _unified_diff(rel: str, a_path: Path | None, b_path: Path | None) -> list[str]:
+        a_lines = a_path.read_text(errors="replace").splitlines(keepends=True) if a_path else []
+        b_lines = b_path.read_text(errors="replace").splitlines(keepends=True) if b_path else []
+        return list(difflib.unified_diff(
+            a_lines, b_lines,
+            fromfile=f"remote/{rel}", tofile=f"local/{rel}",
+        ))
 
     with tempfile.TemporaryDirectory() as tmp:
         try:
@@ -168,28 +193,29 @@ def template_diff() -> None:
                 f"Failed to clone remote: {exc.stderr.strip()}"
             )
 
-        result = subprocess.run(
-            ["diff", "-rq", "--exclude=.git", "--exclude=aj_config.json",
-             "--exclude=submission", "--exclude=record.jsonl",
-             tmp, str(const.AJ_HOME)],
-            capture_output=True, text=True,
-        )
+        remote_files = _collect_files(Path(tmp))
+        local_files = _collect_files(const.AJ_HOME)
+        all_keys = sorted(set(remote_files) | set(local_files))
 
-        if not result.stdout.strip():
+        diff_output: list[str] = []
+        for key in all_keys:
+            r = remote_files.get(key)
+            l = local_files.get(key)  # noqa: E741
+            if r and l:
+                if not filecmp.cmp(str(r), str(l), shallow=False):
+                    diff_output.extend(_unified_diff(key, r, l))
+            elif r and not l:
+                diff_output.extend(_unified_diff(key, r, None))
+            else:
+                diff_output.extend(_unified_diff(key, None, l))
+
+        if not diff_output:
             info("No differences with remote")
             return
 
-        # Show detailed diff
-        detail = subprocess.run(
-            ["diff", "-ru", "--exclude=.git", "--exclude=aj_config.json",
-             "--exclude=submission", "--exclude=record.jsonl",
-             "--color=never",
-             tmp, str(const.AJ_HOME)],
-            capture_output=True, text=True,
-        )
         from rich.syntax import Syntax
         console.print()
-        console.print(Syntax(detail.stdout, "diff", theme="monokai", line_numbers=False))
+        console.print(Syntax("".join(diff_output), "diff", theme="monokai", line_numbers=False))
 
 
 # ---------------------------------------------------------------------------
