@@ -26,6 +26,7 @@ from azure_jobs.utils.time import calc_duration, format_time
 _MGMT = "https://management.azure.com"
 _API_VERSION = "2024-04-01"
 _SCOPE = "https://management.azure.com/.default"
+_ML_SCOPE = "https://ml.azure.com/.default"
 
 
 def create_rest_client(
@@ -74,8 +75,17 @@ class AzureMLJobsClient:
             f"/providers/Microsoft.MachineLearningServices"
             f"/workspaces/{workspace_name}"
         )
+        self._scope_path = (
+            f"subscriptions/{subscription_id}"
+            f"/resourceGroups/{resource_group}"
+            f"/providers/Microsoft.MachineLearningServices"
+            f"/workspaces/{workspace_name}"
+        )
         self._token: str = ""
         self._token_expires: float = 0.0
+        self._data_token: str = ""
+        self._data_token_expires: float = 0.0
+        self._location: str | None = None
         self._session: requests.Session = requests.Session()
 
     # ---- auth ---------------------------------------------------------------
@@ -95,6 +105,27 @@ class AzureMLJobsClient:
     def _headers(self) -> dict[str, str]:
         self._ensure_token()
         return {}  # token is on the session already
+
+    def _ensure_data_token(self) -> str:
+        """Get auth token for the data plane (``ml.azure.com`` scope)."""
+        if self._data_token and time.time() < self._data_token_expires - 60:
+            return self._data_token
+        from azure.identity import AzureCliCredential
+        tok = AzureCliCredential().get_token(_ML_SCOPE)
+        self._data_token = tok.token
+        self._data_token_expires = tok.expires_on
+        return self._data_token
+
+    def _get_location(self) -> str:
+        """Workspace Azure region (lazy, cached)."""
+        if self._location:
+            return self._location
+        self._ensure_token()
+        url = f"{self._base}?api-version={_API_VERSION}"
+        resp = self._session.get(url, timeout=15)
+        resp.raise_for_status()
+        self._location = resp.json().get("location", "")
+        return self._location
 
     # ---- list jobs ----------------------------------------------------------
 
@@ -209,6 +240,27 @@ class AzureMLJobsClient:
         url = f"{self._base}/jobs/{name}/cancel?api-version={_API_VERSION}"
         resp = self._session.post(url, timeout=30)
         resp.raise_for_status()
+
+    # ---- log content (data plane – Run History API) -------------------------
+
+    def get_run_log_urls(self, job_name: str) -> dict[str, str]:
+        """Return ``{log_path: signed_url}`` for a run via Run History API.
+
+        Works for **running** jobs (unlike ``ml_client.jobs.download()``).
+        The History API lives on the data plane at
+        ``https://{location}.api.azureml.ms``.
+        """
+        location = self._get_location()
+        token = self._ensure_data_token()
+        base = f"https://{location}.api.azureml.ms"
+        url = f"{base}/history/v1.0/{self._scope_path}/runs/{job_name}"
+        resp = requests.get(
+            url,
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=30,
+        )
+        resp.raise_for_status()
+        return resp.json().get("logFiles", {}) or {}
 
 
 # ---- extraction ------------------------------------------------------------

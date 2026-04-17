@@ -549,28 +549,29 @@ class AjDashboard(WorkspaceMixin, App):
     def _fetch_logs(self, azure_name: str) -> None:
         """Download job logs (fast, no blocking stream)."""
         worker = get_current_worker()
+        job_status = ""
 
         # Phase 1: Check job status via REST (fast, no SDK)
         if self._rest_client:
             try:
                 job = self._rest_client.get_job(azure_name)
-                status = job.get("status", "")
+                job_status = job.get("status", "")
                 if worker.is_cancelled:
                     return
-                if status in self._NO_LOG_STATUSES:
-                    icon, sty = icon_style(status)
+                if job_status in self._NO_LOG_STATUSES:
+                    icon, sty = icon_style(job_status)
                     self.call_from_thread(
                         self._log_status,
-                        f"[{sty}]{icon} {status}[/{sty}]  "
+                        f"[{sty}]{icon} {job_status}[/{sty}]  "
                         f"— Logs not available yet.\n\n"
-                        f"[dim]The job is still {status.lower()}. "
+                        f"[dim]The job is still {job_status.lower()}. "
                         f"Press [bold]L[/bold] again when it starts running.[/dim]",
                     )
                     return
-                icon, sty = icon_style(status)
+                icon, sty = icon_style(job_status)
                 self.call_from_thread(
                     self._log_status,
-                    f"[{sty}]{icon} {status}[/{sty}]  "
+                    f"[{sty}]{icon} {job_status}[/{sty}]  "
                     f"[dim]Downloading logs…[/dim]",
                 )
             except Exception:
@@ -579,14 +580,18 @@ class AjDashboard(WorkspaceMixin, App):
         if worker.is_cancelled:
             return
 
-        # Phase 2: Download log files (SDK download, not stream)
+        # Phase 2: Download log files
         self.call_from_thread(
             self._log_status, "[dim]Downloading log files…[/dim]",
         )
 
         from azure_jobs.core.log_download import download_job_logs
 
-        content, error_msg = download_job_logs(azure_name)
+        content, error_msg = download_job_logs(
+            azure_name,
+            status=job_status,
+            rest_client=self._rest_client,
+        )
 
         if worker.is_cancelled:
             return

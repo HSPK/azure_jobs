@@ -516,6 +516,22 @@ class TestJobLogsCommand:
         assert result.exit_code == 0
         assert "Hello from training" in result.output
 
+    def test_logs_running_job(self, aj_env):
+        """Running jobs should also fetch logs (via History API path)."""
+        from unittest.mock import MagicMock, patch as mock_patch
+
+        mock_client = MagicMock()
+        mock_client.get_job.return_value = {
+            "name": "some-job", "display_name": "my-train",
+            "status": "Running", "portal_url": "",
+        }
+        with mock_patch("azure_jobs.core.rest_client.create_rest_client", return_value=mock_client), \
+             mock_patch("azure_jobs.core.log_download.download_job_logs", return_value=("Epoch 1/10 loss=0.5", "")):
+            runner = CliRunner()
+            result = runner.invoke(main, ["job", "logs", "some-job"])
+        assert result.exit_code == 0
+        assert "Epoch 1/10" in result.output
+
 
 class TestRunCommand:
     def test_no_template_specified(self, aj_env):

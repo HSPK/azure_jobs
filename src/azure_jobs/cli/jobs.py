@@ -224,7 +224,9 @@ def job_logs(job_id: str) -> None:
     from azure_jobs.core.log_download import download_job_logs
 
     with console.status("[bold cyan]Downloading logs…[/bold cyan]", spinner="dots"):
-        content, error_msg = download_job_logs(azure_name)
+        content, error_msg = download_job_logs(
+            azure_name, status=status, rest_client=client,
+        )
 
     if content:
         console.print(content)
