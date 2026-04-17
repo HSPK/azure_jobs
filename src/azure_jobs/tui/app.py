@@ -22,7 +22,9 @@ from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.screen import ModalScreen
 from textual.widgets import (
+    Button,
     Footer,
     OptionList,
     RichLog,
@@ -94,41 +96,65 @@ def _info_block(job: dict[str, Any]) -> str:
     icon, sty = _icon_style(job.get("status", ""))
     status = job.get("status", "?")
 
-    # Header with status badge
+    # ── Status badge ──
     lines.append("")
     lines.append(f"  [{sty} bold]{icon} {status}[/{sty} bold]")
+    if job.get("error"):
+        lines.append(f"  [red]{job['error']}[/red]")
     lines.append("")
 
-    # Identity section
+    # ── Identity ──
     lines.append("  [bold cyan]Identity[/bold cyan]")
     lines.append(f"  [dim]{'─' * 42}[/dim]")
     if display and display != name:
-        lines.append(f"    [dim]Name[/dim]         {display}")
-    lines.append(f"    [dim]ID[/dim]           {name}")
+        lines.append(f"    [dim]Name[/dim]           {display}")
+    lines.append(f"    [dim]ID[/dim]             {name}")
+    if job.get("type"):
+        lines.append(f"    [dim]Type[/dim]           {job['type']}")
     if job.get("experiment"):
-        lines.append(f"    [dim]Experiment[/dim]   {job['experiment']}")
+        lines.append(f"    [dim]Experiment[/dim]     {job['experiment']}")
+    if job.get("description"):
+        lines.append(f"    [dim]Description[/dim]    {job['description']}")
+    if job.get("tags"):
+        lines.append(f"    [dim]Tags[/dim]           {job['tags']}")
 
-    # Resources
+    # ── Configuration ──
+    has_config = job.get("environment") or job.get("command")
+    if has_config:
+        lines.append("")
+        lines.append("  [bold cyan]Configuration[/bold cyan]")
+        lines.append(f"  [dim]{'─' * 42}[/dim]")
+        if job.get("environment"):
+            lines.append(f"    [dim]Environment[/dim]    {job['environment']}")
+        if job.get("command"):
+            cmd = job["command"]
+            if len(cmd) > 80:
+                cmd = cmd[:77] + "..."
+            lines.append(f"    [dim]Command[/dim]        {cmd}")
+
+    # ── Resources ──
     if job.get("compute"):
         lines.append("")
         lines.append("  [bold cyan]Resources[/bold cyan]")
         lines.append(f"  [dim]{'─' * 42}[/dim]")
-        lines.append(f"    [dim]Compute[/dim]      {job['compute']}")
+        lines.append(f"    [dim]Compute[/dim]        {job['compute']}")
 
-    # Timing
-    has_time = job.get("duration") or job.get("start_time")
+    # ── Timing ──
+    has_time = job.get("duration") or job.get("start_time") or job.get("created")
     if has_time:
         lines.append("")
         lines.append("  [bold cyan]Timing[/bold cyan]")
         lines.append(f"  [dim]{'─' * 42}[/dim]")
-        if job.get("duration"):
-            lines.append(f"    [dim]Duration[/dim]     {job['duration']}")
+        if job.get("created"):
+            lines.append(f"    [dim]Created[/dim]        {job['created']}")
         if job.get("start_time"):
-            lines.append(f"    [dim]Started[/dim]      {job['start_time']}")
+            lines.append(f"    [dim]Started[/dim]        {job['start_time']}")
         if job.get("end_time"):
-            lines.append(f"    [dim]Ended[/dim]        {job['end_time']}")
+            lines.append(f"    [dim]Ended[/dim]          {job['end_time']}")
+        if job.get("duration"):
+            lines.append(f"    [dim]Duration[/dim]       {job['duration']}")
 
-    # Portal link
+    # ── Links ──
     url = job.get("portal_url", "")
     if url:
         lines.append("")
@@ -137,8 +163,9 @@ def _info_block(job: dict[str, Any]) -> str:
         if "/runs/" in url:
             short = url.split("/runs/", 1)[1].split("?")[0]
             url = f"ml.azure.com/runs/{short}"
-        lines.append(f"    [dim]Portal[/dim]       [underline]{url}[/underline]")
+        lines.append(f"    [dim]Portal[/dim]         [underline]{url}[/underline]")
 
+    lines.append("")
     return "\n".join(lines)
 
 
@@ -177,6 +204,37 @@ def _extract_job(job_obj: Any) -> dict[str, Any]:
     if "/" in compute:
         compute = compute.rstrip("/").rsplit("/", 1)[-1]
 
+    # Tags → compact string
+    tags = getattr(job_obj, "tags", None) or {}
+    tags_str = ", ".join(f"{k}={v}" for k, v in tags.items()) if tags else ""
+
+    # Environment — may be string or object with .name
+    env_raw = getattr(job_obj, "environment", None) or ""
+    if hasattr(env_raw, "name"):
+        env_str = getattr(env_raw, "name", str(env_raw))
+    else:
+        env_str = str(env_raw) if env_raw else ""
+    # Trim long ARM IDs to just the resource name
+    if env_str and "/" in env_str:
+        env_str = env_str.rstrip("/").rsplit("/", 1)[-1]
+    # Strip version suffix from environment references like "env:1"
+    if ":" in env_str:
+        env_str = env_str.rsplit(":", 1)[0]
+
+    # Creation time
+    ctx = getattr(job_obj, "creation_context", None)
+    created = ""
+    if ctx:
+        ct = getattr(ctx, "created_at", None)
+        if ct:
+            created = str(ct)[:19]  # "YYYY-MM-DD HH:MM:SS"
+
+    # Error message for failed jobs
+    error_msg = ""
+    err = getattr(job_obj, "error", None)
+    if err:
+        error_msg = getattr(err, "message", str(err))[:200]
+
     return {
         "name": getattr(job_obj, "name", ""),
         "display_name": getattr(job_obj, "display_name", "") or "",
@@ -187,7 +245,77 @@ def _extract_job(job_obj: Any) -> dict[str, Any]:
         "end_time": end,
         "duration": duration,
         "experiment": getattr(job_obj, "experiment_name", "") or "",
+        "type": getattr(job_obj, "type", "") or "",
+        "description": (getattr(job_obj, "description", "") or "")[:200],
+        "tags": tags_str,
+        "environment": env_str,
+        "command": (getattr(job_obj, "command", "") or "")[:200],
+        "created": created,
+        "error": error_msg,
     }
+
+
+# ---- cancel confirmation modal ----------------------------------------------
+
+
+class _ConfirmCancel(ModalScreen[bool]):
+    """Modal dialog asking user to confirm job cancellation."""
+
+    CSS = """
+    _ConfirmCancel {
+        align: center middle;
+    }
+    #confirm-dialog {
+        width: 56;
+        height: auto;
+        max-height: 12;
+        border: thick $accent;
+        background: $surface;
+        padding: 1 2;
+    }
+    #confirm-msg {
+        width: 100%;
+        margin-bottom: 1;
+    }
+    #confirm-btns {
+        width: 100%;
+        height: 3;
+        align: center middle;
+    }
+    #confirm-btns Button {
+        margin: 0 1;
+        min-width: 12;
+    }
+    """
+
+    BINDINGS = [
+        Binding("y", "confirm", "Yes", show=False),
+        Binding("n", "cancel_dialog", "No", show=False),
+        Binding("escape", "cancel_dialog", "Cancel", show=False),
+    ]
+
+    def __init__(self, job_display: str, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._job_display = job_display
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="confirm-dialog"):
+            yield Static(
+                f"Cancel job [bold]{self._job_display}[/bold]?",
+                id="confirm-msg",
+            )
+            with Horizontal(id="confirm-btns"):
+                yield Button("[Y]es", variant="error", id="btn-yes")
+                yield Button("[N]o", variant="default", id="btn-no")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        self.dismiss(event.button.id == "btn-yes")
+
+    def action_confirm(self) -> None:
+        self.dismiss(True)
+
+    def action_cancel_dialog(self) -> None:
+        self.dismiss(False)
 
 
 # ---- app --------------------------------------------------------------------
@@ -434,7 +562,6 @@ class AjDashboard(App):
     def _fetch_next_page(self) -> None:
         """Fetch next page in background (triggered by scroll)."""
         worker = get_current_worker()
-        self._fetching = True
         try:
             self._fetch_page_sync(worker)
         finally:
@@ -662,10 +789,15 @@ class AjDashboard(App):
             self._selected_idx = idx
             self._show_job_info(self._filtered[idx])
             self._logs_job = ""
-            # Pagination: fetch more when near the bottom
-            if (self._has_more and not self._fetching
-                    and idx >= len(self._filtered) - 5):
-                self._fetch_next_page()
+            self._maybe_load_more(idx)
+
+    def _maybe_load_more(self, idx: int) -> None:
+        """Trigger pagination when the highlighted item is near the bottom."""
+        if (self._has_more and not self._fetching
+                and idx >= len(self._filtered) - 5):
+            self._fetching = True
+            self.notify("Loading more…", timeout=2)
+            self._fetch_next_page()
 
     # ---- right pane: info ---------------------------------------------------
 
@@ -909,8 +1041,16 @@ class AjDashboard(App):
     def action_cancel_job(self) -> None:
         if 0 <= self._selected_idx < len(self._filtered):
             job = self._filtered[self._selected_idx]
+            display = job.get("display_name") or job.get("name", "?")
+            self.push_screen(_ConfirmCancel(display), self._on_cancel_confirmed)
+
+    def _on_cancel_confirmed(self, confirmed: bool) -> None:
+        if not confirmed:
+            return
+        if 0 <= self._selected_idx < len(self._filtered):
+            job = self._filtered[self._selected_idx]
             self.query_one("#info-content", Static).update(
-                _kv([("", "")], hint="Cancelling...")
+                _kv([("", "")], hint="Cancelling…")
             )
             self._do_cancel(job)
 

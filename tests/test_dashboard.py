@@ -298,3 +298,74 @@ def test_info_block_sections() -> None:
     assert "j1" in block
 
 
+def test_info_block_new_fields() -> None:
+    """Info block shows type, description, tags, environment, command, error."""
+    from azure_jobs.tui.app import _info_block
+    job = {
+        "name": "j2", "display_name": "sweep-run", "status": "Failed",
+        "compute": "gpu-v100", "experiment": "nlp",
+        "duration": "10m", "start_time": "2026-01-01 00:00:00",
+        "end_time": "2026-01-01 00:10:00",
+        "portal_url": "https://ml.azure.com/runs/j2?wsid=x",
+        "type": "sweep", "description": "Hyperparameter sweep",
+        "tags": "project=alpha, team=ml", "environment": "pytorch-env",
+        "command": "python train.py --lr 0.001",
+        "created": "2026-01-01 00:00:00", "error": "OOM killed",
+    }
+    block = _info_block(job)
+    assert "Configuration" in block
+    assert "sweep" in block
+    assert "Hyperparameter sweep" in block
+    assert "project=alpha" in block
+    assert "pytorch-env" in block
+    assert "python train.py" in block
+    assert "OOM killed" in block
+    assert "Created" in block
+
+
+def test_extract_job_new_fields() -> None:
+    """_extract_job captures type, description, tags, environment, command."""
+    from azure_jobs.tui.app import _extract_job
+
+    class Fake:
+        name = "j1"
+        display_name = "my-job"
+        status = "Running"
+        compute = "gpu"
+        studio_url = ""
+        experiment_name = "default"
+        properties = {}
+        type = "command"
+        description = "A test job"
+        tags = {"project": "alpha"}
+        environment = "curated-env"
+        command = "python train.py"
+        creation_context = None
+        error = None
+
+    d = _extract_job(Fake())
+    assert d["type"] == "command"
+    assert d["description"] == "A test job"
+    assert "project=alpha" in d["tags"]
+    assert d["environment"] == "curated-env"
+    assert d["command"] == "python train.py"
+
+
+@pytest.mark.asyncio
+async def test_cancel_shows_modal(_dash) -> None:
+    """Pressing cancel opens the confirmation modal."""
+    async with _dash.run_test(size=(120, 30)) as pilot:
+        await _load_jobs(_dash, pilot)
+        await pilot.pause()
+        _dash.action_cancel_job()
+        await pilot.pause()
+        from azure_jobs.tui.app import _ConfirmCancel
+        screens = [s for s in _dash.screen_stack if isinstance(s, _ConfirmCancel)]
+        assert len(screens) == 1
+        # Dismiss with 'n' — should not crash
+        await pilot.press("n")
+        await pilot.pause()
+        screens = [s for s in _dash.screen_stack if isinstance(s, _ConfirmCancel)]
+        assert len(screens) == 0
+
+
