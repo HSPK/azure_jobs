@@ -518,3 +518,66 @@ def test_picker_modal_instantiation() -> None:
     modal = _PickerModal("Test", items, current="")
     assert modal._items == items
     assert modal._current == ""
+
+
+@pytest.mark.asyncio
+async def test_log_line_numbers(_dash) -> None:
+    """_append_log_line adds numbered lines to RichLog."""
+    async with _dash.run_test(size=(120, 30)) as pilot:
+        await _load_jobs(_dash, pilot)
+        await pilot.pause()
+        _dash.action_show_logs()
+        await pilot.pause()
+        lw = _dash.query_one("#log-content")
+        lw.clear()
+        _dash._log_line_count = 0
+        _dash._append_log_line("hello world")
+        _dash._append_log_line("second line")
+        await pilot.pause()
+        assert _dash._log_line_count == 2
+
+
+@pytest.mark.asyncio
+async def test_auto_scroll_toggle(_dash) -> None:
+    """s toggles auto-scroll state."""
+    async with _dash.run_test(size=(120, 30)) as pilot:
+        await _load_jobs(_dash, pilot)
+        await pilot.pause()
+        assert _dash._auto_scroll is True
+        _dash.action_toggle_scroll()
+        await pilot.pause()
+        assert _dash._auto_scroll is False
+        _dash.action_toggle_scroll()
+        await pilot.pause()
+        assert _dash._auto_scroll is True
+
+
+@pytest.mark.asyncio
+async def test_log_reset_on_job_switch(_dash) -> None:
+    """Switching to logs for a new job resets line counter."""
+    async with _dash.run_test(size=(120, 30)) as pilot:
+        await _load_jobs(_dash, pilot)
+        await pilot.pause()
+        _dash._log_line_count = 42
+        _dash._logs_job = ""
+        _dash.action_show_logs()
+        await pilot.pause()
+        assert _dash._log_line_count == 0
+
+
+@pytest.mark.asyncio
+async def test_tab_title_shows_scroll_state(_dash) -> None:
+    """Tab title reflects auto-scroll indicator when in logs mode."""
+    async with _dash.run_test(size=(120, 30)) as pilot:
+        await _load_jobs(_dash, pilot)
+        await pilot.pause()
+        _dash.action_show_logs()
+        await pilot.pause()
+        rp = _dash.query_one("#right-pane")
+        title = str(rp.border_title)
+        assert "⤓" in title  # auto-scroll ON
+        _dash._auto_scroll = False
+        _dash._update_tab_title()
+        await pilot.pause()
+        title = str(rp.border_title)
+        assert "⏸" in title  # auto-scroll OFF

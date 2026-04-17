@@ -498,6 +498,7 @@ class AjDashboard(App):
         Binding("c", "cancel_job", "Cancel"),
         Binding("l", "show_logs", "Logs"),
         Binding("i", "show_info", "Info"),
+        Binding("s", "toggle_scroll", "Scroll", show=False),
         Binding("w", "pick_workspace", "Workspace"),
         Binding("f", "pick_status", "Status"),
         Binding("e", "pick_experiment", "Experiment"),
@@ -523,6 +524,9 @@ class AjDashboard(App):
         self._selected_idx: int = -1
         self._logs_job: str = ""
         self._ml_client: Any = None
+        self._log_line_count: int = 0
+        self._auto_scroll: bool = True
+        self._log_streaming: bool = False
         self._status_filter: str = ""
         self._experiment_filter: str = ""
         self._search_query: str = ""
@@ -727,10 +731,14 @@ class AjDashboard(App):
         self.query_one("#jobs-pane").border_title = "  ".join(parts)
 
     def _update_tab_title(self) -> None:
-        """Update right pane border-title to show active tab."""
+        """Update right pane border-title to show active tab + scroll state."""
         rp = self.query_one("#right-pane")
         if self._view_mode == "logs":
-            rp.border_title = "  Info  [bold reverse] Logs [/bold reverse]  "
+            scroll_icon = "⤓" if self._auto_scroll else "⏸"
+            rp.border_title = (
+                f"  Info  [bold reverse] Logs [/bold reverse]"
+                f"  [dim]{scroll_icon}[/dim]  "
+            )
         else:
             rp.border_title = "  [bold reverse] Info [/bold reverse]  Logs  "
 
@@ -957,6 +965,8 @@ class AjDashboard(App):
 
     # ---- right pane: logs ---------------------------------------------------
 
+    _SKIP_PREFIXES = ("RunId:", "Web View:", "Execution Summary", "=====")
+
     def action_show_logs(self) -> None:
         self._view_mode = "logs"
         self.query_one("#info-scroll").add_class("hidden")
@@ -968,9 +978,11 @@ class AjDashboard(App):
             name = job.get("name", "")
             if name != self._logs_job:
                 self._logs_job = name
+                self._log_line_count = 0
+                self._log_streaming = False
                 log_w = self.query_one("#log-content", RichLog)
                 log_w.clear()
-                log_w.write("[dim]Fetching logs...[/dim]")
+                log_w.write("[dim]Connecting to Azure ML…[/dim]")
                 self._fetch_logs(name)
 
     def action_show_info(self) -> None:
@@ -979,8 +991,24 @@ class AjDashboard(App):
         self.query_one("#info-scroll").remove_class("hidden")
         self._update_tab_title()
 
+    def action_toggle_scroll(self) -> None:
+        """Toggle auto-scroll for streaming logs."""
+        self._auto_scroll = not self._auto_scroll
+        self._update_tab_title()
+        state = "ON" if self._auto_scroll else "OFF"
+        self.notify(f"Auto-scroll {state}", timeout=2)
+
+    def _append_log_line(self, line: str) -> None:
+        """Append a single numbered log line to the RichLog widget."""
+        self._log_line_count += 1
+        lw = self.query_one("#log-content", RichLog)
+        num = f"[dim]{self._log_line_count:>5}[/dim] │ "
+        lw.write(f"{num}{line}", scroll_end=self._auto_scroll)
+
     @work(thread=True, exclusive=True, group="logs")
     def _fetch_logs(self, azure_name: str) -> None:
+        """Fetch job logs with incremental streaming to the RichLog widget."""
+        worker = get_current_worker()
         ml = self._get_or_create_ml_client()
         if ml is None:
             self.call_from_thread(
@@ -988,9 +1016,49 @@ class AjDashboard(App):
             )
             return
 
+        # Clear the "Connecting…" message and show streaming start
+        def _begin_stream() -> None:
+            lw = self.query_one("#log-content", RichLog)
+            lw.clear()
+            self._log_streaming = True
+
+        self.call_from_thread(_begin_stream)
+
+        # Custom file-like object that intercepts stdout writes line by line
+        app_ref = self
+        skip = self._SKIP_PREFIXES
+
+        class _StreamCapture(io.TextIOBase):
+            """Intercepts stdout writes and streams lines to the TUI."""
+
+            def __init__(self) -> None:
+                self._buf = ""
+
+            def write(self, s: str) -> int:
+                if worker.is_cancelled:
+                    return len(s)
+                self._buf += s
+                while "\n" in self._buf:
+                    line, self._buf = self._buf.split("\n", 1)
+                    if any(line.startswith(p) for p in skip):
+                        continue
+                    app_ref.call_from_thread(app_ref._append_log_line, line)
+                return len(s)
+
+            def flush(self) -> None:
+                pass
+
+            def drain(self) -> None:
+                """Flush remaining partial line."""
+                if self._buf.strip() and not worker.is_cancelled:
+                    line = self._buf
+                    self._buf = ""
+                    if not any(line.startswith(p) for p in skip):
+                        app_ref.call_from_thread(app_ref._append_log_line, line)
+
+        capture = _StreamCapture()
         old_out = sys.stdout
-        buf = io.StringIO()
-        sys.stdout = buf
+        sys.stdout = capture  # type: ignore[assignment]
         error_msg = ""
         try:
             ml.jobs.stream(azure_name)
@@ -1008,27 +1076,28 @@ class AjDashboard(App):
                 error_msg = msg
         finally:
             sys.stdout = old_out
+            capture.drain()
 
-        raw = buf.getvalue()
-        _SKIP = ("RunId:", "Web View:", "Execution Summary", "=====")
-        lines = [ln for ln in raw.split("\n") if not any(ln.startswith(p) for p in _SKIP)]
-        while lines and not lines[0].strip():
-            lines.pop(0)
-        while lines and not lines[-1].strip():
-            lines.pop()
+        if worker.is_cancelled:
+            return
 
-        if not get_current_worker().is_cancelled:
-            self.call_from_thread(self._show_logs, "\n".join(lines), error_msg)
+        def _finish(err: str = error_msg) -> None:
+            self._log_streaming = False
+            lw = self.query_one("#log-content", RichLog)
+            if err:
+                lw.write(
+                    f"\n[bold red]Error:[/bold red] [red]{err}[/red]",
+                    scroll_end=self._auto_scroll,
+                )
+            if self._log_line_count == 0 and not err:
+                lw.write("[dim]No logs available.[/dim]")
+            elif not err:
+                lw.write(
+                    f"\n[dim]── End of logs ({self._log_line_count} lines) ──[/dim]",
+                    scroll_end=self._auto_scroll,
+                )
 
-    def _show_logs(self, content: str, error: str) -> None:
-        lw = self.query_one("#log-content", RichLog)
-        lw.clear()
-        if content.strip():
-            lw.write(content)
-        if error:
-            lw.write(f"\n[bold red]Error:[/bold red] [red]{error}[/red]")
-        if not content.strip() and not error:
-            lw.write("[dim]No logs available.[/dim]")
+        self.call_from_thread(_finish)
 
     # ---- actions ------------------------------------------------------------
 
