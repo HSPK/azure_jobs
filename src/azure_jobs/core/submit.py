@@ -251,13 +251,13 @@ def _build_storage_mounts(
                 pass
 
         # Build workspace-relative URI for the output
-        ws_id = (
-            f"/subscriptions/{request.subscription_id}"
+        uri = (
+            f"azureml://subscriptions/{request.subscription_id}"
             f"/resourceGroups/{request.resource_group}"
             f"/providers/Microsoft.MachineLearningServices"
             f"/workspaces/{request.workspace_name}"
+            f"/datastores/{ds_name}/paths/"
         )
-        uri = f"azureml://{ws_id}/datastores/{ds_name}/paths/"
 
         outputs[mount_name] = Output(type=AssetTypes.URI_FOLDER, path=uri)
         prop_key = f"AZURE_ML_OUTPUT_PathOnCompute_{mount_name}"
