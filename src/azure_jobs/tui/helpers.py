@@ -83,36 +83,44 @@ def info_block(job: dict[str, Any]) -> str:
     def _kv(label: str, val: str) -> str:
         return f"  [cyan]{label:>{W}}[/cyan]  {val}"
 
-    # ── Status badge + name ──
-    L.append(f"  {status_badge(status)}  [bold]{display}[/bold]")
-    if display != name:
-        L.append(f"  {'':>{W}}  [dim]{name}[/dim]")
+    def _hdr(title: str) -> str:
+        return f"  [bold cyan]{'─' * 3} {title} {'─' * (32 - len(title))}[/bold cyan]"
 
-    # ── Error (prominent, impossible to miss) ──
+    # ── Status badge ──
+    L.append(f"  {status_badge(status)}")
+
+    # ── Error (prominent, right after status) ──
     if job.get("error"):
         L.append("")
         L.append(f"  [bold white on red] ✗ ERROR [/bold white on red]")
         for err_line in job["error"].splitlines():
             L.append(f"  [red]{err_line}[/red]")
 
-    # ── Config ──
-    fields: list[str] = []
-    if job.get("type"):
-        fields.append(_kv("Type", job["type"]))
+    # ── Overview ──
+    L.append("")
+    L.append(_hdr("Overview"))
+    L.append(_kv("Name", f"[bold]{display}[/bold]"))
+    if display != name:
+        L.append(_kv("Run ID", f"[dim]{name}[/dim]"))
     if job.get("experiment"):
-        fields.append(_kv("Experiment", job["experiment"]))
-    if job.get("compute"):
-        fields.append(_kv("Compute", f"[bold]{job['compute']}[/bold]"))
-    if job.get("environment"):
-        fields.append(_kv("Env", job["environment"]))
-    if job.get("command"):
-        cmd = job["command"]
-        if len(cmd) > 50:
-            cmd = cmd[:47] + "…"
-        fields.append(_kv("Command", f"[dim]{cmd}[/dim]"))
-    if fields:
+        L.append(_kv("Experiment", job["experiment"]))
+    if job.get("type"):
+        L.append(_kv("Type", job["type"]))
+
+    # ── Compute ──
+    has_compute = job.get("compute") or job.get("environment") or job.get("command")
+    if has_compute:
         L.append("")
-        L.extend(fields)
+        L.append(_hdr("Compute"))
+        if job.get("compute"):
+            L.append(_kv("Target", f"[bold]{job['compute']}[/bold]"))
+        if job.get("environment"):
+            L.append(_kv("Env", job["environment"]))
+        if job.get("command"):
+            cmd = job["command"]
+            if len(cmd) > 50:
+                cmd = cmd[:47] + "…"
+            L.append(_kv("Command", f"[dim]{cmd}[/dim]"))
 
     # ── Timing ──
     timing: list[str] = []
@@ -133,6 +141,7 @@ def info_block(job: dict[str, Any]) -> str:
         timing.append(_kv("Queue", qt))
     if timing:
         L.append("")
+        L.append(_hdr("Timing"))
         L.extend(timing)
 
     # ── Meta ──
@@ -148,6 +157,7 @@ def info_block(job: dict[str, Any]) -> str:
         meta.append(_kv("Description", desc))
     if meta:
         L.append("")
+        L.append(_hdr("Meta"))
         L.extend(meta)
 
     # ── Portal ──
@@ -158,6 +168,8 @@ def info_block(job: dict[str, Any]) -> str:
             short = f"https://{short}"
         L.append("")
         L.append(f"  [dim]→[/dim] [cyan underline]{short}[/cyan underline]")
+
+    return "\n".join(L)
 
     return "\n".join(L)
 

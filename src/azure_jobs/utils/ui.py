@@ -378,15 +378,16 @@ def show_job_detail(job: dict[str, Any]) -> None:
     def _kv(label: str, val: str) -> str:
         return f"  [cyan]{label:>{W}}[/cyan]  {val}"
 
-    # Status badge + name
+    def _hdr(title: str) -> str:
+        return f"  [bold cyan]{'─' * 3} {title} {'─' * (38 - len(title))}[/bold cyan]"
+
+    # Status badge
     status = job.get("status", "Unknown")
     display = job.get("display_name") or job.get("name", "")
     name = job.get("name", "")
-    lines.append(f"  {status_badge(status)}  [bold]{display}[/bold]")
-    if display != name:
-        lines.append(f"  {'':>{W}}  [dim]{name}[/dim]")
+    lines.append(f"  {status_badge(status)}")
 
-    # Error (prominent badge + red text)
+    # Error (prominent badge + red text, right after status)
     error_msg = job.get("error", "")
     if error_msg:
         lines.append("")
@@ -394,23 +395,31 @@ def show_job_detail(job: dict[str, Any]) -> None:
         for err_line in error_msg.splitlines():
             lines.append(f"  [red]{err_line}[/red]")
 
-    # Config
-    fields: list[str] = []
-    for label, key in [
-        ("Type", "type"), ("Experiment", "experiment"),
-        ("Compute", "compute"), ("Environment", "environment"),
-    ]:
-        val = job.get(key, "")
-        if val:
-            fields.append(_kv(label, f"[bold]{val}[/bold]" if key == "compute" else val))
-    if job.get("command"):
-        cmd = job["command"]
-        if len(cmd) > 70:
-            cmd = cmd[:67] + "…"
-        fields.append(_kv("Command", f"[dim]{cmd}[/dim]"))
-    if fields:
+    # Overview
+    lines.append("")
+    lines.append(_hdr("Overview"))
+    lines.append(_kv("Name", f"[bold]{display}[/bold]"))
+    if display != name:
+        lines.append(_kv("Run ID", f"[dim]{name}[/dim]"))
+    if job.get("experiment"):
+        lines.append(_kv("Experiment", job["experiment"]))
+    if job.get("type"):
+        lines.append(_kv("Type", job["type"]))
+
+    # Compute
+    has_compute = job.get("compute") or job.get("environment") or job.get("command")
+    if has_compute:
         lines.append("")
-        lines.extend(fields)
+        lines.append(_hdr("Compute"))
+        if job.get("compute"):
+            lines.append(_kv("Target", f"[bold]{job['compute']}[/bold]"))
+        if job.get("environment"):
+            lines.append(_kv("Env", job["environment"]))
+        if job.get("command"):
+            cmd = job["command"]
+            if len(cmd) > 70:
+                cmd = cmd[:67] + "…"
+            lines.append(_kv("Command", f"[dim]{cmd}[/dim]"))
 
     # Timing
     timing: list[str] = []
@@ -431,6 +440,7 @@ def show_job_detail(job: dict[str, Any]) -> None:
         timing.append(_kv("Queue", qt))
     if timing:
         lines.append("")
+        lines.append(_hdr("Timing"))
         lines.extend(timing)
 
     # Meta
@@ -446,6 +456,7 @@ def show_job_detail(job: dict[str, Any]) -> None:
         meta.append(_kv("Description", desc))
     if meta:
         lines.append("")
+        lines.append(_hdr("Meta"))
         lines.extend(meta)
 
     # Portal link

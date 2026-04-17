@@ -225,12 +225,22 @@ class AzureMLJobsClient:
     # ---- single job ---------------------------------------------------------
 
     def get_job(self, name: str) -> dict[str, Any]:
-        """Fetch a single job by name."""
+        """Fetch a single job by name, enriched with error from Run History."""
         self._ensure_token()
         url = f"{self._base}/jobs/{name}?api-version={_API_VERSION}"
         resp = self._session.get(url, timeout=30)
         resp.raise_for_status()
-        return _extract_rest_job(resp.json())
+        job = _extract_rest_job(resp.json())
+
+        # Management plane doesn't return error details — fetch from Run History
+        if job.get("status") == "Failed" and not job.get("error"):
+            try:
+                error = self._get_run_error(name)
+                if error:
+                    job["error"] = error
+            except Exception:
+                pass  # best-effort; don't block info display
+        return job
 
     # ---- cancel -------------------------------------------------------------
 
@@ -241,16 +251,11 @@ class AzureMLJobsClient:
         resp = self._session.post(url, timeout=30)
         resp.raise_for_status()
 
-    # ---- log content (data plane – Run History API) -------------------------
+    # ---- data plane (Run History API) ---------------------------------------
 
-    def get_run_log_urls(self, job_name: str) -> dict[str, str]:
-        """Return ``{log_path: signed_url}`` for a run via Run History API.
-
-        Works for **running** jobs (unlike ``ml_client.jobs.download()``).
-        Uses the workspace's ``discoveryUrl`` to derive the data-plane base,
-        so it works for any cloud (public, China sovereign, etc.).
-        """
-        self._get_location()  # ensure _data_plane_base is set
+    def _get_run_history(self, job_name: str) -> dict[str, Any]:
+        """Fetch the full Run History record for a job (data plane)."""
+        self._get_location()
         if not self._data_plane_base:
             return {}
         token = self._ensure_data_token()
@@ -264,7 +269,35 @@ class AzureMLJobsClient:
             timeout=30,
         )
         resp.raise_for_status()
-        return resp.json().get("logFiles", {}) or {}
+        return resp.json()
+
+    def _get_run_error(self, job_name: str) -> str:
+        """Extract error message from Run History API response."""
+        data = self._get_run_history(job_name)
+        err = data.get("error")
+        if not err:
+            return ""
+        # Run History wraps error as {"error": {"code": ..., "message": ...}}
+        if isinstance(err, dict):
+            inner = err.get("error", err)
+            if isinstance(inner, dict):
+                code = inner.get("code", "")
+                msg = inner.get("message", "")
+                if code and msg:
+                    return f"{code}: {msg}"[:500]
+                return (msg or code or str(inner))[:500]
+            return str(inner)[:500]
+        return str(err)[:500]
+
+    def get_run_log_urls(self, job_name: str) -> dict[str, str]:
+        """Return ``{log_path: signed_url}`` for a run via Run History API.
+
+        Works for **running** jobs (unlike ``ml_client.jobs.download()``).
+        Uses the workspace's ``discoveryUrl`` to derive the data-plane base,
+        so it works for any cloud (public, China sovereign, etc.).
+        """
+        data = self._get_run_history(job_name)
+        return data.get("logFiles", {}) or {}
 
 
 # ---- extraction ------------------------------------------------------------
