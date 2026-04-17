@@ -276,9 +276,12 @@ def run(
             raise SystemExit(1)
 
         rec.status = "submitted"
+        rec.azure_name = result.azure_name
         if result.portal_url:
             rec.portal = result.portal_url
-        success(f"Job [bold]{result.job_name}[/bold] submitted")
+        success(f"Job [bold]{name}[/bold] submitted")
+        if result.azure_name != name:
+            dim(f"Azure ID: {result.azure_name}")
         if result.portal_url:
             dim(f"Portal: {result.portal_url}")
     except SystemExit:

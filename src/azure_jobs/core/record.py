@@ -19,6 +19,7 @@ class SubmissionRecord:
     command: str
     args: list[str] = field(default_factory=list)
     note: str = ""
+    azure_name: str = ""  # Azure ML job name (for status queries)
 
 
 def log_record(record: SubmissionRecord) -> None:

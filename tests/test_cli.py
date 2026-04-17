@@ -342,6 +342,58 @@ class TestJobListCommand:
         assert "ok1" not in result.output
 
 
+class TestJobStatusCommand:
+    def test_status_by_azure_name(self, aj_env):
+        """Query status using Azure job name directly."""
+        from unittest.mock import MagicMock, patch
+        from azure_jobs.core.submit import JobStatus
+
+        mock_status = JobStatus(
+            azure_name="my-job-xyz",
+            display_name="azure_jobs_abc123",
+            status="Running",
+            duration="5m 30s (running)",
+            compute="msrresrchvc",
+            portal_url="https://ml.azure.com/runs/my-job-xyz",
+        )
+        with patch("azure_jobs.core.submit.get_job_status", return_value=mock_status), \
+             patch("azure_jobs.core.config.get_workspace_config", return_value={
+                 "subscription_id": "s", "resource_group": "r", "workspace_name": "w",
+             }):
+            runner = CliRunner()
+            result = runner.invoke(main, ["job", "status", "my-job-xyz"])
+        assert result.exit_code == 0
+        assert "Running" in result.output
+        assert "my-job-xyz" in result.output
+
+    def test_status_resolves_aj_id(self, aj_env):
+        """Short aj ID should resolve to azure_name via record.jsonl."""
+        from unittest.mock import MagicMock, patch
+        from azure_jobs.core.submit import JobStatus
+
+        record = json.dumps({
+            "id": "abc12345", "template": "cpu", "nodes": 1, "processes": 1,
+            "portal": "azure", "created_at": "2026-01-01T00:00:00",
+            "status": "submitted", "command": "echo", "args": [],
+            "azure_name": "resolved-azure-name",
+        })
+        aj_env["record_fp"].write_text(record + "\n")
+
+        mock_status = JobStatus(azure_name="resolved-azure-name", status="Completed")
+        with patch("azure_jobs.core.submit.get_job_status", return_value=mock_status) as mock_get, \
+             patch("azure_jobs.core.config.get_workspace_config", return_value={
+                 "subscription_id": "s", "resource_group": "r", "workspace_name": "w",
+             }):
+            runner = CliRunner()
+            result = runner.invoke(main, ["job", "status", "abc12345"])
+        # Should have resolved "abc12345" → "resolved-azure-name"
+        mock_get.assert_called_once_with("resolved-azure-name", {
+            "subscription_id": "s", "resource_group": "r", "workspace_name": "w",
+        })
+        assert result.exit_code == 0
+        assert "Completed" in result.output
+
+
 class TestRunCommand:
     def test_no_template_specified(self, aj_env):
         """When no -t and no default in config, should error."""

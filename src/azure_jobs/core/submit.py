@@ -133,8 +133,9 @@ def _extract_error_message(exc: Exception) -> str:
 class SubmitResult:
     """Result of a job submission."""
 
-    job_name: str
-    status: str  # "submitted" or "failed"
+    job_name: str  # our display name
+    azure_name: str = ""  # Azure-assigned job name (may differ for Singularity)
+    status: str = ""  # "submitted" or "failed"
     portal_url: str = ""
     error: str = ""
 
@@ -257,7 +258,13 @@ def _build_resources(request: SubmitRequest) -> dict[str, Any] | None:
 
 
 def _build_identity(request: SubmitRequest) -> Any | None:
-    """Build identity config."""
+    """Build identity config.
+
+    Singularity does not support identity config — return None.
+    """
+    if request.service == "sing":
+        return None
+
     from azure.ai.ml.entities import ManagedIdentityConfiguration, UserIdentityConfiguration
 
     if request.identity == "managed":
@@ -317,6 +324,7 @@ def submit(request: SubmitRequest, on_status: Any = None) -> SubmitResult:
         _status("submit", f"Submitting to {request.compute}…")
 
         job_kwargs: dict[str, Any] = dict(
+            name=request.name,
             display_name=request.name,
             description=request.description,
             experiment_name=request.experiment_name,
@@ -343,10 +351,12 @@ def submit(request: SubmitRequest, on_status: Any = None) -> SubmitResult:
         if hasattr(returned_job, "studio_url"):
             portal_url = returned_job.studio_url or ""
 
-        _status("done", f"Job {returned_job.name} submitted")
+        azure_name = returned_job.name or request.name
+        _status("done", f"Job {azure_name} submitted")
 
         return SubmitResult(
-            job_name=returned_job.name,
+            job_name=request.name,
+            azure_name=azure_name,
             status="submitted",
             portal_url=portal_url,
         )
@@ -418,3 +428,126 @@ def build_request_from_config(
         vc_subscription_id=target.get("subscription_id", ""),
         vc_resource_group=target.get("resource_group", ""),
     )
+
+
+@dataclass
+class JobStatus:
+    """Status of an Azure ML job."""
+
+    azure_name: str
+    display_name: str = ""
+    status: str = ""  # e.g. Running, Completed, Failed, Canceled, Queued
+    start_time: str = ""
+    end_time: str = ""
+    duration: str = ""
+    portal_url: str = ""
+    error: str = ""
+    compute: str = ""
+
+
+def get_job_status(
+    azure_name: str,
+    workspace: dict[str, str],
+) -> JobStatus:
+    """Query Azure ML for a job's current status.
+
+    Args:
+        azure_name: The Azure ML job name (returned_job.name).
+        workspace: dict with subscription_id, resource_group, workspace_name.
+
+    Returns:
+        JobStatus with current status information.
+    """
+    _quiet_azure_sdk()
+
+    try:
+        from azure.ai.ml import MLClient
+        from azure.identity import AzureCliCredential
+
+        with _suppress_sdk_output():
+            credential = AzureCliCredential()
+            ml_client = MLClient(
+                credential=credential,
+                subscription_id=workspace.get("subscription_id", ""),
+                resource_group_name=workspace.get("resource_group", ""),
+                workspace_name=workspace.get("workspace_name", ""),
+            )
+            job = ml_client.jobs.get(azure_name)
+
+        status = getattr(job, "status", "Unknown")
+        display_name = getattr(job, "display_name", "") or ""
+        portal_url = getattr(job, "studio_url", "") or ""
+        compute = getattr(job, "compute", "") or ""
+        # Extract just the compute name from ARM ID if present
+        if "/" in compute:
+            compute = compute.rstrip("/").rsplit("/", 1)[-1]
+
+        # Parse times
+        start_time = ""
+        end_time = ""
+        duration_str = ""
+        if hasattr(job, "creation_context"):
+            ctx = job.creation_context
+            if hasattr(ctx, "created_at") and ctx.created_at:
+                start_time = str(ctx.created_at)
+
+        if hasattr(job, "services") and job.services:
+            pass  # services info if needed later
+
+        # Try to compute duration from properties
+        start_dt = getattr(job, "creation_context", None)
+        if start_dt and hasattr(start_dt, "created_at") and start_dt.created_at:
+            from datetime import datetime, timezone
+            created = start_dt.created_at
+            if status in ("Completed", "Failed", "Canceled"):
+                # Use modified_at as end time
+                modified = getattr(start_dt, "last_modified_at", None)
+                if modified:
+                    delta = modified - created
+                    total_secs = int(delta.total_seconds())
+                    if total_secs >= 3600:
+                        duration_str = f"{total_secs // 3600}h {(total_secs % 3600) // 60}m"
+                    elif total_secs >= 60:
+                        duration_str = f"{total_secs // 60}m {total_secs % 60}s"
+                    else:
+                        duration_str = f"{total_secs}s"
+                    end_time = str(modified)
+            else:
+                # Still running — show elapsed
+                now = datetime.now(timezone.utc)
+                if created.tzinfo is None:
+                    created = created.replace(tzinfo=timezone.utc)
+                delta = now - created
+                total_secs = int(delta.total_seconds())
+                if total_secs >= 3600:
+                    duration_str = f"{total_secs // 3600}h {(total_secs % 3600) // 60}m (running)"
+                elif total_secs >= 60:
+                    duration_str = f"{total_secs // 60}m {total_secs % 60}s (running)"
+                else:
+                    duration_str = f"{total_secs}s (running)"
+
+        # Error info
+        error_msg = ""
+        if status == "Failed":
+            err = getattr(job, "error", None)
+            if err:
+                error_msg = getattr(err, "message", str(err))
+
+        return JobStatus(
+            azure_name=azure_name,
+            display_name=display_name,
+            status=status,
+            start_time=start_time,
+            end_time=end_time,
+            duration=duration_str,
+            portal_url=portal_url,
+            error=error_msg,
+            compute=compute,
+        )
+
+    except Exception as exc:
+        return JobStatus(
+            azure_name=azure_name,
+            status="error",
+            error=_extract_error_message(exc),
+        )

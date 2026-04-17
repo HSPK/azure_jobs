@@ -4,7 +4,7 @@ import click
 
 from azure_jobs.cli import main
 from azure_jobs.core.record import read_records
-from azure_jobs.utils.ui import show_jobs_table
+from azure_jobs.utils.ui import show_jobs_table, show_job_status
 
 
 @main.group(name="job")
@@ -37,3 +37,33 @@ def job_list(last: int, template: str | None, status: str | None) -> None:
 
     records = records[:last]
     show_jobs_table(records)
+
+
+@job_group.command(name="status")
+@click.argument("job_id")
+def job_status(job_id: str) -> None:
+    """Query the status of a submitted job.
+
+    JOB_ID can be the short aj ID (e.g. f8e7eb32) or the full Azure job name.
+    """
+    from rich.console import Console
+
+    from azure_jobs.core.config import get_workspace_config
+    from azure_jobs.core.submit import get_job_status
+
+    console = Console()
+
+    # Resolve job_id → azure_name via record.jsonl
+    azure_name = job_id
+    records = read_records()
+    for r in records:
+        if r.get("id") == job_id:
+            azure_name = r.get("azure_name") or job_id
+            break
+
+    workspace = get_workspace_config()
+
+    with console.status("[bold cyan]Querying job status…[/bold cyan]", spinner="dots"):
+        result = get_job_status(azure_name, workspace)
+
+    show_job_status(result)

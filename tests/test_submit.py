@@ -10,6 +10,7 @@ from azure_jobs.core.submit import (
     SubmitRequest,
     SubmitResult,
     _build_command_str,
+    _build_identity,
     _extract_error_message,
     _resolve_compute,
     _build_resources,
@@ -150,7 +151,8 @@ class TestSubmitMocked:
             result = submit(request)
 
         assert result.status == "submitted"
-        assert result.job_name == "test-job-abc"
+        assert result.job_name == "test-job"  # our display name
+        assert result.azure_name == "test-job-abc"  # Azure-assigned name
         assert "portal" in result.portal_url
 
     def test_submit_auth_failure(self):
@@ -294,3 +296,19 @@ class TestBuildRequestSingularity:
         ws = {"subscription_id": "s", "resource_group": "r", "workspace_name": "w"}
         r = build_request_from_config(conf, name="j", workspace=ws)
         assert "_sku_raw" not in r.env_vars
+
+
+class TestBuildIdentity:
+    def test_sing_returns_none(self):
+        r = SubmitRequest(name="j", service="sing", identity="managed")
+        assert _build_identity(r) is None
+
+    def test_aml_managed(self):
+        r = SubmitRequest(name="j", service="aml", identity="managed")
+        result = _build_identity(r)
+        assert result is not None
+
+    def test_aml_user(self):
+        r = SubmitRequest(name="j", service="aml", identity="user")
+        result = _build_identity(r)
+        assert result is not None

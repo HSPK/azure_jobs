@@ -237,3 +237,71 @@ def error(msg: str) -> None:
 
 def dim(msg: str) -> None:
     console.print(f"[dim]{msg}[/dim]")
+
+
+# ---------------------------------------------------------------------------
+# Job status display
+# ---------------------------------------------------------------------------
+
+_JOB_STATUS_STYLE = {
+    "Completed": "bold green",
+    "Running": "bold cyan",
+    "Starting": "bold cyan",
+    "Preparing": "bold yellow",
+    "Queued": "yellow",
+    "Failed": "bold red",
+    "Canceled": "dim",
+    "CancelRequested": "dim yellow",
+    "NotStarted": "dim",
+}
+
+_JOB_STATUS_ICON = {
+    "Completed": "✓",
+    "Running": "▶",
+    "Starting": "◉",
+    "Preparing": "◉",
+    "Queued": "◷",
+    "Failed": "✗",
+    "Canceled": "⊘",
+    "CancelRequested": "⊘",
+    "NotStarted": "○",
+}
+
+
+def show_job_status(job_status: Any) -> None:
+    """Display job status as a rich panel."""
+    status = job_status.status
+    style = _JOB_STATUS_STYLE.get(status, "white")
+    icon = _JOB_STATUS_ICON.get(status, "?")
+
+    rows = []
+    rows.append(("Status", f"[{style}]{icon} {status}[/{style}]"))
+    if job_status.display_name:
+        rows.append(("Name", job_status.display_name))
+    rows.append(("Azure ID", job_status.azure_name))
+    if job_status.compute:
+        rows.append(("Compute", job_status.compute))
+    if job_status.duration:
+        rows.append(("Duration", job_status.duration))
+    if job_status.start_time:
+        rows.append(("Started", job_status.start_time))
+    if job_status.end_time:
+        rows.append(("Ended", job_status.end_time))
+    if job_status.portal_url:
+        rows.append(("Portal", job_status.portal_url))
+    if job_status.error:
+        rows.append(("Error", f"[error]{job_status.error}[/error]"))
+
+    max_key_len = max(len(k) for k, _ in rows)
+    lines = []
+    for key, val in rows:
+        lines.append(f"  [key]{key:>{max_key_len}}[/key]  {val}")
+
+    console.print()
+    console.print(Panel(
+        "\n".join(lines),
+        title="[bold]Job Status[/bold]",
+        border_style="cyan",
+        expand=False,
+    ))
+    console.print()
