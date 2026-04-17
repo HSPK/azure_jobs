@@ -420,6 +420,10 @@ class AjDashboard(WorkspaceMixin, App):
         icon, sty = icon_style(job.get("status", ""))
         status = job.get("status", "?")
         display = job.get("display_name") or job.get("name", "")
+        # Truncate to avoid overflow in narrow panes
+        max_name = max(20, (rp.size.width or 60) - 20)
+        if len(display) > max_name:
+            display = display[:max_name - 1] + "…"
         rp.border_subtitle = f"{display}  [{sty}]{icon} {status}[/{sty}]"
 
     # ---- job list events ----------------------------------------------------

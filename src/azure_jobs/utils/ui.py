@@ -361,6 +361,9 @@ def show_job_detail(job: dict[str, Any]) -> None:
     def _kv(label: str, val: str) -> str:
         return f"    [dim]{label:<{W}}[/dim]{val}"
 
+    def _section(title: str) -> str:
+        return f"\n  [bold dim]▸ {title}[/bold dim]"
+
     # Header
     status = job.get("status", "Unknown")
     style = _JOB_STATUS_STYLE.get(status, "white")
@@ -369,7 +372,7 @@ def show_job_detail(job: dict[str, Any]) -> None:
     name = job.get("name", "")
     lines.append(f"  [{style} bold]{icon} {status}[/{style} bold]  [bold]{display}[/bold]")
     if display != name:
-        lines.append(f"    {'':>{W}}{' ' * 0}[dim]{name}[/dim]")
+        lines.append(f"    {'':>{W}}[dim]{name}[/dim]")
 
     # Error
     error_msg = job.get("error", "")
@@ -380,59 +383,64 @@ def show_job_detail(job: dict[str, Any]) -> None:
         lines.append(f"  [bold red]{'━' * 54}[/bold red]")
 
     # Details
-    _sep = f"  {'─' * 54}"
-    lines.append("")
-    lines.append(_sep)
+    details: list[str] = []
     for label, key in [
         ("Type", "type"), ("Experiment", "experiment"),
         ("Compute", "compute"), ("Environment", "environment"),
     ]:
         val = job.get(key, "")
         if val:
-            lines.append(_kv(label, val))
+            details.append(_kv(label, val))
     if job.get("command"):
         cmd = job["command"]
         if len(cmd) > 80:
             cmd = cmd[:77] + "…"
-        lines.append(_kv("Command", cmd))
+        details.append(_kv("Command", cmd))
+    if details:
+        lines.append(_section("Details"))
+        lines.extend(details)
 
     # Timing
-    has_time = job.get("duration") or job.get("start_time") or job.get("created")
-    if has_time:
-        lines.append(_sep)
-        for label, key in [
-            ("Created", "created"), ("Started", "start_time"),
-            ("Ended", "end_time"),
-        ]:
-            val = job.get(key, "")
-            if val:
-                lines.append(_kv(label, val))
-        dur = job.get("duration", "")
-        qt = job.get("queue_time", "")
-        if dur and qt:
-            lines.append(_kv("Duration", f"{dur}  [dim](queue {qt})[/dim]"))
-        elif dur:
-            lines.append(_kv("Duration", dur))
-        elif qt:
-            lines.append(_kv("Queue time", qt))
+    timing: list[str] = []
+    for label, key in [
+        ("Created", "created"), ("Started", "start_time"),
+        ("Ended", "end_time"),
+    ]:
+        val = job.get(key, "")
+        if val:
+            timing.append(_kv(label, val))
+    dur = job.get("duration", "")
+    qt = job.get("queue_time", "")
+    if dur and qt:
+        timing.append(_kv("Duration", f"{dur}  [dim](queue {qt})[/dim]"))
+    elif dur:
+        timing.append(_kv("Duration", dur))
+    elif qt:
+        timing.append(_kv("Queue time", qt))
+    if timing:
+        lines.append(_section("Timing"))
+        lines.extend(timing)
 
     # Meta
-    has_meta = job.get("created_by") or job.get("tags") or job.get("description")
-    if has_meta:
-        lines.append(_sep)
-        if job.get("created_by"):
-            lines.append(_kv("User", job["created_by"]))
-        if job.get("tags"):
-            lines.append(_kv("Tags", job["tags"]))
-        if job.get("description"):
-            lines.append(_kv("Description", job["description"]))
+    meta: list[str] = []
+    if job.get("created_by"):
+        meta.append(_kv("User", job["created_by"]))
+    if job.get("tags"):
+        meta.append(_kv("Tags", job["tags"]))
+    if job.get("description"):
+        meta.append(_kv("Description", job["description"]))
+    if meta:
+        lines.append(_section("Meta"))
+        lines.extend(meta)
 
     # Portal link
     if job.get("portal_url"):
-        lines.append(_sep)
-        lines.append(
-            _kv("Portal", _short_portal_url(job["portal_url"]))
-        )
+        url = job["portal_url"]
+        short = short_portal_url(url, rich_link=False)
+        if not short.startswith("http"):
+            short = f"https://{short}"
+        lines.append("")
+        lines.append(f"    [link={url}][dim cyan underline]{short}[/dim cyan underline][/link]")
 
     console.print()
     console.print(Panel(

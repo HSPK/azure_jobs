@@ -287,7 +287,7 @@ def test_info_block_sections() -> None:
     assert "gpu" in block
     assert "exp1" in block
     assert "Duration" in block
-    assert "Portal" in block
+    assert "ml.azure.com/runs/j1" in block
 
 
 def test_info_block_new_fields() -> None:

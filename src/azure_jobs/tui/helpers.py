@@ -20,7 +20,7 @@ STATUS_CYCLE = ["", "Running", "Completed", "Failed", "Canceled"]
 KW = 14
 LEFT_WIDTH = 38
 NAME_MAX = LEFT_WIDTH - 8
-PAGE_SIZE = 30
+PAGE_SIZE = 50
 
 
 def get_page_size() -> int:
@@ -79,14 +79,17 @@ def info_block(job: dict[str, Any]) -> str:
 
     W = 14  # label column width
 
-    def _kv(label: str, val: str, style: str = "dim") -> str:
-        return f"  [{style}]{label:>{W}}[/{style}]  {val}"
+    def _kv(label: str, val: str) -> str:
+        return f"    [dim]{label:>{W}}[/dim]  {val}"
+
+    def _section(title: str) -> str:
+        return f"\n  [bold dim]{'▸'} {title}[/bold dim]"
 
     # ── Header ──
     L.append("")
     L.append(f"  [{sty} bold]{icon} {status}[/{sty} bold]  [bold]{display}[/bold]")
     if display != name:
-        L.append(f"  {'':>{W}}  [dim]{name}[/dim]")
+        L.append(f"    {'':>{W}}  [dim]{name}[/dim]")
 
     # ── Error ──
     if job.get("error"):
@@ -96,62 +99,65 @@ def info_block(job: dict[str, Any]) -> str:
             L.append(f"  [red]{err_line}[/red]")
         L.append(f"  [bold red]{'━' * 46}[/bold red]")
 
-    # ── Details — single compact block ──
-    L.append("")
-    L.append(f"  [bold]{'─' * 46}[/bold]")
-
-    if job.get("type"):
-        L.append(_kv("Type", job["type"]))
-    if job.get("experiment"):
-        L.append(_kv("Experiment", f"[italic]{job['experiment']}[/italic]"))
-    if job.get("compute"):
-        L.append(_kv("Compute", f"[bold]{job['compute']}[/bold]"))
-    if job.get("environment"):
-        L.append(_kv("Environment", job["environment"]))
+    # ── Details ──
+    details: list[str] = []
+    for label, key in [
+        ("Type", "type"), ("Experiment", "experiment"),
+        ("Compute", "compute"), ("Environment", "environment"),
+    ]:
+        val = job.get(key, "")
+        if val:
+            details.append(_kv(label, f"[bold]{val}[/bold]" if key == "compute" else val))
     if job.get("command"):
         cmd = job["command"]
-        if len(cmd) > 72:
-            cmd = cmd[:69] + "…"
-        L.append(_kv("Command", f"[italic dim]{cmd}[/italic dim]"))
+        if len(cmd) > 60:
+            cmd = cmd[:57] + "…"
+        details.append(_kv("Command", f"[italic dim]{cmd}[/italic dim]"))
+    if details:
+        L.append(_section("Details"))
+        L.extend(details)
 
     # ── Timing ──
-    has_time = job.get("duration") or job.get("start_time") or job.get("created")
-    if has_time:
-        L.append(f"  [bold]{'─' * 46}[/bold]")
-        for label, key in [
-            ("Created", "created"), ("Started", "start_time"),
-            ("Ended", "end_time"),
-        ]:
-            val = job.get(key, "")
-            if val:
-                L.append(_kv(label, val))
-        # Duration + queue on same conceptual line
-        dur = job.get("duration", "")
-        qt = job.get("queue_time", "")
-        if dur and qt:
-            L.append(_kv("Duration", f"[bold]{dur}[/bold]  [dim]queue {qt}[/dim]"))
-        elif dur:
-            L.append(_kv("Duration", f"[bold]{dur}[/bold]"))
-        elif qt:
-            L.append(_kv("Queue time", qt))
+    timing: list[str] = []
+    for label, key in [
+        ("Created", "created"), ("Started", "start_time"),
+        ("Ended", "end_time"),
+    ]:
+        val = job.get(key, "")
+        if val:
+            timing.append(_kv(label, val))
+    dur = job.get("duration", "")
+    qt = job.get("queue_time", "")
+    if dur and qt:
+        timing.append(_kv("Duration", f"[bold]{dur}[/bold]  [dim]queue {qt}[/dim]"))
+    elif dur:
+        timing.append(_kv("Duration", f"[bold]{dur}[/bold]"))
+    elif qt:
+        timing.append(_kv("Queue time", qt))
+    if timing:
+        L.append(_section("Timing"))
+        L.extend(timing)
 
     # ── Meta ──
-    has_meta = job.get("created_by") or job.get("tags") or job.get("description")
-    if has_meta:
-        L.append(f"  [bold]{'─' * 46}[/bold]")
-        if job.get("created_by"):
-            L.append(_kv("User", job["created_by"]))
-        if job.get("tags"):
-            L.append(_kv("Tags", f"[dim]{job['tags']}[/dim]"))
-        if job.get("description"):
-            L.append(_kv("Description", job["description"]))
+    meta: list[str] = []
+    if job.get("created_by"):
+        meta.append(_kv("User", job["created_by"]))
+    if job.get("tags"):
+        meta.append(_kv("Tags", f"[dim]{job['tags']}[/dim]"))
+    if job.get("description"):
+        meta.append(_kv("Description", job["description"]))
+    if meta:
+        L.append(_section("Meta"))
+        L.extend(meta)
 
     # ── Portal link ──
     url = job.get("portal_url", "")
     if url:
-        L.append(f"  [bold]{'─' * 46}[/bold]")
         short = short_portal_url(url, rich_link=False)
-        L.append(_kv("Portal", f"[underline]{short}[/underline]"))
+        if not short.startswith("http"):
+            short = f"https://{short}"
+        L.append("")
+        L.append(f"    [dim cyan underline]{short}[/dim cyan underline]")
 
     L.append("")
     return "\n".join(L)
