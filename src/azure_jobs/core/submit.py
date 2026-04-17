@@ -295,6 +295,7 @@ def _build_resources(request: SubmitRequest) -> dict[str, Any] | None:
                 "imageVersion": image_version,
                 "slaTier": request.sla_tier,
                 "Priority": request.priority,
+                "EnableAzmlInt": True,
                 "VirtualClusterArmId": arm_id,
                 "tensorboardLogDirectory": "outputs",
             }
