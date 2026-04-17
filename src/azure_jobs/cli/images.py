@@ -50,16 +50,16 @@ def image_list(query: str | None) -> None:
         title="[bold]Singularity Base Images[/bold]",
         title_style="",
     )
+    table.add_column("ID", style="dim", no_wrap=True)
     table.add_column("Image", style="highlight", no_wrap=True)
     table.add_column("Aliases", style="dim")
-    table.add_column("ID", style="dim", no_wrap=True)
 
     for img in images:
         aliases = [a for a in img["aliases"] if a != img["name"]]
         table.add_row(
+            img["id"],
             f"amlt-sing/{img['name']}",
             ", ".join(aliases[:3]) + ("…" if len(aliases) > 3 else ""),
-            img["id"],
         )
 
     console.print()
