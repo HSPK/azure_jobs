@@ -1,20 +1,20 @@
 """Interactive TUI dashboard for Azure Jobs.
 
-Data: ``ml_client.jobs.list(list_view_type=ALL)`` → cloud-only, no local records.
+Data: ``ml_client.jobs.list(list_view_type=ALL)`` → cloud-only, paginated.
 
 Layout
 ------
-Left pane   bordered OptionList with search (/) and status filter (f).
-            Bottom-left shows workspace selector (w to toggle).
-Right pane  bordered panel; border-title = job name + status.
-            Content toggles between Info (i) and Logs (l) views.
+Left column  top: bordered OptionList (jobs) with search (/) and status filter (f).
+             bottom: bordered workspace panel (always visible, w to switch).
+Right pane   bordered panel; border-title = job name + status.
+             Content toggles between Info (i) and Logs (l) views.
 """
 
 from __future__ import annotations
 
 import io
 import sys
-from typing import Any
+from typing import Any, Iterator
 
 from rich.text import Text
 from textual import work
@@ -45,8 +45,11 @@ _AZ_STYLE = {
     "NotStarted": "dim", "Provisioning": "yellow", "Finalizing": "cyan",
 }
 
-_KW = 10
+_KW = 12
 _STATUS_CYCLE = ["", "Running", "Completed", "Failed", "Canceled", "Queued"]
+_LEFT_WIDTH = 38
+_NAME_MAX = _LEFT_WIDTH - 8  # icon(3) + padding(2) + margin(3)
+_PAGE_SIZE = 30
 
 
 # ---- helpers ----------------------------------------------------------------
@@ -56,13 +59,21 @@ def _icon_style(status: str) -> tuple[str, str]:
     return _AZ_ICON.get(status, "?"), _AZ_STYLE.get(status, "white")
 
 
+def _trunc(s: str, maxlen: int = _NAME_MAX) -> str:
+    """Truncate with ellipsis in the middle if too long."""
+    if len(s) <= maxlen:
+        return s
+    half = (maxlen - 3) // 2
+    return s[:half] + "..." + s[-(maxlen - 3 - half):]
+
+
 def _make_option(job: dict[str, Any]) -> Option:
-    """Compact list item: icon + display name."""
+    """Compact list item: icon + truncated display name."""
     name = job.get("display_name") or job.get("name", "?")
     icon, sty = _icon_style(job.get("status", ""))
     t = Text()
     t.append(f" {icon} ", style=sty)
-    t.append(name)
+    t.append(_trunc(name))
     return Option(t, id=job.get("name", ""))
 
 
@@ -139,16 +150,19 @@ class AjDashboard(App):
 
     .hidden { display: none; }
 
-    /* ── left ── */
-    #left-pane {
-        width: 36;
-        min-width: 28;
+    /* ── left column ── */
+    #left-col {
+        width: 38;
+        min-width: 30;
         height: 100%;
+    }
+    #jobs-pane {
+        height: 1fr;
         border: round $accent;
         border-title-color: $accent;
         border-title-style: bold;
     }
-    #left-pane:focus-within {
+    #jobs-pane:focus-within {
         border: round $accent;
     }
     #search-input {
@@ -163,11 +177,26 @@ class AjDashboard(App):
         padding: 0;
         scrollbar-size: 1 1;
     }
+
+    /* ── workspace panel ── */
     #ws-pane {
         height: auto;
+        max-height: 3;
+        margin-top: 1;
+        border: round $accent 40%;
+        border-title-color: $text-muted;
+        border-title-style: italic;
+        padding: 0 1;
+    }
+    #ws-current {
+        height: 1;
+    }
+    #ws-list-pane {
         max-height: 10;
-        border-top: solid $accent 40%;
-        padding: 0;
+        margin-top: 1;
+        border: round $accent;
+        border-title-color: $accent;
+        border-title-style: bold;
     }
     #ws-list {
         height: auto;
@@ -175,11 +204,6 @@ class AjDashboard(App):
         border: none;
         padding: 0;
         scrollbar-size: 1 1;
-    }
-    #ws-label {
-        height: 1;
-        padding: 0 1;
-        color: $text-muted;
     }
 
     /* ── right ── */
@@ -236,19 +260,26 @@ class AjDashboard(App):
         self._ml_client: Any = None
         self._status_filter: str = ""
         self._name_filter: str = ""
-        self._view_mode: str = "info"  # "info" or "logs"
+        self._view_mode: str = "info"
+        # Pagination
+        self._job_iter: Iterator | None = None
+        self._has_more: bool = True
+        self._fetching: bool = False
 
     # ---- compose ------------------------------------------------------------
 
     def compose(self) -> ComposeResult:
         with Horizontal():
-            with Vertical(id="left-pane"):
-                yield Input(
-                    placeholder="Search...", id="search-input", classes="hidden",
-                )
-                yield OptionList(id="job-list")
-                with Vertical(id="ws-pane", classes="hidden"):
-                    yield Static(" Workspaces", id="ws-label")
+            with Vertical(id="left-col"):
+                with Vertical(id="jobs-pane"):
+                    yield Input(
+                        placeholder="Search...", id="search-input",
+                        classes="hidden",
+                    )
+                    yield OptionList(id="job-list")
+                with Vertical(id="ws-pane"):
+                    yield Static("", id="ws-current")
+                with Vertical(id="ws-list-pane", classes="hidden"):
                     yield OptionList(id="ws-list")
             with Vertical(id="right-pane"):
                 with VerticalScroll(id="info-scroll"):
@@ -260,12 +291,14 @@ class AjDashboard(App):
         yield Footer()
 
     def on_mount(self) -> None:
+        self.query_one("#ws-pane").border_title = "Workspace"
+        self.query_one("#ws-list-pane").border_title = "Switch Workspace"
         self._update_titles()
         self.query_one("#right-pane").border_subtitle = "Info"
         self.query_one("#info-content", Static).update(
             _kv([], hint="Loading jobs…")
         )
-        self._fetch_azure_jobs()
+        self._init_fetch()
 
     # ---- data ---------------------------------------------------------------
 
@@ -276,7 +309,8 @@ class AjDashboard(App):
         )
 
     @work(thread=True, exclusive=True, group="fetch")
-    def _fetch_azure_jobs(self) -> None:
+    def _init_fetch(self) -> None:
+        """Authenticate, create iterator, fetch first page."""
         worker = get_current_worker()
 
         self.call_from_thread(self._update_loading, "Reading workspace config…")
@@ -286,11 +320,15 @@ class AjDashboard(App):
                 self.notify, "No workspace configured – press w", severity="warning",
             )
             self.call_from_thread(
-                self._update_loading, "No workspace configured. Press [bold]w[/bold] to select.",
+                self._update_loading,
+                "No workspace configured. Press [bold]w[/bold] to select.",
             )
             return
         if worker.is_cancelled:
             return
+
+        # Update workspace panel on UI
+        self.call_from_thread(self._update_ws_label)
 
         if self._ml_client is None:
             self.call_from_thread(self._update_loading, "Authenticating…")
@@ -305,31 +343,62 @@ class AjDashboard(App):
 
         from azure.ai.ml.constants import ListViewType
 
-        _FIRST_BATCH = 20
-        jobs: list[dict[str, Any]] = []
         try:
-            for job_obj in self._ml_client.jobs.list(
+            self._job_iter = iter(self._ml_client.jobs.list(
                 list_view_type=ListViewType.ALL,
-                max_results=self._last,
-            ):
-                if worker.is_cancelled:
-                    return
-                jobs.append(_extract_job(job_obj))
-                # Show first batch immediately so the UI is responsive
-                if len(jobs) == _FIRST_BATCH:
-                    self.call_from_thread(self._on_jobs_loaded, list(jobs))
+            ))
         except Exception as exc:
             if not worker.is_cancelled:
-                msg = str(exc)[:100]
                 self.call_from_thread(
-                    self._update_loading, f"[red]Error:[/red] {msg}",
+                    self._update_loading, f"[red]Error:[/red] {str(exc)[:100]}",
                 )
             return
 
-        if jobs and not worker.is_cancelled:
-            self.call_from_thread(self._on_jobs_loaded, jobs)
+        self._has_more = True
+        self._fetch_page_sync(worker)
+
+    def _fetch_page_sync(self, worker: Any) -> None:
+        """Consume up to _PAGE_SIZE items from the live iterator (runs in thread)."""
+        if self._job_iter is None or not self._has_more:
+            return
+        new: list[dict[str, Any]] = []
+        try:
+            for _ in range(_PAGE_SIZE):
+                if worker.is_cancelled:
+                    return
+                job_obj = next(self._job_iter)
+                new.append(_extract_job(job_obj))
+        except StopIteration:
+            self._has_more = False
+        except Exception:
+            self._has_more = False
+
+        if new and not worker.is_cancelled:
+            self.call_from_thread(self._on_page_loaded, new)
+        elif not new and not self._all_jobs and not worker.is_cancelled:
+            self.call_from_thread(
+                self._update_loading, "No jobs found in this workspace.",
+            )
+
+    @work(thread=True, exclusive=True, group="fetch-more")
+    def _fetch_next_page(self) -> None:
+        """Fetch next page in background (triggered by scroll)."""
+        worker = get_current_worker()
+        self._fetching = True
+        try:
+            self._fetch_page_sync(worker)
+        finally:
+            self._fetching = False
+
+    def _on_page_loaded(self, new_jobs: list[dict[str, Any]]) -> None:
+        prev_name = ""
+        if 0 <= self._selected_idx < len(self._filtered):
+            prev_name = self._filtered[self._selected_idx].get("name", "")
+        self._all_jobs.extend(new_jobs)
+        self._apply_filter(restore_name=prev_name)
 
     def _on_jobs_loaded(self, jobs: list[dict[str, Any]]) -> None:
+        """Full replace (used by tests and refresh)."""
         prev_name = ""
         if 0 <= self._selected_idx < len(self._filtered):
             prev_name = self._filtered[self._selected_idx].get("name", "")
@@ -379,15 +448,15 @@ class AjDashboard(App):
 
     def _update_titles(self) -> None:
         total, shown = len(self._all_jobs), len(self._filtered)
-        parts = [f"Jobs ({shown})" if shown == total else f"Jobs ({shown}/{total})"]
+        label = f"Jobs ({shown})" if shown == total else f"Jobs ({shown}/{total})"
+        if self._has_more:
+            label += "+"
+        parts = [label]
         if self._status_filter:
             parts.append(f"▸ {self._status_filter}")
         if self._name_filter:
             parts.append(f'"{self._name_filter}"')
-        lp = self.query_one("#left-pane")
-        lp.border_title = "  ".join(parts)
-        ws_name = (self._workspace or {}).get("workspace_name", "")
-        lp.border_subtitle = ws_name or ""
+        self.query_one("#jobs-pane").border_title = "  ".join(parts)
 
     # ---- workspace / client -------------------------------------------------
 
@@ -401,6 +470,20 @@ class AjDashboard(App):
             self._subscription_id = ws["subscription_id"]
             return ws
         return None
+
+    def _update_ws_label(self) -> None:
+        """Update the always-visible workspace panel."""
+        ws = self._workspace
+        if ws:
+            name = ws.get("workspace_name", "")
+            rg = ws.get("resource_group", "")
+            self.query_one("#ws-current", Static).update(
+                f"[bold]{name}[/bold]  [dim]{rg}[/dim]"
+            )
+        else:
+            self.query_one("#ws-current", Static).update(
+                "[dim]Not configured[/dim]"
+            )
 
     def _create_ml_client(self, ws: dict[str, str]) -> Any:
         """Create a new MLClient for the given workspace dict."""
@@ -428,15 +511,15 @@ class AjDashboard(App):
     # ---- workspace selector -------------------------------------------------
 
     def action_toggle_ws(self) -> None:
-        ws_pane = self.query_one("#ws-pane")
-        if ws_pane.has_class("hidden"):
-            ws_pane.remove_class("hidden")
+        ws_list_pane = self.query_one("#ws-list-pane")
+        if ws_list_pane.has_class("hidden"):
+            ws_list_pane.remove_class("hidden")
             if not self._workspaces:
                 self._detect_workspaces()
             else:
                 self.query_one("#ws-list", OptionList).focus()
         else:
-            ws_pane.add_class("hidden")
+            ws_list_pane.add_class("hidden")
             self.query_one("#job-list", OptionList).focus()
 
     @work(thread=True, exclusive=True, group="ws-detect")
@@ -507,19 +590,22 @@ class AjDashboard(App):
             "resource_group": ws["resource_group"],
             "workspace_name": ws["name"],
         }
-        self._ml_client = None  # force recreate
+        self._ml_client = None
         self._all_jobs.clear()
         self._filtered.clear()
+        self._job_iter = None
+        self._has_more = True
         self._logs_job = ""
 
-        # Collapse workspace panel, refresh
-        self.query_one("#ws-pane").add_class("hidden")
+        # Collapse workspace list, refresh
+        self.query_one("#ws-list-pane").add_class("hidden")
+        self._update_ws_label()
         self._update_titles()
         self.query_one("#info-content", Static).update(
             _kv([], hint="Loading jobs…")
         )
         self._on_workspaces_detected(self._subscription_id, self._workspaces)
-        self._fetch_azure_jobs()
+        self._init_fetch()
         self.query_one("#job-list", OptionList).focus()
         self.notify(f"Switched to {ws['name']}")
 
@@ -535,6 +621,10 @@ class AjDashboard(App):
             self._selected_idx = idx
             self._show_job_info(self._filtered[idx])
             self._logs_job = ""
+            # Pagination: fetch more when near the bottom
+            if (self._has_more and not self._fetching
+                    and idx >= len(self._filtered) - 5):
+                self._fetch_next_page()
 
     # ---- right pane: info ---------------------------------------------------
 
@@ -552,6 +642,9 @@ class AjDashboard(App):
 
         pairs: list[tuple[str, str]] = []
 
+        # Full display name (may differ from truncated list item)
+        if display and display != name:
+            pairs.append(("Name", display))
         if job.get("compute"):
             pairs.append(("Compute", job["compute"]))
         if job.get("experiment"):
@@ -718,10 +811,10 @@ class AjDashboard(App):
     # ---- actions ------------------------------------------------------------
 
     def action_dismiss(self) -> None:
-        """Escape: close ws pane → close search → switch to info → quit."""
-        ws_pane = self.query_one("#ws-pane")
-        if not ws_pane.has_class("hidden"):
-            ws_pane.add_class("hidden")
+        """Escape: close ws list → close search → switch to info → quit."""
+        ws_list = self.query_one("#ws-list-pane")
+        if not ws_list.has_class("hidden"):
+            ws_list.add_class("hidden")
             self.query_one("#job-list", OptionList).focus()
             return
         inp = self.query_one("#search-input", Input)
@@ -739,10 +832,12 @@ class AjDashboard(App):
     def action_refresh(self) -> None:
         self._all_jobs.clear()
         self._filtered.clear()
+        self._job_iter = None
+        self._has_more = True
         self.query_one("#info-content", Static).update(
             _kv([], hint="Loading jobs…")
         )
-        self._fetch_azure_jobs()
+        self._init_fetch()
         self.notify("Refreshing...")
 
     def action_cycle_filter(self) -> None:

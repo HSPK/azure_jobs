@@ -41,12 +41,11 @@ async def _load_jobs(app, pilot=None):
     """Inject test jobs into a running app instance.
 
     We must first pause to drain any queued messages from the background
-    ``_fetch_azure_jobs`` worker (which fires on mount), then inject our
-    test data.
+    ``_init_fetch`` worker (which fires on mount), then inject our test data.
     """
     app.workers.cancel_all()
     if pilot:
-        await pilot.pause()  # drain queued call_from_thread messages
+        await pilot.pause()
     app._on_jobs_loaded([dict(j) for j in _JOBS])
     if app._filtered:
         app._show_job_info(app._filtered[0])
@@ -173,30 +172,30 @@ async def test_escape_layered(_dash) -> None:
 
 @pytest.mark.asyncio
 async def test_escape_closes_ws_pane(_dash) -> None:
-    """Escape closes workspace pane first."""
+    """Escape closes workspace list pane first."""
     async with _dash.run_test(size=(120, 30)) as pilot:
         await _load_jobs(_dash, pilot)
         await pilot.pause()
-        ws_pane = _dash.query_one("#ws-pane")
-        ws_pane.remove_class("hidden")
+        ws_list = _dash.query_one("#ws-list-pane")
+        ws_list.remove_class("hidden")
         await pilot.pause()
         _dash.action_dismiss()
         await pilot.pause()
-        assert ws_pane.has_class("hidden")
+        assert ws_list.has_class("hidden")
 
 
 @pytest.mark.asyncio
 async def test_workspace_toggle(_dash) -> None:
-    """w toggles workspace pane visibility."""
+    """w toggles workspace list visibility."""
     async with _dash.run_test(size=(120, 30)) as pilot:
-        ws = _dash.query_one("#ws-pane")
-        assert ws.has_class("hidden")
+        ws_list = _dash.query_one("#ws-list-pane")
+        assert ws_list.has_class("hidden")
         _dash.action_toggle_ws()
         await pilot.pause()
-        assert not ws.has_class("hidden")
+        assert not ws_list.has_class("hidden")
         _dash.action_toggle_ws()
         await pilot.pause()
-        assert ws.has_class("hidden")
+        assert ws_list.has_class("hidden")
 
 
 @pytest.mark.asyncio
@@ -240,3 +239,53 @@ def test_make_option_display_name() -> None:
     opt = _make_option({"name": "azure_j1", "display_name": "cool-job", "status": "Running"})
     assert "cool-job" in opt.prompt.plain
     assert "azure_j1" not in opt.prompt.plain
+
+
+def test_trunc_short() -> None:
+    from azure_jobs.tui.app import _trunc
+    assert _trunc("short") == "short"
+
+
+def test_trunc_long() -> None:
+    from azure_jobs.tui.app import _trunc, _NAME_MAX
+    long_name = "a" * 100
+    result = _trunc(long_name)
+    assert len(result) == _NAME_MAX
+    assert "..." in result
+
+
+def test_make_option_truncates_long_name() -> None:
+    from azure_jobs.tui.app import _make_option, _NAME_MAX
+    long_name = "very-long-job-name-that-exceeds-the-maximum-width-limit"
+    opt = _make_option({"name": "id", "display_name": long_name, "status": "Running"})
+    plain = opt.prompt.plain.strip()
+    # Icon (2 chars) + space + truncated name
+    assert "..." in plain
+
+
+@pytest.mark.asyncio
+async def test_info_shows_full_name(_dash) -> None:
+    """Info panel shows full display_name even if list truncates it."""
+    from azure_jobs.tui.app import AjDashboard
+    long_name = "very-long-job-name-that-exceeds-the-maximum-width-limit"
+    jobs = [dict(_JOBS[0], display_name=long_name)]
+    async with _dash.run_test(size=(120, 30)) as pilot:
+        _dash.workers.cancel_all()
+        await pilot.pause()
+        _dash._on_jobs_loaded(jobs)
+        _dash._show_job_info(jobs[0])
+        text = _dash.query_one("#info-content").content
+        assert long_name in text
+
+
+@pytest.mark.asyncio
+async def test_page_loaded_appends(_dash) -> None:
+    """_on_page_loaded appends to existing jobs."""
+    async with _dash.run_test(size=(120, 30)) as pilot:
+        _dash.workers.cancel_all()
+        await pilot.pause()
+        _dash._on_jobs_loaded([dict(_JOBS[0])])
+        assert len(_dash._all_jobs) == 1
+        _dash._on_page_loaded([dict(_JOBS[1])])
+        assert len(_dash._all_jobs) == 2
+        assert _dash.query_one("#job-list").option_count == 2
