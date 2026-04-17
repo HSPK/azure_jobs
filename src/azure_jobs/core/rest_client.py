@@ -168,60 +168,30 @@ class AzureMLJobsClient:
         job_type: str = "",
         tag: str = "",
     ) -> tuple[list[dict[str, Any]], str | None]:
-        """Fetch *top* jobs, issuing multiple server requests if needed.
+        """Fetch one server page of jobs.
 
-        The Azure ML REST API may return fewer items than ``$top`` requests
-        (typically ~10 per page).  This method transparently fetches
-        additional server pages until *top* items are collected or data is
-        exhausted.
-
-        Parameters
-        ----------
-        next_link:
-            Continuation URL from a previous call (pagination).
-        list_view_type:
-            ``ActiveOnly`` (default), ``ArchivedOnly``, or ``All``.
-        top:
-            Desired number of jobs to return.
-        job_type:
-            Server-side filter — ``Command``, ``Pipeline``, ``Sweep``,
-            ``AutoML``, or empty for all.
-        tag:
-            Server-side filter — tag key (e.g. ``"experiment"``).
+        The Azure ML REST API returns ~10 items per page regardless of
+        ``$top``.  Callers should loop and accumulate until enough items
+        are collected, updating the UI after each batch for responsiveness.
 
         Returns ``(jobs, next_link)`` where *next_link* is ``None`` when
         there are no more pages.
         """
         self._ensure_token()
-        collected: list[dict[str, Any]] = []
-        url = next_link  # may be None for first call
-
-        while len(collected) < top:
-            if url:
-                req_url = self._patch_top(url, top)
-            else:
-                req_url = self._build_list_url(
-                    list_view_type=list_view_type,
-                    top=top,
-                    job_type=job_type,
-                    tag=tag,
-                )
-
-            resp = self._session.get(req_url, timeout=30)
-            resp.raise_for_status()
-            data = resp.json()
-
-            batch = [_extract_rest_job(j) for j in data.get("value", [])]
-            if not batch:
-                return collected, None
-
-            collected.extend(batch)
-            url = data.get("nextLink")
-            if not url:
-                return collected, None
-
-        # We have enough — return exactly `top` and preserve nextLink
-        return collected[:top], url
+        if next_link:
+            url = self._patch_top(next_link, top)
+        else:
+            url = self._build_list_url(
+                list_view_type=list_view_type,
+                top=top,
+                job_type=job_type,
+                tag=tag,
+            )
+        resp = self._session.get(url, timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+        jobs = [_extract_rest_job(j) for j in data.get("value", [])]
+        return jobs, data.get("nextLink")
 
     def _build_list_url(
         self,

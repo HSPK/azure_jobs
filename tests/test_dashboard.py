@@ -276,18 +276,18 @@ async def test_info_shows_full_name(_dash) -> None:
 
 @pytest.mark.asyncio
 async def test_page_loaded_appends(_dash) -> None:
-    """_on_page_fetched appends a new page and shows it."""
+    """_on_batch_arrived merges items into current display page."""
     async with _dash.run_test(size=(120, 30)) as pilot:
         _dash.workers.cancel_all()
         await pilot.pause()
         _dash._on_jobs_loaded([dict(_JOBS[0])])
         assert len(_dash._all_jobs) == 1
-        _dash._on_page_fetched([dict(_JOBS[1])])
+        # Simulate a new batch arriving — merges into current page
+        _dash._on_batch_arrived([dict(_JOBS[1])], False)
         assert len(_dash._all_jobs) == 2
-        assert len(_dash._pages) == 2
-        # Current page shows the newly fetched page
-        assert _dash._current_page == 1
-        assert _dash.query_one("#job-list").option_count == 1
+        assert len(_dash._pages) == 1  # merged into same page
+        assert _dash._current_page == 0
+        assert _dash.query_one("#job-list").option_count == 2
 
 
 def test_info_block_sections() -> None:

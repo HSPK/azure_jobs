@@ -222,54 +222,97 @@ class AjDashboard(WorkspaceMixin, App):
         self._current_page = 0
         self._next_link = None
         self._has_more = True
-        self._fetch_page_rest(worker)
+        self._fill_page(worker, is_first=True)
 
-    def _fetch_page_rest(self, worker: Any) -> None:
-        """Fetch one page via REST API (runs in thread)."""
+    def _fill_page(self, worker: Any, *, is_first: bool = False) -> None:
+        """Fetch server batches until the current display page is full.
+
+        Each server response (~10 items) is immediately pushed to the UI so
+        the list updates incrementally instead of waiting for all page_size
+        items.
+        """
         if self._rest_client is None or not self._has_more:
             return
-        try:
-            jobs, nxt = self._rest_client.list_jobs_page(
-                next_link=self._next_link,
-                top=self._page_size,
-            )
-        except Exception as exc:
-            self._has_more = False
-            if not worker.is_cancelled:
-                self.call_from_thread(
-                    self._update_loading, f"[red]Error:[/red] {str(exc)[:100]}",
+
+        # Determine how many items the current page still needs
+        page_jobs = self._pages[-1] if self._pages else []
+        needed = self._page_size - len(page_jobs)
+
+        while needed > 0:
+            try:
+                jobs, nxt = self._rest_client.list_jobs_page(
+                    next_link=self._next_link,
+                    top=self._page_size,
                 )
-            return
+            except Exception as exc:
+                self._has_more = False
+                if not worker.is_cancelled:
+                    self.call_from_thread(
+                        self._update_loading,
+                        f"[red]Error:[/red] {str(exc)[:100]}",
+                    )
+                return
 
-        if worker.is_cancelled:
-            return
+            if worker.is_cancelled:
+                return
 
-        self._next_link = nxt
-        if not nxt:
-            self._has_more = False
+            self._next_link = nxt
+            if not nxt:
+                self._has_more = False
 
-        if jobs:
-            self.call_from_thread(self._on_page_fetched, jobs)
-        elif not self._pages:
-            self.call_from_thread(
-                self._update_loading, "No jobs found in this workspace.",
-            )
+            if not jobs:
+                if is_first and not self._pages:
+                    self.call_from_thread(
+                        self._update_loading,
+                        "No jobs found in this workspace.",
+                    )
+                return
+
+            # Push this batch to the UI immediately
+            self.call_from_thread(self._on_batch_arrived, jobs, is_first)
+            is_first = False
+            needed -= len(jobs)
+
+            if not self._has_more:
+                break
+
+    def _fetch_page_rest(self, worker: Any) -> None:
+        """Fetch a new display page (triggered by → navigation)."""
+        self._fill_page(worker, is_first=True)
 
     @work(thread=True, exclusive=True, group="fetch-more")
     def _fetch_next_page(self) -> None:
         """Fetch next page in background (triggered by right arrow)."""
         worker = get_current_worker()
+        # Start a new display page
+        self._pages.append([])
+        self._current_page = len(self._pages) - 1
         try:
-            self._fetch_page_rest(worker)
+            self._fill_page(worker, is_first=True)
         finally:
             self._fetching = False
 
-    def _on_page_fetched(self, new_jobs: list[dict[str, Any]]) -> None:
-        """Called when a new REST page arrives — one REST page = one display page."""
-        self._pages.append(new_jobs)
-        self._all_jobs.extend(new_jobs)
-        self._current_page = len(self._pages) - 1
+    def _on_batch_arrived(
+        self, batch: list[dict[str, Any]], is_first: bool,
+    ) -> None:
+        """Called per server batch (~10 items) — merge into current page."""
+        if not self._pages:
+            self._pages.append([])
+            self._current_page = 0
+
+        cur = self._pages[self._current_page]
+        room = self._page_size - len(cur)
+        take = batch[:room]
+        overflow = batch[room:]
+
+        cur.extend(take)
+        self._all_jobs.extend(take)
         self._show_current_page()
+
+        # Overflow goes to the next (hidden) page buffer
+        if overflow:
+            self._pages.append(list(overflow))
+            self._all_jobs.extend(overflow)
 
     def _on_jobs_loaded(self, jobs: list[dict[str, Any]]) -> None:
         """Full replace (used by tests and refresh)."""

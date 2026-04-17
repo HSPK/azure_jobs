@@ -68,14 +68,14 @@ def job_list(
     next_link = None
     scanned = 0
     filtering = bool(status or experiment)
-    max_pages = 5 if filtering else 1
+    max_scan = last * 5 if filtering else last
     view_type = "All" if archived else "ActiveOnly"
 
     with console.status("[bold cyan]Fetching jobs…[/bold cyan]", spinner="dots") as st:
-        for _ in range(max_pages):
+        while len(all_jobs) < last and scanned < max_scan:
             jobs, next_link = client.list_jobs_page(
                 next_link=next_link,
-                top=last if not filtering else 100,
+                top=last,
                 list_view_type=view_type,
                 job_type=job_type or "",
                 tag=tag or "",
@@ -91,12 +91,12 @@ def job_list(
                 if len(all_jobs) >= last:
                     break
             scanned += len(jobs)
-            if filtering:
-                st.update(
-                    f"[bold cyan]Scanning… {scanned} scanned, "
-                    f"{len(all_jobs)} matched[/bold cyan]"
-                )
-            if not next_link or len(all_jobs) >= last:
+            st.update(
+                f"[bold cyan]Fetching… {len(all_jobs)}/{last} jobs"
+                + (f" ({scanned} scanned)" if filtering else "")
+                + "[/bold cyan]"
+            )
+            if not next_link:
                 break
 
     show_cloud_jobs_table(all_jobs[:last])
