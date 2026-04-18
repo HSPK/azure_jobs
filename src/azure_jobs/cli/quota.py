@@ -191,6 +191,7 @@ _AML_VM_GPU: dict[str, tuple[str, int, int]] = {
     "standard_nc96ads_a100_v4": ("A100", 4, 80),
     # H100
     "standard_nd96isr_h100_v5": ("H100", 8, 80),
+    "standard_nc80adis_h100_v5": ("H100", 8, 80),
     # H200
     "standard_nd96isr_h200_v5": ("H200", 8, 141),
     # V100
@@ -270,6 +271,8 @@ def _show_aml_quotas(show_all: bool) -> None:
         if c.get("properties", {}).get("computeType") == "AmlCompute"
     ]
 
+    from rich.text import Text
+
     if clusters:
         ct = Table(
             title=f"[bold]AML Compute Clusters[/bold]  [dim]{ws_name}[/dim]",
@@ -305,7 +308,6 @@ def _show_aml_quotas(show_all: bool) -> None:
             )
             unusable = node_state.get("unusableNodeCount") or 0
             idle = node_state.get("idleNodeCount") or 0
-            free = max(0, max_nodes - busy - unusable)
 
             if max_nodes == 0:
                 nodes_s = "[dim]0/0[/dim]"
@@ -322,10 +324,9 @@ def _show_aml_quotas(show_all: bool) -> None:
             }.get(vm_pri, vm_pri)
 
             portal = _portal_compute_url(sub, rg, ws_name, name)
-            # Shorten for display
-            portal_s = f"[dim link={portal}]portal ↗[/dim]"
+            portal_text = Text("portal ↗", style=f"dim link {portal}")
 
-            ct.add_row(name, vm_size, sku_s, nodes_s, pri_s, location, portal_s)
+            ct.add_row(name, vm_size, sku_s, nodes_s, pri_s, location, portal_text)
 
         console.print()
         console.print(ct)
@@ -366,7 +367,13 @@ def _show_aml_quotas(show_all: bool) -> None:
             limit = getattr(u, "limit", 0) or 0
             current = getattr(u, "current_value", 0) or 0
             name_obj = getattr(u, "name", None)
-            family = getattr(name_obj, "value", "") if name_obj else ""
+            # SDK returns name as either a dict or an object with .value
+            if isinstance(name_obj, dict):
+                family = name_obj.get("localized_value") or name_obj.get("value", "")
+            else:
+                family = getattr(name_obj, "localized_value", "") or getattr(name_obj, "value", "")
+            if not family:
+                family = str(name_obj) if name_obj else ""
 
             avail = max(0, limit - current)
             if avail > 0:
