@@ -67,12 +67,12 @@ class TestMatchFamily:
     def test_gpu_a100_80g_nvlink_matches_ndamv4(self):
         spec = SkuSpec.parse("1x80G8-A100-NvLink")
         result = _match_family(spec, "NDAMv4", _FAMILY_MAP["NDAMv4"])
-        assert result == "ND96amsr_A100_v4"
+        assert result == "ND96amrs_A100_v4"
 
     def test_gpu_a100_40g_matches_ndv4(self):
         spec = SkuSpec.parse("1x40G8-A100")
         result = _match_family(spec, "NDv4", _FAMILY_MAP["NDv4"])
-        assert result == "ND96asr_v4"
+        assert result == "ND96rs_v4"
 
     def test_gpu_rejects_cpu_family(self):
         spec = SkuSpec.parse("1x80G8-A100")
@@ -112,7 +112,7 @@ class TestResolveInstanceType:
             "1x80G8-A100-NvLink",
             vc_subscription_id="sub", vc_resource_group="rg", vc_name="vc",
         )
-        assert result[0] == "ND96amsr_A100_v4"
+        assert result[0] == "ND96amrs_A100_v4"
 
     @patch("azure_jobs.core.sku._fetch_vc_families")
     def test_no_match_returns_empty(self, mock_fetch):

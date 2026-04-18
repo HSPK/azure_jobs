@@ -85,85 +85,150 @@ class SkuSpec:
 # Each family maps to a dict of { gpu_count: instance_name } or for CPU
 # families a list of instance names sorted small→large.
 #
-# Source: Azure VM docs + observed Singularity clusters.
+# Source: amlt sing_instance_fallback.json (authoritative).
+# For GPU families we pick the IB+NvLink variant (most capable) per GPU count.
+# For CPU families we list representative sizes.
 # ---------------------------------------------------------------------------
 _FAMILY_MAP: dict[str, dict[str, Any]] = {
-    # CPU families
+    # --- CPU families ---
     "Eadsv5": {
         "cpu": True,
         "gpu_model": None,
-        "instances": ["E2ads_v5", "E4ads_v5", "E8ads_v5", "E16ads_v5",
-                       "E32ads_v5", "E48ads_v5", "E64ads_v5", "E96ads_v5"],
+        "instances": ["E4ads_v5", "E8ads_v5", "E16ads_v5", "E32ads_v5", "E64ads_v5"],
     },
-    "Dadsv5": {
+    "Dv3": {
         "cpu": True,
         "gpu_model": None,
-        "instances": ["D2ads_v5", "D4ads_v5", "D8ads_v5", "D16ads_v5",
-                       "D32ads_v5", "D48ads_v5", "D64ads_v5", "D96ads_v5"],
+        "instances": ["D4_v3", "D8_v3", "D16_v3", "D32_v3", "D64_v3"],
     },
-    # A100 80GB (single node, no NvLink)
-    "NC_A100_v4": {
-        "cpu": False,
-        "gpu_model": "A100",
-        "gpu_memory": 80,
-        "nvlink": False,
-        "instances_by_gpu": {1: "NC24ads_A100_v4", 4: "NC48ads_A100_v4"},
-    },
-    # A100 80GB (8-GPU NvLink)
+    # --- A100 80GB (NDAMv4) — NvLink + IB 8-GPU, or fractional ---
     "NDAMv4": {
         "cpu": False,
         "gpu_model": "A100",
         "gpu_memory": 80,
         "nvlink": True,
-        "instances_by_gpu": {8: "ND96amsr_A100_v4"},
+        "instances_by_gpu": {
+            1: "ND12am_A100_v4",
+            2: "ND24am_A100_v4",
+            4: "ND48am_A100_v4",
+            8: "ND96amrs_A100_v4",
+        },
     },
-    # A100 40GB
+    # --- A100 80GB (NC_A100_v4) — no NvLink, 1-4 GPU ---
+    "NC_A100_v4": {
+        "cpu": False,
+        "gpu_model": "A100",
+        "gpu_memory": 80,
+        "nvlink": False,
+        "instances_by_gpu": {
+            1: "NC24ad_A100_v4",
+            2: "NC48ad_A100_v4",
+            4: "NC96ad_A100_v4",
+        },
+    },
+    # --- A100 40GB (NDv4) ---
     "NDv4": {
         "cpu": False,
         "gpu_model": "A100",
         "gpu_memory": 40,
-        "nvlink": False,
-        "instances_by_gpu": {8: "ND96asr_v4"},
-    },
-    # V100 32GB (legacy)
-    "NDv2": {
-        "cpu": False,
-        "gpu_model": "V100",
-        "gpu_memory": 32,
         "nvlink": True,
-        "instances_by_gpu": {8: "Standard_ND40rs_v2"},
+        "instances_by_gpu": {
+            1: "ND12_v4",
+            2: "ND24_v4",
+            4: "ND48_v4",
+            8: "ND96rs_v4",
+        },
     },
-    # H100 80GB
+    # --- H100 80GB (NDH100v5) ---
     "NDH100v5": {
         "cpu": False,
         "gpu_model": "H100",
         "gpu_memory": 80,
         "nvlink": True,
-        "instances_by_gpu": {8: "ND96isr_H100_v5"},
+        "instances_by_gpu": {
+            1: "ND12_H100_v5",
+            2: "ND24_H100_v5",
+            4: "ND48_H100_v5",
+            8: "ND96r_H100_v5",
+        },
     },
-    # MI200 (AMD)
-    "NDMI200v4": {
-        "cpu": False,
-        "gpu_model": "MI200",
-        "gpu_memory": 64,
-        "nvlink": False,
-        "instances_by_gpu": {8: "ND96amsr_MI200_v4"},
-    },
-    # MI300X (AMD)
-    "NDMI300Xv4": {
-        "cpu": False,
-        "gpu_model": "MI300X",
-        "gpu_memory": 192,
-        "nvlink": False,
-        "instances_by_gpu": {8: "ND96isr_MI300X_v4"},
-    },
-    # H200
+    # --- H200 141GB (NDH200v5) — not in fallback JSON yet, using naming convention ---
     "NDH200v5": {
         "cpu": False,
         "gpu_model": "H200",
         "gpu_memory": 141,
         "nvlink": True,
-        "instances_by_gpu": {8: "ND96isr_H200_v5"},
+        "instances_by_gpu": {
+            1: "ND12_H200_v5",
+            2: "ND24_H200_v5",
+            4: "ND48_H200_v5",
+            8: "ND96r_H200_v5",
+        },
+    },
+    # --- MI200 64GB (NDMI200v4) — AMD xGMI ---
+    "NDMI200v4": {
+        "cpu": False,
+        "gpu_model": "MI200",
+        "gpu_memory": 64,
+        "nvlink": False,
+        "instances_by_gpu": {
+            2: "ND12as_MI200_v4",
+            4: "ND24as_MI200_v4",
+            8: "ND48as_MI200_v4",
+            16: "ND96asr_MI200_v4",
+        },
+    },
+    # --- MI300X 192GB (NDMI300Xv5) — AMD xGMI ---
+    "NDMI300Xv4": {
+        "cpu": False,
+        "gpu_model": "MI300X",
+        "gpu_memory": 192,
+        "nvlink": False,
+        "instances_by_gpu": {
+            1: "ND12is_MI300X_v5",
+            2: "ND24is_MI300X_v5",
+            4: "ND48is_MI300X_v5",
+            8: "ND96isr_MI300X_v5",
+        },
+    },
+    # Also map the v5 series ID that some VCs report
+    "NDMI300Xv5": {
+        "cpu": False,
+        "gpu_model": "MI300X",
+        "gpu_memory": 192,
+        "nvlink": False,
+        "instances_by_gpu": {
+            1: "ND12is_MI300X_v5",
+            2: "ND24is_MI300X_v5",
+            4: "ND48is_MI300X_v5",
+            8: "ND96isr_MI300X_v5",
+        },
+    },
+    # --- V100 32GB (NDv2) ---
+    "NDv2": {
+        "cpu": False,
+        "gpu_model": "V100",
+        "gpu_memory": 32,
+        "nvlink": True,
+        "instances_by_gpu": {
+            1: "ND5_v2",
+            2: "ND10_v2",
+            4: "ND20_v2",
+            8: "ND40rs_v2",
+        },
+    },
+    # --- H100 80GB (LMD_BM_GPUH100) — OCI ---
+    "LMD_BM_GPUH100": {
+        "cpu": False,
+        "gpu_model": "H100",
+        "gpu_memory": 80,
+        "nvlink": True,
+        "instances_by_gpu": {
+            1: "LMD_BM_GPUH100.1-n1",
+            2: "LMD_BM_GPUH100.2-n1",
+            4: "LMD_BM_GPUH100.4-n1",
+            8: "LMD_BM_GPUH100.8-n1",
+        },
     },
 }
 
