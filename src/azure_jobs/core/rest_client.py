@@ -553,8 +553,9 @@ class AzureMLJobsClient:
         except Exception:
             pass
         # Credential-less datastore — get a Storage-scoped bearer token
+        from azure.identity import AzureCliCredential
         storage_scope = "https://storage.azure.com/.default"
-        token = self._cred.get_token(storage_scope)
+        token = AzureCliCredential().get_token(storage_scope)
         return {"_bearer": token.token}
 
     def _upload_blob(
