@@ -151,6 +151,26 @@ def _build_environment(request: SubmitRequest, ml_client: Any) -> Any:
     return env
 
 
+def _get_or_create_datastore(
+    ml_client: Any, ds_name: str, account: str, container: str, mount_name: str,
+) -> None:
+    """Ensure a blob datastore exists in the workspace (create if missing)."""
+    try:
+        ml_client.datastores.get(ds_name)
+    except Exception:
+        from azure.ai.ml.entities import AzureBlobDatastore
+        ds = AzureBlobDatastore(
+            name=ds_name,
+            account_name=account,
+            container_name=container,
+            description=f"Created by aj for {mount_name}",
+        )
+        try:
+            ml_client.create_or_update(ds)
+        except Exception:
+            log.debug("Failed to create datastore %s", ds_name, exc_info=True)
+
+
 def _build_storage_mounts(
     request: SubmitRequest,
     ml_client: Any,
@@ -173,32 +193,15 @@ def _build_storage_mounts(
 
     from azure.ai.ml import Output
     from azure.ai.ml.constants import AssetTypes
-    from azure.ai.ml.entities import AzureBlobDatastore
 
     for mount_name, mount_cfg in request.storage.items():
         account = mount_cfg.get("storage_account_name", "")
         container = mount_cfg.get("container_name", "")
         mount_dir = mount_cfg.get("mount_dir", f"/mnt/{mount_name}")
-
-        # Sanitize datastore name (Azure requires alphanumeric + underscores)
         ds_name = f"aj_{mount_name}".replace("-", "_")
 
-        # Create or reuse datastore in the workspace
-        try:
-            ml_client.datastores.get(ds_name)
-        except Exception:
-            ds = AzureBlobDatastore(
-                name=ds_name,
-                account_name=account,
-                container_name=container,
-                description=f"Created by aj for {mount_name}",
-            )
-            try:
-                ml_client.create_or_update(ds)
-            except Exception:
-                log.debug("Failed to create datastore %s", ds_name, exc_info=True)
+        _get_or_create_datastore(ml_client, ds_name, account, container, mount_name)
 
-        # Build workspace-relative URI for the output
         uri = (
             f"azureml://subscriptions/{request.subscription_id}"
             f"/resourceGroups/{request.resource_group}"
@@ -383,6 +386,36 @@ def _build_identity(request: SubmitRequest) -> Any | None:
 
 _INTERNAL_ENV_KEYS = {"_sku_raw"}
 
+_SING_DEFAULT_ENV = {
+    "SUDO": "sudo",
+    "AZCOPY_AUTO_LOGIN_TYPE": "MSI",
+    "JOB_EXECUTION_MODE": "Basic",
+    "AZUREML_COMPUTE_USE_COMMON_RUNTIME": "false",
+}
+
+
+def _build_env_vars(request: SubmitRequest, dataref_env: dict[str, str]) -> dict[str, str]:
+    """Build the environment variables dict for the job."""
+    env_vars = {
+        k: v for k, v in request.env_vars.items() if k not in _INTERNAL_ENV_KEYS
+    }
+    if request.shm_size:
+        env_vars.setdefault("SHM_SIZE", request.shm_size)
+    if request.service == "sing":
+        for k, v in _SING_DEFAULT_ENV.items():
+            env_vars.setdefault(k, v)
+    env_vars.update(dataref_env)
+    return env_vars
+
+
+def _build_tags(tag_strings: list[str]) -> dict[str, str | None]:
+    """Parse ``key:value`` tag strings into a dict."""
+    tags: dict[str, str | None] = {}
+    for tag_str in tag_strings:
+        key, _, value = tag_str.partition(":")
+        tags[key.strip()] = value.strip() or None
+    return tags
+
 
 def submit(request: SubmitRequest, on_status: Any = None) -> SubmitResult:
     """Submit a job to Azure ML.
@@ -422,24 +455,7 @@ def submit(request: SubmitRequest, on_status: Any = None) -> SubmitResult:
         identity = _build_identity(request)
         compute = _resolve_compute(request)
         resources = _build_resources(request, on_status=_status)
-
-        # Build environment variables — keep Azure-specific keys, drop only
-        # our internal markers like _sku_raw
-        env_vars = {
-            k: v for k, v in request.env_vars.items() if k not in _INTERNAL_ENV_KEYS
-        }
-        if request.shm_size:
-            env_vars.setdefault("SHM_SIZE", request.shm_size)
-
-        # Singularity-specific env vars
-        if request.service == "sing":
-            env_vars.setdefault("SUDO", "sudo")
-            env_vars.setdefault("AZCOPY_AUTO_LOGIN_TYPE", "MSI")
-            env_vars.setdefault("JOB_EXECUTION_MODE", "Basic")
-            env_vars.setdefault("AZUREML_COMPUTE_USE_COMMON_RUNTIME", "false")
-
-        # Add storage DATAREFERENCE env vars
-        env_vars.update(dataref_env)
+        env_vars = _build_env_vars(request, dataref_env)
 
         # Singularity identity: resolve UAI client_id for storage auth
         identity_prefix = ""
@@ -458,15 +474,8 @@ def submit(request: SubmitRequest, on_status: Any = None) -> SubmitResult:
         if identity_prefix:
             command_str = f"{identity_prefix} && {command_str}"
 
-        # Build properties dict (PathOnCompute + metadata)
-        properties: dict[str, str] = {}
-        properties.update(poc_props)
-
-        # Build tags
-        tags = {}
-        for tag_str in request.tags:
-            key, _, value = tag_str.partition(":")
-            tags[key.strip()] = value.strip() or None
+        tags = _build_tags(request.tags)
+        properties = dict(poc_props) if poc_props else {}
 
         from azure.ai.ml import command as aml_command
 

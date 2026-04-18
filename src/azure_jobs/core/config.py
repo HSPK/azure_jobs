@@ -144,6 +144,79 @@ def pick_workspace(workspaces: list[dict[str, str]]) -> dict[str, str] | None:
     return None
 
 
+def _ensure_subscription_id(workspace: dict[str, str]) -> bool:
+    """Detect or prompt for subscription_id. Returns True if workspace changed."""
+    if workspace.get("subscription_id"):
+        return False
+    az_info = detect_subscription()
+    if az_info and az_info["subscription_id"]:
+        workspace["subscription_id"] = az_info["subscription_id"]
+        click.echo()
+        click.secho(
+            f"  ✓ Detected subscription: {az_info.get('subscription_name', '')} "
+            f"({az_info['subscription_id'][:8]}…)",
+            fg="green",
+        )
+    else:
+        click.echo()
+        click.secho(
+            "Could not detect Azure subscription. Run `az login` first, "
+            "or enter manually:",
+            fg="yellow",
+        )
+        workspace["subscription_id"] = click.prompt(
+            click.style("  Subscription ID", fg="white", bold=True),
+            type=str,
+        )
+    return True
+
+
+def _ensure_resource_group_and_workspace(workspace: dict[str, str]) -> bool:
+    """Detect or prompt for resource_group and workspace_name. Returns True if changed."""
+    need_rg = not workspace.get("resource_group")
+    need_ws = not workspace.get("workspace_name")
+    if not need_rg and not need_ws:
+        return False
+
+    detected = detect_workspaces(workspace["subscription_id"])
+    picked = pick_workspace(detected) if detected else None
+
+    if picked:
+        if need_rg:
+            workspace["resource_group"] = picked["resource_group"]
+        if need_ws:
+            workspace["workspace_name"] = picked["name"]
+        click.echo()
+        click.secho(
+            f"  ✓ Workspace: {picked['name']} "
+            f"(resource group: {picked['resource_group']})",
+            fg="green",
+        )
+        return True
+
+    # Manual fallback
+    changed = False
+    if need_rg:
+        click.echo()
+        workspace["resource_group"] = click.prompt(
+            click.style("  Resource group", fg="white", bold=True),
+            type=str,
+        )
+        changed = True
+    if need_ws:
+        click.echo()
+        ws_name = click.prompt(
+            click.style("  Workspace name (or empty to skip)", fg="white", bold=True),
+            type=str,
+            default="",
+            show_default=False,
+        )
+        if ws_name:
+            workspace["workspace_name"] = ws_name
+            changed = True
+    return changed
+
+
 def get_workspace_config() -> dict[str, str]:
     """Return workspace details, auto-detecting and prompting as needed.
 
@@ -157,75 +230,9 @@ def get_workspace_config() -> dict[str, str]:
     """
     config = read_config()
     workspace = config.get("workspace", {})
-    changed = False
 
-    # --- subscription_id ---
-    if not workspace.get("subscription_id"):
-        az_info = detect_subscription()
-        if az_info and az_info["subscription_id"]:
-            workspace["subscription_id"] = az_info["subscription_id"]
-            click.echo()
-            click.secho(
-                f"  ✓ Detected subscription: {az_info.get('subscription_name', '')} "
-                f"({az_info['subscription_id'][:8]}…)",
-                fg="green",
-            )
-            changed = True
-        else:
-            click.echo()
-            click.secho(
-                "Could not detect Azure subscription. Run `az login` first, "
-                "or enter manually:",
-                fg="yellow",
-            )
-            workspace["subscription_id"] = click.prompt(
-                click.style("  Subscription ID", fg="white", bold=True),
-                type=str,
-            )
-            changed = True
-
-    # --- resource_group + workspace_name via workspace detection ---
-    need_rg = not workspace.get("resource_group")
-    need_ws = not workspace.get("workspace_name")
-
-    if need_rg or need_ws:
-        detected = detect_workspaces(workspace["subscription_id"])
-        picked = None
-        if detected:
-            picked = pick_workspace(detected)
-
-        if picked:
-            if need_rg:
-                workspace["resource_group"] = picked["resource_group"]
-            if need_ws:
-                workspace["workspace_name"] = picked["name"]
-            click.echo()
-            click.secho(
-                f"  ✓ Workspace: {picked['name']} "
-                f"(resource group: {picked['resource_group']})",
-                fg="green",
-            )
-            changed = True
-        else:
-            # Manual fallback
-            if need_rg:
-                click.echo()
-                workspace["resource_group"] = click.prompt(
-                    click.style("  Resource group", fg="white", bold=True),
-                    type=str,
-                )
-                changed = True
-            if need_ws:
-                click.echo()
-                ws_name = click.prompt(
-                    click.style("  Workspace name (or empty to skip)", fg="white", bold=True),
-                    type=str,
-                    default="",
-                    show_default=False,
-                )
-                if ws_name:
-                    workspace["workspace_name"] = ws_name
-                    changed = True
+    changed = _ensure_subscription_id(workspace)
+    changed = _ensure_resource_group_and_workspace(workspace) or changed
 
     if changed:
         config["workspace"] = workspace

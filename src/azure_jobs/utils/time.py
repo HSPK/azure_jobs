@@ -85,13 +85,6 @@ def format_time(utc_str: str) -> str:
     return dt.astimezone(get_display_tz()).strftime(_DISPLAY_FMT)
 
 
-def utc_now_display() -> str:
-    """Return the current time in the display timezone."""
-    return datetime.now(timezone.utc).astimezone(get_display_tz()).strftime(
-        _DISPLAY_FMT,
-    )
-
-
 def time_ago(iso_str: str) -> str:
     """Convert an ISO 8601 / UTC timestamp to a human-readable relative time."""
     if not iso_str:
