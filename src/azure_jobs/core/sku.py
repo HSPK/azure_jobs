@@ -526,9 +526,12 @@ def _match_family(spec: SkuSpec, family_id: str, family_info: dict) -> str | Non
         if not family_info.get("cpu"):
             return None
         instances = family_info.get("instances", [])
-        # Pick a reasonable CPU instance (index 3 = 16 vCPUs, good default)
-        idx = min(3, len(instances) - 1) if instances else -1
-        return instances[idx] if idx >= 0 else None
+        if not instances:
+            return None
+        # num_units maps to instance size: C1 → smallest, C4 → mid, etc.
+        # Clamp to valid range
+        idx = min(spec.num_units - 1, len(instances) - 1)
+        return instances[max(0, idx)]
 
     # GPU matching
     if family_info.get("cpu"):
