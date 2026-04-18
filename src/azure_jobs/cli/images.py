@@ -60,33 +60,32 @@ def image_list(query: str | None) -> None:
             ", ".join(aliases[:3]) + ("…" if len(aliases) > 3 else ""),
         )
 
-    console.print()
-    console.print(table)
-    console.print()
+    from azure_jobs.utils.ui import print_table
+    print_table(table)
     console.print(f"[dim]{len(images)} images available[/dim]")
     console.print()
 
 
 def _fetch_sing_images() -> list[dict]:
-    """Fetch Singularity base images via Azure Management API."""
-    from azure_jobs.core.config import az_json
+    """Fetch Singularity base images via Azure ARM REST API."""
+    from azure_jobs.core.rest_client import AzureARMClient
 
-    # Find a working subscription
-    subs = az_json(["account", "list", "--query", "[].id", "-o", "json"])
-    if not subs:
-        return []
-    for sub_id in subs:
+    with AzureARMClient() as arm:
         try:
-            data = az_json([
-                "rest", "--method", "get",
-                "--url",
-                f"https://management.azure.com/subscriptions/{sub_id}"
-                f"/providers/Microsoft.Singularity/images?api-version=2020-12-01-preview",
-            ])
-            if data and data.get("value"):
-                return _parse_images(data["value"])
+            subs = arm.list_subscriptions()
         except Exception:
-            continue
+            return []
+        for sub_id in subs:
+            try:
+                data = arm.get(
+                    f"https://management.azure.com/subscriptions/{sub_id}"
+                    f"/providers/Microsoft.Singularity/images"
+                    f"?api-version=2020-12-01-preview"
+                )
+                if data and data.get("value"):
+                    return _parse_images(data["value"])
+            except Exception:
+                continue
     return []
 
 
@@ -95,13 +94,11 @@ def _parse_images(raw_images: list[dict]) -> list[dict]:
     images = []
     for entry in raw_images:
         names = entry.get("names", [])
-        # Pick the most descriptive name (one with a tag)
         name = next((n for n in names if ":" in n), names[-1] if names else "")
         images.append({
             "id": entry.get("id", ""),
             "name": name,
             "aliases": names,
         })
-    # Sort by name
     images.sort(key=lambda x: x["name"])
     return images

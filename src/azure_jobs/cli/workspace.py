@@ -12,17 +12,10 @@ def ws_group() -> None:
     """Manage Azure ML workspaces."""
 
 
-@ws_group.command(name="list")
-def ws_list() -> None:
-    """List Azure ML workspaces in the current subscription."""
-    from rich.table import Table
-
-    from azure_jobs.core.config import (
-        detect_subscription,
-        detect_workspaces,
-        read_config,
-    )
-    from azure_jobs.utils.ui import console, warning
+def _ensure_workspaces() -> tuple[dict[str, str], list[dict[str, str]]]:
+    """Detect subscription and list workspaces, raising on failure."""
+    from azure_jobs.core.config import detect_subscription, detect_workspaces
+    from azure_jobs.utils.ui import console
 
     sub = detect_subscription()
     if not sub:
@@ -30,16 +23,29 @@ def ws_list() -> None:
             "Cannot detect subscription. Run `az login` first."
         )
 
-    console.print(
-        f"\n[dim]Subscription: {sub['subscription_name']}"
-        f" ({sub['subscription_id'][:8]}…)[/dim]"
-    )
     with console.status("[bold cyan]Listing workspaces…[/bold cyan]", spinner="dots"):
         workspaces = detect_workspaces(sub["subscription_id"])
 
     if not workspaces:
-        warning("No ML workspaces found in this subscription")
-        return
+        raise click.ClickException("No ML workspaces found in this subscription")
+
+    return sub, workspaces
+
+
+@ws_group.command(name="list")
+def ws_list() -> None:
+    """List Azure ML workspaces in the current subscription."""
+    from rich.table import Table
+
+    from azure_jobs.core.config import read_config
+    from azure_jobs.utils.ui import console, print_table
+
+    sub, workspaces = _ensure_workspaces()
+
+    console.print(
+        f"\n[dim]Subscription: {sub['subscription_name']}"
+        f" ({sub['subscription_id'][:8]}…)[/dim]"
+    )
 
     current_ws = read_config().get("workspace", {}).get("workspace_name", "")
 
@@ -56,9 +62,7 @@ def ws_list() -> None:
         marker = "●" if ws["name"] == current_ws else " "
         table.add_row(marker, ws["name"], ws["resource_group"], ws["location"])
 
-    console.print()
-    console.print(table)
-    console.print()
+    print_table(table)
 
 
 @ws_group.command(name="show")
@@ -111,25 +115,13 @@ def ws_set(name: str | None) -> None:
     With NAME, sets the workspace by exact name.
     """
     from azure_jobs.core.config import (
-        detect_subscription,
-        detect_workspaces,
         pick_workspace,
         read_config,
         write_config,
     )
-    from azure_jobs.utils.ui import console, success
+    from azure_jobs.utils.ui import success
 
-    sub = detect_subscription()
-    if not sub:
-        raise click.ClickException(
-            "Cannot detect subscription. Run `az login` first."
-        )
-
-    with console.status("[bold cyan]Listing workspaces…[/bold cyan]", spinner="dots"):
-        workspaces = detect_workspaces(sub["subscription_id"])
-
-    if not workspaces:
-        raise click.ClickException("No ML workspaces found in this subscription")
+    sub, workspaces = _ensure_workspaces()
 
     if name:
         match = [w for w in workspaces if w["name"] == name]

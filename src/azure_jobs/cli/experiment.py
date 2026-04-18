@@ -89,9 +89,8 @@ def exp_list(last: int, ws_name: str | None) -> None:
             info["latest_created"],
         )
 
-    console.print()
-    console.print(table)
-    console.print()
+    from azure_jobs.utils.ui import print_table
+    print_table(table)
 
 
 @exp_group.command(name="show")

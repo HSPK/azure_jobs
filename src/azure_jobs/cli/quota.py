@@ -203,8 +203,8 @@ def _show_sing_quotas(show_all: bool, template: str | None) -> None:
         if vi < len(vcs) - 1:
             table.add_section()
 
-    console.print(table)
-    console.print()
+    from azure_jobs.utils.ui import print_table
+    print_table(table)
 
 
 # ---------------------------------------------------------------------------
@@ -394,9 +394,8 @@ def _show_aml_quotas(show_all: bool) -> None:
 
         table.add_row(ws_label, name, vm_size, sku_s, nodes_s, pri_s, location, portal_text)
 
-    console.print()
-    console.print(table)
-    console.print()
+    from azure_jobs.utils.ui import print_table
+    print_table(table)
 
 
 # ---------------------------------------------------------------------------

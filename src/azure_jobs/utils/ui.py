@@ -33,6 +33,13 @@ _THEME = Theme(
 console = Console(theme=_THEME, highlight=False)
 
 
+def print_table(table: Table) -> None:
+    """Print a Rich table with blank-line spacing above and below."""
+    console.print()
+    console.print(table)
+    console.print()
+
+
 # ---------------------------------------------------------------------------
 # Submission preview
 # ---------------------------------------------------------------------------
@@ -108,9 +115,7 @@ def show_template_table(
             t.get("sku", "—"),
         )
 
-    console.print()
-    console.print(table)
-    console.print()
+    print_table(table)
 
 
 # ---------------------------------------------------------------------------
@@ -185,9 +190,7 @@ def show_jobs_table(records: list[dict[str, Any]]) -> None:
             note,
         )
 
-    console.print()
-    console.print(table)
-    console.print()
+    print_table(table)
 
 
 # ---------------------------------------------------------------------------
@@ -348,9 +351,7 @@ def show_cloud_jobs_table(
             j.get("created", ""),
         )
 
-    console.print()
-    console.print(table)
-    console.print()
+    print_table(table)
 
 
 def build_job_info_lines(

@@ -234,11 +234,10 @@ def run(
         return
 
     # ── Submit to Azure ML ──────────────────────────────────────────
-    from azure_jobs.core.submit import SubmitResult, build_request_from_config, submit
+    from azure_jobs.core.submit import build_request_from_config
 
     workspace = get_workspace_config()
     request = build_request_from_config(conf, name=name, workspace=workspace)
-    # Override with resolved values
     request.nodes = nodes_int
     request.processes_per_node = processes_int
     request.command = conf["jobs"][0]["command"]
@@ -255,16 +254,20 @@ def run(
         args=list(args),
     )
 
-    current_step = ""
+    _submit_and_record(request, rec, name)
 
-    def on_status(step: str, detail: str) -> None:
-        nonlocal current_step
-        current_step = detail
+
+def _submit_and_record(
+    request: Any,
+    rec: SubmissionRecord,
+    display_name: str,
+) -> None:
+    """Submit job to Azure ML and update the submission record."""
+    from azure_jobs.core.submit import SubmitResult, submit
 
     try:
         with console.status("", spinner="dots") as status_ctx:
             def _on_status(step: str, detail: str) -> None:
-                on_status(step, detail)
                 status_ctx.update(f"[bold cyan]{detail}[/bold cyan]")
 
             result: SubmitResult = submit(request, on_status=_on_status)
@@ -279,8 +282,8 @@ def run(
         rec.azure_name = result.azure_name
         if result.portal_url:
             rec.portal = result.portal_url
-        success(f"Job [bold]{name}[/bold] submitted")
-        if result.azure_name != name:
+        success(f"Job [bold]{display_name}[/bold] submitted")
+        if result.azure_name != display_name:
             dim(f"Azure ID: {result.azure_name}")
         if result.portal_url:
             from azure_jobs.utils.ui import short_portal_url
