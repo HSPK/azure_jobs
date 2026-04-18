@@ -142,6 +142,16 @@ def _parse_utc(s: str) -> datetime:
     return dt
 
 
+def calc_duration_secs(start_utc: str, end_utc: str) -> int | None:
+    """Return the number of seconds between two UTC time strings, or *None*."""
+    if not start_utc or not end_utc:
+        return None
+    try:
+        return int((_parse_utc(end_utc) - _parse_utc(start_utc)).total_seconds())
+    except (ValueError, TypeError):
+        return None
+
+
 def calc_duration(start_utc: str, end_utc: str) -> str:
     """Calculate duration between two UTC time strings.
 

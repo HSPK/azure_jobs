@@ -28,7 +28,7 @@ from urllib.parse import quote, urlencode
 
 import requests
 
-from azure_jobs.utils.time import calc_duration, format_time
+from azure_jobs.utils.time import calc_duration, calc_duration_secs, format_time
 
 _MGMT = "https://management.azure.com"
 _API_VERSION = "2024-04-01"
@@ -812,15 +812,18 @@ def _extract_rest_job(raw: dict[str, Any]) -> dict[str, Any]:
     start = inner_props.get("StartTimeUtc", "")
     end = inner_props.get("EndTimeUtc", "")
     duration = calc_duration(start, end)
+    duration_secs = calc_duration_secs(start, end)
     start_display = format_time(start)
     end_display = format_time(end)
 
     # Queue time (created → started)
     queue_time = ""
+    queue_secs: int | None = None
     sys_data = raw.get("systemData", {}) or {}
     created_raw = sys_data.get("createdAt", "")
     if created_raw and start:
         queue_time = calc_duration(created_raw[:19], start)
+        queue_secs = calc_duration_secs(created_raw[:19], start)
 
     # Compute — trim ARM ID to short name
     compute = _trim_arm_id(props.get("computeId", "") or "")
@@ -858,7 +861,9 @@ def _extract_rest_job(raw: dict[str, Any]) -> dict[str, Any]:
         "start_time": start_display,
         "end_time": end_display,
         "duration": duration,
+        "duration_secs": duration_secs,
         "queue_time": queue_time,
+        "queue_secs": queue_secs,
         "experiment": props.get("experimentName", "") or "",
         "type": props.get("jobType", "") or "",
         "description": (props.get("description", "") or "")[:200],

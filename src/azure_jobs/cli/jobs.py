@@ -249,6 +249,263 @@ def job_logs(job_id: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Job statistics
+# ---------------------------------------------------------------------------
+
+
+def _fetch_jobs_for_stats(
+    n: int,
+    ws_name: str | None,
+) -> list[dict[str, Any]]:
+    """Fetch *n* terminal-state jobs for statistics aggregation."""
+    from azure_jobs.core.rest_client import create_rest_client
+    from azure_jobs.utils.ui import console
+
+    client = create_rest_client(ws_name=ws_name)
+    jobs: list[dict[str, Any]] = []
+    next_link = None
+
+    with console.status("[bold cyan]Fetching jobs…[/bold cyan]", spinner="dots") as st:
+        while len(jobs) < n:
+            page, next_link = client.list_jobs_page(
+                next_link=next_link, top=n, list_view_type="ActiveOnly",
+            )
+            if not page:
+                break
+            jobs.extend(page)
+            st.update(f"[bold cyan]Fetching… {len(jobs)} jobs[/bold cyan]")
+            if not next_link:
+                break
+    return jobs[:n]
+
+
+def _median(vals: list[int]) -> int:
+    """Return the median of a sorted list of ints."""
+    if not vals:
+        return 0
+    s = sorted(vals)
+    mid = len(s) // 2
+    if len(s) % 2 == 0:
+        return (s[mid - 1] + s[mid]) // 2
+    return s[mid]
+
+
+@job_group.command(name="stats")
+@click.option(
+    "-n", "--last", default=100, show_default=True,
+    help="Number of recent jobs to analyse",
+)
+@click.option("--ws", "ws_name", default=None, help="Workspace name override")
+def job_stats(last: int, ws_name: str | None) -> None:
+    """Show statistics for recent jobs."""
+    from collections import defaultdict
+
+    from rich.table import Table
+
+    from azure_jobs.utils.time import format_duration
+    from azure_jobs.utils.ui import console, print_table
+
+    jobs = _fetch_jobs_for_stats(last, ws_name)
+    if not jobs:
+        console.print("[dim]No jobs found.[/dim]")
+        return
+
+    # ── Classify statuses ─────────────────────────────────────────────
+    _TERMINAL = {"Completed", "Failed", "Canceled", "CancelRequested"}
+    _ACTIVE = {"Running", "Starting", "Preparing", "Queued",
+               "Provisioning", "Finalizing", "NotStarted"}
+
+    total = len(jobs)
+    by_status: dict[str, int] = defaultdict(int)
+    for j in jobs:
+        by_status[j.get("status", "Unknown")] += 1
+
+    completed = by_status.get("Completed", 0)
+    failed = by_status.get("Failed", 0)
+    canceled = by_status.get("Canceled", 0) + by_status.get("CancelRequested", 0)
+    active = sum(by_status[s] for s in _ACTIVE if s in by_status)
+    terminal = sum(by_status[s] for s in _TERMINAL if s in by_status)
+
+    # Success rate = completed / (completed + failed)
+    decided = completed + failed
+    rate = f"{completed / decided * 100:.1f}%" if decided else "N/A"
+
+    # Overall duration / queue aggregation (terminal jobs only)
+    all_dur: list[int] = []
+    all_queue: list[int] = []
+    for j in jobs:
+        if j.get("status") not in _TERMINAL:
+            continue
+        d = j.get("duration_secs")
+        if d is not None and d > 0:
+            all_dur.append(d)
+        q = j.get("queue_secs")
+        if q is not None and q >= 0:
+            all_queue.append(q)
+
+    avg_dur = format_duration(sum(all_dur) // len(all_dur)) if all_dur else "—"
+    avg_queue = format_duration(sum(all_queue) // len(all_queue)) if all_queue else "—"
+    med_queue = format_duration(_median(all_queue)) if all_queue else "—"
+
+    # ── Overview panel ────────────────────────────────────────────────
+    console.print()
+    console.print(f"[bold]📊 Job Statistics[/bold]  [dim](last {total} jobs)[/dim]")
+    console.print()
+
+    parts = [
+        f"  [bold]Total[/bold] {total}",
+        f"  [bold green]✓ Completed[/bold green] {completed}",
+        f"  [bold red]✗ Failed[/bold red] {failed}",
+        f"  [dim]⊘ Canceled[/dim] {canceled}",
+    ]
+    if active:
+        parts.append(f"  [bold cyan]▶ Active[/bold cyan] {active}")
+    parts.append(f"  [bold]Success Rate[/bold] {rate}")
+    parts.append(f"  [bold]Avg Duration[/bold] {avg_dur}")
+    parts.append(f"  [bold]Avg Queue[/bold] {avg_queue}  [dim]median {med_queue}[/dim]")
+
+    console.print("\n".join(parts))
+
+    # ── By experiment ─────────────────────────────────────────────────
+    exp_stats: dict[str, dict[str, Any]] = defaultdict(
+        lambda: {"total": 0, "completed": 0, "failed": 0, "canceled": 0,
+                 "dur": [], "queue": []}
+    )
+    for j in jobs:
+        exp = j.get("experiment") or "Default"
+        es = exp_stats[exp]
+        es["total"] += 1
+        st = j.get("status", "")
+        if st == "Completed":
+            es["completed"] += 1
+        elif st == "Failed":
+            es["failed"] += 1
+        elif st in ("Canceled", "CancelRequested"):
+            es["canceled"] += 1
+        d = j.get("duration_secs")
+        if d is not None and d > 0 and st in _TERMINAL:
+            es["dur"].append(d)
+        q = j.get("queue_secs")
+        if q is not None and q >= 0 and st in _TERMINAL:
+            es["queue"].append(q)
+
+    # Sort by total desc
+    sorted_exps = sorted(exp_stats.items(), key=lambda x: x[1]["total"], reverse=True)
+
+    tbl = Table(title="By Experiment", title_style="bold", show_edge=False,
+                pad_edge=False)
+    tbl.add_column("Experiment", style="bold")
+    tbl.add_column("Total", justify="right")
+    tbl.add_column("✓", justify="right", style="green")
+    tbl.add_column("✗", justify="right", style="red")
+    tbl.add_column("⊘", justify="right", style="dim")
+    tbl.add_column("Rate", justify="right")
+    tbl.add_column("Avg Duration", justify="right")
+
+    for exp_name, es in sorted_exps:
+        dec = es["completed"] + es["failed"]
+        exp_rate = f"{es['completed'] / dec * 100:.0f}%" if dec else "—"
+        exp_dur = format_duration(sum(es["dur"]) // len(es["dur"])) if es["dur"] else "—"
+
+        # Dim the row if all jobs are canceled with no completions
+        row_style = "dim" if dec == 0 and es["canceled"] > 0 else None
+        tbl.add_row(
+            exp_name, str(es["total"]),
+            str(es["completed"]), str(es["failed"]), str(es["canceled"]),
+            exp_rate, exp_dur,
+            style=row_style,
+        )
+
+    print_table(tbl)
+
+    # ── By compute ────────────────────────────────────────────────────
+    compute_stats: dict[str, dict[str, Any]] = defaultdict(
+        lambda: {"total": 0, "completed": 0, "failed": 0,
+                 "dur": [], "queue": []}
+    )
+    for j in jobs:
+        comp = j.get("compute") or "unknown"
+        cs = compute_stats[comp]
+        cs["total"] += 1
+        st = j.get("status", "")
+        if st == "Completed":
+            cs["completed"] += 1
+        elif st == "Failed":
+            cs["failed"] += 1
+        d = j.get("duration_secs")
+        if d is not None and d > 0 and st in _TERMINAL:
+            cs["dur"].append(d)
+        q = j.get("queue_secs")
+        if q is not None and q >= 0 and st in _TERMINAL:
+            cs["queue"].append(q)
+
+    sorted_computes = sorted(
+        compute_stats.items(), key=lambda x: x[1]["total"], reverse=True,
+    )
+
+    tbl2 = Table(title="By Compute", title_style="bold", show_edge=False,
+                 pad_edge=False)
+    tbl2.add_column("Compute", style="bold")
+    tbl2.add_column("Jobs", justify="right")
+    tbl2.add_column("✓/✗", justify="right")
+    tbl2.add_column("Queue (avg)", justify="right")
+    tbl2.add_column("Queue (p50)", justify="right")
+    tbl2.add_column("Queue (max)", justify="right")
+    tbl2.add_column("Avg Duration", justify="right")
+
+    for comp_name, cs in sorted_computes:
+        dec = cs["completed"] + cs["failed"]
+        ratio = f"{cs['completed']}/{cs['failed']}" if dec else "—"
+        q_avg = format_duration(sum(cs["queue"]) // len(cs["queue"])) if cs["queue"] else "—"
+        q_p50 = format_duration(_median(cs["queue"])) if cs["queue"] else "—"
+        q_max = format_duration(max(cs["queue"])) if cs["queue"] else "—"
+        c_dur = format_duration(sum(cs["dur"]) // len(cs["dur"])) if cs["dur"] else "—"
+
+        tbl2.add_row(
+            comp_name, str(cs["total"]), ratio,
+            q_avg, q_p50, q_max, c_dur,
+        )
+
+    print_table(tbl2)
+
+    # ── By user ───────────────────────────────────────────────────────
+    user_counts: dict[str, dict[str, int]] = defaultdict(
+        lambda: {"total": 0, "completed": 0, "failed": 0}
+    )
+    for j in jobs:
+        user = j.get("created_by") or "unknown"
+        # Shorten email to alias
+        if "@" in user:
+            user = user.split("@")[0]
+        uc = user_counts[user]
+        uc["total"] += 1
+        st = j.get("status", "")
+        if st == "Completed":
+            uc["completed"] += 1
+        elif st == "Failed":
+            uc["failed"] += 1
+
+    if len(user_counts) > 1:
+        sorted_users = sorted(
+            user_counts.items(), key=lambda x: x[1]["total"], reverse=True,
+        )
+        tbl3 = Table(title="By User", title_style="bold", show_edge=False,
+                     pad_edge=False)
+        tbl3.add_column("User", style="bold")
+        tbl3.add_column("Jobs", justify="right")
+        tbl3.add_column("✓", justify="right", style="green")
+        tbl3.add_column("✗", justify="right", style="red")
+        tbl3.add_column("Rate", justify="right")
+
+        for uname, uc in sorted_users:
+            dec = uc["completed"] + uc["failed"]
+            u_rate = f"{uc['completed'] / dec * 100:.0f}%" if dec else "—"
+            tbl3.add_row(uname, str(uc["total"]),
+                         str(uc["completed"]), str(uc["failed"]), u_rate)
+        print_table(tbl3)
+
+
+# ---------------------------------------------------------------------------
 # Local records (accessible via ``aj list``)
 # ---------------------------------------------------------------------------
 
