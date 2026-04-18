@@ -22,3 +22,4 @@ from . import experiment  # noqa: E402, F401
 from . import quota  # noqa: E402, F401
 from . import env  # noqa: E402, F401
 from . import ds  # noqa: E402, F401
+from . import sku  # noqa: E402, F401
