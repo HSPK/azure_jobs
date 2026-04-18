@@ -69,6 +69,7 @@ class SubmitRequest:
     # Singularity-specific (only used when service == "sing")
     vc_subscription_id: str = ""  # VC subscription (falls back to subscription_id)
     vc_resource_group: str = ""  # VC resource group (falls back to resource_group)
+    group_policy: str = ""  # Singularity group policy name for quota allocation
 
 
 def _extract_error_message(exc: Exception) -> str:
@@ -322,6 +323,8 @@ def _build_resources(
             }
         }
     }
+    if request.group_policy:
+        res["properties"]["AISuperComputer"]["groupPolicyName"] = request.group_policy
 
 
 def _resolve_sing_identity(
@@ -393,6 +396,8 @@ def _build_env_vars(request: SubmitRequest, dataref_env: dict[str, str]) -> dict
     if request.service == "sing":
         for k, v in _SING_DEFAULT_ENV.items():
             env_vars.setdefault(k, v)
+        if request.group_policy:
+            env_vars.setdefault("AML_JOB_GROUP_POLICY", request.group_policy)
     env_vars.update(dataref_env)
     return env_vars
 
@@ -615,5 +620,6 @@ def build_request_from_config(
         service=service,
         vc_subscription_id=target.get("subscription_id", ""),
         vc_resource_group=target.get("resource_group", ""),
+        group_policy=target.get("group_policy_name", ""),
     )
 
