@@ -56,6 +56,49 @@ def save_defaults(
     write_config(config)
 
 
+# -- experiment --------------------------------------------------------------
+
+
+def get_experiment() -> str:
+    """Return the configured experiment name, or empty string if unset."""
+    return read_config().get("experiment", "")
+
+
+def ensure_experiment() -> str:
+    """Return experiment name, prompting the user if not yet configured.
+
+    Generates a default suggestion like ``my-experiment-a1b2c3d4`` and
+    saves the chosen name to ``aj_config.json``.
+    """
+    name = get_experiment()
+    if name:
+        return name
+
+    import secrets
+    suffix = secrets.token_hex(4)  # 8 hex chars
+    suggestion = f"experiment-{suffix}"
+
+    click.echo()
+    click.secho("  No experiment configured yet.", fg="yellow")
+    name = click.prompt(
+        click.style("  Experiment name", fg="white", bold=True),
+        type=str,
+        default=suggestion,
+    )
+    name = name.strip()
+    if not name:
+        name = suggestion
+
+    cfg = read_config()
+    cfg["experiment"] = name
+    write_config(cfg)
+    click.echo()
+    click.secho(f"  ✓ Experiment set to: {name}", fg="green")
+    click.secho(f"    Change anytime with: aj config experiment <name>", fg="bright_black")
+    click.echo()
+    return name
+
+
 # -- workspace ---------------------------------------------------------------
 
 

@@ -43,6 +43,31 @@ def config_timezone(tz: str | None) -> None:
     console.print(f"[success]✓[/success] Timezone set to [bold]{tz}[/bold]")
 
 
+@config_group.command(name="experiment")
+@click.argument("name", required=False)
+def config_experiment(name: str | None) -> None:
+    """Get or set the experiment name.
+
+    Without arguments, prints the current experiment.
+    With a name, saves it to aj_config.json.
+    """
+    from azure_jobs.core.config import get_experiment, read_config, write_config
+    from azure_jobs.utils.ui import console
+
+    if name is None:
+        exp = get_experiment()
+        if exp:
+            console.print(f"[bold]{exp}[/bold]")
+        else:
+            console.print("[dim]No experiment set. Run [bold]aj config experiment <name>[/bold] or submit a job.[/dim]")
+        return
+
+    cfg = read_config()
+    cfg["experiment"] = name.strip()
+    write_config(cfg)
+    console.print(f"[success]✓[/success] Experiment set to [bold]{name.strip()}[/bold]")
+
+
 @config_group.command(name="show")
 def config_show() -> None:
     """Show all configuration."""

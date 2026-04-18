@@ -234,10 +234,14 @@ def run(
         return
 
     # ── Submit to Azure ML ──────────────────────────────────────────
+    from azure_jobs.core.config import ensure_experiment
     from azure_jobs.core.submit import build_request_from_config
 
+    experiment = ensure_experiment()
     workspace = get_workspace_config()
-    request = build_request_from_config(conf, name=name, workspace=workspace)
+    request = build_request_from_config(
+        conf, name=name, workspace=workspace, experiment=experiment,
+    )
     request.nodes = nodes_int
     request.processes_per_node = processes_int
     request.command = conf["jobs"][0]["command"]

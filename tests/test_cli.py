@@ -688,6 +688,7 @@ class TestRunCommand:
         write_template(aj_env["template_home"], "default", MINIMAL_JOB_CONF)
         aj_env["config_fp"].write_text(json.dumps({
             "defaults": {"template": "default"},
+            "experiment": "test",
             "workspace": {"subscription_id": "s", "resource_group": "r", "workspace_name": "w"},
         }))
         runner = CliRunner()
@@ -919,6 +920,7 @@ class TestRunErrorPaths:
         write_template(aj_env["template_home"], "default", MINIMAL_JOB_CONF)
         aj_env["config_fp"].write_text(json.dumps({
             "defaults": {"template": "default"},
+            "experiment": "test",
             "workspace": {"subscription_id": "s", "resource_group": "r", "workspace_name": "w"},
         }))
         runner = CliRunner()
@@ -934,6 +936,7 @@ class TestRunErrorPaths:
         write_template(aj_env["template_home"], "default", MINIMAL_JOB_CONF)
         aj_env["config_fp"].write_text(json.dumps({
             "defaults": {"template": "default"},
+            "experiment": "test",
             "workspace": {"subscription_id": "s", "resource_group": "r", "workspace_name": "w"},
         }))
         runner = CliRunner()

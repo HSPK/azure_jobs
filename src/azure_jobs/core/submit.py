@@ -563,6 +563,7 @@ def build_request_from_config(
     *,
     name: str,
     workspace: dict[str, str],
+    experiment: str = "aj",
 ) -> SubmitRequest:
     """Build a SubmitRequest from a merged template config dict.
 
@@ -595,6 +596,7 @@ def build_request_from_config(
     return SubmitRequest(
         name=name,
         description=name,
+        experiment_name=experiment,
         compute=target.get("name", ""),
         nodes=job.get("instance_count", 1),
         processes_per_node=job.get("process_count_per_node", 1),
