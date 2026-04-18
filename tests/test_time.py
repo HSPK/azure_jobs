@@ -10,22 +10,19 @@ import pytest
 
 
 @pytest.fixture()
-def _cfg_tz(tmp_path: Path):
+def _cfg_tz(aj_config: Path):
     """Fixture that sets up aj_config.json with a custom timezone."""
-    cf = tmp_path / "aj_config.json"
-
     def _set(tz: str | None = None):
         import json
         import azure_jobs.utils.time as _tmod
         data = {"timezone": tz} if tz else {}
-        cf.write_text(json.dumps(data))
+        aj_config.write_text(json.dumps(data))
         # Reset caches so the new config is picked up
         _tmod._tz_cache.clear()
         _tmod._display_tz_name = None
 
-    cf.write_text("{}")
-    with patch("azure_jobs.core.const.AJ_CONFIG", cf):
-        yield _set
+    aj_config.write_text("{}")
+    yield _set
 
 
 # ---- format_time -----------------------------------------------------------

@@ -9,31 +9,22 @@ from azure_jobs.core.config import (
 )
 
 
-@pytest.fixture
-def config_env(tmp_path, monkeypatch):
-    """Set up isolated AJ_HOME with aj_config.json path."""
-    aj_home = tmp_path / ".azure_jobs"
-    aj_home.mkdir()
-    config_fp = aj_home / "aj_config.json"
-    monkeypatch.setattr("azure_jobs.core.const.AJ_CONFIG", config_fp)
-    return {"aj_home": aj_home, "config_fp": config_fp}
-
-
 class TestReadConfig:
-    def test_missing_file_returns_empty(self, config_env):
+    def test_missing_file_returns_empty(self, aj_config):
+        aj_config.unlink()  # ensure no file
         assert read_config() == {}
 
-    def test_reads_existing_config(self, config_env):
+    def test_reads_existing_config(self, aj_config):
         data = {"workspace": {"subscription_id": "sub-123"}}
-        config_env["config_fp"].write_text(json.dumps(data))
+        aj_config.write_text(json.dumps(data))
         assert read_config() == data
 
 
 class TestWriteConfig:
-    def test_creates_file_with_indentation(self, config_env):
+    def test_creates_file_with_indentation(self, aj_config):
         data = {"workspace": {"subscription_id": "sub-123", "resource_group": "rg"}}
         write_config(data)
-        content = config_env["config_fp"].read_text()
+        content = aj_config.read_text()
         parsed = json.loads(content)
         assert parsed == data
         assert '  "workspace"' in content
@@ -46,17 +37,17 @@ class TestWriteConfig:
 
 
 class TestDefaults:
-    def test_get_defaults_empty(self, config_env):
+    def test_get_defaults_empty(self, aj_config):
         assert get_defaults() == {}
 
-    def test_save_and_get_defaults(self, config_env):
+    def test_save_and_get_defaults(self, aj_config):
         save_defaults(template="gpu", nodes=4, processes=2)
         d = get_defaults()
         assert d["template"] == "gpu"
         assert d["nodes"] == 4
         assert d["processes"] == 2
 
-    def test_save_partial_preserves_existing(self, config_env):
+    def test_save_partial_preserves_existing(self, aj_config):
         save_defaults(template="gpu", nodes=4)
         save_defaults(processes=8)
         d = get_defaults()
@@ -64,8 +55,8 @@ class TestDefaults:
         assert d["nodes"] == 4
         assert d["processes"] == 8
 
-    def test_save_defaults_preserves_other_config(self, config_env):
-        config_env["config_fp"].write_text(json.dumps({"repo_id": "foo/bar"}))
+    def test_save_defaults_preserves_other_config(self, aj_config):
+        aj_config.write_text(json.dumps({"repo_id": "foo/bar"}))
         save_defaults(template="cpu")
         data = read_config()
         assert data["repo_id"] == "foo/bar"
@@ -137,7 +128,7 @@ class TestPickWorkspace:
 
 
 class TestGetWorkspaceConfig:
-    def test_returns_existing_config(self, config_env):
+    def test_returns_existing_config(self, aj_config):
         data = {
             "workspace": {
                 "subscription_id": "sub-123",
@@ -145,13 +136,13 @@ class TestGetWorkspaceConfig:
                 "workspace_name": "ws-test",
             }
         }
-        config_env["config_fp"].write_text(json.dumps(data))
+        aj_config.write_text(json.dumps(data))
         result = get_workspace_config()
         assert result["subscription_id"] == "sub-123"
         assert result["resource_group"] == "rg-test"
         assert result["workspace_name"] == "ws-test"
 
-    def test_full_auto_detect_flow(self, config_env, monkeypatch):
+    def test_full_auto_detect_flow(self, aj_config, monkeypatch):
         """subscription + workspace all auto-detected."""
         import subprocess as sp
         call_count = {"n": 0}
@@ -177,10 +168,10 @@ class TestGetWorkspaceConfig:
         assert result["subscription_id"] == "auto-sub"
         assert result["resource_group"] == "eastus_2"
         assert result["workspace_name"] == "FastAML"
-        saved = json.loads(config_env["config_fp"].read_text())
+        saved = json.loads(aj_config.read_text())
         assert saved["workspace"]["resource_group"] == "eastus_2"
 
-    def test_manual_fallback_when_no_workspaces_found(self, config_env, monkeypatch):
+    def test_manual_fallback_when_no_workspaces_found(self, aj_config, monkeypatch):
         """Falls back to prompt when az resource list returns empty."""
         import subprocess as sp
         def mock_run(cmd, **kw):
@@ -198,7 +189,7 @@ class TestGetWorkspaceConfig:
         assert result["resource_group"] == "rg-manual"
         assert result["workspace_name"] == "ws-manual"
 
-    def test_manual_entry_via_option_zero(self, config_env, monkeypatch):
+    def test_manual_entry_via_option_zero(self, aj_config, monkeypatch):
         """User selects '0' to enter manually instead of picking a workspace."""
         import subprocess as sp
         def mock_run(cmd, **kw):
@@ -220,7 +211,7 @@ class TestGetWorkspaceConfig:
         assert result["resource_group"] == "my-rg"
         assert result["workspace_name"] == "my-ws"
 
-    def test_prompts_subscription_when_az_fails(self, config_env, monkeypatch):
+    def test_prompts_subscription_when_az_fails(self, aj_config, monkeypatch):
         """Falls back to prompt if az CLI is not available."""
         monkeypatch.setattr(
             "azure_jobs.core.config.subprocess.run",
@@ -232,7 +223,7 @@ class TestGetWorkspaceConfig:
         assert result["subscription_id"] == "manual-sub"
         assert result["resource_group"] == "rg-prod"
 
-    def test_skips_detection_for_existing_rg_and_ws(self, config_env):
+    def test_skips_detection_for_existing_rg_and_ws(self, aj_config):
         data = {
             "workspace": {
                 "subscription_id": "sub-123",
@@ -240,7 +231,7 @@ class TestGetWorkspaceConfig:
                 "workspace_name": "ws-existing",
             }
         }
-        config_env["config_fp"].write_text(json.dumps(data))
+        aj_config.write_text(json.dumps(data))
         result = get_workspace_config()
         assert result["resource_group"] == "rg-existing"
         assert result["workspace_name"] == "ws-existing"

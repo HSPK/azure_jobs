@@ -14,7 +14,10 @@ Right pane   bordered panel; border-title shows tab indicator (Info/Logs),
 
 from __future__ import annotations
 
+import logging
 from typing import Any
+
+log = logging.getLogger(__name__)
 
 from textual import work
 from textual.app import App, ComposeResult
@@ -142,7 +145,7 @@ class AjDashboard(WorkspaceMixin, App):
                 kv([], hint=msg)
             )
         except Exception:
-            pass
+            pass  # Widget not yet mounted during startup
 
     @work(thread=True, exclusive=True, group="fetch")
     def _init_fetch(self) -> None:
@@ -553,7 +556,7 @@ class AjDashboard(WorkspaceMixin, App):
             lw.clear()
             lw.write(msg)
         except Exception:
-            pass
+            log.debug("Log viewer not available for status update")
 
     def _append_log_line(self, line: str) -> None:
         """Append a single numbered log line to the RichLog widget."""
@@ -707,7 +710,7 @@ class AjDashboard(WorkspaceMixin, App):
                 else:
                     new_jobs.append(d)
         except Exception:
-            pass
+            log.debug("Failed to parse refreshed job data", exc_info=True)
 
         if worker.is_cancelled:
             return

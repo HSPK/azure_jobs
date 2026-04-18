@@ -14,8 +14,11 @@ All azure-ai-ml imports are lazy to keep CLI startup fast.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from typing import Any
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -135,7 +138,7 @@ def _build_environment(request: SubmitRequest, ml_client: Any) -> Any:
         if isinstance(cached, Environment):
             return cached
     except Exception:
-        pass
+        log.debug("Environment %s:%s not cached, creating new", env_name, version)
 
     env = Environment(name=env_name, version=version, image=image)
     try:
@@ -143,7 +146,7 @@ def _build_environment(request: SubmitRequest, ml_client: Any) -> Any:
         if isinstance(registered, Environment):
             return registered
     except Exception:
-        pass
+        log.debug("Failed to register environment, using unregistered", exc_info=True)
     # Fallback: return unregistered environment
     return env
 
@@ -193,7 +196,7 @@ def _build_storage_mounts(
             try:
                 ml_client.create_or_update(ds)
             except Exception:
-                pass
+                log.debug("Failed to create datastore %s", ds_name, exc_info=True)
 
         # Build workspace-relative URI for the output
         uri = (
@@ -353,7 +356,7 @@ def _resolve_sing_identity(
             if rid and rid.lower().rstrip("/") == uai_resource_id.lower().rstrip("/"):
                 return cid or None
     except Exception:
-        pass
+        log.debug("Failed to resolve Singularity identity", exc_info=True)
 
     return None
 

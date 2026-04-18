@@ -271,6 +271,7 @@ def _fetch_vc_families(
         quotas = managed.get("defaultGroupPolicyOverallQuotas", {}).get("limits", [])
         return [q["id"] for q in quotas if q.get("limit", 0) > 0]
     except Exception:
+        log.debug("Failed to fetch VC families for %s", vc_name, exc_info=True)
         return []
 
 
@@ -359,6 +360,7 @@ def fetch_vc_quotas(
             vc_subscription_id, vc_resource_group, vc_name,
         )
     except Exception:
+        log.debug("Failed to fetch VC quotas for %s", vc_name, exc_info=True)
         return []
 
     managed = data.get("properties", {}).get("managed", {})
@@ -425,6 +427,7 @@ def discover_virtual_clusters(
         try:
             subscription_ids = arm_client.list_subscriptions()
         except Exception:
+            log.debug("Failed to list subscriptions", exc_info=True)
             return []
         if not subscription_ids:
             return []
@@ -438,6 +441,7 @@ def discover_virtual_clusters(
     try:
         rows = arm_client.resource_graph_query(query, subscription_ids)
     except Exception:
+        log.debug("Resource graph query for VCs failed", exc_info=True)
         return []
 
     return [

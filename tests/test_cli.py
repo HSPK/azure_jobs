@@ -22,35 +22,21 @@ from azure_jobs.core.record import SubmissionRecord
 
 
 @pytest.fixture
-def aj_env(tmp_path, monkeypatch):
+def aj_env(aj_home, tmp_path, monkeypatch):
     """Set up an isolated AJ_HOME with a valid template and working dir."""
-    aj_home = tmp_path / ".azure_jobs"
-    template_home = aj_home / "template"
-    submission_home = aj_home / "submission"
-    template_home.mkdir(parents=True)
-    submission_home.mkdir(parents=True)
-
-    record_fp = aj_home / "record.jsonl"
-    config_fp = aj_home / "aj_config.json"
-
-    monkeypatch.setattr("azure_jobs.core.const.AJ_HOME", aj_home)
-    monkeypatch.setattr("azure_jobs.core.const.AJ_TEMPLATE_HOME", template_home)
-    monkeypatch.setattr("azure_jobs.core.const.AJ_SUBMISSION_HOME", submission_home)
-    monkeypatch.setattr("azure_jobs.core.const.AJ_RECORD", record_fp)
-    monkeypatch.setattr("azure_jobs.core.const.AJ_CONFIG", config_fp)
-
     workdir = tmp_path / "workdir"
     workdir.mkdir()
     monkeypatch.chdir(workdir)
 
+    config_fp = aj_home / "aj_config.json"
     # Pre-set default template in aj_config.json
     config_fp.write_text(json.dumps({"defaults": {"template": "default"}}, indent=2))
 
     return {
         "aj_home": aj_home,
-        "template_home": template_home,
-        "submission_home": submission_home,
-        "record_fp": record_fp,
+        "template_home": aj_home / "template",
+        "submission_home": aj_home / "submission",
+        "record_fp": aj_home / "record.jsonl",
         "config_fp": config_fp,
         "workdir": workdir,
     }

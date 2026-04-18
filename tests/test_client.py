@@ -9,14 +9,19 @@ import pytest
 
 class TestQuietAzureSdk:
     def test_suppresses_warnings(self) -> None:
+        import logging
         import warnings
         from azure_jobs.core.client import quiet_azure_sdk
         quiet_azure_sdk()
-        # Should not raise even with experimental-like warnings
+        # Verify warning filters were installed
+        assert logging.getLogger("azure").level == logging.ERROR
         with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            quiet_azure_sdk()  # re-apply filters
             warnings.warn("experimental class", FutureWarning)
-            # Filter may suppress it
-            assert True  # no crash
+        # FutureWarning about "experimental" should be filtered out
+        experimental = [x for x in w if "experimental" in str(x.message)]
+        assert len(experimental) == 0
 
     def test_sets_logger_levels(self) -> None:
         import logging
