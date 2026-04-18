@@ -804,10 +804,10 @@ class AzureMLJobsClient:
                 code = inner.get("code", "")
                 msg = inner.get("message", "")
                 if code and msg:
-                    return f"{code}: {msg}"[:500]
-                return (msg or code or str(inner))[:500]
-            return str(inner)[:500]
-        return str(err)[:500]
+                    return f"{code}: {msg}"
+                return msg or code or str(inner)
+            return str(inner)
+        return str(err)
 
     def get_run_log_urls(self, job_name: str) -> dict[str, str]:
         """Return ``{log_path: signed_url}`` for a run via Run History API.
@@ -837,9 +837,9 @@ def _extract_error_message(err: dict | str | None) -> str:
                 msg = inner_msg
             inner = inner.get("innerError") or inner.get("inner_error")
         if code and msg:
-            return f"{code}: {msg}"[:500]
-        return (msg or code or str(err))[:500]
-    return str(err)[:500]
+            return f"{code}: {msg}"
+        return msg or code or str(err)
+    return str(err)
 
 
 def _trim_arm_id(arm_id: str) -> str:
@@ -900,6 +900,22 @@ def _extract_rest_job(raw: dict[str, Any]) -> dict[str, Any]:
     studio = services.get("Studio", {}) or {}
     portal_url = studio.get("endpoint", "") or ""
 
+    # Resources — extract instance type, nodes, SLA tier
+    resources = props.get("resources", {}) or {}
+    aisc = resources.get("properties", {}).get("AISuperComputer", {}) or {}
+    instance_type = aisc.get("instanceType", "") or ""
+    # Strip "Singularity." prefix and comma-separated alternatives
+    if instance_type:
+        instance_type = instance_type.split(",")[0].strip()
+        if instance_type.startswith("Singularity."):
+            instance_type = instance_type[len("Singularity."):]
+    nodes = resources.get("instanceCount", 1) or aisc.get("instanceCount", 1)
+    sla_tier = aisc.get("slaTier", "") or ""
+
+    # Distribution — process count
+    dist = props.get("distribution", {}) or {}
+    processes_per_node = dist.get("processCountPerInstance", 0) or 0
+
     return {
         "name": name,
         "display_name": props.get("displayName", "") or "",
@@ -922,4 +938,8 @@ def _extract_rest_job(raw: dict[str, Any]) -> dict[str, Any]:
         "created_utc": created_raw[:19] if created_raw else "",
         "created_by": created_by,
         "error": error_msg,
+        "instance_type": instance_type,
+        "nodes": nodes,
+        "sla_tier": sla_tier,
+        "processes_per_node": processes_per_node,
     }

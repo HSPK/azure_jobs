@@ -407,6 +407,17 @@ def build_job_info_lines(
         lines.append(_hdr("Compute"))
         if job.get("compute"):
             lines.append(_kv("Target", f"[bold]{job['compute']}[/bold]"))
+        if job.get("instance_type"):
+            lines.append(_kv("Instance", job["instance_type"]))
+        nodes = job.get("nodes", 0)
+        ppn = job.get("processes_per_node", 0)
+        if nodes and nodes > 1:
+            node_str = f"{nodes} nodes"
+            if ppn and ppn > 1:
+                node_str += f"  ×{ppn} processes"
+            lines.append(_kv("Nodes", node_str))
+        if job.get("sla_tier"):
+            lines.append(_kv("SLA", job["sla_tier"]))
         if job.get("environment"):
             lines.append(_kv("Env", job["environment"]))
         if job.get("command"):
