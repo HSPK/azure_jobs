@@ -310,26 +310,15 @@ def _show_aml_quotas(show_all: bool) -> None:
     table.add_column("Location", no_wrap=True)
     table.add_column("Portal", no_wrap=True, overflow="fold")
 
+    # Collect all cluster rows first to compute column widths for alignment
+    all_rows: list[tuple[int, int, dict, dict | None]] = []
+    max_idle_w = max_busy_w = max_total_w = 1
     for ws_idx, (ws, clusters) in enumerate(ws_computes):
-        ws_name = ws.get("name", "")
-        sub = ws.get("subscriptionId", "")
-        rg = ws.get("resourceGroup", "")
-
         if not clusters:
-            table.add_row(ws_name, "[dim]no clusters[/dim]", "", "", "", "", "", "")
-            if ws_idx < len(ws_computes) - 1:
-                table.add_section()
+            all_rows.append((ws_idx, 0, ws, None))
             continue
-
-        for i, c in enumerate(sorted(clusters, key=lambda x: x.get("name", ""))):
-            ws_label = ws_name if i == 0 else ""
-            name = c.get("name", "")
+        for ci, c in enumerate(sorted(clusters, key=lambda x: x.get("name", ""))):
             props = c.get("properties", {}).get("properties", {}) or {}
-            vm_size = props.get("vmSize", "") or ""
-            vm_pri = props.get("vmPriority", "") or ""
-            location = c.get("location", "") or ""
-
-            # Node counts
             scale = props.get("scaleSettings", {}) or {}
             max_nodes = scale.get("maxNodeCount", 0) or 0
             node_state = props.get("nodeStateCounts", {}) or {}
@@ -339,28 +328,64 @@ def _show_aml_quotas(show_all: bool) -> None:
                 + (node_state.get("leavingNodeCount") or 0)
             )
             idle = node_state.get("idleNodeCount") or 0
+            max_idle_w = max(max_idle_w, len(str(idle)))
+            max_busy_w = max(max_busy_w, len(str(busy)))
+            max_total_w = max(max_total_w, len(str(max_nodes)))
+            all_rows.append((ws_idx, ci, ws, c))
 
-            if max_nodes == 0:
-                nodes_s = "[dim]0/0[/dim]"
-            else:
-                free_col = "red" if vm_pri == "LowPriority" else "green"
-                nodes_s = f"[{free_col}]{idle}[/{free_col}] idle  [cyan]{busy}[/cyan] busy  [dim]/ {max_nodes}[/dim]"
+    prev_ws_idx = -1
+    for ws_idx, ci, ws, c in all_rows:
+        ws_name = ws.get("name", "")
+        sub = ws.get("subscriptionId", "")
+        rg = ws.get("resourceGroup", "")
+        ws_label = ws_name if ci == 0 else ""
 
-            sku = _vm_sku_label(vm_size)
-            sku_s = f"[bold]{sku}[/bold]" if sku and sku != "CPU" else (sku or "[dim]—[/dim]")
-
-            pri_s = {
-                "LowPriority": "[yellow]Low[/yellow]",
-                "Dedicated": "[green]Dedicated[/green]",
-            }.get(vm_pri, vm_pri)
-
-            portal = _portal_compute_url(sub, rg, ws_name, name)
-            portal_text = Text("portal ↗", style=f"dim link {portal}")
-
-            table.add_row(ws_label, name, vm_size, sku_s, nodes_s, pri_s, location, portal_text)
-
-        if ws_idx < len(ws_computes) - 1:
+        # Section divider between workspace groups
+        if prev_ws_idx >= 0 and ws_idx != prev_ws_idx:
             table.add_section()
+        prev_ws_idx = ws_idx
+
+        if c is None:
+            table.add_row(ws_label, "[dim]no clusters[/dim]", "", "", "", "", "", "")
+            continue
+
+        name = c.get("name", "")
+        props = c.get("properties", {}).get("properties", {}) or {}
+        vm_size = props.get("vmSize", "") or ""
+        vm_pri = props.get("vmPriority", "") or ""
+        location = c.get("location", "") or ""
+
+        scale = props.get("scaleSettings", {}) or {}
+        max_nodes = scale.get("maxNodeCount", 0) or 0
+        node_state = props.get("nodeStateCounts", {}) or {}
+        busy = (
+            (node_state.get("runningNodeCount") or 0)
+            + (node_state.get("preparingNodeCount") or 0)
+            + (node_state.get("leavingNodeCount") or 0)
+        )
+        idle = node_state.get("idleNodeCount") or 0
+
+        if max_nodes == 0:
+            nodes_s = "[dim]0/0[/dim]"
+        else:
+            free_col = "red" if vm_pri == "LowPriority" else "green"
+            i_s = str(idle).rjust(max_idle_w)
+            b_s = str(busy).rjust(max_busy_w)
+            t_s = str(max_nodes).rjust(max_total_w)
+            nodes_s = f"[{free_col}]{i_s}[/{free_col}] idle [cyan]{b_s}[/cyan] busy [dim]/{t_s}[/dim]"
+
+        sku = _vm_sku_label(vm_size)
+        sku_s = f"[bold]{sku}[/bold]" if sku and sku != "CPU" else (sku or "[dim]—[/dim]")
+
+        pri_s = {
+            "LowPriority": "[yellow]Low[/yellow]",
+            "Dedicated": "[green]Dedicated[/green]",
+        }.get(vm_pri, vm_pri)
+
+        portal = _portal_compute_url(sub, rg, ws_name, name)
+        portal_text = Text("portal ↗", style=f"dim link {portal}")
+
+        table.add_row(ws_label, name, vm_size, sku_s, nodes_s, pri_s, location, portal_text)
 
     console.print()
     console.print(table)
