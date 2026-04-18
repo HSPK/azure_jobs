@@ -6,7 +6,8 @@ on:
       - "v*"
 
 permissions:
-  contents: read
+  contents: write
+  id-token: write
 
 jobs:
   build:
@@ -59,9 +60,10 @@ jobs:
   publish-pypi:
     name: Publish to PyPI
     needs: build
+    if: ${{ !contains(github.ref_name, '-') }}
     runs-on: ubuntu-latest
-    env:
-      PYPI_API_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+    permissions:
+      id-token: write
 
     steps:
       - name: Download build artifacts
@@ -70,13 +72,7 @@ jobs:
           name: dist
           path: dist
 
-      - name: Skip PyPI publish when token is missing or tag is a prerelease
-        if: ${{ env.PYPI_API_TOKEN == '' || contains(github.ref_name, '-') }}
-        run: echo "Skipping PyPI publish because the token is missing or the tag is a prerelease."
-
-      - name: Publish distributions to PyPI
-        if: ${{ env.PYPI_API_TOKEN != '' && !contains(github.ref_name, '-') }}
+      - name: Publish to PyPI (Trusted Publisher)
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist/
-          password: ${{ env.PYPI_API_TOKEN }}
