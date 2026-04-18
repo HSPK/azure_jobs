@@ -139,6 +139,14 @@ def _series_to_rows(sq: object) -> list[tuple[str, str, str]]:
     return [(label, f"[dim]{series}[/dim]", "[dim]—[/dim]")]
 
 
+# vCPU counts for known CPU instances (from amlt fallback data)
+_CPU_VCPU: dict[str, int] = {
+    "E4ads_v5": 4, "E8ads_v5": 8, "E16ads_v5": 16,
+    "E32ads_v5": 32, "E64ads_v5": 64,
+    "D4_v3": 4, "D8_v3": 8, "D16_v3": 16, "D32_v3": 32, "D64_v3": 64,
+}
+
+
 def _family_rows(
     family: dict, gpu_model: str, gpu_mem: int
 ) -> list[tuple[str, str, str]]:
@@ -146,10 +154,12 @@ def _family_rows(
     rows: list[tuple[str, str, str]] = []
 
     if family.get("cpu"):
-        # CPU family — show a few representative instances
         instances = family.get("instances", [])
-        representative = instances[3] if len(instances) > 3 else (instances[-1] if instances else "?")
-        rows.append(("CPU", representative, "C1"))
+        for i, inst in enumerate(instances):
+            vcpu = _CPU_VCPU.get(inst, 0)
+            label = f"[bold]{vcpu} vCPU[/bold]" if vcpu else "CPU"
+            shorthand = f"C{i + 1}"
+            rows.append((label, inst, shorthand))
         return rows
 
     model = family.get("gpu_model", gpu_model) or "GPU"
