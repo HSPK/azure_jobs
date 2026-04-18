@@ -40,30 +40,6 @@ from azure_jobs.tui.log_viewer import LogViewer
 from azure_jobs.tui.modals import ConfirmCancel, HelpScreen, PickerModal
 from azure_jobs.tui.workspace import WorkspaceMixin
 
-# ---- backward-compat re-exports (test code may import private names) --------
-
-from azure_jobs.tui.helpers import (  # noqa: F401, E402
-    AZ_ICON as _AZ_ICON,
-    AZ_STYLE as _AZ_STYLE,
-    KW as _KW,
-    LEFT_WIDTH as _LEFT_WIDTH,
-    NAME_MAX as _NAME_MAX,
-    PAGE_SIZE as _PAGE_SIZE,
-    fmt_dur as _fmt_dur,
-    icon_style as _icon_style,
-    info_block as _info_block,
-    kv as _kv,
-    make_option as _make_option,
-    trunc as _trunc,
-)
-from azure_jobs.tui.modals import (  # noqa: F401, E402
-    ConfirmCancel as _ConfirmCancel,
-    PickerModal as _PickerModal,
-)
-from azure_jobs.tui.log_viewer import LogViewer as _LogViewer  # noqa: F401, E402
-_STATUS_CYCLE = STATUS_CYCLE
-
-
 # ---- app --------------------------------------------------------------------
 
 

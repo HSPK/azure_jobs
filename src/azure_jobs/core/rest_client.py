@@ -72,6 +72,16 @@ class AzureARMClient:
         self._token_expires: float = 0.0
         self._session: requests.Session = requests.Session()
 
+    def close(self) -> None:
+        """Close the underlying HTTP session."""
+        self._session.close()
+
+    def __enter__(self) -> "AzureARMClient":
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        self.close()
+
     def _ensure_token(self) -> str:
         self._token, self._token_expires = _refresh_session_token(
             self._session, self._token, self._token_expires,
@@ -220,6 +230,16 @@ class AzureMLJobsClient:
         self._data_plane_base: str = ""  # set by _get_location
         self._session: requests.Session = requests.Session()
 
+    def close(self) -> None:
+        """Close the underlying HTTP session."""
+        self._session.close()
+
+    def __enter__(self) -> "AzureMLJobsClient":
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        self.close()
+
     # ---- auth ---------------------------------------------------------------
 
     def _ensure_token(self) -> str:
@@ -227,10 +247,6 @@ class AzureMLJobsClient:
             self._session, self._token, self._token_expires,
         )
         return self._token
-
-    def _headers(self) -> dict[str, str]:
-        self._ensure_token()
-        return {}
 
     def _ensure_data_token(self) -> str:
         """Get auth token for the data plane.

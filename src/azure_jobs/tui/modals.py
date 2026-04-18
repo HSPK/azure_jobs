@@ -233,9 +233,3 @@ class HelpScreen(ModalScreen[None]):
     def action_close_help(self) -> None:
         self.dismiss(None)
 
-
-# ---- backward-compat aliases (internal names used by tests) -----------------
-
-_ConfirmCancel = ConfirmCancel
-_PickerModal = PickerModal
-_STATUS_CYCLE = ConfirmCancel  # placeholder — real cycle is in helpers

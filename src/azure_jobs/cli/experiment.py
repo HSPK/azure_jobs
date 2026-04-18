@@ -28,12 +28,7 @@ def exp_list(last: int, ws_name: str | None) -> None:
     from rich.table import Table
 
     from azure_jobs.core.rest_client import create_rest_client
-    from azure_jobs.utils.ui import console, warning
-
-    _STATUS_STYLE: dict[str, str] = {
-        "Completed": "green", "Running": "cyan", "Failed": "red",
-        "Canceled": "dim", "Queued": "yellow",
-    }
+    from azure_jobs.utils.ui import AZ_STYLE, console, warning
 
     client = create_rest_client(ws_name=ws_name)
     experiments: dict[str, dict[str, Any]] = {}
@@ -87,7 +82,7 @@ def exp_list(last: int, ws_name: str | None) -> None:
 
     for name, info in sorted_exps:
         status = info["latest_status"]
-        style = _STATUS_STYLE.get(status, "white")
+        style = AZ_STYLE.get(status, "white")
         table.add_row(
             name, str(info["count"]),
             f"[{style}]{status}[/{style}]",

@@ -32,7 +32,10 @@ console = Console(theme=_THEME, highlight=False)
 
 
 def _time_ago(iso_str: str) -> str:
-    """Convert an ISO 8601 timestamp to a human-readable relative time."""
+    """Convert an ISO 8601 timestamp to a human-readable relative time.
+
+    .. deprecated:: Use ``azure_jobs.utils.time.time_ago`` directly.
+    """
     from azure_jobs.utils.time import time_ago
     return time_ago(iso_str)
 
@@ -235,9 +238,7 @@ AZ_STYLE: dict[str, str] = {
     "NotStarted": "dim", "Provisioning": "bold yellow", "Finalizing": "bold cyan",
 }
 
-# backward-compat aliases
-_JOB_STATUS_STYLE = AZ_STYLE
-_JOB_STATUS_ICON = AZ_ICON
+# backward-compat aliases — kept for show_job_status above
 
 
 def icon_style(status: str) -> tuple[str, str]:
@@ -265,16 +266,13 @@ def short_portal_url(url: str, *, rich_link: bool = True) -> str:
     return display
 
 
-# backward-compat alias
-_short_portal_url = short_portal_url
 
 
 def show_job_status(job_status: Any) -> None:
     """Display job status as a rich panel."""
     status = job_status.status
-    style = _JOB_STATUS_STYLE.get(status, "white")
-    icon = _JOB_STATUS_ICON.get(status, "?")
-
+    style = AZ_STYLE.get(status, "white")
+    icon = AZ_ICON.get(status, "?")
     rows = []
     rows.append(("Status", f"[{style}]{icon} {status}[/{style}]"))
     if job_status.display_name:
@@ -289,7 +287,7 @@ def show_job_status(job_status: Any) -> None:
     if job_status.end_time:
         rows.append(("Ended", job_status.end_time))
     if job_status.portal_url:
-        rows.append(("Portal", _short_portal_url(job_status.portal_url)))
+        rows.append(("Portal", short_portal_url(job_status.portal_url)))
     if job_status.error:
         rows.append(("Error", f"[error]{job_status.error}[/error]"))
 
@@ -342,8 +340,8 @@ def show_cloud_jobs_table(
 
     for j in jobs:
         status = j.get("status", "")
-        style = _JOB_STATUS_STYLE.get(status, "white")
-        icon = _JOB_STATUS_ICON.get(status, "?")
+        style = AZ_STYLE.get(status, "white")
+        icon = AZ_ICON.get(status, "?")
         display = j.get("display_name") or j.get("name", "")
         portal = j.get("portal_url", "")
         if portal and display:
@@ -362,16 +360,26 @@ def show_cloud_jobs_table(
     console.print()
 
 
-def show_job_detail(job: dict[str, Any]) -> None:
-    """Display detailed cloud job info as a rich panel."""
+def build_job_info_lines(
+    job: dict[str, Any],
+    *,
+    label_width: int = 14,
+    header_width: int = 38,
+    cmd_max: int = 70,
+    portal_link: bool = True,
+) -> list[str]:
+    """Build section-based info lines for a job dict.
+
+    Shared by ``show_job_detail`` (CLI panels) and ``info_block`` (TUI).
+    """
     lines: list[str] = []
-    W = 14  # label column width
+    W = label_width
 
     def _kv(label: str, val: str) -> str:
         return f"  [cyan]{label:>{W}}[/cyan]  {val}"
 
     def _hdr(title: str) -> str:
-        return f"  [bold cyan]{'─' * 3} {title} {'─' * (38 - len(title))}[/bold cyan]"
+        return f"  [bold cyan]{'─' * 3} {title} {'─' * (header_width - len(title))}[/bold cyan]"
 
     # Status badge
     status = job.get("status", "Unknown")
@@ -379,11 +387,11 @@ def show_job_detail(job: dict[str, Any]) -> None:
     name = job.get("name", "")
     lines.append(f"  {status_badge(status)}")
 
-    # Error (section header style, right after status)
+    # Error
     error_msg = job.get("error", "")
     if error_msg:
         lines.append("")
-        lines.append(f"  [bold red]{'─' * 3} Error {'─' * (36 - len('Error'))}[/bold red]")
+        lines.append(f"  [bold red]{'─' * 3} Error {'─' * (header_width - 2 - len('Error'))}[/bold red]")
         for err_line in error_msg.splitlines():
             lines.append(f"  [red]{err_line}[/red]")
 
@@ -409,8 +417,8 @@ def show_job_detail(job: dict[str, Any]) -> None:
             lines.append(_kv("Env", job["environment"]))
         if job.get("command"):
             cmd = job["command"]
-            if len(cmd) > 70:
-                cmd = cmd[:67] + "…"
+            if len(cmd) > cmd_max:
+                cmd = cmd[:cmd_max - 3] + "…"
             lines.append(_kv("Command", f"[dim]{cmd}[/dim]"))
 
     # Timing
@@ -443,8 +451,8 @@ def show_job_detail(job: dict[str, Any]) -> None:
         meta.append(_kv("Tags", job["tags"]))
     if job.get("description"):
         desc = job["description"]
-        if len(desc) > 70:
-            desc = desc[:67] + "…"
+        if len(desc) > cmd_max:
+            desc = desc[:cmd_max - 3] + "…"
         meta.append(_kv("Description", desc))
     if meta:
         lines.append("")
@@ -452,13 +460,20 @@ def show_job_detail(job: dict[str, Any]) -> None:
         lines.extend(meta)
 
     # Portal link
-    if job.get("portal_url"):
+    if portal_link and job.get("portal_url"):
         url = job["portal_url"]
         short = short_portal_url(url, rich_link=False)
         if not short.startswith("http"):
             short = f"https://{short}"
         lines.append("")
         lines.append(f"  [dim]→[/dim] [link={url}][cyan underline]{short}[/cyan underline][/link]")
+
+    return lines
+
+
+def show_job_detail(job: dict[str, Any]) -> None:
+    """Display detailed cloud job info as a rich panel."""
+    lines = build_job_info_lines(job)
 
     console.print()
     console.print(Panel(

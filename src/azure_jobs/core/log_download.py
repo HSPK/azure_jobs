@@ -29,8 +29,6 @@ _LOG_FILES = [
     "azureml-logs/75_job_post-tvmps.txt",
 ]
 
-from azure_jobs.core.client import SKIP_LOG_PREFIXES
-
 # States where ``ml_client.jobs.download()`` works
 _DOWNLOAD_STATES = frozenset(
     {"Completed", "Failed", "Canceled", "NotResponding", "Paused"}
@@ -188,13 +186,5 @@ def _read_log_files(base_dir: str, job_name: str) -> str:
 
 def _filter_content(raw: str) -> str:
     """Strip SDK boilerplate lines from log content."""
-    lines = []
-    for line in raw.split("\n"):
-        if any(line.startswith(p) for p in SKIP_LOG_PREFIXES):
-            continue
-        lines.append(line)
-    while lines and not lines[0].strip():
-        lines.pop(0)
-    while lines and not lines[-1].strip():
-        lines.pop()
-    return "\n".join(lines)
+    from azure_jobs.core.client import filter_log_lines
+    return "\n".join(filter_log_lines(raw))

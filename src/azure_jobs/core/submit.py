@@ -17,10 +17,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-# Re-export public names so existing importers (cli/jobs etc.) keep working
-# during the transition.  New code should import from core.client directly.
-from azure_jobs.core.client import create_ml_client, suppress_sdk_output
-
 
 @dataclass
 class SubmitRequest:
@@ -75,20 +71,9 @@ class SubmitRequest:
 
 
 def _extract_error_message(exc: Exception) -> str:
-    """Extract a concise error message from an Azure SDK exception.
-
-    Azure errors include verbose JSON with correlation IDs, inner errors, etc.
-    We extract just the main message line.
-    """
-    text = str(exc)
-    # Azure HttpResponseError: "(ErrorCode) Main message.\nCode: ...\nMessage: ..."
-    if "\n" in text:
-        first_line = text.split("\n")[0].strip()
-        # Remove the error code prefix like "(UserError) "
-        if first_line.startswith("(") and ") " in first_line:
-            return first_line.split(") ", 1)[1]
-        return first_line
-    return text
+    """Extract a concise error message from an Azure SDK exception."""
+    from azure_jobs.core.client import extract_json_error
+    return extract_json_error(exc)
 
 
 @dataclass
@@ -104,6 +89,7 @@ class SubmitResult:
 
 def _get_ml_client(request: SubmitRequest) -> Any:
     """Create an authenticated MLClient from a SubmitRequest."""
+    from azure_jobs.core.client import create_ml_client
     return create_ml_client(
         {
             "subscription_id": request.subscription_id,
@@ -412,6 +398,8 @@ def submit(request: SubmitRequest, on_status: Any = None) -> SubmitResult:
             on_status(step, detail)
 
     try:
+        from azure_jobs.core.client import suppress_sdk_output
+
         _status("auth", "Authenticating…")
         with suppress_sdk_output():
             ml_client = _get_ml_client(request)
@@ -591,9 +579,3 @@ def build_request_from_config(
         vc_resource_group=target.get("resource_group", ""),
     )
 
-
-def _format_duration(seconds: int) -> str:
-    """Format seconds into a human-readable duration string."""
-    from azure_jobs.utils.time import format_duration
-
-    return format_duration(seconds)

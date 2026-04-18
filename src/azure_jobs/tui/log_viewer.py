@@ -23,7 +23,3 @@ class LogViewer(RichLog):
         Binding("ctrl+b", "page_up", "PgUp", show=False),
     ]
 
-
-# ---- backward-compat alias --------------------------------------------------
-
-_LogViewer = LogViewer

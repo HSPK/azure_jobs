@@ -185,8 +185,8 @@ async def test_workspace_picker(_dash) -> None:
         }
         _dash.action_pick_workspace()
         await pilot.pause()
-        from azure_jobs.tui.app import _PickerModal
-        screens = [s for s in _dash.screen_stack if isinstance(s, _PickerModal)]
+        from azure_jobs.tui.modals import PickerModal
+        screens = [s for s in _dash.screen_stack if isinstance(s, PickerModal)]
         assert len(screens) == 1
         # Escape cancels
         await pilot.press("escape")
@@ -214,29 +214,29 @@ async def test_switch_workspace(_dash) -> None:
 
 
 def test_make_option_display_name() -> None:
-    from azure_jobs.tui.app import _make_option
-    opt = _make_option({"name": "azure_j1", "display_name": "cool-job", "status": "Running"})
+    from azure_jobs.tui.helpers import make_option
+    opt = make_option({"name": "azure_j1", "display_name": "cool-job", "status": "Running"})
     assert "cool-job" in opt.prompt.plain
     assert "azure_j1" not in opt.prompt.plain
 
 
 def test_trunc_short() -> None:
-    from azure_jobs.tui.app import _trunc
-    assert _trunc("short") == "short"
+    from azure_jobs.tui.helpers import trunc
+    assert trunc("short") == "short"
 
 
 def test_trunc_long() -> None:
-    from azure_jobs.tui.app import _trunc, _NAME_MAX
+    from azure_jobs.tui.helpers import trunc, NAME_MAX
     long_name = "a" * 100
-    result = _trunc(long_name)
-    assert len(result) == _NAME_MAX
+    result = trunc(long_name)
+    assert len(result) == NAME_MAX
     assert "..." in result
 
 
 def test_make_option_truncates_long_name() -> None:
-    from azure_jobs.tui.app import _make_option, _NAME_MAX
+    from azure_jobs.tui.helpers import make_option, NAME_MAX
     long_name = "very-long-job-name-that-exceeds-the-maximum-width-limit"
-    opt = _make_option({"name": "id", "display_name": long_name, "status": "Running"})
+    opt = make_option({"name": "id", "display_name": long_name, "status": "Running"})
     plain = opt.prompt.plain.strip()
     # Icon (2 chars) + space + truncated name
     assert "..." in plain
@@ -274,14 +274,14 @@ async def test_page_loaded_appends(_dash) -> None:
 
 
 def test_info_block_sections() -> None:
-    from azure_jobs.tui.app import _info_block
+    from azure_jobs.tui.helpers import info_block
     job = {
         "name": "j1", "display_name": "my-job", "status": "Running",
         "compute": "gpu", "experiment": "exp1",
         "duration": "5m", "start_time": "2026-01-01 00:00:00",
         "end_time": "", "portal_url": "https://ml.azure.com/runs/j1?wsid=x",
     }
-    block = _info_block(job)
+    block = info_block(job)
     assert "my-job" in block
     assert "j1" in block
     assert "gpu" in block
@@ -292,7 +292,7 @@ def test_info_block_sections() -> None:
 
 def test_info_block_new_fields() -> None:
     """Info block shows type, description, tags, environment, command, error."""
-    from azure_jobs.tui.app import _info_block
+    from azure_jobs.tui.helpers import info_block
     job = {
         "name": "j2", "display_name": "sweep-run", "status": "Failed",
         "compute": "gpu-v100", "experiment": "nlp",
@@ -304,7 +304,7 @@ def test_info_block_new_fields() -> None:
         "command": "python train.py --lr 0.001",
         "created": "2026-01-01 00:00:00", "error": "OOM killed",
     }
-    block = _info_block(job)
+    block = info_block(job)
     assert "sweep" in block
     assert "Hyperparameter sweep" in block
     assert "project=alpha" in block
@@ -322,13 +322,13 @@ async def test_cancel_shows_modal(_dash) -> None:
         await pilot.pause()
         _dash.action_cancel_job()
         await pilot.pause()
-        from azure_jobs.tui.app import _ConfirmCancel
-        screens = [s for s in _dash.screen_stack if isinstance(s, _ConfirmCancel)]
+        from azure_jobs.tui.modals import ConfirmCancel
+        screens = [s for s in _dash.screen_stack if isinstance(s, ConfirmCancel)]
         assert len(screens) == 1
         # Dismiss with 'n' — should not crash
         await pilot.press("n")
         await pilot.pause()
-        screens = [s for s in _dash.screen_stack if isinstance(s, _ConfirmCancel)]
+        screens = [s for s in _dash.screen_stack if isinstance(s, ConfirmCancel)]
         assert len(screens) == 0
 
 
@@ -410,13 +410,13 @@ async def test_status_picker_modal(_dash) -> None:
         await pilot.pause()
         _dash.action_pick_status()
         await pilot.pause()
-        from azure_jobs.tui.app import _PickerModal
-        screens = [s for s in _dash.screen_stack if isinstance(s, _PickerModal)]
+        from azure_jobs.tui.modals import PickerModal
+        screens = [s for s in _dash.screen_stack if isinstance(s, PickerModal)]
         assert len(screens) == 1
         # Escape cancels
         await pilot.press("escape")
         await pilot.pause()
-        screens = [s for s in _dash.screen_stack if isinstance(s, _PickerModal)]
+        screens = [s for s in _dash.screen_stack if isinstance(s, PickerModal)]
         assert len(screens) == 0
 
 
@@ -474,9 +474,9 @@ async def test_search_bar_toggle(_dash) -> None:
 
 def test_picker_modal_instantiation() -> None:
     """_PickerModal can be instantiated with items and current value."""
-    from azure_jobs.tui.app import _PickerModal
+    from azure_jobs.tui.modals import PickerModal
     items = [("", "All"), ("Running", "Running"), ("Failed", "Failed")]
-    modal = _PickerModal("Test", items, current="")
+    modal = PickerModal("Test", items, current="")
     assert modal._items == items
     assert modal._current == ""
 
@@ -547,11 +547,11 @@ async def test_tab_title_shows_scroll_state(_dash) -> None:
 @pytest.mark.asyncio
 async def test_log_viewer_has_vim_bindings(_dash) -> None:
     """_LogViewer widget supports j/k/G/g vim keys."""
-    from azure_jobs.tui.app import _LogViewer
+    from azure_jobs.tui.log_viewer import LogViewer
     async with _dash.run_test(size=(120, 30)) as pilot:
         await _load_jobs(_dash, pilot)
         await pilot.pause()
-        lv = _dash.query_one("#log-content", _LogViewer)
+        lv = _dash.query_one("#log-content", LogViewer)
         binding_keys = {b.key for b in lv.BINDINGS}
         assert "j" in binding_keys
         assert "k" in binding_keys
@@ -606,8 +606,8 @@ async def test_error_lines_inline(_dash) -> None:
 @pytest.mark.asyncio
 async def test_log_viewer_wrap_enabled(_dash) -> None:
     """Log viewer has wrap=True for long lines."""
-    from azure_jobs.tui.app import _LogViewer
+    from azure_jobs.tui.log_viewer import LogViewer
     async with _dash.run_test(size=(120, 30)) as pilot:
         await pilot.pause()
-        lv = _dash.query_one("#log-content", _LogViewer)
+        lv = _dash.query_one("#log-content", LogViewer)
         assert lv.wrap is True

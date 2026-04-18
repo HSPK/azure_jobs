@@ -283,9 +283,9 @@ def run(
         if result.azure_name != name:
             dim(f"Azure ID: {result.azure_name}")
         if result.portal_url:
-            from azure_jobs.utils.ui import _short_portal_url
+            from azure_jobs.utils.ui import short_portal_url
 
-            dim(f"Portal: {_short_portal_url(result.portal_url)}")
+            dim(f"Portal: {short_portal_url(result.portal_url)}")
     except SystemExit:
         raise
     except Exception as exc:

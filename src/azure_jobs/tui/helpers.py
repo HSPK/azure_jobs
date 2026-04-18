@@ -11,9 +11,7 @@ from typing import Any
 from rich.text import Text
 from textual.widgets.option_list import Option
 
-from azure_jobs.utils.ui import (
-    AZ_ICON, AZ_STYLE, icon_style, short_portal_url, status_badge,
-)
+from azure_jobs.utils.ui import icon_style
 
 # ---- TUI-specific constants ------------------------------------------------
 
@@ -69,123 +67,34 @@ def kv(pairs: list[tuple[str, str]], *, hint: str = "") -> str:
 
 
 def info_block(job: dict[str, Any]) -> str:
-    """Build a visually rich info panel for a job."""
-    L: list[str] = []  # noqa: N806
-    name = job.get("name", "")
-    display = job.get("display_name") or name
-    status = job.get("status", "?")
+    """Build a visually rich info panel for a job (TUI variant).
 
-    W = 12  # label column width
+    Uses the shared ``build_job_info_lines`` with TUI-tuned parameters:
+    narrower labels (W=12), shorter command truncation (50 chars),
+    and no clickable portal links (plain text URL instead).
+    """
+    from azure_jobs.utils.ui import build_job_info_lines, short_portal_url
 
-    def _kv(label: str, val: str) -> str:
-        return f"  [cyan]{label:>{W}}[/cyan]  {val}"
-
-    def _hdr(title: str) -> str:
-        return f"  [bold cyan]{'─' * 3} {title} {'─' * (32 - len(title))}[/bold cyan]"
-
-    # ── Status badge ──
-    L.append(f"  {status_badge(status)}")
-
-    # ── Error (section header style, right after status) ──
-    if job.get("error"):
-        L.append("")
-        L.append(f"  [bold red]{'─' * 3} Error {'─' * (30 - len('Error'))}[/bold red]")
-        for err_line in job["error"].splitlines():
-            L.append(f"  [red]{err_line}[/red]")
-
-    # ── Overview ──
-    L.append("")
-    L.append(_hdr("Overview"))
-    L.append(_kv("Display Name", f"[bold]{display}[/bold]"))
-    if display != name:
-        L.append(_kv("Run ID", f"[dim]{name}[/dim]"))
-    if job.get("experiment"):
-        L.append(_kv("Experiment", job["experiment"]))
-    if job.get("type"):
-        L.append(_kv("Type", job["type"]))
-
-    # ── Compute ──
-    has_compute = job.get("compute") or job.get("environment") or job.get("command")
-    if has_compute:
-        L.append("")
-        L.append(_hdr("Compute"))
-        if job.get("compute"):
-            L.append(_kv("Target", f"[bold]{job['compute']}[/bold]"))
-        if job.get("environment"):
-            L.append(_kv("Env", job["environment"]))
-        if job.get("command"):
-            cmd = job["command"]
-            if len(cmd) > 50:
-                cmd = cmd[:47] + "…"
-            L.append(_kv("Command", f"[dim]{cmd}[/dim]"))
-
-    # ── Timing ──
-    timing: list[str] = []
-    for label, key in [
-        ("Created", "created"), ("Started", "start_time"),
-        ("Ended", "end_time"),
-    ]:
-        val = job.get(key, "")
-        if val:
-            timing.append(_kv(label, val))
-    dur = job.get("duration", "")
-    qt = job.get("queue_time", "")
-    if dur and qt:
-        timing.append(_kv("Duration", f"[bold]{dur}[/bold]  [dim]queue {qt}[/dim]"))
-    elif dur:
-        timing.append(_kv("Duration", f"[bold]{dur}[/bold]"))
-    elif qt:
-        timing.append(_kv("Queue", qt))
-    if timing:
-        L.append("")
-        L.append(_hdr("Timing"))
-        L.extend(timing)
-
-    # ── Meta ──
-    meta: list[str] = []
-    if job.get("created_by"):
-        meta.append(_kv("User", job["created_by"]))
-    if job.get("tags"):
-        meta.append(_kv("Tags", f"[dim]{job['tags']}[/dim]"))
-    if job.get("description"):
-        desc = job["description"]
-        if len(desc) > 50:
-            desc = desc[:47] + "…"
-        meta.append(_kv("Description", desc))
-    if meta:
-        L.append("")
-        L.append(_hdr("Meta"))
-        L.extend(meta)
-
-    # ── Portal ──
+    lines = build_job_info_lines(
+        job,
+        label_width=12,
+        header_width=32,
+        cmd_max=50,
+        portal_link=False,
+    )
+    # TUI portal: plain underlined text (no Rich [link])
     url = job.get("portal_url", "")
     if url:
         short = short_portal_url(url, rich_link=False)
         if not short.startswith("http"):
             short = f"https://{short}"
-        L.append("")
-        L.append(f"  [dim]→[/dim] [cyan underline]{short}[/cyan underline]")
+        lines.append("")
+        lines.append(f"  [dim]→[/dim] [cyan underline]{short}[/cyan underline]")
 
-    return "\n".join(L)
-
-    return "\n".join(L)
+    return "\n".join(lines)
 
 
 def fmt_dur(secs: int) -> str:
     from azure_jobs.utils.time import format_duration
     return format_duration(secs)
 
-
-# ---- backward-compat aliases (tests import private names) -------------------
-
-_AZ_ICON = AZ_ICON
-_AZ_STYLE = AZ_STYLE
-_KW = KW
-_LEFT_WIDTH = LEFT_WIDTH
-_NAME_MAX = NAME_MAX
-_PAGE_SIZE = PAGE_SIZE
-_icon_style = icon_style
-_trunc = trunc
-_make_option = make_option
-_kv = kv
-_info_block = info_block
