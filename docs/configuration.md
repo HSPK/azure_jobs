@@ -10,14 +10,14 @@ Located at `.azure_jobs/aj_config.json`. Stores three things:
 
 **Repository** — the Git URL for `aj pull`. Saved after the first pull so subsequent pulls don't need the URL again.
 
-**Workspace** — Azure subscription, resource group, and workspace name. Prompted interactively on first use.
+**Workspace** — Azure subscription, resource group, and workspace name. Can be set interactively via `aj ws set` or prompted on first use.
 
 ## Templates
 
 Templates live in `.azure_jobs/template/` as YAML files. Each template has two top-level keys:
 
 - **`base`** — optional. A template name (or list of names) to inherit from.
-- **`config`** — the actual job configuration passed to amlt.
+- **`config`** — the actual job configuration.
 
 ### Directory Structure
 

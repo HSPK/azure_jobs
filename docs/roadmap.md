@@ -2,36 +2,30 @@
 
 ## Completed
 
-- Rich terminal output — panels, spinners, styled messages
+- **Pure REST architecture** — replaced `azure-ai-ml` SDK and `amlt` with direct REST API calls
+- **Job submission** — code upload, environment registration, datastore creation, distributed training, all via REST
+- **Job lifecycle** — `aj job list/show/cancel/logs` with server-side filtering
+- **Template management** — `aj template list/show/validate/pull/push/diff`
+- **Workspace management** — `aj ws list/show/set` with interactive picker
+- **Environment browsing** — `aj env list/show` for registered environments
+- **Datastore browsing** — `aj ds list/show` for workspace datastores
+- **Experiment browsing** — `aj exp list/show` aggregated from jobs
+- **Quota monitoring** — `aj quota list` for Singularity VCs and AML clusters
+- **Image catalog** — `aj image list` for Singularity curated base images
+- **Interactive dashboard** — `aj dash` TUI with job table, filtering, keyboard shortcuts
+- **Authentication** — `aj auth status/login/logout` with credential health checks
+- Rich terminal output — panels, tables, spinners, styled messages
 - Unified `aj_config.json` — defaults, workspace, repo_id in one file
-- Template defaults — last-used template saved automatically
-- `aj pull` shorthand — `user/repo` expands to SSH URL
-- Codebase restructured into `cli/`, `core/`, `utils/`
-- Type hints and error handling throughout
-- Circular template inheritance detection
-- 106 tests
-
-## Next: Job Lifecycle
-
-Direct Azure ML SDK integration for job management, bypassing `amlt` for speed.
-
-- `aj jobs list` — show recent jobs from local records
-- `aj jobs show <id>` — fetch live status from Azure
-- `aj jobs cancel <id>` — cancel a running job
-- `aj jobs logs <id>` — stream or download job logs
-
-This requires a `core/backend.py` module with lazy Azure SDK imports to keep startup fast. See [amlt-integration.md](amlt-integration.md) for the design.
-
-## Next: Template Management
-
-- `aj template list` — replace current `aj list`
-- `aj template show <name>` — display resolved config after inheritance
-- `aj template validate <name>` — check for errors without submitting
+- YAML template inheritance with circular detection and merge rules
+- Multi-node distributed training preamble (MPI rank mapping, NCCL tuning)
+- Content-addressed artifact dedup (SHA-based code and environment versions)
+- 335 tests
 
 ## Future
 
-- Pre-submission validation (check amlt installed, validate SKU names)
+- Pre-submission validation (validate SKU names, check cluster existence)
 - Resubmit support (`aj run --resubmit <id>`)
 - Job metrics — queue time tracking, cost estimation
 - Shell completions
-- Optional `[azure]` dependency group in pyproject.toml
+- Log streaming for running jobs
+- Job diff — compare configs of two submissions
