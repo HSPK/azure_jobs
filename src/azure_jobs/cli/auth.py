@@ -37,7 +37,7 @@ def auth_status() -> None:
     rows.append(("Subscription ID", account.get("id", "unknown")))
     rows.append(("Tenant", account.get("tenantId", "unknown")))
 
-    # ── 2. Azure ML SDK credential check ──
+    # ── 2. Azure credential check ──
     sdk_ok = False
     try:
         from azure.identity import AzureCliCredential
@@ -45,16 +45,15 @@ def auth_status() -> None:
         token = cred.get_token("https://management.azure.com/.default")
         if token and token.token:
             sdk_ok = True
-            rows.append(("SDK Credential", "[bold green]✓ Valid[/bold green]"))
+            rows.append(("Credential", "[bold green]✓ Valid[/bold green]"))
     except Exception as exc:
-        rows.append(("SDK Credential", f"[bold red]✗ {exc}[/bold red]"))
+        rows.append(("Credential", f"[bold red]✗ {exc}[/bold red]"))
 
     if not sdk_ok:
         try:
-            # check if azure-identity is installed at all
             import azure.identity  # noqa: F401
         except ImportError:
-            rows.append(("SDK Credential", "[yellow]⚠ azure-identity not installed[/yellow]"))
+            rows.append(("Credential", "[yellow]⚠ azure-identity not installed[/yellow]"))
 
     # ── 3. aj workspace config ──
     try:

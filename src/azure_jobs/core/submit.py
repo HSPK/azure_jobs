@@ -1,15 +1,13 @@
-"""Azure ML job submission engine.
+"""Azure ML job submission engine — pure REST, no ``azure-ai-ml`` SDK.
 
-Direct SDK submission without amlt. Handles:
-- Authentication (AzureCliCredential)
-- Code packaging and upload
-- Environment (Docker image)
-- Storage mounts (blob containers)
-- Distribution (PyTorch multi-node)
-- Singularity virtual cluster targets (ARM resource IDs + AISuperComputer resources)
-- Job creation and submission
-
-All azure-ai-ml imports are lazy to keep CLI startup fast.
+Handles:
+- Authentication (AzureCliCredential via REST client)
+- Code packaging and upload (zip → blob → code version)
+- Environment (Docker image registration via REST)
+- Storage mounts (blob datastores via REST)
+- Distribution (PyTorch multi-node via plain dicts)
+- Singularity virtual cluster targets (ARM resource IDs + AISuperComputer)
+- Job creation (REST PUT)
 """
 
 from __future__ import annotations
@@ -74,9 +72,20 @@ class SubmitRequest:
 
 
 def _extract_error_message(exc: Exception) -> str:
-    """Extract a concise error message from an Azure SDK exception."""
-    from azure_jobs.core.client import extract_json_error
-    return extract_json_error(exc)
+    """Extract a concise error message from an Azure REST exception."""
+    import json
+    msg = str(exc)
+    if "{" in msg:
+        try:
+            s, e = msg.index("{"), msg.rindex("}") + 1
+            err = json.loads(msg[s:e])
+            return err.get("error", {}).get("message", msg).strip()
+        except (ValueError, json.JSONDecodeError):
+            pass
+    first = msg.split("\n")[0].strip()
+    if first.startswith("(") and ") " in first:
+        return first.split(") ", 1)[1]
+    return first
 
 
 @dataclass
@@ -90,15 +99,13 @@ class SubmitResult:
     error: str = ""
 
 
-def _get_ml_client(request: SubmitRequest) -> Any:
-    """Create an authenticated MLClient from a SubmitRequest."""
-    from azure_jobs.core.client import create_ml_client
-    return create_ml_client(
-        {
-            "subscription_id": request.subscription_id,
-            "resource_group": request.resource_group,
-            "workspace_name": request.workspace_name,
-        }
+def _get_rest_client(request: SubmitRequest) -> Any:
+    """Create a REST client from a SubmitRequest."""
+    from azure_jobs.core.rest_client import AzureMLJobsClient
+    return AzureMLJobsClient(
+        subscription_id=request.subscription_id,
+        resource_group=request.resource_group,
+        workspace_name=request.workspace_name,
     )
 
 
@@ -108,15 +115,13 @@ _SING_IMAGE_PREFIX = "amlt-sing/"
 _SING_DUMMY_IMAGE = "mcr.microsoft.com/azureml/openmpi4.1.0-ubuntu20.04:latest"
 
 
-def _build_environment(request: SubmitRequest, ml_client: Any) -> Any:
-    """Build and register an Azure ML Environment from a Docker image.
+def _build_environment(request: SubmitRequest, client: Any) -> str:
+    """Register a Docker image as an environment and return its ARM ID.
 
     For Singularity curated images (``amlt-sing/...``), uses a dummy MCR image
     that passes Azure ML validation.  The real image is selected at runtime
     by the Singularity platform via the ``imageVersion`` resource property.
     """
-    from azure.ai.ml.entities import Environment
-
     if request.image_registry:
         image = f"{request.image_registry}/{request.image}"
     else:
@@ -134,50 +139,49 @@ def _build_environment(request: SubmitRequest, ml_client: Any) -> Any:
 
     # Reuse existing environment if available
     try:
-        cached = ml_client.environments.get(name=env_name, version=version)
-        if isinstance(cached, Environment):
-            return cached
+        cached = client.get_environment_version(env_name, version)
+        if cached:
+            return cached.get("id", "")
     except Exception:
         log.debug("Environment %s:%s not cached, creating new", env_name, version)
 
-    env = Environment(name=env_name, version=version, image=image)
     try:
-        registered = ml_client.environments.create_or_update(env)
-        if isinstance(registered, Environment):
-            return registered
+        registered = client.create_or_update_environment(env_name, version, image)
+        return registered.get("id", "")
     except Exception:
-        log.debug("Failed to register environment, using unregistered", exc_info=True)
-    # Fallback: return unregistered environment
-    return env
+        log.debug("Failed to register environment, using inline", exc_info=True)
+    # Fallback: return inline image reference (no registered environment)
+    return ""
 
 
 def _get_or_create_datastore(
-    ml_client: Any, ds_name: str, account: str, container: str, mount_name: str,
+    client: Any, ds_name: str, account: str, container: str, mount_name: str,
 ) -> None:
     """Ensure a blob datastore exists in the workspace (create if missing)."""
     try:
-        ml_client.datastores.get(ds_name)
+        existing = client.get_datastore(ds_name)
+        if existing:
+            return
     except Exception:
-        from azure.ai.ml.entities import AzureBlobDatastore
-        ds = AzureBlobDatastore(
+        pass
+    try:
+        client.create_or_update_datastore(
             name=ds_name,
             account_name=account,
             container_name=container,
             description=f"Created by aj for {mount_name}",
         )
-        try:
-            ml_client.create_or_update(ds)
-        except Exception:
-            log.debug("Failed to create datastore %s", ds_name, exc_info=True)
+    except Exception:
+        log.debug("Failed to create datastore %s", ds_name, exc_info=True)
 
 
 def _build_storage_mounts(
     request: SubmitRequest,
-    ml_client: Any,
+    client: Any,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, str], dict[str, str]]:
     """Set up storage mounts via workspace datastores.
 
-    Creates or reuses datastores in the workspace, then builds Output objects
+    Creates or reuses datastores in the workspace, then builds output dicts
     and PathOnCompute properties that Singularity needs to mount storage.
 
     Returns:
@@ -191,16 +195,13 @@ def _build_storage_mounts(
     if not request.storage:
         return inputs, outputs, path_on_compute, dataref_env
 
-    from azure.ai.ml import Output
-    from azure.ai.ml.constants import AssetTypes
-
     for mount_name, mount_cfg in request.storage.items():
         account = mount_cfg.get("storage_account_name", "")
         container = mount_cfg.get("container_name", "")
         mount_dir = mount_cfg.get("mount_dir", f"/mnt/{mount_name}")
         ds_name = f"aj_{mount_name}".replace("-", "_")
 
-        _get_or_create_datastore(ml_client, ds_name, account, container, mount_name)
+        _get_or_create_datastore(client, ds_name, account, container, mount_name)
 
         uri = (
             f"azureml://subscriptions/{request.subscription_id}"
@@ -210,7 +211,11 @@ def _build_storage_mounts(
             f"/datastores/{ds_name}/paths/"
         )
 
-        outputs[mount_name] = Output(type=AssetTypes.URI_FOLDER, path=uri)
+        outputs[mount_name] = {
+            "jobOutputType": "uri_folder",
+            "uri": uri,
+            "mode": "ReadWriteMount",
+        }
         prop_key = f"AZURE_ML_OUTPUT_PathOnCompute_{mount_name}"
         path_on_compute[prop_key] = mount_dir.rstrip("/") + "/"
         dataref_env[f"AZUREML_DATAREFERENCE_{mount_name}"] = mount_dir
@@ -237,16 +242,15 @@ def _build_command_str(request: SubmitRequest) -> str:
     return " && ".join(all_cmds)
 
 
-def _build_distribution(request: SubmitRequest) -> Any | None:
-    """Build distribution config for multi-node jobs."""
+def _build_distribution(request: SubmitRequest) -> dict[str, Any] | None:
+    """Build distribution config for multi-node jobs as a plain dict."""
     if request.nodes <= 1 and request.processes_per_node <= 1:
         return None
 
-    from azure.ai.ml import PyTorchDistribution
-
-    return PyTorchDistribution(
-        process_count_per_node=request.processes_per_node,
-    )
+    return {
+        "distributionType": "PyTorch",
+        "processCountPerInstance": request.processes_per_node,
+    }
 
 
 def _resolve_compute(request: SubmitRequest) -> str:
@@ -327,7 +331,7 @@ def _build_resources(
 
 def _resolve_sing_identity(
     request: SubmitRequest,
-    ml_client: Any,
+    client: Any,
 ) -> str | None:
     """Look up the Singularity UAI client_id from workspace identity config.
 
@@ -347,40 +351,30 @@ def _resolve_sing_identity(
         return None
 
     try:
-        ws = ml_client.workspaces.get(request.workspace_name)
-        for ident in ws.identity.user_assigned_identities or []:
-            # SDK returns dicts or objects depending on version
-            if isinstance(ident, dict):
-                rid = ident.get("resource_id", "")
-                cid = ident.get("client_id", "")
-            else:
-                rid = getattr(ident, "resource_id", "")
-                cid = getattr(ident, "client_id", "")
-            if rid and rid.lower().rstrip("/") == uai_resource_id.lower().rstrip("/"):
-                return cid or None
+        ws = client.get_workspace()
+        identity = ws.get("identity", {})
+        uais = identity.get("userAssignedIdentities", {}) or {}
+        for rid, props in uais.items():
+            if rid.lower().rstrip("/") == uai_resource_id.lower().rstrip("/"):
+                return (props or {}).get("clientId") or None
     except Exception:
         log.debug("Failed to resolve Singularity identity", exc_info=True)
 
     return None
 
 
-def _build_identity(request: SubmitRequest) -> Any | None:
-    """Build identity config.
+def _build_identity(request: SubmitRequest) -> dict[str, str] | None:
+    """Build identity config as a plain dict.
 
     Singularity does not support identity config — return None.
     """
     if request.service == "sing":
         return None
 
-    from azure.ai.ml.entities import (
-        ManagedIdentityConfiguration,
-        UserIdentityConfiguration,
-    )
-
     if request.identity == "managed":
-        return ManagedIdentityConfiguration()
+        return {"identityType": "Managed"}
     elif request.identity == "user":
-        return UserIdentityConfiguration()
+        return {"identityType": "UserIdentity"}
     return None
 
 
@@ -418,7 +412,7 @@ def _build_tags(tag_strings: list[str]) -> dict[str, str | None]:
 
 
 def submit(request: SubmitRequest, on_status: Any = None) -> SubmitResult:
-    """Submit a job to Azure ML.
+    """Submit a job to Azure ML via REST API.
 
     Args:
         request: Complete submission specification.
@@ -434,21 +428,22 @@ def submit(request: SubmitRequest, on_status: Any = None) -> SubmitResult:
             on_status(step, detail)
 
     try:
-        from azure_jobs.core.client import suppress_sdk_output
-
         _status("auth", "Authenticating…")
-        with suppress_sdk_output():
-            ml_client = _get_ml_client(request)
+        client = _get_rest_client(request)
 
         _status("environment", "Preparing environment…")
-        with suppress_sdk_output():
-            environment = _build_environment(request, ml_client)
+        env_id = _build_environment(request, client)
 
         _status("storage", f"Configuring {len(request.storage)} storage mount(s)…")
-        with suppress_sdk_output():
-            inputs, outputs, poc_props, dataref_env = _build_storage_mounts(
-                request, ml_client
-            )
+        inputs, outputs, poc_props, dataref_env = _build_storage_mounts(
+            request, client
+        )
+
+        _status("code", "Uploading code…")
+        code_id = client.upload_code(
+            request.code_dir,
+            ignore_patterns=request.code_ignore or None,
+        )
 
         _status("command", "Building command…")
         distribution = _build_distribution(request)
@@ -461,8 +456,7 @@ def submit(request: SubmitRequest, on_status: Any = None) -> SubmitResult:
         identity_prefix = ""
         if request.service == "sing":
             _status("identity", "Resolving Singularity identity…")
-            with suppress_sdk_output():
-                client_id = _resolve_sing_identity(request, ml_client)
+            client_id = _resolve_sing_identity(request, client)
             if client_id:
                 identity_prefix = (
                     f"export DEFAULT_IDENTITY_CLIENT_ID={client_id}"
@@ -477,41 +471,76 @@ def submit(request: SubmitRequest, on_status: Any = None) -> SubmitResult:
         tags = _build_tags(request.tags)
         properties = dict(poc_props) if poc_props else {}
 
-        from azure.ai.ml import command as aml_command
-
         _status("submit", f"Submitting to {request.compute}…")
 
-        job_kwargs: dict[str, Any] = dict(
-            name=request.name,
-            display_name=request.name,
-            description=request.description,
-            experiment_name=request.experiment_name,
-            code=request.code_dir,
-            command=command_str,
-            environment=environment,
-            compute=compute,
-            instance_count=request.nodes,
-            distribution=distribution,
-            inputs=inputs if inputs else None,
-            outputs=outputs if outputs else None,
-            environment_variables=env_vars,
-            identity=identity,
-            shm_size=request.shm_size,
-            tags=tags if tags else None,
-            properties=properties if properties else None,
-        )
+        # Build the REST job body
+        job_body: dict[str, Any] = {
+            "properties": {
+                "jobType": "Command",
+                "displayName": request.name,
+                "description": request.description,
+                "experimentName": request.experiment_name,
+                "command": command_str,
+                "compute": compute,
+                "environmentVariables": env_vars,
+            }
+        }
+
+        job_props = job_body["properties"]
+
+        # Code reference
+        if code_id:
+            job_props["codeId"] = code_id
+
+        # Environment — either registered ID or inline image
+        if env_id:
+            job_props["environmentId"] = env_id
+        else:
+            # Inline environment with image
+            image = request.image
+            if request.image_registry:
+                image = f"{request.image_registry}/{image}"
+            job_props["environmentId"] = image
+
+        # Distribution
+        if distribution:
+            job_props["distribution"] = distribution
+
+        # Identity
+        if identity:
+            job_props["identity"] = identity
+
+        # Resources (instance count + Singularity-specific)
+        res: dict[str, Any] = {"instanceCount": request.nodes}
         if resources:
-            job_kwargs["resources"] = resources
+            res["properties"] = resources.get("properties", {})
+        job_props["resources"] = res
 
-        with suppress_sdk_output():
-            job = aml_command(**job_kwargs)
-            returned_job = ml_client.jobs.create_or_update(job)
+        # Outputs (storage mounts)
+        if outputs:
+            job_props["outputs"] = outputs
 
+        # Tags and properties
+        if tags:
+            job_props["tags"] = tags
+        if properties:
+            job_props["properties"] = properties
+
+        # SHM size
+        if request.shm_size:
+            job_props.setdefault("resources", {})
+            job_props["resources"]["shmSize"] = request.shm_size
+
+        returned_job = client.create_or_update_job(request.name, job_body)
+
+        # Extract portal URL from response
         portal_url = ""
-        if hasattr(returned_job, "studio_url"):
-            portal_url = returned_job.studio_url or ""
+        ret_props = returned_job.get("properties", {})
+        services = ret_props.get("services", {}) or {}
+        studio = services.get("Studio", {}) or {}
+        portal_url = studio.get("endpoint", "") or ""
 
-        azure_name = returned_job.name or request.name
+        azure_name = returned_job.get("name", "") or request.name
         _status("done", f"Job {azure_name} submitted")
 
         return SubmitResult(
