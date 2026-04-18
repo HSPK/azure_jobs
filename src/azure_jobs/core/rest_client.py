@@ -109,11 +109,7 @@ class AzureARMClient:
     def list_workspace_computes(
         self, subscription_id: str, resource_group: str, workspace_name: str,
     ) -> list[dict[str, Any]]:
-        """List compute resources in an AML workspace via ARM batch API.
-
-        Returns raw compute objects with node state, VM size, priority, etc.
-        Uses the same batch API approach as amlt for detailed node counts.
-        """
+        """List compute resources in an AML workspace via ARM API."""
         url = (
             f"{_MGMT}/subscriptions/{subscription_id}"
             f"/resourceGroups/{resource_group}"
@@ -123,6 +119,22 @@ class AzureARMClient:
         )
         data = self.get(url, timeout=30)
         return data.get("value", [])
+
+    def list_ml_workspaces(
+        self, subscription_ids: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Discover all AML workspaces across subscriptions via Resource Graph."""
+        if not subscription_ids:
+            subscription_ids = self.list_subscriptions()
+        if not subscription_ids:
+            return []
+        query = (
+            "resources "
+            "| where type == 'microsoft.machinelearningservices/workspaces' "
+            "| order by name asc "
+            "| project name, resourceGroup, subscriptionId, location"
+        )
+        return self.resource_graph_query(query, subscription_ids)
 
 
 def create_rest_client(

@@ -242,55 +242,87 @@ def _portal_compute_url(sub: str, rg: str, ws: str, cluster: str) -> str:
 
 
 def _show_aml_quotas(show_all: bool) -> None:
-    """Display AML workspace compute clusters and family quotas."""
-    from azure_jobs.core.config import get_workspace_config
+    """Display AML compute clusters across all discovered workspaces."""
     from azure_jobs.core.rest_client import AzureARMClient
-    from azure_jobs.utils.ui import console, warning
+    from azure_jobs.utils.ui import console, error, warning
 
     from rich.table import Table
-
-    ws = get_workspace_config()
-    sub = ws.get("subscription_id", "")
-    rg = ws.get("resource_group", "")
-    ws_name = ws.get("workspace_name", "")
+    from rich.text import Text
 
     arm = AzureARMClient()
 
-    # --- Section 1: Per-cluster compute info (like amlt target info aml) ---
+    # Discover all AML workspaces
     with console.status(
-        "[bold cyan]Fetching compute clusters…[/bold cyan]", spinner="dots",
+        "[bold cyan]Discovering AML workspaces…[/bold cyan]", spinner="dots",
     ):
         try:
-            computes = arm.list_workspace_computes(sub, rg, ws_name)
+            workspaces = arm.list_ml_workspaces()
         except Exception as exc:
-            warning(f"Could not fetch computes: {exc}")
-            computes = []
+            error(f"Could not discover workspaces: {exc}")
+            raise SystemExit(1)
 
-    clusters = [
-        c for c in computes
-        if c.get("properties", {}).get("computeType") == "AmlCompute"
-    ]
+    if not workspaces:
+        error("No AML workspaces found")
+        console.print("  Make sure you are logged in (`az login`) and have access to workspaces")
+        raise SystemExit(1)
 
-    from rich.text import Text
+    # Fetch computes for each workspace with (x/N) progress
+    ws_computes: list[tuple[dict, list]] = []
+    for idx, ws in enumerate(workspaces, 1):
+        ws_name = ws.get("name", "")
+        with console.status(
+            f"[bold cyan]Fetching computes ({idx}/{len(workspaces)}) {ws_name}…[/bold cyan]",
+            spinner="dots",
+        ):
+            try:
+                raw = arm.list_workspace_computes(
+                    ws["subscriptionId"], ws["resourceGroup"], ws_name,
+                )
+                clusters = [
+                    c for c in raw
+                    if c.get("properties", {}).get("computeType") == "AmlCompute"
+                ]
+                if clusters or show_all:
+                    ws_computes.append((ws, clusters))
+            except Exception:
+                # Skip workspaces we can't access
+                pass
 
-    if clusters:
-        ct = Table(
-            title=f"[bold]AML Compute Clusters[/bold]  [dim]{ws_name}[/dim]",
-            title_style="",
-            show_header=True,
-            header_style="bold",
-            show_lines=False,
-            pad_edge=True,
-        )
-        ct.add_column("Cluster", style="bold cyan", no_wrap=True)
-        ct.add_column("VM Size", no_wrap=True)
-        ct.add_column("SKU", no_wrap=True)
-        ct.add_column("Nodes", justify="right", no_wrap=True)
-        ct.add_column("Priority", no_wrap=True)
-        ct.add_column("Location", no_wrap=True)
-        ct.add_column("Portal", no_wrap=True, overflow="fold")
+    if not ws_computes:
+        warning("No AML compute clusters found in any workspace")
+        return
 
-        for c in sorted(clusters, key=lambda x: x.get("name", "")):
+    # Build grouped table
+    table = Table(
+        title="[bold]AML Compute Clusters[/bold]",
+        title_style="",
+        show_header=True,
+        header_style="bold",
+        show_lines=False,
+        pad_edge=True,
+    )
+    table.add_column("Workspace", style="bold magenta", no_wrap=True)
+    table.add_column("Cluster", style="bold cyan", no_wrap=True)
+    table.add_column("VM Size", no_wrap=True)
+    table.add_column("SKU", no_wrap=True)
+    table.add_column("Nodes", justify="right", no_wrap=True)
+    table.add_column("Priority", no_wrap=True)
+    table.add_column("Location", no_wrap=True)
+    table.add_column("Portal", no_wrap=True, overflow="fold")
+
+    for ws_idx, (ws, clusters) in enumerate(ws_computes):
+        ws_name = ws.get("name", "")
+        sub = ws.get("subscriptionId", "")
+        rg = ws.get("resourceGroup", "")
+
+        if not clusters:
+            table.add_row(ws_name, "[dim]no clusters[/dim]", "", "", "", "", "", "")
+            if ws_idx < len(ws_computes) - 1:
+                table.add_section()
+            continue
+
+        for i, c in enumerate(sorted(clusters, key=lambda x: x.get("name", ""))):
+            ws_label = ws_name if i == 0 else ""
             name = c.get("name", "")
             props = c.get("properties", {}).get("properties", {}) or {}
             vm_size = props.get("vmSize", "") or ""
@@ -306,7 +338,6 @@ def _show_aml_quotas(show_all: bool) -> None:
                 + (node_state.get("preparingNodeCount") or 0)
                 + (node_state.get("leavingNodeCount") or 0)
             )
-            unusable = node_state.get("unusableNodeCount") or 0
             idle = node_state.get("idleNodeCount") or 0
 
             if max_nodes == 0:
@@ -326,77 +357,13 @@ def _show_aml_quotas(show_all: bool) -> None:
             portal = _portal_compute_url(sub, rg, ws_name, name)
             portal_text = Text("portal ↗", style=f"dim link {portal}")
 
-            ct.add_row(name, vm_size, sku_s, nodes_s, pri_s, location, portal_text)
+            table.add_row(ws_label, name, vm_size, sku_s, nodes_s, pri_s, location, portal_text)
 
-        console.print()
-        console.print(ct)
+        if ws_idx < len(ws_computes) - 1:
+            table.add_section()
 
-    # --- Section 2: Per-family quota usage ---
-    with console.status(
-        "[bold cyan]Fetching family quotas…[/bold cyan]", spinner="dots",
-    ):
-        try:
-            from azure_jobs.core.client import create_ml_client
-            ml = create_ml_client(ws)
-            ws_obj = ml.workspaces.get(ws_name)
-            location = getattr(ws_obj, "location", "") or ""
-            usages = list(ml.compute.list_usage(location=location)) if location else []
-        except Exception as exc:
-            warning(f"Could not fetch quotas: {exc}")
-            usages = []
-            location = ""
-
-    # Filter to non-zero (unless --all)
-    usages = [u for u in usages if show_all or (getattr(u, "limit", 0) or 0) > 0]
-
-    if usages:
-        qt = Table(
-            title=f"[bold]AML Family Quotas[/bold]  [dim]{location}[/dim]",
-            title_style="",
-            show_header=True,
-            header_style="bold",
-            show_lines=False,
-            pad_edge=True,
-        )
-        qt.add_column("VM Family", style="bold cyan", no_wrap=True)
-        qt.add_column("Free", justify="right", no_wrap=True)
-        qt.add_column("Nodes", justify="right", no_wrap=True)
-        qt.add_column("", no_wrap=True)  # bar
-
-        for u in usages:
-            limit = getattr(u, "limit", 0) or 0
-            current = getattr(u, "current_value", 0) or 0
-            name_obj = getattr(u, "name", None)
-            # SDK returns name as either a dict or an object with .value
-            if isinstance(name_obj, dict):
-                family = name_obj.get("localized_value") or name_obj.get("value", "")
-            else:
-                family = getattr(name_obj, "localized_value", "") or getattr(name_obj, "value", "")
-            if not family:
-                family = str(name_obj) if name_obj else ""
-
-            avail = max(0, limit - current)
-            if avail > 0:
-                nodes_s = f"[green]{current}[/green][dim]/[/dim]{limit}"
-            elif limit > 0:
-                nodes_s = f"[red]{current}[/red][dim]/[/dim]{limit}"
-            else:
-                nodes_s = f"[dim]{current}/{limit}[/dim]"
-
-            pct = (current / limit * 100) if limit > 0 else 0
-            bar_len = 15
-            filled = int(pct / 100 * bar_len)
-            bar_color = "green" if pct < 70 else ("yellow" if pct < 90 else "red")
-            bar = f"[{bar_color}]{'█' * filled}[/{bar_color}][dim]{'░' * (bar_len - filled)}[/dim]"
-
-            qt.add_row(family, f"[green]{avail}[/green]", nodes_s, bar)
-
-        console.print()
-        console.print(qt)
-
-    if not clusters and not usages:
-        warning("No compute or quota information available")
-
+    console.print()
+    console.print(table)
     console.print()
 
 
