@@ -12,6 +12,9 @@ test.sh
 scripts/
 *.egg-info
 
+# Auto-generated version file
+src/azure_jobs/_version.py
+
 # Virtual environments
 .venv
 .DS_Store

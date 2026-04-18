@@ -55,7 +55,6 @@ wheels = [
 
 [[package]]
 name = "azure-jobs"
-version = "0.1.13"
 source = { editable = "." }
 dependencies = [
     { name = "azure-identity" },
