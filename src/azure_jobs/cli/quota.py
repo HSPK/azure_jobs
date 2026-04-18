@@ -367,12 +367,20 @@ def _show_aml_quotas(show_all: bool) -> None:
 
         if max_nodes == 0:
             nodes_s = "[dim]0/0[/dim]"
+        elif idle == 0 and busy == 0:
+            # Fully idle cluster — dim the whole thing
+            i_s = str(idle).rjust(max_idle_w)
+            b_s = str(busy).rjust(max_busy_w)
+            t_s = str(max_nodes).rjust(max_total_w)
+            nodes_s = f"[dim]{i_s} idle {b_s} busy /{t_s}[/dim]"
         else:
             free_col = "red" if vm_pri == "LowPriority" else "green"
             i_s = str(idle).rjust(max_idle_w)
             b_s = str(busy).rjust(max_busy_w)
             t_s = str(max_nodes).rjust(max_total_w)
-            nodes_s = f"[{free_col}]{i_s}[/{free_col}] idle [cyan]{b_s}[/cyan] busy [dim]/{t_s}[/dim]"
+            idle_part = f"[{free_col}]{i_s}[/{free_col}] idle" if idle > 0 else f"[dim]{i_s} idle[/dim]"
+            busy_part = f"[cyan]{b_s}[/cyan] busy" if busy > 0 else f"[dim]{b_s} busy[/dim]"
+            nodes_s = f"{idle_part} {busy_part} [dim]/{t_s}[/dim]"
 
         sku = _vm_sku_label(vm_size)
         sku_s = f"[bold]{sku}[/bold]" if sku and sku != "CPU" else (sku or "[dim]—[/dim]")
