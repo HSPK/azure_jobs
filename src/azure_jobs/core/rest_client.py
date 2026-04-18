@@ -538,9 +538,24 @@ class AzureMLJobsClient:
     def _get_blob_sas(
         self, account_name: str, container: str,
     ) -> dict[str, str]:
-        """Get SAS or account key for blob upload from workspaceblobstore."""
-        secrets = self.list_datastore_secrets("workspaceblobstore")
-        return secrets
+        """Get credentials for blob upload from workspaceblobstore.
+
+        Tries ``listSecrets`` first.  If the datastore is credential-less
+        (``credentialsType: None``), falls back to an Azure AD bearer token
+        scoped to Azure Storage.
+        """
+        try:
+            secrets = self.list_datastore_secrets("workspaceblobstore")
+            # Check if we actually got usable credentials
+            if (secrets.get("key") or secrets.get("accountKey", "")
+                    or secrets.get("sasToken", "")):
+                return secrets
+        except Exception:
+            pass
+        # Credential-less datastore — get a Storage-scoped bearer token
+        storage_scope = "https://storage.azure.com/.default"
+        token = self._cred.get_token(storage_scope)
+        return {"_bearer": token.token}
 
     def _upload_blob(
         self,
@@ -548,37 +563,37 @@ class AzureMLJobsClient:
         data: bytes,
         sas_info: dict[str, Any],
     ) -> None:
-        """Upload bytes to Azure Blob Storage using account key or SAS."""
-        import base64
-        from datetime import datetime, timezone
+        """Upload bytes to Azure Blob Storage via SAS, shared key, or bearer token."""
+        headers: dict[str, str] = {
+            "x-ms-blob-type": "BlockBlob",
+            "x-ms-version": "2024-11-04",
+            "Content-Type": "application/zip",
+            "Content-Length": str(len(data)),
+        }
 
-        key = sas_info.get("key") or sas_info.get("accountKey", "")
+        bearer = sas_info.get("_bearer", "")
         sas_token = sas_info.get("sasToken", "")
+        key = sas_info.get("key") or sas_info.get("accountKey", "")
 
-        if sas_token:
-            # Use SAS token
+        if bearer:
+            headers["Authorization"] = f"Bearer {bearer}"
+            resp = requests.put(blob_url, data=data, headers=headers, timeout=120)
+        elif sas_token:
             sep = "&" if "?" in blob_url else "?"
-            url = f"{blob_url}{sep}{sas_token}"
             resp = requests.put(
-                url,
-                data=data,
-                headers={
-                    "x-ms-blob-type": "BlockBlob",
-                    "x-ms-version": "2024-11-04",
-                    "Content-Type": "application/zip",
-                },
-                timeout=120,
+                f"{blob_url}{sep}{sas_token}", data=data, headers=headers, timeout=120,
             )
         elif key:
-            # Use shared key auth
+            import base64
             import hmac
-            now = datetime.now(timezone.utc).strftime("%a, %d %b %Y %H:%M:%S GMT")
-            # For simplicity, use the key to generate a service SAS inline
-            # Actually, use the REST API with shared key header
+            from datetime import datetime as dt
+            from datetime import timezone as tz
             from urllib.parse import urlparse
+
+            now = dt.now(tz.utc).strftime("%a, %d %b %Y %H:%M:%S GMT")
             parsed = urlparse(blob_url)
             account = parsed.hostname.split(".")[0] if parsed.hostname else ""
-            resource = parsed.path  # /{container}/{blob}
+            resource = parsed.path
 
             string_to_sign = (
                 f"PUT\n\n\n{len(data)}\n\n"
@@ -595,20 +610,9 @@ class AzureMLJobsClient:
                     hashlib.sha256,
                 ).digest()
             ).decode()
-
-            resp = requests.put(
-                blob_url,
-                data=data,
-                headers={
-                    "x-ms-blob-type": "BlockBlob",
-                    "x-ms-date": now,
-                    "x-ms-version": "2024-11-04",
-                    "Content-Type": "application/zip",
-                    "Content-Length": str(len(data)),
-                    "Authorization": f"SharedKey {account}:{sig}",
-                },
-                timeout=120,
-            )
+            headers["x-ms-date"] = now
+            headers["Authorization"] = f"SharedKey {account}:{sig}"
+            resp = requests.put(blob_url, data=data, headers=headers, timeout=120)
         else:
             raise ValueError("No credentials available for blob upload")
 
