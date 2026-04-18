@@ -203,13 +203,8 @@ def _build_storage_mounts(
 
         _get_or_create_datastore(client, ds_name, account, container, mount_name)
 
-        uri = (
-            f"azureml://subscriptions/{request.subscription_id}"
-            f"/resourceGroups/{request.resource_group}"
-            f"/providers/Microsoft.MachineLearningServices"
-            f"/workspaces/{request.workspace_name}"
-            f"/datastores/{ds_name}/paths/"
-        )
+        # Short-form URI — the long ARM-style azureml:// is rejected by Singularity
+        uri = f"azureml://datastores/{ds_name}/paths/{request.name}/"
 
         outputs[mount_name] = {
             "jobOutputType": "uri_folder",
@@ -481,7 +476,7 @@ def submit(request: SubmitRequest, on_status: Any = None) -> SubmitResult:
                 "description": request.description,
                 "experimentName": request.experiment_name,
                 "command": command_str,
-                "compute": compute,
+                "computeId": compute,
                 "environmentVariables": env_vars,
             }
         }
