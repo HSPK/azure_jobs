@@ -42,6 +42,39 @@ def _fmt_used_limit(used: int | None, limit: int) -> str:
     return f"[{color}]{u}[/{color}][dim]/[/dim][yellow]{limit}[/yellow]"
 
 
+def _parse_compute_nodes(props: dict) -> tuple[int, int, int]:
+    """Extract (idle, busy, max_nodes) from ARM compute properties."""
+    scale = props.get("scaleSettings", {}) or {}
+    max_nodes = scale.get("maxNodeCount", 0) or 0
+    state = props.get("nodeStateCounts", {}) or {}
+    busy = (
+        (state.get("runningNodeCount") or 0)
+        + (state.get("preparingNodeCount") or 0)
+        + (state.get("leavingNodeCount") or 0)
+    )
+    idle = state.get("idleNodeCount") or 0
+    return idle, busy, max_nodes
+
+
+def _fmt_nodes(
+    idle: int, busy: int, max_nodes: int,
+    low_priority: bool,
+    w_idle: int = 1, w_busy: int = 1, w_total: int = 1,
+) -> str:
+    """Format the Nodes cell with alignment and conditional dimming."""
+    if max_nodes == 0:
+        return "[dim]0/0[/dim]"
+    i_s = str(idle).rjust(w_idle)
+    b_s = str(busy).rjust(w_busy)
+    t_s = str(max_nodes).rjust(w_total)
+    if idle == 0 and busy == 0:
+        return f"[dim]{i_s} idle {b_s} busy /{t_s}[/dim]"
+    free_col = "red" if low_priority else "green"
+    idle_part = f"[{free_col}]{i_s}[/{free_col}] idle" if idle > 0 else f"[dim]{i_s} idle[/dim]"
+    busy_part = f"[cyan]{b_s}[/cyan] busy" if busy > 0 else f"[dim]{b_s} busy[/dim]"
+    return f"{idle_part} {busy_part} [dim]/{t_s}[/dim]"
+
+
 # ---------------------------------------------------------------------------
 # Singularity quotas
 # ---------------------------------------------------------------------------
@@ -94,30 +127,27 @@ def _show_sing_quotas(show_all: bool, template: str | None) -> None:
         raise SystemExit(1)
 
     # Fetch quotas for each VC with (x/N) progress
-    all_vc_quotas: list[tuple] = []
     for idx, vc in enumerate(vcs, 1):
         with console.status(
             f"[bold cyan]Fetching quotas ({idx}/{len(vcs)}) {vc.name}…[/bold cyan]",
             spinner="dots",
         ):
-            quotas = fetch_vc_quotas(
+            vc.quotas = fetch_vc_quotas(
                 vc_subscription_id=vc.subscription_id,
                 vc_resource_group=vc.resource_group,
                 vc_name=vc.name,
                 include_zero=show_all,
                 arm_client=arm,
             )
-            vc.quotas = quotas
-            all_vc_quotas.append((vc, quotas))
 
     # Determine which SLA tiers are active across ALL VCs
     active_tiers: list[str] = []
     has_quota_limit = False
-    for _vc, quotas in all_vc_quotas:
+    for vc in vcs:
         for tier in SLA_TIERS:
-            if tier not in active_tiers and any(tier in sq.tiers for sq in quotas):
+            if tier not in active_tiers and any(tier in sq.tiers for sq in vc.quotas):
                 active_tiers.append(tier)
-        if not has_quota_limit and any(sq.overall for sq in quotas):
+        if not has_quota_limit and any(sq.overall for sq in vc.quotas):
             has_quota_limit = True
 
     # Build one table with VC grouping
@@ -138,8 +168,8 @@ def _show_sing_quotas(show_all: bool, template: str | None) -> None:
     if has_quota_limit:
         table.add_column("[cyan]Quota[/cyan]", justify="right", no_wrap=True)
 
-    for vc, quotas in all_vc_quotas:
-        if not quotas:
+    for vi, vc in enumerate(vcs):
+        if not vc.quotas:
             empty_row: list[str] = [vc.name, "[dim]no quotas[/dim]", ""]
             empty_row += [""] * len(active_tiers)
             if has_quota_limit:
@@ -147,7 +177,7 @@ def _show_sing_quotas(show_all: bool, template: str | None) -> None:
             table.add_row(*empty_row)
             continue
 
-        for i, sq in enumerate(quotas):
+        for i, sq in enumerate(vc.quotas):
             vc_label = vc.name if i == 0 else ""
             acc = sq.accelerator or ""
             mem = f" {sq.gpu_memory}GB" if sq.gpu_memory else ""
@@ -170,7 +200,7 @@ def _show_sing_quotas(show_all: bool, template: str | None) -> None:
             table.add_row(*row)
 
         # Divider line between VC groups
-        if vc != all_vc_quotas[-1][0]:
+        if vi < len(vcs) - 1:
             table.add_section()
 
     console.print(table)
@@ -310,7 +340,7 @@ def _show_aml_quotas(show_all: bool) -> None:
     table.add_column("Location", no_wrap=True)
     table.add_column("Portal", no_wrap=True, overflow="fold")
 
-    # Collect all cluster rows first to compute column widths for alignment
+    # Pre-compute column widths for node alignment
     all_rows: list[tuple[int, int, dict, dict | None]] = []
     max_idle_w = max_busy_w = max_total_w = 1
     for ws_idx, (ws, clusters) in enumerate(ws_computes):
@@ -319,15 +349,7 @@ def _show_aml_quotas(show_all: bool) -> None:
             continue
         for ci, c in enumerate(sorted(clusters, key=lambda x: x.get("name", ""))):
             props = c.get("properties", {}).get("properties", {}) or {}
-            scale = props.get("scaleSettings", {}) or {}
-            max_nodes = scale.get("maxNodeCount", 0) or 0
-            node_state = props.get("nodeStateCounts", {}) or {}
-            busy = (
-                (node_state.get("runningNodeCount") or 0)
-                + (node_state.get("preparingNodeCount") or 0)
-                + (node_state.get("leavingNodeCount") or 0)
-            )
-            idle = node_state.get("idleNodeCount") or 0
+            idle, busy, max_nodes = _parse_compute_nodes(props)
             max_idle_w = max(max_idle_w, len(str(idle)))
             max_busy_w = max(max_busy_w, len(str(busy)))
             max_total_w = max(max_total_w, len(str(max_nodes)))
@@ -355,32 +377,9 @@ def _show_aml_quotas(show_all: bool) -> None:
         vm_pri = props.get("vmPriority", "") or ""
         location = c.get("location", "") or ""
 
-        scale = props.get("scaleSettings", {}) or {}
-        max_nodes = scale.get("maxNodeCount", 0) or 0
-        node_state = props.get("nodeStateCounts", {}) or {}
-        busy = (
-            (node_state.get("runningNodeCount") or 0)
-            + (node_state.get("preparingNodeCount") or 0)
-            + (node_state.get("leavingNodeCount") or 0)
-        )
-        idle = node_state.get("idleNodeCount") or 0
-
-        if max_nodes == 0:
-            nodes_s = "[dim]0/0[/dim]"
-        elif idle == 0 and busy == 0:
-            # Fully idle cluster — dim the whole thing
-            i_s = str(idle).rjust(max_idle_w)
-            b_s = str(busy).rjust(max_busy_w)
-            t_s = str(max_nodes).rjust(max_total_w)
-            nodes_s = f"[dim]{i_s} idle {b_s} busy /{t_s}[/dim]"
-        else:
-            free_col = "red" if vm_pri == "LowPriority" else "green"
-            i_s = str(idle).rjust(max_idle_w)
-            b_s = str(busy).rjust(max_busy_w)
-            t_s = str(max_nodes).rjust(max_total_w)
-            idle_part = f"[{free_col}]{i_s}[/{free_col}] idle" if idle > 0 else f"[dim]{i_s} idle[/dim]"
-            busy_part = f"[cyan]{b_s}[/cyan] busy" if busy > 0 else f"[dim]{b_s} busy[/dim]"
-            nodes_s = f"{idle_part} {busy_part} [dim]/{t_s}[/dim]"
+        idle, busy, max_nodes = _parse_compute_nodes(props)
+        nodes_s = _fmt_nodes(idle, busy, max_nodes, vm_pri == "LowPriority",
+                             max_idle_w, max_busy_w, max_total_w)
 
         sku = _vm_sku_label(vm_size)
         sku_s = f"[bold]{sku}[/bold]" if sku and sku != "CPU" else (sku or "[dim]—[/dim]")

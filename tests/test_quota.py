@@ -8,7 +8,7 @@ import pytest
 from click.testing import CliRunner
 
 from azure_jobs.cli import main
-from azure_jobs.cli.quota import _portal_compute_url, _vm_sku_label
+from azure_jobs.cli.quota import _fmt_nodes, _parse_compute_nodes, _portal_compute_url, _vm_sku_label
 from azure_jobs.core.sku import (
     SLA_TIERS,
     SeriesQuota,
@@ -329,3 +329,30 @@ class TestAmlHelpers:
         assert "sub1" in url
         assert "rg1" in url
         assert "ws1" in url
+
+    def test_parse_compute_nodes(self):
+        props = {
+            "scaleSettings": {"maxNodeCount": 16},
+            "nodeStateCounts": {
+                "idleNodeCount": 2,
+                "runningNodeCount": 5,
+                "preparingNodeCount": 1,
+                "leavingNodeCount": 0,
+            },
+        }
+        assert _parse_compute_nodes(props) == (2, 6, 16)
+
+    def test_parse_compute_nodes_empty(self):
+        assert _parse_compute_nodes({}) == (0, 0, 0)
+
+    def test_fmt_nodes_all_zero_activity(self):
+        s = _fmt_nodes(0, 0, 16, low_priority=True)
+        assert "dim" in s  # fully dimmed
+
+    def test_fmt_nodes_busy_highlighted(self):
+        s = _fmt_nodes(0, 4, 8, low_priority=False)
+        assert "cyan" in s  # busy highlighted
+        assert "dim" in s   # idle dimmed
+
+    def test_fmt_nodes_max_zero(self):
+        assert _fmt_nodes(0, 0, 0, low_priority=False) == "[dim]0/0[/dim]"

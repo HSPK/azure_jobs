@@ -256,12 +256,15 @@ def _fetch_vc_families(
     vc_subscription_id: str,
     vc_resource_group: str,
     vc_name: str,
+    arm_client: Any = None,
 ) -> list[str]:
     """Query the virtual cluster's available instance families from quotas."""
     try:
-        from azure_jobs.core.rest_client import AzureARMClient
+        if arm_client is None:
+            from azure_jobs.core.rest_client import AzureARMClient
+            arm_client = AzureARMClient()
 
-        data = AzureARMClient().get_vc_quotas_raw(
+        data = arm_client.get_vc_quotas_raw(
             vc_subscription_id, vc_resource_group, vc_name,
         )
         managed = data.get("properties", {}).get("managed", {})
@@ -347,8 +350,6 @@ def fetch_vc_quotas(
 
     Each quota item from the API has ``{id, slaTier, limit, used}``.
     """
-    from collections import defaultdict
-
     if arm_client is None:
         from azure_jobs.core.rest_client import AzureARMClient
         arm_client = AzureARMClient()
@@ -376,14 +377,15 @@ def fetch_vc_quotas(
             raw_items.extend(region_data.get("limits", []))
 
     # Build per-series quotas
-    series_map: dict[str, SeriesQuota] = defaultdict(lambda: SeriesQuota(series=""))
+    series_map: dict[str, SeriesQuota] = {}
     for item in raw_items:
         sid = item.get("id", "")
         if not sid:
             continue
-        if sid not in series_map:
-            series_map[sid] = SeriesQuota(series=sid)
-        sq = series_map[sid]
+        sq = series_map.get(sid)
+        if sq is None:
+            sq = SeriesQuota(series=sid)
+            series_map[sid] = sq
         limit = item.get("limit", 0)
         used = item.get("used") if "used" in item else None
         sla_tier = item.get("slaTier")

@@ -30,6 +30,33 @@ _ML_SCOPE = "https://ml.azure.com/.default"
 
 
 # ---------------------------------------------------------------------------
+# Shared ARM credential helper
+# ---------------------------------------------------------------------------
+
+def _get_arm_token() -> tuple[str, float]:
+    """Acquire an ARM token via AzureCliCredential.
+
+    Returns ``(token, expires_on)`` — callers cache as needed.
+    """
+    from azure.identity import AzureCliCredential
+    tok = AzureCliCredential().get_token(_SCOPE)
+    return tok.token, tok.expires_on
+
+
+def _refresh_session_token(
+    session: requests.Session,
+    token: str,
+    expires: float,
+) -> tuple[str, float]:
+    """Return a (possibly refreshed) token, updating *session* headers."""
+    if token and time.time() < expires - 60:
+        return token, expires
+    token, expires = _get_arm_token()
+    session.headers.update({"Authorization": f"Bearer {token}"})
+    return token, expires
+
+
+# ---------------------------------------------------------------------------
 # Generic ARM REST client (shared auth + session)
 # ---------------------------------------------------------------------------
 
@@ -46,13 +73,9 @@ class AzureARMClient:
         self._session: requests.Session = requests.Session()
 
     def _ensure_token(self) -> str:
-        if self._token and time.time() < self._token_expires - 60:
-            return self._token
-        from azure.identity import AzureCliCredential
-        tok = AzureCliCredential().get_token(_SCOPE)
-        self._token = tok.token
-        self._token_expires = tok.expires_on
-        self._session.headers.update({"Authorization": f"Bearer {self._token}"})
+        self._token, self._token_expires = _refresh_session_token(
+            self._session, self._token, self._token_expires,
+        )
         return self._token
 
     def get(self, url: str, *, timeout: int = 30) -> dict[str, Any]:
@@ -200,20 +223,14 @@ class AzureMLJobsClient:
     # ---- auth ---------------------------------------------------------------
 
     def _ensure_token(self) -> str:
-        if self._token and time.time() < self._token_expires - 60:
-            return self._token
-        from azure.identity import AzureCliCredential
-        tok = AzureCliCredential().get_token(_SCOPE)
-        self._token = tok.token
-        self._token_expires = tok.expires_on
-        self._session.headers.update(
-            {"Authorization": f"Bearer {self._token}"}
+        self._token, self._token_expires = _refresh_session_token(
+            self._session, self._token, self._token_expires,
         )
         return self._token
 
     def _headers(self) -> dict[str, str]:
         self._ensure_token()
-        return {}  # token is on the session already
+        return {}
 
     def _ensure_data_token(self) -> str:
         """Get auth token for the data plane.
