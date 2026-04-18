@@ -219,6 +219,84 @@ def _build_storage_mounts(
     return inputs, outputs, path_on_compute, dataref_env
 
 
+_RUNNER_FILENAME = "aj_runner.sh"
+
+
+def _generate_runner_script(
+    request: SubmitRequest,
+    identity_client_id: str = "",
+) -> str:
+    """Generate the aj_runner.sh script that runs inside the container.
+
+    The script handles:
+    - Identity exports (Singularity UAI)
+    - Distributed env detection (MPI → PyTorch vars)
+    - NCCL configuration
+    - Rank-0-only setup with barrier
+    - User command execution
+    """
+    lines: list[str] = ["#!/bin/bash", "set -e", ""]
+
+    # --- Identity exports ---
+    if identity_client_id:
+        lines.append("# Singularity managed identity")
+        lines.append(f"export DEFAULT_IDENTITY_CLIENT_ID={identity_client_id}")
+        lines.append(f"export AZURE_CLIENT_ID={identity_client_id}")
+        lines.append("")
+
+    # --- Distributed preamble ---
+    is_distributed = request.nodes > 1 or request.processes_per_node > 1
+    if is_distributed:
+        lines.append("# Distributed training env detection")
+        lines.append('if [ -n "$OMPI_COMM_WORLD_RANK" ]; then')
+        lines.append("  export RANK=$OMPI_COMM_WORLD_RANK")
+        lines.append("  export WORLD_SIZE=$OMPI_COMM_WORLD_SIZE")
+        lines.append("  export LOCAL_RANK=$OMPI_COMM_WORLD_LOCAL_RANK")
+        lines.append("  export NODE_RANK=$((OMPI_COMM_WORLD_RANK / OMPI_COMM_WORLD_LOCAL_SIZE))")
+        lines.append("fi")
+        lines.append("")
+
+        lines.append("# Master address resolution")
+        lines.append('if [ -n "$AZ_BATCH_MASTER_NODE" ]; then')
+        lines.append('  export MASTER_ADDR=$(echo "$AZ_BATCH_MASTER_NODE" | cut -d: -f1)')
+        lines.append("fi")
+        lines.append('if [ -n "$AZ_BATCHAI_MPI_MASTER_NODE" ]; then')
+        lines.append("  export MASTER_ADDR=$AZ_BATCHAI_MPI_MASTER_NODE")
+        lines.append("fi")
+        lines.append("export MASTER_PORT=${MASTER_PORT:-6105}")
+        lines.append("")
+
+        lines.append("# NCCL tuning")
+        lines.append('export NCCL_SOCKET_IFNAME=${NCCL_SOCKET_IFNAME:-"^docker0,lo"}')
+        lines.append("")
+
+    # --- Setup commands (rank-0 only for distributed) ---
+    if request.setup_commands:
+        setup_str = "\n".join(request.setup_commands)
+        if is_distributed:
+            lines.append("# Setup (rank-0 only with barrier)")
+            lines.append('if [ "${LOCAL_RANK:-0}" = "0" ]; then')
+            for cmd in request.setup_commands:
+                lines.append(f"  {cmd}")
+            lines.append("  touch /tmp/.aj_setup_done")
+            lines.append("else")
+            lines.append("  while [ ! -f /tmp/.aj_setup_done ]; do sleep 1; done")
+            lines.append("fi")
+        else:
+            lines.append("# Setup")
+            for cmd in request.setup_commands:
+                lines.append(cmd)
+        lines.append("")
+
+    # --- User command ---
+    lines.append("# Run")
+    for cmd in request.command:
+        lines.append(cmd)
+    lines.append("")
+
+    return "\n".join(lines)
+
+
 def _build_command_str(request: SubmitRequest) -> str:
     """Build the full command string from setup + user commands.
 
@@ -439,12 +517,6 @@ def submit(request: SubmitRequest, on_status: Any = None) -> SubmitResult:
             request, client
         )
 
-        _status("code", "Uploading code…")
-        code_id = client.upload_code(
-            request.code_dir,
-            ignore_patterns=request.code_ignore or None,
-        )
-
         _status("command", "Building command…")
         distribution = _build_distribution(request)
         identity = _build_identity(request)
@@ -453,20 +525,22 @@ def submit(request: SubmitRequest, on_status: Any = None) -> SubmitResult:
         env_vars = _build_env_vars(request, dataref_env)
 
         # Singularity identity: resolve UAI client_id for storage auth
-        identity_prefix = ""
+        identity_client_id = ""
         if request.service == "sing":
             _status("identity", "Resolving Singularity identity…")
-            client_id = _resolve_sing_identity(request, client)
-            if client_id:
-                identity_prefix = (
-                    f"export DEFAULT_IDENTITY_CLIENT_ID={client_id}"
-                    f" && export AZURE_CLIENT_ID={client_id}"
-                )
+            identity_client_id = _resolve_sing_identity(request, client) or ""
 
-        # Build command with optional identity exports prepended
-        command_str = _build_command_str(request)
-        if identity_prefix:
-            command_str = f"{identity_prefix} && {command_str}"
+        # Generate runner script and inject into code upload
+        runner_script = _generate_runner_script(request, identity_client_id)
+
+        _status("code", "Uploading code…")
+        code_id = client.upload_code(
+            request.code_dir,
+            ignore_patterns=request.code_ignore or None,
+            extra_files={_RUNNER_FILENAME: runner_script},
+        )
+
+        command_str = f"bash {_RUNNER_FILENAME}"
 
         tags = _build_tags(request.tags)
         properties = dict(poc_props) if poc_props else {}

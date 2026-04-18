@@ -488,8 +488,15 @@ class AzureMLJobsClient:
         self,
         code_dir: str,
         ignore_patterns: list[str] | None = None,
+        extra_files: dict[str, str | bytes] | None = None,
     ) -> str:
         """Zip, upload code to workspace blob store, and register as code asset.
+
+        Args:
+            code_dir: Local directory to upload.
+            ignore_patterns: Glob patterns to exclude.
+            extra_files: Extra files to inject into the zip root.
+                Keys are archive paths, values are str or bytes content.
 
         Returns the ARM resource ID of the created code version.
         """
@@ -500,6 +507,11 @@ class AzureMLJobsClient:
             for fp in sorted(code_path.rglob("*")):
                 if fp.is_file() and not _should_ignore(fp, code_path, ignore_patterns):
                     zf.write(fp, fp.relative_to(code_path))
+            # Inject extra files (e.g. aj_runner.sh)
+            if extra_files:
+                for name, content in extra_files.items():
+                    data = content.encode() if isinstance(content, str) else content
+                    zf.writestr(name, data)
         code_bytes = buf.getvalue()
 
         # 2. Compute deterministic hash for dedup
