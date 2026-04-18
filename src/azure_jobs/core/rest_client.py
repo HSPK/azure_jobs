@@ -514,20 +514,38 @@ class AzureMLJobsClient:
 
         self._upload_blob(blob_url, code_bytes, sas_info)
 
-        # 4. Register as code version
+        # 4. Register as code version (version must be a positive integer)
+        #    Use hash in the blob path for dedup; use next available version number
         code_name = "aj-code"
         self._ensure_token()
+
+        # Find the next version number by listing existing versions
+        list_url = (
+            f"{self._base}/codes/{code_name}/versions"
+            f"?api-version={_API_VERSION}&$orderby=createdtime%20desc&$top=1"
+        )
+        try:
+            lr = self._session.get(list_url, timeout=15)
+            if lr.status_code == 200:
+                items = lr.json().get("value", [])
+                if items:
+                    latest = int(items[0].get("name", "0"))
+                    code_version = str(latest + 1)
+                else:
+                    code_version = "1"
+            else:
+                code_version = "1"
+        except Exception:
+            code_version = "1"
+
+        code_uri = f"{account_url}/{container}/LocalUpload/{code_hash}"
         url = (
             f"{self._base}/codes/{code_name}"
-            f"/versions/{code_hash}?api-version={_API_VERSION}"
+            f"/versions/{code_version}?api-version={_API_VERSION}"
         )
         body = {
             "properties": {
-                "codeUri": f"azureml://subscriptions/{self.subscription_id}"
-                f"/resourceGroups/{self.resource_group}"
-                f"/providers/Microsoft.MachineLearningServices"
-                f"/workspaces/{self.workspace_name}"
-                f"/datastores/workspaceblobstore/paths/LocalUpload/{code_hash}",
+                "codeUri": code_uri,
                 "isAnonymous": True,
             }
         }
@@ -631,7 +649,20 @@ class AzureMLJobsClient:
             f"?api-version={_API_VERSION}"
         )
         resp = self._session.put(url, json=body, timeout=60)
-        resp.raise_for_status()
+        if resp.status_code >= 400:
+            # Include server error detail in the exception
+            try:
+                detail = resp.json().get("error", {}).get("message", "")
+                inner = resp.json().get("error", {}).get("details", [])
+                if inner:
+                    detail += " | " + str([d.get("message", "") for d in inner])
+            except Exception:
+                detail = resp.text[:500]
+            from requests.exceptions import HTTPError
+            raise HTTPError(
+                f"{resp.status_code}: {detail}",
+                response=resp,
+            )
         return resp.json()
 
     # ---- list jobs ----------------------------------------------------------
