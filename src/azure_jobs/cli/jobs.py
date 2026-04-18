@@ -368,12 +368,12 @@ def _median(vals: list[int]) -> int:
 
 @job_group.command(name="stats")
 @click.option(
-    "-n", "--last", default=100, show_default=True,
+    "-n", "--last", default=None, type=int,
     help="Max jobs to analyse (per workspace with --all)",
 )
 @click.option(
-    "--days", default=None, type=int,
-    help="Only include jobs from the last N days",
+    "-d", "--days", default=7, show_default=True, type=int,
+    help="Only include jobs from the last N days (0 = no limit)",
 )
 @click.option(
     "-a", "--all", "all_ws", is_flag=True, default=False,
@@ -381,8 +381,8 @@ def _median(vals: list[int]) -> int:
 )
 @click.option("--ws", "ws_name", default=None, help="Workspace name override")
 def job_stats(
-    last: int,
-    days: int | None,
+    last: int | None,
+    days: int,
     all_ws: bool,
     ws_name: str | None,
 ) -> None:
@@ -397,13 +397,16 @@ def job_stats(
     from azure_jobs.utils.ui import console, print_table
 
     cutoff: datetime | None = None
-    if days is not None:
+    if days:
         cutoff = dt.now(tz.utc) - timedelta(days=days)
 
+    # Without -n and without --days, default to a reasonable scan limit
+    max_jobs = last if last is not None else 10000
+
     if all_ws:
-        jobs = _fetch_jobs_all_ws(last, cutoff_utc=cutoff)
+        jobs = _fetch_jobs_all_ws(max_jobs, cutoff_utc=cutoff)
     else:
-        jobs = _fetch_jobs_for_stats(last, ws_name, cutoff_utc=cutoff)
+        jobs = _fetch_jobs_for_stats(max_jobs, ws_name, cutoff_utc=cutoff)
 
     # Apply cutoff filter to collected jobs (in case a partial page slipped)
     if cutoff:
