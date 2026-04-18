@@ -18,10 +18,8 @@ Optimisations
 from __future__ import annotations
 
 import hashlib
-import io
 import re
 import time
-import zipfile
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote, urlencode
@@ -213,8 +211,14 @@ def _should_ignore(
 ) -> bool:
     """Check if a file should be excluded from code upload."""
     rel = str(fp.relative_to(root))
-    for skip in ("__pycache__", ".git", ".venv", "node_modules", ".azure_jobs"):
-        if skip in rel.split("/"):
+    parts = rel.split("/")
+    for skip in ("__pycache__", ".git", ".venv", "node_modules"):
+        if skip in parts:
+            return True
+    # Skip .azure_jobs metadata but keep .azure_jobs/scripts/
+    if ".azure_jobs" in parts:
+        aj_idx = parts.index(".azure_jobs")
+        if aj_idx + 1 >= len(parts) or parts[aj_idx + 1] != "scripts":
             return True
     if not patterns:
         return False
@@ -490,65 +494,65 @@ class AzureMLJobsClient:
         ignore_patterns: list[str] | None = None,
         extra_files: dict[str, str | bytes] | None = None,
     ) -> str:
-        """Zip, upload code to workspace blob store, and register as code asset.
+        """Upload code files to workspace blob store and register as code asset.
+
+        Uploads individual files (not a zip) so Azure ML can mount
+        the blob directory directly as the code directory at runtime.
 
         Args:
             code_dir: Local directory to upload.
             ignore_patterns: Glob patterns to exclude.
-            extra_files: Extra files to inject into the zip root.
-                Keys are archive paths, values are str or bytes content.
+            extra_files: Extra files to inject into the code root.
+                Keys are relative paths, values are str or bytes content.
 
         Returns the ARM resource ID of the created code version.
         """
-        # 1. Zip the code directory
+        # 1. Collect all files with relative paths
         code_path = Path(code_dir).resolve()
-        buf = io.BytesIO()
-        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-            for fp in sorted(code_path.rglob("*")):
-                if fp.is_file() and not _should_ignore(fp, code_path, ignore_patterns):
-                    zf.write(fp, fp.relative_to(code_path))
-            # Inject extra files (e.g. aj_runner.sh)
-            if extra_files:
-                for name, content in extra_files.items():
-                    data = content.encode() if isinstance(content, str) else content
-                    zf.writestr(name, data)
-        code_bytes = buf.getvalue()
+        files: dict[str, bytes] = {}
+        for fp in sorted(code_path.rglob("*")):
+            if fp.is_file() and not _should_ignore(fp, code_path, ignore_patterns):
+                rel = str(fp.relative_to(code_path))
+                files[rel] = fp.read_bytes()
+        if extra_files:
+            for name, content in extra_files.items():
+                files[name] = content.encode() if isinstance(content, str) else content
 
         # 2. Compute deterministic hash for dedup
-        code_hash = hashlib.sha256(code_bytes).hexdigest()[:16]
+        hasher = hashlib.sha256()
+        for rel_path in sorted(files):
+            hasher.update(rel_path.encode())
+            hasher.update(hashlib.sha256(files[rel_path]).digest())
+        code_hash = hasher.hexdigest()[:16]
 
-        # 3. Upload to workspace default blob store via SAS
+        # 3. Upload each file individually to blob store
         account_name, container, account_url = self._get_default_storage()
-
-        blob_path = f"LocalUpload/{code_hash}/code.zip"
         sas_info = self._get_blob_sas(account_name, container)
-        blob_url = f"{account_url}/{container}/{blob_path}"
 
-        self._upload_blob(blob_url, code_bytes, sas_info)
+        from concurrent.futures import ThreadPoolExecutor, as_completed
 
-        # 4. Register as code version (version must be a positive integer)
-        #    Use hash in the blob path for dedup; use next available version number
+        def _upload_one(rel_path: str, data: bytes) -> None:
+            blob_path = f"LocalUpload/{code_hash}/{rel_path}"
+            blob_url = f"{account_url}/{container}/{blob_path}"
+            self._upload_blob(blob_url, data, sas_info)
+
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            futures = {
+                pool.submit(_upload_one, rel, data): rel
+                for rel, data in files.items()
+            }
+            for fut in as_completed(futures):
+                fut.result()  # propagate exceptions
+
+        # 4. Register as code version (content-addressed by hash)
+        #    Use hash-derived integer as version name — same content maps to
+        #    the same version (idempotent PUT), different content gets a new one.
         code_name = "aj-code"
         self._ensure_token()
 
-        # Find the next version number by listing existing versions
-        list_url = (
-            f"{self._base}/codes/{code_name}/versions"
-            f"?api-version={_API_VERSION}&$orderby=createdtime%20desc&$top=1"
-        )
-        try:
-            lr = self._session.get(list_url, timeout=15)
-            if lr.status_code == 200:
-                items = lr.json().get("value", [])
-                if items:
-                    latest = int(items[0].get("name", "0"))
-                    code_version = str(latest + 1)
-                else:
-                    code_version = "1"
-            else:
-                code_version = "1"
-        except Exception:
-            code_version = "1"
+        # Convert first 7 hex chars to a stable positive integer (max ~268M,
+        # well within Azure ML's int32 version limit).
+        code_version = str(int(code_hash[:7], 16) + 1)
 
         code_uri = f"{account_url}/{container}/LocalUpload/{code_hash}"
         url = (
@@ -593,12 +597,13 @@ class AzureMLJobsClient:
         blob_url: str,
         data: bytes,
         sas_info: dict[str, Any],
+        content_type: str = "application/octet-stream",
     ) -> None:
         """Upload bytes to Azure Blob Storage via SAS, shared key, or bearer token."""
         headers: dict[str, str] = {
             "x-ms-blob-type": "BlockBlob",
             "x-ms-version": "2024-11-04",
-            "Content-Type": "application/zip",
+            "Content-Type": content_type,
             "Content-Length": str(len(data)),
         }
 
@@ -628,7 +633,7 @@ class AzureMLJobsClient:
 
             string_to_sign = (
                 f"PUT\n\n\n{len(data)}\n\n"
-                f"application/zip\n\n\n\n\n\n\n"
+                f"{content_type}\n\n\n\n\n\n\n"
                 f"x-ms-blob-type:BlockBlob\n"
                 f"x-ms-date:{now}\n"
                 f"x-ms-version:2024-11-04\n"
