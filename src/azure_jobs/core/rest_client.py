@@ -871,6 +871,7 @@ def _extract_rest_job(raw: dict[str, Any]) -> dict[str, Any]:
         "environment": env_str,
         "command": (props.get("command", "") or "")[:200],
         "created": created,
+        "created_utc": created_raw[:19] if created_raw else "",
         "created_by": created_by,
         "error": error_msg,
     }

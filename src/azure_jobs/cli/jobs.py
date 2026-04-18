@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta
 from typing import Any
 
 import click
@@ -256,26 +257,101 @@ def job_logs(job_id: str) -> None:
 def _fetch_jobs_for_stats(
     n: int,
     ws_name: str | None,
+    *,
+    cutoff_utc: datetime | None = None,
 ) -> list[dict[str, Any]]:
-    """Fetch *n* terminal-state jobs for statistics aggregation."""
+    """Fetch up to *n* jobs for statistics.  Stops early if *cutoff_utc* is
+    set and the page contains only jobs older than the cutoff."""
     from azure_jobs.core.rest_client import create_rest_client
     from azure_jobs.utils.ui import console
 
     client = create_rest_client(ws_name=ws_name)
+    return _fetch_jobs_from_client(client, n, cutoff_utc=cutoff_utc, console=console)
+
+
+def _fetch_jobs_all_ws(
+    n_per_ws: int,
+    *,
+    cutoff_utc: datetime | None = None,
+) -> list[dict[str, Any]]:
+    """Fetch jobs from all discovered workspaces."""
+    from azure_jobs.core.rest_client import AzureARMClient, AzureMLJobsClient
+    from azure_jobs.utils.ui import console, warning
+
+    arm = AzureARMClient()
+    with console.status(
+        "[bold cyan]Discovering workspaces…[/bold cyan]", spinner="dots",
+    ):
+        workspaces = arm.list_ml_workspaces()
+
+    if not workspaces:
+        warning("No workspaces found")
+        return []
+
+    all_jobs: list[dict[str, Any]] = []
+    for idx, ws in enumerate(workspaces, 1):
+        ws_name = ws.get("name", "")
+        with console.status(
+            f"[bold cyan]Fetching jobs ({idx}/{len(workspaces)}) {ws_name}…[/bold cyan]",
+            spinner="dots",
+        ):
+            try:
+                client = AzureMLJobsClient(
+                    subscription_id=ws["subscriptionId"],
+                    resource_group=ws["resourceGroup"],
+                    workspace_name=ws_name,
+                )
+                jobs = _fetch_jobs_from_client(
+                    client, n_per_ws, cutoff_utc=cutoff_utc,
+                    label=ws_name,
+                )
+                # Tag each job with its workspace for display
+                for j in jobs:
+                    j["_workspace"] = ws_name
+                all_jobs.extend(jobs)
+            except Exception:
+                pass  # skip workspaces we can't access
+    return all_jobs
+
+
+def _fetch_jobs_from_client(
+    client: Any,
+    n: int,
+    *,
+    cutoff_utc: datetime | None = None,
+    console: Any = None,
+    label: str = "",
+) -> list[dict[str, Any]]:
+    """Fetch up to *n* jobs from one workspace client, stopping at *cutoff_utc*."""
+    from azure_jobs.utils.time import _parse_utc
+
     jobs: list[dict[str, Any]] = []
     next_link = None
 
-    with console.status("[bold cyan]Fetching jobs…[/bold cyan]", spinner="dots") as st:
-        while len(jobs) < n:
-            page, next_link = client.list_jobs_page(
-                next_link=next_link, top=n, list_view_type="ActiveOnly",
-            )
-            if not page:
+    while len(jobs) < n:
+        page, next_link = client.list_jobs_page(
+            next_link=next_link, top=n, list_view_type="ActiveOnly",
+        )
+        if not page:
+            break
+
+        past_cutoff = False
+        for j in page:
+            if cutoff_utc:
+                raw = j.get("created_utc", "")
+                if raw:
+                    try:
+                        if _parse_utc(raw) < cutoff_utc:
+                            past_cutoff = True
+                            break
+                    except ValueError:
+                        pass
+            jobs.append(j)
+            if len(jobs) >= n:
                 break
-            jobs.extend(page)
-            st.update(f"[bold cyan]Fetching… {len(jobs)} jobs[/bold cyan]")
-            if not next_link:
-                break
+
+        if past_cutoff or not next_link:
+            break
     return jobs[:n]
 
 
@@ -293,19 +369,57 @@ def _median(vals: list[int]) -> int:
 @job_group.command(name="stats")
 @click.option(
     "-n", "--last", default=100, show_default=True,
-    help="Number of recent jobs to analyse",
+    help="Max jobs to analyse (per workspace with --all)",
+)
+@click.option(
+    "--days", default=None, type=int,
+    help="Only include jobs from the last N days",
+)
+@click.option(
+    "-a", "--all", "all_ws", is_flag=True, default=False,
+    help="Aggregate across all workspaces",
 )
 @click.option("--ws", "ws_name", default=None, help="Workspace name override")
-def job_stats(last: int, ws_name: str | None) -> None:
+def job_stats(
+    last: int,
+    days: int | None,
+    all_ws: bool,
+    ws_name: str | None,
+) -> None:
     """Show statistics for recent jobs."""
     from collections import defaultdict
+    from datetime import datetime as dt
+    from datetime import timezone as tz
 
     from rich.table import Table
 
     from azure_jobs.utils.time import format_duration
     from azure_jobs.utils.ui import console, print_table
 
-    jobs = _fetch_jobs_for_stats(last, ws_name)
+    cutoff: datetime | None = None
+    if days is not None:
+        cutoff = dt.now(tz.utc) - timedelta(days=days)
+
+    if all_ws:
+        jobs = _fetch_jobs_all_ws(last, cutoff_utc=cutoff)
+    else:
+        jobs = _fetch_jobs_for_stats(last, ws_name, cutoff_utc=cutoff)
+
+    # Apply cutoff filter to collected jobs (in case a partial page slipped)
+    if cutoff:
+        from azure_jobs.utils.time import _parse_utc
+        filtered = []
+        for j in jobs:
+            raw = j.get("created_utc", "")
+            if raw:
+                try:
+                    if _parse_utc(raw) < cutoff:
+                        continue
+                except ValueError:
+                    pass
+            filtered.append(j)
+        jobs = filtered
+
     if not jobs:
         console.print("[dim]No jobs found.[/dim]")
         return
@@ -324,7 +438,6 @@ def job_stats(last: int, ws_name: str | None) -> None:
     failed = by_status.get("Failed", 0)
     canceled = by_status.get("Canceled", 0) + by_status.get("CancelRequested", 0)
     active = sum(by_status[s] for s in _ACTIVE if s in by_status)
-    terminal = sum(by_status[s] for s in _TERMINAL if s in by_status)
 
     # Success rate = completed / (completed + failed)
     decided = completed + failed
@@ -349,7 +462,11 @@ def job_stats(last: int, ws_name: str | None) -> None:
 
     # ── Overview panel ────────────────────────────────────────────────
     console.print()
-    console.print(f"[bold]📊 Job Statistics[/bold]  [dim](last {total} jobs)[/dim]")
+    scope = f"last {days}d" if days else f"last {total}"
+    if all_ws:
+        ws_count = len({j.get("_workspace", "") for j in jobs})
+        scope += f", {ws_count} workspace{'s' if ws_count != 1 else ''}"
+    console.print(f"[bold]📊 Job Statistics[/bold]  [dim]({scope}, {total} jobs)[/dim]")
     console.print()
 
     parts = [
@@ -389,7 +506,6 @@ def job_stats(last: int, ws_name: str | None) -> None:
         if q is not None and q >= 0 and st in _TERMINAL:
             es["queue"].append(q)
 
-    # Sort by total desc
     sorted_exps = sorted(exp_stats.items(), key=lambda x: x[1]["total"], reverse=True)
 
     tbl = Table(title="By Experiment", title_style="bold", show_edge=False,
@@ -407,7 +523,6 @@ def job_stats(last: int, ws_name: str | None) -> None:
         exp_rate = f"{es['completed'] / dec * 100:.0f}%" if dec else "—"
         exp_dur = format_duration(sum(es["dur"]) // len(es["dur"])) if es["dur"] else "—"
 
-        # Dim the row if all jobs are canceled with no completions
         row_style = "dim" if dec == 0 and es["canceled"] > 0 else None
         tbl.add_row(
             exp_name, str(es["total"]),
@@ -468,13 +583,43 @@ def job_stats(last: int, ws_name: str | None) -> None:
 
     print_table(tbl2)
 
+    # ── By workspace (only with --all) ────────────────────────────────
+    if all_ws:
+        ws_stats: dict[str, dict[str, int]] = defaultdict(
+            lambda: {"total": 0, "completed": 0, "failed": 0}
+        )
+        for j in jobs:
+            wsn = j.get("_workspace") or "unknown"
+            ws = ws_stats[wsn]
+            ws["total"] += 1
+            st = j.get("status", "")
+            if st == "Completed":
+                ws["completed"] += 1
+            elif st == "Failed":
+                ws["failed"] += 1
+
+        sorted_ws = sorted(ws_stats.items(), key=lambda x: x[1]["total"], reverse=True)
+        tbl_ws = Table(title="By Workspace", title_style="bold", show_edge=False,
+                       pad_edge=False)
+        tbl_ws.add_column("Workspace", style="bold")
+        tbl_ws.add_column("Jobs", justify="right")
+        tbl_ws.add_column("✓", justify="right", style="green")
+        tbl_ws.add_column("✗", justify="right", style="red")
+        tbl_ws.add_column("Rate", justify="right")
+
+        for wsn, wst in sorted_ws:
+            dec = wst["completed"] + wst["failed"]
+            w_rate = f"{wst['completed'] / dec * 100:.0f}%" if dec else "—"
+            tbl_ws.add_row(wsn, str(wst["total"]),
+                           str(wst["completed"]), str(wst["failed"]), w_rate)
+        print_table(tbl_ws)
+
     # ── By user ───────────────────────────────────────────────────────
     user_counts: dict[str, dict[str, int]] = defaultdict(
         lambda: {"total": 0, "completed": 0, "failed": 0}
     )
     for j in jobs:
         user = j.get("created_by") or "unknown"
-        # Shorten email to alias
         if "@" in user:
             user = user.split("@")[0]
         uc = user_counts[user]
