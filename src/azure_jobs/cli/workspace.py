@@ -18,13 +18,13 @@ def ws_list() -> None:
     from rich.table import Table
 
     from azure_jobs.core.config import (
-        _detect_subscription,
-        _detect_workspaces,
+        detect_subscription,
+        detect_workspaces,
         read_config,
     )
     from azure_jobs.utils.ui import console, warning
 
-    sub = _detect_subscription()
+    sub = detect_subscription()
     if not sub:
         raise click.ClickException(
             "Cannot detect subscription. Run `az login` first."
@@ -35,7 +35,7 @@ def ws_list() -> None:
         f" ({sub['subscription_id'][:8]}…)[/dim]"
     )
     with console.status("[bold cyan]Listing workspaces…[/bold cyan]", spinner="dots"):
-        workspaces = _detect_workspaces(sub["subscription_id"])
+        workspaces = detect_workspaces(sub["subscription_id"])
 
     if not workspaces:
         warning("No ML workspaces found in this subscription")
@@ -111,22 +111,22 @@ def ws_set(name: str | None) -> None:
     With NAME, sets the workspace by exact name.
     """
     from azure_jobs.core.config import (
-        _detect_subscription,
-        _detect_workspaces,
-        _pick_workspace,
+        detect_subscription,
+        detect_workspaces,
+        pick_workspace,
         read_config,
         write_config,
     )
     from azure_jobs.utils.ui import console, success
 
-    sub = _detect_subscription()
+    sub = detect_subscription()
     if not sub:
         raise click.ClickException(
             "Cannot detect subscription. Run `az login` first."
         )
 
     with console.status("[bold cyan]Listing workspaces…[/bold cyan]", spinner="dots"):
-        workspaces = _detect_workspaces(sub["subscription_id"])
+        workspaces = detect_workspaces(sub["subscription_id"])
 
     if not workspaces:
         raise click.ClickException("No ML workspaces found in this subscription")
@@ -140,7 +140,7 @@ def ws_set(name: str | None) -> None:
             )
         picked = match[0]
     else:
-        picked = _pick_workspace(workspaces)
+        picked = pick_workspace(workspaces)
         if not picked:
             picked = {
                 "name": click.prompt("Workspace name"),

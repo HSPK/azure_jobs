@@ -24,8 +24,6 @@ def image_list(query: str | None) -> None:
     """
     from rich.table import Table
 
-    from azure_jobs.core.config import _az_json
-
     with console.status("[bold cyan]Fetching base images…[/bold cyan]", spinner="dots"):
         images = _fetch_sing_images()
 
@@ -71,15 +69,15 @@ def image_list(query: str | None) -> None:
 
 def _fetch_sing_images() -> list[dict]:
     """Fetch Singularity base images via Azure Management API."""
-    from azure_jobs.core.config import _az_json
+    from azure_jobs.core.config import az_json
 
     # Find a working subscription
-    subs = _az_json(["account", "list", "--query", "[].id", "-o", "json"])
+    subs = az_json(["account", "list", "--query", "[].id", "-o", "json"])
     if not subs:
         return []
     for sub_id in subs:
         try:
-            data = _az_json([
+            data = az_json([
                 "rest", "--method", "get",
                 "--url",
                 f"https://management.azure.com/subscriptions/{sub_id}"

@@ -62,9 +62,9 @@ class WorkspaceMixin:
     @work(thread=True, exclusive=True, group="ws-detect")
     def _detect_workspaces_then_pick(self: "AjDashboard") -> None:
         worker = get_current_worker()
-        from azure_jobs.core.config import _detect_subscription, _detect_workspaces
+        from azure_jobs.core.config import detect_subscription, detect_workspaces
 
-        sub = _detect_subscription()
+        sub = detect_subscription()
         if worker.is_cancelled:
             return
         if not sub:
@@ -73,7 +73,7 @@ class WorkspaceMixin:
             )
             return
         sub_id = sub["subscription_id"]
-        wss = _detect_workspaces(sub_id)
+        wss = detect_workspaces(sub_id)
         if not worker.is_cancelled:
             self.call_from_thread(self._on_workspaces_ready, sub_id, wss)
 

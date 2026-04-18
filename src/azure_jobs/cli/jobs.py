@@ -102,20 +102,14 @@ def job_list(
     show_cloud_jobs_table(all_jobs[:last])
 
 
-@job_group.command(name="show")
-@click.argument("name")
-@click.option("--ws", "ws_name", default=None, help="Workspace name override")
-def job_show(name: str, ws_name: str | None) -> None:
-    """Show detailed info for a job.
-
-    NAME can be the short aj ID (e.g. f8e7eb32) or the full Azure job name.
-    """
+def _fetch_and_show_job(job_id: str, ws_name: str | None = None) -> None:
+    """Resolve *job_id*, fetch via REST, and display details."""
     from requests.exceptions import HTTPError
 
     from azure_jobs.core.rest_client import create_rest_client
     from azure_jobs.utils.ui import console, error, show_job_detail
 
-    name = _resolve_job_id(name)
+    name = _resolve_job_id(job_id)
     client = create_rest_client(ws_name=ws_name)
 
     try:
@@ -131,6 +125,17 @@ def job_show(name: str, ws_name: str | None) -> None:
     show_job_detail(job)
 
 
+@job_group.command(name="show")
+@click.argument("name")
+@click.option("--ws", "ws_name", default=None, help="Workspace name override")
+def job_show(name: str, ws_name: str | None) -> None:
+    """Show detailed info for a job.
+
+    NAME can be the short aj ID (e.g. f8e7eb32) or the full Azure job name.
+    """
+    _fetch_and_show_job(name, ws_name=ws_name)
+
+
 # ---------------------------------------------------------------------------
 # Existing commands (status, cancel, logs)
 # ---------------------------------------------------------------------------
@@ -143,25 +148,7 @@ def job_status(job_id: str) -> None:
 
     JOB_ID can be the short aj ID (e.g. f8e7eb32) or the full Azure job name.
     """
-    from requests.exceptions import HTTPError
-
-    from azure_jobs.core.rest_client import create_rest_client
-    from azure_jobs.utils.ui import console, error, show_job_detail
-
-    azure_name = _resolve_job_id(job_id)
-    client = create_rest_client()
-
-    try:
-        with console.status("[bold cyan]Querying job status…[/bold cyan]", spinner="dots"):
-            job = client.get_job(azure_name)
-    except HTTPError as exc:
-        if exc.response is not None and exc.response.status_code == 404:
-            error(f"Job not found: [bold]{azure_name}[/bold]")
-        else:
-            error(f"Failed to fetch job: {exc}")
-        raise SystemExit(1)
-
-    show_job_detail(job)
+    _fetch_and_show_job(job_id)
 
 
 @job_group.command(name="cancel")

@@ -30,9 +30,9 @@ def config_timezone(tz: str | None) -> None:
         return
 
     # Validate the timezone name
-    from azure_jobs.utils.time import _resolve_tz
+    from azure_jobs.utils.time import resolve_tz
     try:
-        _resolve_tz(tz)
+        resolve_tz(tz)
     except Exception:
         console.print(f"[error]✗[/error] Unknown timezone: {tz}")
         raise SystemExit(1)

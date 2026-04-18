@@ -17,7 +17,7 @@ def auth_group() -> None:
 @auth_group.command(name="status")
 def auth_status() -> None:
     """Show current Azure login status, subscription, and credential health."""
-    from azure_jobs.core.config import _az_json
+    from azure_jobs.core.config import az_json
     from azure_jobs.utils.ui import console
     from rich.panel import Panel
     from rich.table import Table
@@ -25,7 +25,7 @@ def auth_status() -> None:
     rows: list[tuple[str, str]] = []
 
     # ── 1. az CLI login ──
-    account = _az_json(["account", "show"])
+    account = az_json(["account", "show"])
     if account is None:
         console.print("[error]✗[/error] Not logged in (or Azure CLI not installed)")
         console.print("  Run [bold]az login[/bold] to authenticate")
@@ -88,8 +88,8 @@ def auth_login() -> None:
 
     console.print("[info]ℹ[/info] Opening Azure login…")
     try:
-        from azure_jobs.core.config import _find_az
-        subprocess.run([_find_az(), "login"], check=False)
+        from azure_jobs.core.config import find_az
+        subprocess.run([find_az(), "login"], check=False)
     except FileNotFoundError:
         console.print("[error]✗[/error] Azure CLI not installed")
         console.print("  Install: https://aka.ms/installazurecli")
@@ -102,9 +102,9 @@ def auth_logout() -> None:
     from azure_jobs.utils.ui import console
 
     try:
-        from azure_jobs.core.config import _find_az
+        from azure_jobs.core.config import find_az
         result = subprocess.run(
-            [_find_az(), "logout"],
+            [find_az(), "logout"],
             capture_output=True,
             text=True,
             timeout=15,

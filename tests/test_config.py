@@ -5,7 +5,7 @@ import pytest
 
 from azure_jobs.core.config import (
     read_config, write_config, get_workspace_config, get_defaults, save_defaults,
-    _detect_subscription, _detect_workspaces, _pick_workspace,
+    detect_subscription, detect_workspaces, pick_workspace,
 )
 
 
@@ -82,7 +82,7 @@ class TestDetectSubscription:
                 stderr="",
             )
         monkeypatch.setattr("azure_jobs.core.config.subprocess.run", mock_run)
-        info = _detect_subscription()
+        info = detect_subscription()
         assert info["subscription_id"] == "sub-abc"
         assert info["subscription_name"] == "My Sub"
 
@@ -91,7 +91,7 @@ class TestDetectSubscription:
             "azure_jobs.core.config.subprocess.run",
             lambda *a, **kw: (_ for _ in ()).throw(FileNotFoundError("no az")),
         )
-        assert _detect_subscription() is None
+        assert detect_subscription() is None
 
 
 class TestDetectWorkspaces:
@@ -107,7 +107,7 @@ class TestDetectWorkspaces:
                 stdout=json.dumps(ws_data), stderr="",
             )
         monkeypatch.setattr("azure_jobs.core.config.subprocess.run", mock_run)
-        result = _detect_workspaces("sub-123")
+        result = detect_workspaces("sub-123")
         assert len(result) == 2
         assert result[0] == {"name": "WS1", "resource_group": "RG1", "location": "eastus"}
 
@@ -116,7 +116,7 @@ class TestDetectWorkspaces:
             "azure_jobs.core.config.subprocess.run",
             lambda *a, **kw: (_ for _ in ()).throw(FileNotFoundError()),
         )
-        assert _detect_workspaces("sub-123") == []
+        assert detect_workspaces("sub-123") == []
 
 
 class TestPickWorkspace:
@@ -126,14 +126,14 @@ class TestPickWorkspace:
             {"name": "WS2", "resource_group": "RG2", "location": "westus"},
         ]
         monkeypatch.setattr("click.prompt", lambda *a, **kw: 2)
-        picked = _pick_workspace(workspaces)
+        picked = pick_workspace(workspaces)
         assert picked["name"] == "WS2"
         assert picked["resource_group"] == "RG2"
 
     def test_zero_returns_none_for_manual(self, monkeypatch):
         workspaces = [{"name": "WS1", "resource_group": "RG1", "location": "eastus"}]
         monkeypatch.setattr("click.prompt", lambda *a, **kw: 0)
-        assert _pick_workspace(workspaces) is None
+        assert pick_workspace(workspaces) is None
 
 
 class TestGetWorkspaceConfig:

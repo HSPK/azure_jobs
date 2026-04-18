@@ -28,6 +28,9 @@ _API_VERSION = "2024-04-01"
 _SCOPE = "https://management.azure.com/.default"
 _ML_SCOPE = "https://ml.azure.com/.default"
 
+_RE_TOP_SEARCH = re.compile(r'[\$%24]top=')
+_RE_TOP_SUB = re.compile(r'([\$%24]top=)\d+')
+
 
 # ---------------------------------------------------------------------------
 # Shared ARM credential helper
@@ -358,8 +361,8 @@ class AzureMLJobsClient:
     @staticmethod
     def _patch_top(url: str, top: int) -> str:
         """Ensure ``$top=<top>`` in a server-returned nextLink URL."""
-        if re.search(r'[\$%24]top=', url):
-            return re.sub(r'([\$%24]top=)\d+', rf'\g<1>{top}', url)
+        if _RE_TOP_SEARCH.search(url):
+            return _RE_TOP_SUB.sub(rf'\g<1>{top}', url)
         sep = "&" if "?" in url else "?"
         return f"{url}{sep}$top={top}"
 
@@ -441,7 +444,33 @@ class AzureMLJobsClient:
         return data.get("logFiles", {}) or {}
 
 
-# ---- extraction ------------------------------------------------------------
+# ---- extraction helpers ----------------------------------------------------
+
+
+def _extract_error_message(err: dict | str | None) -> str:
+    """Walk nested ``innerError`` chain and return the most specific message."""
+    if not err:
+        return ""
+    if isinstance(err, dict):
+        code = err.get("code", "")
+        msg = err.get("message", "")
+        inner = err.get("innerError") or err.get("inner_error")
+        while inner and isinstance(inner, dict):
+            inner_msg = inner.get("message", "")
+            if inner_msg:
+                msg = inner_msg
+            inner = inner.get("innerError") or inner.get("inner_error")
+        if code and msg:
+            return f"{code}: {msg}"[:500]
+        return (msg or code or str(err))[:500]
+    return str(err)[:500]
+
+
+def _trim_arm_id(arm_id: str) -> str:
+    """Extract the trailing name segment from an ARM resource ID."""
+    if "/" in arm_id:
+        return arm_id.rstrip("/").rsplit("/", 1)[-1]
+    return arm_id
 
 
 def _extract_rest_job(raw: dict[str, Any]) -> dict[str, Any]:
@@ -466,19 +495,15 @@ def _extract_rest_job(raw: dict[str, Any]) -> dict[str, Any]:
         queue_time = calc_duration(created_raw[:19], start)
 
     # Compute — trim ARM ID to short name
-    compute = props.get("computeId", "") or ""
-    if "/" in compute:
-        compute = compute.rstrip("/").rsplit("/", 1)[-1]
+    compute = _trim_arm_id(props.get("computeId", "") or "")
 
     # Tags — filter out internal AML system tags
     tags = props.get("tags", {}) or {}
     tags = {k: v for k, v in tags.items() if not k.startswith("_aml_system_")}
     tags_str = ", ".join(f"{k}={v}" for k, v in tags.items()) if tags else ""
 
-    # Environment
-    env_str = props.get("environmentId", "") or ""
-    if "/" in env_str:
-        env_str = env_str.rstrip("/").rsplit("/", 1)[-1]
+    # Environment — trim ARM ID and strip version suffix
+    env_str = _trim_arm_id(props.get("environmentId", "") or "")
     if ":" in env_str:
         env_str = env_str.rsplit(":", 1)[0]
 
@@ -488,26 +513,8 @@ def _extract_rest_job(raw: dict[str, Any]) -> dict[str, Any]:
     # Created by (user)
     created_by = sys_data.get("createdBy", "") or ""
 
-    # Error — dig into nested innerError for more detail
-    error_msg = ""
-    err = props.get("error", None)
-    if err:
-        if isinstance(err, dict):
-            code = err.get("code", "")
-            msg = err.get("message", "")
-            # Walk innerError chain for more specific messages
-            inner = err.get("innerError") or err.get("inner_error")
-            while inner and isinstance(inner, dict):
-                inner_msg = inner.get("message", "")
-                if inner_msg:
-                    msg = inner_msg
-                inner = inner.get("innerError") or inner.get("inner_error")
-            if code and msg:
-                error_msg = f"{code}: {msg}"[:500]
-            else:
-                error_msg = (msg or code or str(err))[:500]
-        else:
-            error_msg = str(err)[:500]
+    # Error
+    error_msg = _extract_error_message(props.get("error", None))
 
     # Portal URL
     services = props.get("services", {}) or {}

@@ -16,7 +16,7 @@ _DEFAULT_TZ = "Asia/Shanghai"
 _tz_cache: dict[str, Any] = {}
 
 
-def _resolve_tz(name: str) -> Any:
+def resolve_tz(name: str) -> Any:
     """Resolve a timezone name to a ``tzinfo`` object.
 
     Tries ``zoneinfo`` (Python 3.9+), then falls back to a fixed UTC+8
@@ -43,7 +43,7 @@ _display_tz_name: str | None = None
 
 def get_display_tz() -> Any:
     """Return the configured display timezone (cached after first read)."""
-    return _resolve_tz(get_display_tz_name())
+    return resolve_tz(get_display_tz_name())
 
 
 def get_display_tz_name() -> str:

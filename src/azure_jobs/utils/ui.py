@@ -13,6 +13,8 @@ from typing import Any
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
+
+from azure_jobs.utils.time import time_ago
 from rich.theme import Theme
 
 _THEME = Theme(
@@ -29,15 +31,6 @@ _THEME = Theme(
 )
 
 console = Console(theme=_THEME, highlight=False)
-
-
-def _time_ago(iso_str: str) -> str:
-    """Convert an ISO 8601 timestamp to a human-readable relative time.
-
-    .. deprecated:: Use ``azure_jobs.utils.time.time_ago`` directly.
-    """
-    from azure_jobs.utils.time import time_ago
-    return time_ago(iso_str)
 
 
 # ---------------------------------------------------------------------------
@@ -172,7 +165,7 @@ def show_jobs_table(records: list[dict[str, Any]]) -> None:
             cmd_str += " " + " ".join(args[:3])
             if len(args) > 3:
                 cmd_str += " …"
-        when = _time_ago(r.get("created_at", ""))
+        when = time_ago(r.get("created_at", ""))
         note = r.get("note", "")
         if note:
             # Extract just the main error message (first meaningful line)

@@ -150,7 +150,7 @@ def test_time_ago_empty() -> None:
 
 def test_resolve_tz_fallback() -> None:
     """Unknown timezone falls back to UTC."""
-    from azure_jobs.utils.time import _resolve_tz, _tz_cache
+    from azure_jobs.utils.time import resolve_tz, _tz_cache
     _tz_cache.clear()
-    tz = _resolve_tz("NonExistent/Timezone")
+    tz = resolve_tz("NonExistent/Timezone")
     assert tz == timezone.utc

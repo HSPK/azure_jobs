@@ -14,7 +14,7 @@ from azure_jobs.cli import main
 @pytest.fixture(autouse=True)
 def _mock_find_az():
     """Ensure tests don't depend on ``az`` being installed."""
-    with patch("azure_jobs.core.config._find_az", return_value="az"):
+    with patch("azure_jobs.core.config.find_az", return_value="az"):
         yield
 
 

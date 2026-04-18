@@ -59,7 +59,7 @@ def save_defaults(
 # -- workspace ---------------------------------------------------------------
 
 
-def _find_az() -> str:
+def find_az() -> str:
     """Return the full path to the ``az`` CLI (resolves ``az.cmd`` on Windows)."""
     path = shutil.which("az")
     if path is None:
@@ -67,10 +67,10 @@ def _find_az() -> str:
     return path
 
 
-def _az_json(args: list[str], timeout: int = 15) -> Any | None:
+def az_json(args: list[str], timeout: int = 15) -> Any | None:
     """Run an ``az`` CLI command and return parsed JSON, or *None* on failure."""
     try:
-        az = _find_az()
+        az = find_az()
         result = subprocess.run(
             [az, *args, "--output", "json"],
             capture_output=True, text=True, timeout=timeout,
@@ -82,9 +82,9 @@ def _az_json(args: list[str], timeout: int = 15) -> Any | None:
     return None
 
 
-def _detect_subscription() -> dict[str, str] | None:
+def detect_subscription() -> dict[str, str] | None:
     """Try to get subscription info from ``az account show``."""
-    data = _az_json(["account", "show"])
+    data = az_json(["account", "show"])
     if data:
         return {
             "subscription_id": data.get("id", ""),
@@ -93,12 +93,12 @@ def _detect_subscription() -> dict[str, str] | None:
     return None
 
 
-def _detect_workspaces(subscription_id: str) -> list[dict[str, str]]:
+def detect_workspaces(subscription_id: str) -> list[dict[str, str]]:
     """List Azure ML workspaces in a subscription via ``az resource list``.
 
     Returns list of dicts with keys: name, resource_group, location.
     """
-    data = _az_json([
+    data = az_json([
         "resource", "list",
         "--resource-type", "Microsoft.MachineLearningServices/workspaces",
         "--subscription", subscription_id,
@@ -115,7 +115,7 @@ def _detect_workspaces(subscription_id: str) -> list[dict[str, str]]:
     ]
 
 
-def _pick_workspace(workspaces: list[dict[str, str]]) -> dict[str, str] | None:
+def pick_workspace(workspaces: list[dict[str, str]]) -> dict[str, str] | None:
     """Let the user pick a workspace from a detected list.
 
     Returns dict with ``name`` and ``resource_group``, or *None* if the user
@@ -161,7 +161,7 @@ def get_workspace_config() -> dict[str, str]:
 
     # --- subscription_id ---
     if not workspace.get("subscription_id"):
-        az_info = _detect_subscription()
+        az_info = detect_subscription()
         if az_info and az_info["subscription_id"]:
             workspace["subscription_id"] = az_info["subscription_id"]
             click.echo()
@@ -189,10 +189,10 @@ def get_workspace_config() -> dict[str, str]:
     need_ws = not workspace.get("workspace_name")
 
     if need_rg or need_ws:
-        detected = _detect_workspaces(workspace["subscription_id"])
+        detected = detect_workspaces(workspace["subscription_id"])
         picked = None
         if detected:
-            picked = _pick_workspace(detected)
+            picked = pick_workspace(detected)
 
         if picked:
             if need_rg:
@@ -253,13 +253,13 @@ def resolve_workspace(name: str | None = None) -> dict[str, str]:
     sub_id = ws.get("subscription_id", "")
 
     if not sub_id:
-        sub = _detect_subscription()
+        sub = detect_subscription()
         if not sub:
             raise ValueError("Cannot detect subscription. Run `az login` first.")
         sub_id = sub["subscription_id"]
 
     # Try to find full details from detected workspaces
-    detected = _detect_workspaces(sub_id)
+    detected = detect_workspaces(sub_id)
     for w in detected:
         if w["name"] == name:
             return {
