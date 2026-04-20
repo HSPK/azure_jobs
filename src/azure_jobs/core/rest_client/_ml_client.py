@@ -53,6 +53,8 @@ class AzureMLJobsClient(_BlobMixin, _ResourceMixin, _JobsMixin):
         self._data_token_expires: float = 0.0
         self._location: str | None = None
         self._data_plane_base: str = ""
+        self._ws_cache: dict[str, Any] | None = None
+        self._storage_cache: tuple[str, str, str] | None = None
         self._session: requests.Session = requests.Session()
 
     def close(self) -> None:
@@ -108,11 +110,7 @@ class AzureMLJobsClient(_BlobMixin, _ResourceMixin, _JobsMixin):
         """Workspace Azure region (lazy, cached)."""
         if self._location:
             return self._location
-        self._ensure_token()
-        url = f"{self._base}?api-version={_API_VERSION}"
-        resp = self._session.get(url, timeout=15)
-        resp.raise_for_status()
-        ws = resp.json()
+        ws = self.get_workspace()
         self._location = ws.get("location", "")
         disc = (ws.get("properties", {}).get("discoveryUrl", "") or "").rstrip("/")
         if disc.endswith("/discovery"):
@@ -121,9 +119,12 @@ class AzureMLJobsClient(_BlobMixin, _ResourceMixin, _JobsMixin):
         return self._location
 
     def get_workspace(self) -> dict[str, Any]:
-        """Fetch full workspace details (cached after first call)."""
+        """Fetch full workspace details (cached for the client's lifetime)."""
+        if self._ws_cache is not None:
+            return self._ws_cache
         self._ensure_token()
         url = f"{self._base}?api-version={_API_VERSION}"
         resp = self._session.get(url, timeout=15)
         resp.raise_for_status()
-        return resp.json()
+        self._ws_cache = resp.json()
+        return self._ws_cache

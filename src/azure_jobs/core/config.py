@@ -16,18 +16,33 @@ import click
 
 from . import const
 
+# Module-level config cache: stores (mtime, data) to avoid repeated disk I/O.
+_config_cache: tuple[float, dict[str, Any]] | None = None
+
 
 def read_config() -> dict[str, Any]:
-    """Read aj_config.json, returning an empty dict if missing."""
+    """Read aj_config.json, returning an empty dict if missing.
+
+    Results are cached by file mtime and invalidated on modification.
+    """
+    global _config_cache
     if not const.AJ_CONFIG.exists():
+        _config_cache = None
         return {}
-    return json.loads(const.AJ_CONFIG.read_text())
+    mtime = const.AJ_CONFIG.stat().st_mtime
+    if _config_cache is not None and _config_cache[0] == mtime:
+        return _config_cache[1]
+    data = json.loads(const.AJ_CONFIG.read_text())
+    _config_cache = (mtime, data)
+    return data
 
 
 def write_config(config: dict[str, Any]) -> None:
     """Write aj_config.json with pretty indentation."""
+    global _config_cache
     const.AJ_CONFIG.parent.mkdir(parents=True, exist_ok=True)
     const.AJ_CONFIG.write_text(json.dumps(config, indent=2) + "\n")
+    _config_cache = None  # invalidate cache
 
 
 # -- defaults ---------------------------------------------------------------

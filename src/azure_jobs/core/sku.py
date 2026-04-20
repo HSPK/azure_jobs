@@ -20,6 +20,9 @@ from typing import Any
 
 log = logging.getLogger(__name__)
 
+# Module-level caches for avoiding redundant ARM API calls
+_vc_families_cache: dict[str, list[str]] = {}  # vc_name → families
+
 
 @dataclass
 class SkuSpec:
@@ -323,7 +326,13 @@ def _fetch_vc_families(
     vc_name: str,
     arm_client: Any = None,
 ) -> list[str]:
-    """Query the virtual cluster's available instance families from quotas."""
+    """Query the virtual cluster's available instance families from quotas.
+
+    Results are cached per vc_name to avoid repeated API calls.
+    """
+    cache_key = f"{vc_subscription_id}/{vc_name}"
+    if cache_key in _vc_families_cache:
+        return _vc_families_cache[cache_key]
     try:
         if arm_client is None:
             from azure_jobs.core.rest_client import AzureARMClient
@@ -334,7 +343,9 @@ def _fetch_vc_families(
         )
         managed = data.get("properties", {}).get("managed", {})
         quotas = managed.get("defaultGroupPolicyOverallQuotas", {}).get("limits", [])
-        return [q["id"] for q in quotas if q.get("limit", 0) > 0]
+        families = [q["id"] for q in quotas if q.get("limit", 0) > 0]
+        _vc_families_cache[cache_key] = families
+        return families
     except Exception:
         log.debug("Failed to fetch VC families for %s", vc_name, exc_info=True)
         return []

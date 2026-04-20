@@ -41,8 +41,10 @@ class _BlobMixin:
 
     def _get_default_storage(self) -> tuple[str, str, str]:
         """Return ``(account_name, container_name, account_url)``
-        for the workspace default blob store.
+        for the workspace default blob store.  Cached after first call.
         """
+        if self._storage_cache is not None:  # type: ignore[attr-defined]
+            return self._storage_cache  # type: ignore[attr-defined]
         ws = self.get_workspace()  # type: ignore[attr-defined]
         props = ws.get("properties", {})
         storage_arm = props.get("storageAccount", "")
@@ -55,7 +57,8 @@ class _BlobMixin:
         account_url = f"https://{account_name}.blob.core.windows.net"
         if ".cn/" in self._base:  # type: ignore[attr-defined]
             account_url = f"https://{account_name}.blob.core.chinacloudapi.cn"
-        return account_name, container, account_url
+        self._storage_cache = (account_name, container, account_url)  # type: ignore[attr-defined]
+        return self._storage_cache  # type: ignore[attr-defined]
 
     def upload_code(
         self,
@@ -100,12 +103,34 @@ class _BlobMixin:
 
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
-        def _upload_one(rel_path: str, data: bytes) -> None:
+        def _blob_exists(blob_url: str) -> bool:
+            """HEAD request to check if blob already exists."""
+            headers: dict[str, str] = {"x-ms-version": "2024-11-04"}
+            bearer = sas_info.get("_bearer", "")
+            sas_token = sas_info.get("sasToken", "")
+            if bearer:
+                headers["Authorization"] = f"Bearer {bearer}"
+                url = blob_url
+            elif sas_token:
+                sep = "&" if "?" in blob_url else "?"
+                url = f"{blob_url}{sep}{sas_token}"
+            else:
+                url = blob_url
+            try:
+                resp = requests.head(url, headers=headers, timeout=10)
+                return resp.status_code == 200
+            except Exception:
+                return False
+
+        def _upload_one(rel_path: str, data: bytes) -> bool:
             blob_path = f"LocalUpload/{code_hash}/{rel_path}"
             blob_url = f"{account_url}/{container}/{blob_path}"
+            if _blob_exists(blob_url):
+                return False  # skipped
             self._upload_blob(blob_url, data, sas_info)
+            return True  # uploaded
 
-        with ThreadPoolExecutor(max_workers=8) as pool:
+        with ThreadPoolExecutor(max_workers=16) as pool:
             futures = {
                 pool.submit(_upload_one, rel, data): rel
                 for rel, data in files.items()

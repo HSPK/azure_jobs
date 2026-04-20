@@ -83,6 +83,7 @@ class AjDashboard(WorkspaceMixin, App):
         super().__init__(**kwargs)
         self._page_size: int = page_size if page_size is not None else get_page_size()
         self._all_jobs: list[dict[str, Any]] = []
+        self._job_idx: dict[str, int] = {}  # name → index in _all_jobs
         self._filtered: list[dict[str, Any]] = []
         self._workspace: dict[str, str] | None = None
         self._workspaces: list[dict[str, str]] = []
@@ -283,7 +284,10 @@ class AjDashboard(WorkspaceMixin, App):
         overflow = batch[room:]
 
         cur.extend(take)
+        base = len(self._all_jobs)
         self._all_jobs.extend(take)
+        for offset, j in enumerate(take):
+            self._job_idx[j.get("name", "")] = base + offset
 
         # Preserve current selection while list grows
         prev_name = ""
@@ -294,13 +298,17 @@ class AjDashboard(WorkspaceMixin, App):
         # Overflow goes to the next (hidden) page buffer
         if overflow:
             self._pages.append(list(overflow))
+            base = len(self._all_jobs)
             self._all_jobs.extend(overflow)
+            for offset, j in enumerate(overflow):
+                self._job_idx[j.get("name", "")] = base + offset
 
     def _on_jobs_loaded(self, jobs: list[dict[str, Any]]) -> None:
         """Full replace (used by tests and refresh)."""
         ps = self._page_size
         self._pages = [jobs[i:i + ps] for i in range(0, len(jobs), ps)] if jobs else [[]]
         self._all_jobs = list(jobs)
+        self._job_idx = {j.get("name", ""): i for i, j in enumerate(self._all_jobs)}
         self._current_page = 0
         self._has_more = False
         self._show_current_page()
@@ -480,11 +488,11 @@ class AjDashboard(WorkspaceMixin, App):
             self.call_from_thread(self._on_single_fetched, name, updated)
 
     def _on_single_fetched(self, name: str, updated: dict[str, Any]) -> None:
-        # Update in _all_jobs and in the page cache
-        for i, j in enumerate(self._all_jobs):
-            if j.get("name") == name:
-                self._all_jobs[i] = updated
-                break
+        # Update in _all_jobs via O(1) dict lookup
+        idx = self._job_idx.get(name)
+        if idx is not None and idx < len(self._all_jobs):
+            self._all_jobs[idx] = updated
+        # Update in page cache (small — page_size items per page)
         for page in self._pages:
             for i, j in enumerate(page):
                 if j.get("name") == name:
@@ -702,11 +710,11 @@ class AjDashboard(WorkspaceMixin, App):
                 if worker.is_cancelled:
                     return
                 if d["name"] in existing:
-                    for j in self._all_jobs:
-                        if j["name"] == d["name"] and j["status"] != d["status"]:
-                            j.update(d)
+                    idx = self._job_idx.get(d["name"])
+                    if idx is not None and idx < len(self._all_jobs):
+                        if self._all_jobs[idx].get("status") != d.get("status"):
+                            self._all_jobs[idx].update(d)
                             updated += 1
-                            break
                 else:
                     new_jobs.append(d)
         except Exception:
@@ -727,6 +735,8 @@ class AjDashboard(WorkspaceMixin, App):
     ) -> None:
         if new_jobs:
             self._all_jobs = new_jobs + self._all_jobs
+        # Rebuild index after structural changes
+        self._job_idx = {j.get("name", ""): i for i, j in enumerate(self._all_jobs)}
         # Re-page all jobs to keep page sizes consistent
         ps = self._page_size
         all_j = self._all_jobs
