@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import subprocess
 import uuid
+from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -166,6 +167,9 @@ def run(
     if not conf:
         raise click.ClickException(f"Empty configuration file: {template_fp}")
 
+    # Work on a copy so the original template config is never mutated.
+    conf = deepcopy(conf)
+
     sid = uuid.uuid4().hex[:8]
     name = resolve_name(command, sid)
 
@@ -251,7 +255,7 @@ def run(
         template=template,
         nodes=nodes_int,
         processes=processes_int,
-        portal="azure",
+        portal="",
         created_at=datetime.now(timezone.utc).isoformat(),
         status="submitted",
         command=command,

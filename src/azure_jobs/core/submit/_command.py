@@ -59,7 +59,6 @@ def _generate_runner_script(
 
     # --- Setup commands (rank-0 only for distributed) ---
     if request.setup_commands:
-        setup_str = "\n".join(request.setup_commands)
         if is_distributed:
             lines.append("# Setup (rank-0 only with barrier)")
             lines.append('if [ "${LOCAL_RANK:-0}" = "0" ]; then')
@@ -67,7 +66,15 @@ def _generate_runner_script(
                 lines.append(f"  {cmd}")
             lines.append("  touch /tmp/.aj_setup_done")
             lines.append("else")
-            lines.append("  while [ ! -f /tmp/.aj_setup_done ]; do sleep 1; done")
+            lines.append("  _aj_waited=0")
+            lines.append("  while [ ! -f /tmp/.aj_setup_done ]; do")
+            lines.append("    sleep 1")
+            lines.append("    _aj_waited=$((_aj_waited + 1))")
+            lines.append('    if [ "$_aj_waited" -ge 600 ]; then')
+            lines.append('      echo "ERROR: setup barrier timed out after 600s" >&2')
+            lines.append("      exit 1")
+            lines.append("    fi")
+            lines.append("  done")
             lines.append("fi")
         else:
             lines.append("# Setup")

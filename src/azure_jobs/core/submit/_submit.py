@@ -107,7 +107,7 @@ def submit(request: SubmitRequest, on_status: Any = None) -> SubmitResult:
         env_id = _build_environment(request, client)
 
         _status("storage", f"Configuring {len(request.storage)} storage mount(s)…")
-        inputs, outputs, poc_props, dataref_env = _build_storage_mounts(
+        outputs, poc_props, dataref_env = _build_storage_mounts(
             request, client
         )
 

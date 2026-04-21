@@ -34,22 +34,21 @@ def _get_or_create_datastore(
 def _build_storage_mounts(
     request: SubmitRequest,
     client: Any,
-) -> tuple[dict[str, Any], dict[str, Any], dict[str, str], dict[str, str]]:
+) -> tuple[dict[str, Any], dict[str, str], dict[str, str]]:
     """Set up storage mounts via workspace datastores.
 
     Creates or reuses datastores in the workspace, then builds output dicts
     and PathOnCompute properties that Singularity needs to mount storage.
 
     Returns:
-        (inputs, outputs, path_on_compute_properties, datareference_env_vars)
+        (outputs, path_on_compute_properties, datareference_env_vars)
     """
-    inputs: dict[str, Any] = {}
     outputs: dict[str, Any] = {}
     path_on_compute: dict[str, str] = {}
     dataref_env: dict[str, str] = {}
 
     if not request.storage:
-        return inputs, outputs, path_on_compute, dataref_env
+        return outputs, path_on_compute, dataref_env
 
     for mount_name, mount_cfg in request.storage.items():
         account = mount_cfg.get("storage_account_name", "")
@@ -71,4 +70,4 @@ def _build_storage_mounts(
         path_on_compute[prop_key] = mount_dir.rstrip("/") + "/"
         dataref_env[f"AZUREML_DATAREFERENCE_{mount_name}"] = mount_dir
 
-    return inputs, outputs, path_on_compute, dataref_env
+    return outputs, path_on_compute, dataref_env

@@ -476,8 +476,7 @@ class TestResolveSingIdentity:
 class TestBuildStorageMounts:
     def test_empty_storage_returns_empty(self):
         r = SubmitRequest(name="j")
-        inputs, outputs, poc, env = _build_storage_mounts(r, MagicMock())
-        assert inputs == {}
+        outputs, poc, env = _build_storage_mounts(r, MagicMock())
         assert outputs == {}
         assert poc == {}
         assert env == {}
@@ -498,7 +497,7 @@ class TestBuildStorageMounts:
         )
         client = MagicMock()
         client.get_datastore.return_value = None  # not found
-        inputs, outputs, poc, env = _build_storage_mounts(r, client)
+        outputs, poc, env = _build_storage_mounts(r, client)
 
         # Datastore should have been created
         client.create_or_update_datastore.assert_called_once()
@@ -530,7 +529,7 @@ class TestBuildStorageMounts:
         )
         client = MagicMock()
         client.get_datastore.return_value = {"name": "aj_data"}  # already exists
-        inputs, outputs, poc, env = _build_storage_mounts(r, client)
+        outputs, poc, env = _build_storage_mounts(r, client)
 
         # Should NOT call create for datastore
         client.create_or_update_datastore.assert_not_called()
