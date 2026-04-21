@@ -2,12 +2,9 @@
 
 from __future__ import annotations
 
-import logging
 from typing import Any
 
 from ._models import SubmitRequest
-
-log = logging.getLogger(__name__)
 
 
 def _get_or_create_datastore(
@@ -27,8 +24,11 @@ def _get_or_create_datastore(
             container_name=container,
             description=f"Created by aj for {mount_name}",
         )
-    except Exception:
-        log.debug("Failed to create datastore %s", ds_name, exc_info=True)
+    except Exception as exc:
+        raise RuntimeError(
+            f"Failed to create datastore '{ds_name}' "
+            f"(account={account}, container={container}): {exc}"
+        ) from exc
 
 
 def _build_storage_mounts(

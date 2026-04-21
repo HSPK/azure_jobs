@@ -195,17 +195,16 @@ def submit(request: SubmitRequest, on_status: Any = None) -> SubmitResult:
 
         # SHM size
         if request.shm_size:
-            job_props.setdefault("resources", {})
             job_props["resources"]["shmSize"] = request.shm_size
 
         returned_job = client.create_or_update_job(request.name, job_body)
 
         # Extract portal URL from response
         portal_url = ""
-        ret_props = returned_job.get("properties", {})
-        services = ret_props.get("services", {}) or {}
-        studio = services.get("Studio", {}) or {}
-        portal_url = studio.get("endpoint", "") or ""
+        ret_props = returned_job.get("properties") or {}
+        services = ret_props.get("services") or {}
+        studio = services.get("Studio") or {}
+        portal_url = studio.get("endpoint") or ""
 
         azure_name = returned_job.get("name", "") or request.name
         _status("done", f"Job {azure_name} submitted")
