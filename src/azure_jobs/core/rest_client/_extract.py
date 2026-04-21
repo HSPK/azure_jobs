@@ -86,7 +86,7 @@ def _extract_rest_job(raw: dict[str, Any]) -> dict[str, Any]:
 
     # Resources — extract instance type, nodes, SLA tier
     resources = props.get("resources", {}) or {}
-    aisc = resources.get("properties", {}).get("AISuperComputer", {}) or {}
+    aisc = (resources.get("properties") or {}).get("AISuperComputer", {}) or {}
     instance_type = aisc.get("instanceType", "") or ""
     # Strip "Singularity." prefix and comma-separated alternatives
     if instance_type:
