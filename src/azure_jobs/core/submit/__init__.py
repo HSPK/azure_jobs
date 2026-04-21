@@ -6,7 +6,7 @@ All public names are re-exported here so callers can simply do::
     from azure_jobs.core.submit import build_request_from_config
 """
 
-from ._command import _RUNNER_FILENAME, _build_command_str, _generate_runner_script
+from ._command import _RUNNER_FILENAME, _generate_runner_script
 from ._compute import (
     _build_distribution,
     _build_identity,
@@ -35,7 +35,6 @@ __all__ = [
     "submit",
     "build_request_from_config",
     # Internal (used by tests)
-    "_build_command_str",
     "_build_environment",
     "_build_identity",
     "_build_resources",

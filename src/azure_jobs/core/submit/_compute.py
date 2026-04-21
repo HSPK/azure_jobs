@@ -41,7 +41,9 @@ def _resolve_compute(request: SubmitRequest) -> str:
 
 
 def _build_resources(
-    request: SubmitRequest, on_status: Any = None
+    request: SubmitRequest,
+    compute_id: str = "",
+    on_status: Any = None,
 ) -> dict[str, Any] | None:
     """Build the ``resources`` dict for Singularity targets.
 
@@ -52,7 +54,7 @@ def _build_resources(
     if request.service != "sing":
         return None
 
-    arm_id = _resolve_compute(request)
+    arm_id = compute_id or _resolve_compute(request)
     sku_raw = request.env_vars.get("_sku_raw", "") or "C1"
 
     from azure_jobs.core.sku import resolve_instance_type

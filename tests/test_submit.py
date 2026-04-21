@@ -9,7 +9,6 @@ import pytest
 from azure_jobs.core.submit import (
     SubmitRequest,
     SubmitResult,
-    _build_command_str,
     _build_environment,
     _build_identity,
     _build_storage_mounts,
@@ -45,27 +44,6 @@ class TestSubmitRequest:
         assert r.compute == "gpu-cluster"
         assert r.nodes == 4
         assert r.service == "sing"
-
-
-class TestBuildCommandStr:
-    def test_joins_with_ampersand(self):
-        r = SubmitRequest(
-            name="test",
-            setup_commands=["pip install torch"],
-            command=["python train.py"],
-        )
-        result = _build_command_str(r)
-        assert result == "pip install torch && python train.py"
-
-    def test_command_only(self):
-        r = SubmitRequest(name="test", command=["echo hello"])
-        result = _build_command_str(r)
-        assert result == "echo hello"
-
-    def test_empty(self):
-        r = SubmitRequest(name="test")
-        result = _build_command_str(r)
-        assert result == ""
 
 
 class TestBuildRequestFromConfig:

@@ -13,10 +13,20 @@ def build_request_from_config(
     name: str,
     workspace: dict[str, str],
     experiment: str = "aj",
+    nodes: int | None = None,
+    processes_per_node: int | None = None,
 ) -> SubmitRequest:
     """Build a SubmitRequest from a merged template config dict.
 
     This bridges the template config format to the submission engine.
+
+    Args:
+        conf: Merged template config dict.
+        name: Job display name.
+        workspace: Workspace config (subscription_id, resource_group, workspace_name).
+        experiment: Experiment name.
+        nodes: Override for node count (takes precedence over job config).
+        processes_per_node: Override for processes per node.
     """
     target = conf.get("target", {})
     env = conf.get("environment", {})
@@ -47,8 +57,11 @@ def build_request_from_config(
         description=name,
         experiment_name=experiment,
         compute=target.get("name", ""),
-        nodes=job.get("instance_count", 1),
-        processes_per_node=job.get("process_count_per_node", 1),
+        nodes=nodes if nodes is not None else job.get("instance_count", 1),
+        processes_per_node=(
+            processes_per_node if processes_per_node is not None
+            else job.get("process_count_per_node", 1)
+        ),
         image=env.get("image", ""),
         image_registry=env.get("registry"),
         code_dir=code_dir,

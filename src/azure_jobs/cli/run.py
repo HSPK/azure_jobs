@@ -188,10 +188,9 @@ def run(
     )
     conf.pop("_extra", None)
 
-    # Remember this template as the new default
-    save_defaults(template=template)
-
+    # Remember this template as the new default (only after validation passes)
     validate_config(conf, template_fp)
+    save_defaults(template=template)
 
     conf["description"] = name
     conf["jobs"][0]["name"] = name
@@ -245,10 +244,8 @@ def run(
     workspace = get_workspace_config()
     request = build_request_from_config(
         conf, name=name, workspace=workspace, experiment=experiment,
+        nodes=nodes_int, processes_per_node=processes_int,
     )
-    request.nodes = nodes_int
-    request.processes_per_node = processes_int
-    request.command = conf["jobs"][0]["command"]
 
     rec = SubmissionRecord(
         id=sid,

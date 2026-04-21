@@ -89,22 +89,3 @@ def _generate_runner_script(
     lines.append("")
 
     return "\n".join(lines)
-
-
-def _build_command_str(request: SubmitRequest) -> str:
-    """Build the full command string from setup + user commands.
-
-    For multi-node jobs, wraps with a distributed preamble that
-    configures RANK/MASTER_ADDR env vars and runs setup on rank 0 only.
-    """
-    is_distributed = request.nodes > 1 or request.processes_per_node > 1
-
-    if is_distributed:
-        from azure_jobs.core.distributed import build_distributed_preamble
-
-        preamble = build_distributed_preamble(list(request.setup_commands))
-        all_cmds = preamble + list(request.command)
-    else:
-        all_cmds = list(request.setup_commands) + list(request.command)
-
-    return " && ".join(all_cmds)

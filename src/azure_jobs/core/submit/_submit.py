@@ -115,7 +115,7 @@ def submit(request: SubmitRequest, on_status: Any = None) -> SubmitResult:
         distribution = _build_distribution(request)
         identity = _build_identity(request)
         compute = _resolve_compute(request)
-        resources = _build_resources(request, on_status=_status)
+        resources = _build_resources(request, compute_id=compute, on_status=_status)
         env_vars = _build_env_vars(request, dataref_env)
 
         # Singularity identity: resolve UAI client_id for storage auth
