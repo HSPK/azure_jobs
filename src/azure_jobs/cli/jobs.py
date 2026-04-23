@@ -460,20 +460,27 @@ def job_stats(
     rate = f"{completed / decided * 100:.1f}%" if decided else "N/A"
 
     # Overall duration / queue aggregation (terminal jobs only)
-    all_dur: list[int] = []
+    all_gpu_secs: list[int] = []
     all_queue: list[int] = []
     for j in jobs:
         if j.get("status") not in _TERMINAL:
             continue
         d = j.get("duration_secs")
         if d is not None and d > 0:
-            all_dur.append(d)
+            nodes = j.get("nodes") or 1
+            all_gpu_secs.append(d * nodes)
         q = j.get("queue_secs")
         if q is not None and q >= 0:
             all_queue.append(q)
 
-    avg_dur = format_duration(sum(all_dur) // len(all_dur)) if all_dur else "—"
-    total_dur = format_duration(sum(all_dur)) if all_dur else "—"
+    def _fmt_gpu_hours(secs: int) -> str:
+        h = secs / 3600
+        if h >= 100:
+            return f"{h:,.0f}h"
+        return f"{h:,.1f}h"
+
+    total_gpu = _fmt_gpu_hours(sum(all_gpu_secs)) if all_gpu_secs else "—"
+    avg_gpu = _fmt_gpu_hours(sum(all_gpu_secs) // len(all_gpu_secs)) if all_gpu_secs else "—"
     avg_queue = format_duration(sum(all_queue) // len(all_queue)) if all_queue else "—"
     med_queue = format_duration(_median(all_queue)) if all_queue else "—"
 
@@ -494,8 +501,7 @@ def job_stats(
     if active:
         grid.add_row("Active", f"[cyan]{active}[/cyan]")
     grid.add_row("Success Rate", rate)
-    grid.add_row("Avg Duration", avg_dur)
-    grid.add_row("Total Duration", total_dur)
+    grid.add_row("GPU Hours", f"{total_gpu}  (avg {avg_gpu})")
     grid.add_row("Avg Queue", f"{avg_queue}  (median {med_queue})")
 
     console.print()
@@ -509,7 +515,7 @@ def job_stats(
     # ── By experiment ─────────────────────────────────────────────────
     exp_stats: dict[str, dict[str, Any]] = defaultdict(
         lambda: {"total": 0, "completed": 0, "failed": 0, "canceled": 0,
-                 "dur": [], "queue": []}
+                 "gpu_secs": 0, "queue": []}
     )
     for j in jobs:
         exp = j.get("experiment") or "Default"
@@ -524,12 +530,13 @@ def job_stats(
             es["canceled"] += 1
         d = j.get("duration_secs")
         if d is not None and d > 0 and st in _TERMINAL:
-            es["dur"].append(d)
+            nodes = j.get("nodes") or 1
+            es["gpu_secs"] += d * nodes
         q = j.get("queue_secs")
         if q is not None and q >= 0 and st in _TERMINAL:
             es["queue"].append(q)
 
-    sorted_exps = sorted(exp_stats.items(), key=lambda x: x[1]["total"], reverse=True)
+    sorted_exps = sorted(exp_stats.items(), key=lambda x: x[1]["gpu_secs"], reverse=True)
 
     tbl = Table(title="By Experiment", title_style="bold", show_edge=False,
                 pad_edge=False)
@@ -539,19 +546,17 @@ def job_stats(
     tbl.add_column("✗", justify="right", style="red")
     tbl.add_column("Canceled", justify="right")
     tbl.add_column("Rate", justify="right")
-    tbl.add_column("Avg Dur", justify="right")
-    tbl.add_column("Total Dur", justify="right")
+    tbl.add_column("GPU Hours", justify="right")
 
     for exp_name, es in sorted_exps:
         dec = es["completed"] + es["failed"]
         exp_rate = f"{es['completed'] / dec * 100:.0f}%" if dec else "—"
-        exp_dur = format_duration(sum(es["dur"]) // len(es["dur"])) if es["dur"] else "—"
-        exp_total_dur = format_duration(sum(es["dur"])) if es["dur"] else "—"
+        exp_gpu = _fmt_gpu_hours(es["gpu_secs"]) if es["gpu_secs"] else "—"
 
         tbl.add_row(
             exp_name, str(es["total"]),
             str(es["completed"]), str(es["failed"]), str(es["canceled"]),
-            exp_rate, exp_dur, exp_total_dur,
+            exp_rate, exp_gpu,
         )
 
     print_table(tbl)
@@ -559,7 +564,7 @@ def job_stats(
     # ── By compute ────────────────────────────────────────────────────
     compute_stats: dict[str, dict[str, Any]] = defaultdict(
         lambda: {"total": 0, "completed": 0, "failed": 0,
-                 "dur": [], "queue": []}
+                 "gpu_secs": 0, "queue": []}
     )
     for j in jobs:
         comp = j.get("compute") or "unknown"
@@ -572,13 +577,14 @@ def job_stats(
             cs["failed"] += 1
         d = j.get("duration_secs")
         if d is not None and d > 0 and st in _TERMINAL:
-            cs["dur"].append(d)
+            nodes = j.get("nodes") or 1
+            cs["gpu_secs"] += d * nodes
         q = j.get("queue_secs")
         if q is not None and q >= 0 and st in _TERMINAL:
             cs["queue"].append(q)
 
     sorted_computes = sorted(
-        compute_stats.items(), key=lambda x: x[1]["total"], reverse=True,
+        compute_stats.items(), key=lambda x: x[1]["gpu_secs"], reverse=True,
     )
 
     tbl2 = Table(title="By Compute", title_style="bold", show_edge=False,
@@ -590,20 +596,18 @@ def job_stats(
     tbl2.add_column("Avg Queue", justify="right")
     tbl2.add_column("P50 Queue", justify="right")
     tbl2.add_column("Max Queue", justify="right")
-    tbl2.add_column("Avg Dur", justify="right")
-    tbl2.add_column("Total Dur", justify="right")
+    tbl2.add_column("GPU Hours", justify="right")
 
     for comp_name, cs in sorted_computes:
         q_avg = format_duration(sum(cs["queue"]) // len(cs["queue"])) if cs["queue"] else "—"
         q_p50 = format_duration(_median(cs["queue"])) if cs["queue"] else "—"
         q_max = format_duration(max(cs["queue"])) if cs["queue"] else "—"
-        c_dur = format_duration(sum(cs["dur"]) // len(cs["dur"])) if cs["dur"] else "—"
-        c_total_dur = format_duration(sum(cs["dur"])) if cs["dur"] else "—"
+        c_gpu = _fmt_gpu_hours(cs["gpu_secs"]) if cs["gpu_secs"] else "—"
 
         tbl2.add_row(
             comp_name, str(cs["total"]),
             str(cs["completed"]), str(cs["failed"]),
-            q_avg, q_p50, q_max, c_dur, c_total_dur,
+            q_avg, q_p50, q_max, c_gpu,
         )
 
     print_table(tbl2)
