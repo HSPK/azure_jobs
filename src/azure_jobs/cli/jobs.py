@@ -515,7 +515,7 @@ def job_stats(
     # ── By experiment ─────────────────────────────────────────────────
     exp_stats: dict[str, dict[str, Any]] = defaultdict(
         lambda: {"total": 0, "completed": 0, "failed": 0, "canceled": 0,
-                 "gpu_secs": 0, "queue": []}
+                 "active": 0, "gpu_secs": 0, "queue": []}
     )
     for j in jobs:
         exp = j.get("experiment") or "Default"
@@ -528,6 +528,8 @@ def job_stats(
             es["failed"] += 1
         elif st in ("Canceled", "CancelRequested"):
             es["canceled"] += 1
+        if st in _ACTIVE:
+            es["active"] += 1
         d = j.get("duration_secs")
         if d is not None and d > 0 and st in _TERMINAL:
             nodes = j.get("nodes") or 1
@@ -542,6 +544,7 @@ def job_stats(
                 pad_edge=False)
     tbl.add_column("Experiment", style="bold")
     tbl.add_column("Total", justify="right")
+    tbl.add_column("▶", justify="right", style="cyan")
     tbl.add_column("✓", justify="right", style="green")
     tbl.add_column("✗", justify="right", style="red")
     tbl.add_column("Canceled", justify="right")
@@ -555,7 +558,8 @@ def job_stats(
 
         tbl.add_row(
             exp_name, str(es["total"]),
-            str(es["completed"]), str(es["failed"]), str(es["canceled"]),
+            str(es["active"]), str(es["completed"]),
+            str(es["failed"]), str(es["canceled"]),
             exp_rate, exp_gpu,
         )
 
@@ -563,7 +567,7 @@ def job_stats(
 
     # ── By compute ────────────────────────────────────────────────────
     compute_stats: dict[str, dict[str, Any]] = defaultdict(
-        lambda: {"total": 0, "completed": 0, "failed": 0,
+        lambda: {"total": 0, "completed": 0, "failed": 0, "active": 0,
                  "gpu_secs": 0, "queue": []}
     )
     for j in jobs:
@@ -575,6 +579,8 @@ def job_stats(
             cs["completed"] += 1
         elif st == "Failed":
             cs["failed"] += 1
+        if st in _ACTIVE:
+            cs["active"] += 1
         d = j.get("duration_secs")
         if d is not None and d > 0 and st in _TERMINAL:
             nodes = j.get("nodes") or 1
@@ -591,6 +597,7 @@ def job_stats(
                  pad_edge=False)
     tbl2.add_column("Compute", style="bold")
     tbl2.add_column("Jobs", justify="right")
+    tbl2.add_column("▶", justify="right", style="cyan")
     tbl2.add_column("✓", justify="right", style="green")
     tbl2.add_column("✗", justify="right", style="red")
     tbl2.add_column("Avg Queue", justify="right")
@@ -606,7 +613,7 @@ def job_stats(
 
         tbl2.add_row(
             comp_name, str(cs["total"]),
-            str(cs["completed"]), str(cs["failed"]),
+            str(cs["active"]), str(cs["completed"]), str(cs["failed"]),
             q_avg, q_p50, q_max, c_gpu,
         )
 
