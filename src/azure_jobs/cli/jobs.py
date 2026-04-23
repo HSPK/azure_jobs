@@ -403,6 +403,7 @@ def job_stats(
     from datetime import datetime as dt
     from datetime import timezone as tz
 
+    from rich.box import ROUNDED
     from rich.panel import Panel
     from rich.table import Table
 
@@ -540,10 +541,10 @@ def job_stats(
 
     sorted_exps = sorted(exp_stats.items(), key=lambda x: x[1]["gpu_secs"], reverse=True)
 
-    tbl = Table(title="By Experiment", title_style="bold", show_edge=False,
-                pad_edge=False)
-    tbl.add_column("Experiment", style="bold")
-    tbl.add_column("Total", justify="right")
+    tbl = Table(title="By Experiment", box=ROUNDED, title_style="bold",
+                header_style="bold", pad_edge=True)
+    tbl.add_column("Experiment", style="cyan")
+    tbl.add_column("Jobs", justify="right")
     tbl.add_column("▶", justify="right", style="cyan")
     tbl.add_column("✓", justify="right", style="green")
     tbl.add_column("✗", justify="right", style="red")
@@ -593,9 +594,9 @@ def job_stats(
         compute_stats.items(), key=lambda x: x[1]["gpu_secs"], reverse=True,
     )
 
-    tbl2 = Table(title="By Compute", title_style="bold", show_edge=False,
-                 pad_edge=False)
-    tbl2.add_column("Compute", style="bold")
+    tbl2 = Table(title="By Compute", box=ROUNDED, title_style="bold",
+                 header_style="bold", pad_edge=True)
+    tbl2.add_column("Compute", style="cyan")
     tbl2.add_column("Jobs", justify="right")
     tbl2.add_column("▶", justify="right", style="cyan")
     tbl2.add_column("✓", justify="right", style="green")
@@ -642,9 +643,9 @@ def job_stats(
                 ws["gpu_secs"] += d * nodes
 
         sorted_ws = sorted(ws_stats.items(), key=lambda x: x[1]["gpu_secs"], reverse=True)
-        tbl_ws = Table(title="By Workspace", title_style="bold", show_edge=False,
-                       pad_edge=False)
-        tbl_ws.add_column("Workspace", style="bold")
+        tbl_ws = Table(title="By Workspace", box=ROUNDED, title_style="bold",
+                       header_style="bold", pad_edge=True)
+        tbl_ws.add_column("Workspace", style="cyan")
         tbl_ws.add_column("Jobs", justify="right")
         tbl_ws.add_column("▶", justify="right", style="cyan")
         tbl_ws.add_column("✓", justify="right", style="green")
@@ -688,9 +689,9 @@ def job_stats(
         sorted_users = sorted(
             user_counts.items(), key=lambda x: x[1]["gpu_secs"], reverse=True,
         )
-        tbl3 = Table(title="By User", title_style="bold", show_edge=False,
-                     pad_edge=False)
-        tbl3.add_column("User", style="bold")
+        tbl3 = Table(title="By User", box=ROUNDED, title_style="bold",
+                     header_style="bold", pad_edge=True)
+        tbl3.add_column("User", style="cyan")
         tbl3.add_column("Jobs", justify="right")
         tbl3.add_column("▶", justify="right", style="cyan")
         tbl3.add_column("✓", justify="right", style="green")
