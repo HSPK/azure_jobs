@@ -621,8 +621,9 @@ def job_stats(
 
     # ── By workspace (only with --all) ────────────────────────────────
     if all_ws:
-        ws_stats: dict[str, dict[str, int]] = defaultdict(
-            lambda: {"total": 0, "completed": 0, "failed": 0}
+        ws_stats: dict[str, dict[str, Any]] = defaultdict(
+            lambda: {"total": 0, "completed": 0, "failed": 0,
+                     "active": 0, "gpu_secs": 0}
         )
         for j in jobs:
             wsn = j.get("_workspace") or "unknown"
@@ -633,26 +634,37 @@ def job_stats(
                 ws["completed"] += 1
             elif st == "Failed":
                 ws["failed"] += 1
+            if st in _ACTIVE:
+                ws["active"] += 1
+            d = j.get("duration_secs")
+            if d is not None and d > 0 and st in _TERMINAL:
+                nodes = j.get("nodes") or 1
+                ws["gpu_secs"] += d * nodes
 
-        sorted_ws = sorted(ws_stats.items(), key=lambda x: x[1]["total"], reverse=True)
+        sorted_ws = sorted(ws_stats.items(), key=lambda x: x[1]["gpu_secs"], reverse=True)
         tbl_ws = Table(title="By Workspace", title_style="bold", show_edge=False,
                        pad_edge=False)
         tbl_ws.add_column("Workspace", style="bold")
         tbl_ws.add_column("Jobs", justify="right")
+        tbl_ws.add_column("▶", justify="right", style="cyan")
         tbl_ws.add_column("✓", justify="right", style="green")
         tbl_ws.add_column("✗", justify="right", style="red")
         tbl_ws.add_column("Rate", justify="right")
+        tbl_ws.add_column("GPU Hours", justify="right")
 
         for wsn, wst in sorted_ws:
             dec = wst["completed"] + wst["failed"]
             w_rate = f"{wst['completed'] / dec * 100:.0f}%" if dec else "—"
+            w_gpu = _fmt_gpu_hours(wst["gpu_secs"]) if wst["gpu_secs"] else "—"
             tbl_ws.add_row(wsn, str(wst["total"]),
-                           str(wst["completed"]), str(wst["failed"]), w_rate)
+                           str(wst["active"]), str(wst["completed"]),
+                           str(wst["failed"]), w_rate, w_gpu)
         print_table(tbl_ws)
 
     # ── By user ───────────────────────────────────────────────────────
-    user_counts: dict[str, dict[str, int]] = defaultdict(
-        lambda: {"total": 0, "completed": 0, "failed": 0}
+    user_counts: dict[str, dict[str, Any]] = defaultdict(
+        lambda: {"total": 0, "completed": 0, "failed": 0,
+                 "active": 0, "gpu_secs": 0}
     )
     for j in jobs:
         user = j.get("created_by") or "unknown"
@@ -665,24 +677,34 @@ def job_stats(
             uc["completed"] += 1
         elif st == "Failed":
             uc["failed"] += 1
+        if st in _ACTIVE:
+            uc["active"] += 1
+        d = j.get("duration_secs")
+        if d is not None and d > 0 and st in _TERMINAL:
+            nodes = j.get("nodes") or 1
+            uc["gpu_secs"] += d * nodes
 
     if len(user_counts) > 1:
         sorted_users = sorted(
-            user_counts.items(), key=lambda x: x[1]["total"], reverse=True,
+            user_counts.items(), key=lambda x: x[1]["gpu_secs"], reverse=True,
         )
         tbl3 = Table(title="By User", title_style="bold", show_edge=False,
                      pad_edge=False)
         tbl3.add_column("User", style="bold")
         tbl3.add_column("Jobs", justify="right")
+        tbl3.add_column("▶", justify="right", style="cyan")
         tbl3.add_column("✓", justify="right", style="green")
         tbl3.add_column("✗", justify="right", style="red")
         tbl3.add_column("Rate", justify="right")
+        tbl3.add_column("GPU Hours", justify="right")
 
         for uname, uc in sorted_users:
             dec = uc["completed"] + uc["failed"]
             u_rate = f"{uc['completed'] / dec * 100:.0f}%" if dec else "—"
+            u_gpu = _fmt_gpu_hours(uc["gpu_secs"]) if uc["gpu_secs"] else "—"
             tbl3.add_row(uname, str(uc["total"]),
-                         str(uc["completed"]), str(uc["failed"]), u_rate)
+                         str(uc["active"]), str(uc["completed"]),
+                         str(uc["failed"]), u_rate, u_gpu)
         print_table(tbl3)
 
 
