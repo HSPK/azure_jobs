@@ -87,6 +87,8 @@ def _collect_ssh_files(code_dir: str) -> dict[str, bytes]:
     If ``code_dir`` already contains a ``.ssh`` directory, skip (it will be
     uploaded as part of the normal code tree).  Otherwise, read key files
     from ``~/.ssh`` and return them keyed as ``.ssh/<filename>``.
+    If ``~/.ssh`` doesn't exist either, return a placeholder so the
+    ``.ssh`` directory is always created on the remote.
     """
     from pathlib import Path
 
@@ -96,7 +98,7 @@ def _collect_ssh_files(code_dir: str) -> dict[str, bytes]:
 
     home_ssh = Path.home() / ".ssh"
     if not home_ssh.is_dir():
-        return {}
+        return {".ssh/.keep": b""}
 
     _ALLOWED = {"id_rsa", "id_ed25519", "id_ecdsa", "config", "known_hosts"}
     result: dict[str, bytes] = {}
@@ -106,6 +108,8 @@ def _collect_ssh_files(code_dir: str) -> dict[str, bytes]:
                 result[f".ssh/{fp.name}"] = fp.read_bytes()
             except OSError:
                 log.debug("Failed to read %s", fp, exc_info=True)
+    if not result:
+        result[".ssh/.keep"] = b""
     return result
 
 
