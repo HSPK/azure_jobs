@@ -403,6 +403,7 @@ def job_stats(
     from datetime import datetime as dt
     from datetime import timezone as tz
 
+    from rich.panel import Panel
     from rich.table import Table
 
     from azure_jobs.utils.time import format_duration
@@ -477,27 +478,33 @@ def job_stats(
     med_queue = format_duration(_median(all_queue)) if all_queue else "—"
 
     # ── Overview panel ────────────────────────────────────────────────
-    console.print()
     scope = f"last {days}d" if days else f"last {total}"
     if all_ws:
         ws_count = len({j.get("_workspace", "") for j in jobs})
         scope += f", {ws_count} workspace{'s' if ws_count != 1 else ''}"
-    console.print(f"[bold]📊 Job Statistics[/bold]  [dim]({scope}, {total} jobs)[/dim]")
-    console.print()
 
-    parts = [
-        f"  [bold]Total[/bold] {total}",
-        f"  [bold green]✓ Completed[/bold green] {completed}",
-        f"  [bold red]✗ Failed[/bold red] {failed}",
-        f"  [dim]⊘ Canceled[/dim] {canceled}",
-    ]
+    grid = Table.grid(padding=(0, 2))
+    grid.add_column(style="key", justify="right")
+    grid.add_column(style="value")
+
+    grid.add_row("Jobs", str(total))
+    grid.add_row("Completed", f"[green]{completed}[/green]")
+    grid.add_row("Failed", f"[red]{failed}[/red]")
+    grid.add_row("Canceled", str(canceled))
     if active:
-        parts.append(f"  [bold cyan]▶ Active[/bold cyan] {active}")
-    parts.append(f"  [bold]Success Rate[/bold] {rate}")
-    parts.append(f"  [bold]Avg Duration[/bold] {avg_dur}  [dim]total {total_dur}[/dim]")
-    parts.append(f"  [bold]Avg Queue[/bold] {avg_queue}  [dim]median {med_queue}[/dim]")
+        grid.add_row("Active", f"[cyan]{active}[/cyan]")
+    grid.add_row("Success Rate", rate)
+    grid.add_row("Avg Duration", avg_dur)
+    grid.add_row("Total Duration", total_dur)
+    grid.add_row("Avg Queue", f"{avg_queue}  (median {med_queue})")
 
-    console.print("\n".join(parts))
+    console.print()
+    console.print(Panel(
+        grid,
+        title=f"[bold]Job Statistics[/bold]  ({scope})",
+        border_style="cyan",
+        expand=False,
+    ))
 
     # ── By experiment ─────────────────────────────────────────────────
     exp_stats: dict[str, dict[str, Any]] = defaultdict(
@@ -530,10 +537,10 @@ def job_stats(
     tbl.add_column("Total", justify="right")
     tbl.add_column("✓", justify="right", style="green")
     tbl.add_column("✗", justify="right", style="red")
-    tbl.add_column("⊘", justify="right", style="dim")
+    tbl.add_column("Canceled", justify="right")
     tbl.add_column("Rate", justify="right")
     tbl.add_column("Avg Dur", justify="right")
-    tbl.add_column("Total Dur", justify="right", style="dim")
+    tbl.add_column("Total Dur", justify="right")
 
     for exp_name, es in sorted_exps:
         dec = es["completed"] + es["failed"]
@@ -541,12 +548,10 @@ def job_stats(
         exp_dur = format_duration(sum(es["dur"]) // len(es["dur"])) if es["dur"] else "—"
         exp_total_dur = format_duration(sum(es["dur"])) if es["dur"] else "—"
 
-        row_style = "dim" if dec == 0 and es["canceled"] > 0 else None
         tbl.add_row(
             exp_name, str(es["total"]),
             str(es["completed"]), str(es["failed"]), str(es["canceled"]),
             exp_rate, exp_dur, exp_total_dur,
-            style=row_style,
         )
 
     print_table(tbl)
@@ -580,16 +585,15 @@ def job_stats(
                  pad_edge=False)
     tbl2.add_column("Compute", style="bold")
     tbl2.add_column("Jobs", justify="right")
-    tbl2.add_column("✓/✗", justify="right")
-    tbl2.add_column("Queue (avg)", justify="right")
-    tbl2.add_column("Queue (p50)", justify="right")
-    tbl2.add_column("Queue (max)", justify="right")
+    tbl2.add_column("✓", justify="right", style="green")
+    tbl2.add_column("✗", justify="right", style="red")
+    tbl2.add_column("Avg Queue", justify="right")
+    tbl2.add_column("P50 Queue", justify="right")
+    tbl2.add_column("Max Queue", justify="right")
     tbl2.add_column("Avg Dur", justify="right")
-    tbl2.add_column("Total Dur", justify="right", style="dim")
+    tbl2.add_column("Total Dur", justify="right")
 
     for comp_name, cs in sorted_computes:
-        dec = cs["completed"] + cs["failed"]
-        ratio = f"{cs['completed']}/{cs['failed']}" if dec else "—"
         q_avg = format_duration(sum(cs["queue"]) // len(cs["queue"])) if cs["queue"] else "—"
         q_p50 = format_duration(_median(cs["queue"])) if cs["queue"] else "—"
         q_max = format_duration(max(cs["queue"])) if cs["queue"] else "—"
@@ -597,7 +601,8 @@ def job_stats(
         c_total_dur = format_duration(sum(cs["dur"])) if cs["dur"] else "—"
 
         tbl2.add_row(
-            comp_name, str(cs["total"]), ratio,
+            comp_name, str(cs["total"]),
+            str(cs["completed"]), str(cs["failed"]),
             q_avg, q_p50, q_max, c_dur, c_total_dur,
         )
 
