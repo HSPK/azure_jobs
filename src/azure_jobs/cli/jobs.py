@@ -266,7 +266,15 @@ def _fetch_jobs_for_stats(
     from azure_jobs.utils.ui import console
 
     client = create_rest_client(ws_name=ws_name)
-    return _fetch_jobs_from_client(client, n, cutoff_utc=cutoff_utc, console=console)
+    with console.status(
+        "[bold cyan]Fetching jobs…[/bold cyan]", spinner="dots",
+    ) as status_ctx:
+        def _on_progress(count: int) -> None:
+            status_ctx.update(f"[bold cyan]Fetching jobs… {count} loaded[/bold cyan]")
+        return _fetch_jobs_from_client(
+            client, n, cutoff_utc=cutoff_utc, console=console,
+            on_progress=_on_progress,
+        )
 
 
 def _fetch_jobs_all_ws(
@@ -321,6 +329,7 @@ def _fetch_jobs_from_client(
     cutoff_utc: datetime | None = None,
     console: Any = None,
     label: str = "",
+    on_progress: Any = None,
 ) -> list[dict[str, Any]]:
     """Fetch up to *n* jobs from one workspace client, stopping at *cutoff_utc*."""
     from azure_jobs.utils.time import _parse_utc
@@ -349,6 +358,9 @@ def _fetch_jobs_from_client(
             jobs.append(j)
             if len(jobs) >= n:
                 break
+
+        if on_progress:
+            on_progress(len(jobs))
 
         if past_cutoff or not next_link:
             break
@@ -460,6 +472,7 @@ def job_stats(
             all_queue.append(q)
 
     avg_dur = format_duration(sum(all_dur) // len(all_dur)) if all_dur else "—"
+    total_dur = format_duration(sum(all_dur)) if all_dur else "—"
     avg_queue = format_duration(sum(all_queue) // len(all_queue)) if all_queue else "—"
     med_queue = format_duration(_median(all_queue)) if all_queue else "—"
 
@@ -481,7 +494,7 @@ def job_stats(
     if active:
         parts.append(f"  [bold cyan]▶ Active[/bold cyan] {active}")
     parts.append(f"  [bold]Success Rate[/bold] {rate}")
-    parts.append(f"  [bold]Avg Duration[/bold] {avg_dur}")
+    parts.append(f"  [bold]Avg Duration[/bold] {avg_dur}  [dim]total {total_dur}[/dim]")
     parts.append(f"  [bold]Avg Queue[/bold] {avg_queue}  [dim]median {med_queue}[/dim]")
 
     console.print("\n".join(parts))
@@ -519,18 +532,20 @@ def job_stats(
     tbl.add_column("✗", justify="right", style="red")
     tbl.add_column("⊘", justify="right", style="dim")
     tbl.add_column("Rate", justify="right")
-    tbl.add_column("Avg Duration", justify="right")
+    tbl.add_column("Avg Dur", justify="right")
+    tbl.add_column("Total Dur", justify="right", style="dim")
 
     for exp_name, es in sorted_exps:
         dec = es["completed"] + es["failed"]
         exp_rate = f"{es['completed'] / dec * 100:.0f}%" if dec else "—"
         exp_dur = format_duration(sum(es["dur"]) // len(es["dur"])) if es["dur"] else "—"
+        exp_total_dur = format_duration(sum(es["dur"])) if es["dur"] else "—"
 
         row_style = "dim" if dec == 0 and es["canceled"] > 0 else None
         tbl.add_row(
             exp_name, str(es["total"]),
             str(es["completed"]), str(es["failed"]), str(es["canceled"]),
-            exp_rate, exp_dur,
+            exp_rate, exp_dur, exp_total_dur,
             style=row_style,
         )
 
@@ -569,7 +584,8 @@ def job_stats(
     tbl2.add_column("Queue (avg)", justify="right")
     tbl2.add_column("Queue (p50)", justify="right")
     tbl2.add_column("Queue (max)", justify="right")
-    tbl2.add_column("Avg Duration", justify="right")
+    tbl2.add_column("Avg Dur", justify="right")
+    tbl2.add_column("Total Dur", justify="right", style="dim")
 
     for comp_name, cs in sorted_computes:
         dec = cs["completed"] + cs["failed"]
@@ -578,10 +594,11 @@ def job_stats(
         q_p50 = format_duration(_median(cs["queue"])) if cs["queue"] else "—"
         q_max = format_duration(max(cs["queue"])) if cs["queue"] else "—"
         c_dur = format_duration(sum(cs["dur"]) // len(cs["dur"])) if cs["dur"] else "—"
+        c_total_dur = format_duration(sum(cs["dur"])) if cs["dur"] else "—"
 
         tbl2.add_row(
             comp_name, str(cs["total"]), ratio,
-            q_avg, q_p50, q_max, c_dur,
+            q_avg, q_p50, q_max, c_dur, c_total_dur,
         )
 
     print_table(tbl2)
