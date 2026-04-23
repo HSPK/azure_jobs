@@ -96,7 +96,7 @@ def build_command_list(
         f"export AJ_ID={sid}",
         f"export AJ_TEMPLATE={template}",
         f"export AJ_SUBMIT_TIMESTAMP_UTC={datetime.now(timezone.utc).isoformat()}",
-        "export PATH=$$HOME/.local/bin:$$PATH",
+        "export PATH=$HOME/.local/bin:$PATH",
     ]
     cmd_list.extend(conf_commands)
 
