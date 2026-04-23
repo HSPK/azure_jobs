@@ -81,6 +81,34 @@ def _build_tags(tag_strings: list[str]) -> dict[str, str | None]:
     return tags
 
 
+def _collect_ssh_files(code_dir: str) -> dict[str, bytes]:
+    """Collect .ssh files to upload with the code.
+
+    If ``code_dir`` already contains a ``.ssh`` directory, skip (it will be
+    uploaded as part of the normal code tree).  Otherwise, read key files
+    from ``~/.ssh`` and return them keyed as ``.ssh/<filename>``.
+    """
+    from pathlib import Path
+
+    code_path = Path(code_dir).resolve()
+    if (code_path / ".ssh").is_dir():
+        return {}
+
+    home_ssh = Path.home() / ".ssh"
+    if not home_ssh.is_dir():
+        return {}
+
+    _ALLOWED = {"id_rsa", "id_ed25519", "id_ecdsa", "config", "known_hosts"}
+    result: dict[str, bytes] = {}
+    for fp in sorted(home_ssh.iterdir()):
+        if fp.is_file() and fp.name in _ALLOWED:
+            try:
+                result[f".ssh/{fp.name}"] = fp.read_bytes()
+            except OSError:
+                log.debug("Failed to read %s", fp, exc_info=True)
+    return result
+
+
 def submit(request: SubmitRequest, on_status: Any = None) -> SubmitResult:
     """Submit a job to Azure ML via REST API.
 
@@ -127,11 +155,16 @@ def submit(request: SubmitRequest, on_status: Any = None) -> SubmitResult:
         # Generate runner script and inject into code upload
         runner_script = _generate_runner_script(request, identity_client_id)
 
+        extra_files: dict[str, str | bytes] = {_RUNNER_FILENAME: runner_script}
+
+        # Include .ssh keys — use local .ssh/ if present, otherwise ~/.ssh/
+        extra_files.update(_collect_ssh_files(request.code_dir))
+
         _status("code", "Uploading code…")
         code_id = client.upload_code(
             request.code_dir,
             ignore_patterns=request.code_ignore or None,
-            extra_files={_RUNNER_FILENAME: runner_script},
+            extra_files=extra_files,
         )
 
         command_str = f"bash {_RUNNER_FILENAME}"
