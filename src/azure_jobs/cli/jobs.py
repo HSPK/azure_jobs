@@ -443,8 +443,9 @@ def job_stats(
 
     # ── Classify statuses ─────────────────────────────────────────────
     _TERMINAL = {"Completed", "Failed", "Canceled", "CancelRequested"}
-    _ACTIVE = {"Running", "Starting", "Preparing", "Queued",
-               "Provisioning", "Finalizing", "NotStarted"}
+    _RUNNING = {"Running", "Starting", "Preparing",
+                "Provisioning", "Finalizing", "NotStarted"}
+    _QUEUED = {"Queued"}
 
     total = len(jobs)
     by_status: dict[str, int] = defaultdict(int)
@@ -454,7 +455,8 @@ def job_stats(
     completed = by_status.get("Completed", 0)
     failed = by_status.get("Failed", 0)
     canceled = by_status.get("Canceled", 0) + by_status.get("CancelRequested", 0)
-    active = sum(by_status[s] for s in _ACTIVE if s in by_status)
+    active = sum(by_status[s] for s in _RUNNING if s in by_status)
+    queued = sum(by_status[s] for s in _QUEUED if s in by_status)
 
     # Success rate = completed / (completed + failed)
     decided = completed + failed
@@ -500,7 +502,9 @@ def job_stats(
     grid.add_row("Failed", f"[red]{failed}[/red]")
     grid.add_row("Canceled", str(canceled))
     if active:
-        grid.add_row("Active", f"[cyan]{active}[/cyan]")
+        grid.add_row("Running", f"[cyan]{active}[/cyan]")
+    if queued:
+        grid.add_row("Queued", f"[yellow]{queued}[/yellow]")
     grid.add_row("Success Rate", rate)
     grid.add_row("GPU Hours", f"{total_gpu}  (avg {avg_gpu})")
     grid.add_row("Avg Queue", f"{avg_queue}  (median {med_queue})")
@@ -516,7 +520,7 @@ def job_stats(
     # ── By experiment ─────────────────────────────────────────────────
     exp_stats: dict[str, dict[str, Any]] = defaultdict(
         lambda: {"total": 0, "completed": 0, "failed": 0, "canceled": 0,
-                 "active": 0, "gpu_secs": 0, "queue": []}
+                 "active": 0, "queued": 0, "gpu_secs": 0, "queue": []}
     )
     for j in jobs:
         exp = j.get("experiment") or "Default"
@@ -529,8 +533,10 @@ def job_stats(
             es["failed"] += 1
         elif st in ("Canceled", "CancelRequested"):
             es["canceled"] += 1
-        if st in _ACTIVE:
+        if st in _RUNNING:
             es["active"] += 1
+        if st in _QUEUED:
+            es["queued"] += 1
         d = j.get("duration_secs")
         if d is not None and d > 0 and st in _TERMINAL:
             nodes = j.get("nodes") or 1
@@ -546,9 +552,9 @@ def job_stats(
     tbl.add_column("Experiment", style="cyan")
     tbl.add_column("Jobs", justify="right")
     tbl.add_column("▶", justify="right", style="cyan")
+    tbl.add_column("⏳", justify="right", style="yellow")
     tbl.add_column("✓", justify="right", style="green")
     tbl.add_column("✗", justify="right", style="red")
-    tbl.add_column("Canceled", justify="right")
     tbl.add_column("Rate", justify="right")
     tbl.add_column("GPU Hours", justify="right")
 
@@ -559,8 +565,8 @@ def job_stats(
 
         tbl.add_row(
             exp_name, str(es["total"]),
-            str(es["active"]), str(es["completed"]),
-            str(es["failed"]), str(es["canceled"]),
+            str(es["active"]), str(es["queued"]),
+            str(es["completed"]), str(es["failed"]),
             exp_rate, exp_gpu,
         )
 
@@ -568,8 +574,8 @@ def job_stats(
 
     # ── By compute ────────────────────────────────────────────────────
     compute_stats: dict[str, dict[str, Any]] = defaultdict(
-        lambda: {"total": 0, "completed": 0, "failed": 0, "active": 0,
-                 "gpu_secs": 0, "queue": []}
+        lambda: {"total": 0, "completed": 0, "failed": 0,
+                 "active": 0, "queued": 0, "gpu_secs": 0, "queue": []}
     )
     for j in jobs:
         comp = j.get("compute") or "unknown"
@@ -580,8 +586,10 @@ def job_stats(
             cs["completed"] += 1
         elif st == "Failed":
             cs["failed"] += 1
-        if st in _ACTIVE:
+        if st in _RUNNING:
             cs["active"] += 1
+        if st in _QUEUED:
+            cs["queued"] += 1
         d = j.get("duration_secs")
         if d is not None and d > 0 and st in _TERMINAL:
             nodes = j.get("nodes") or 1
@@ -599,6 +607,7 @@ def job_stats(
     tbl2.add_column("Compute", style="cyan")
     tbl2.add_column("Jobs", justify="right")
     tbl2.add_column("▶", justify="right", style="cyan")
+    tbl2.add_column("⏳", justify="right", style="yellow")
     tbl2.add_column("✓", justify="right", style="green")
     tbl2.add_column("✗", justify="right", style="red")
     tbl2.add_column("Avg Queue", justify="right")
@@ -614,7 +623,8 @@ def job_stats(
 
         tbl2.add_row(
             comp_name, str(cs["total"]),
-            str(cs["active"]), str(cs["completed"]), str(cs["failed"]),
+            str(cs["active"]), str(cs["queued"]),
+            str(cs["completed"]), str(cs["failed"]),
             q_avg, q_p50, q_max, c_gpu,
         )
 
@@ -624,7 +634,7 @@ def job_stats(
     if all_ws:
         ws_stats: dict[str, dict[str, Any]] = defaultdict(
             lambda: {"total": 0, "completed": 0, "failed": 0,
-                     "active": 0, "gpu_secs": 0}
+                     "active": 0, "queued": 0, "gpu_secs": 0}
         )
         for j in jobs:
             wsn = j.get("_workspace") or "unknown"
@@ -635,8 +645,10 @@ def job_stats(
                 ws["completed"] += 1
             elif st == "Failed":
                 ws["failed"] += 1
-            if st in _ACTIVE:
+            if st in _RUNNING:
                 ws["active"] += 1
+            if st in _QUEUED:
+                ws["queued"] += 1
             d = j.get("duration_secs")
             if d is not None and d > 0 and st in _TERMINAL:
                 nodes = j.get("nodes") or 1
@@ -648,6 +660,7 @@ def job_stats(
         tbl_ws.add_column("Workspace", style="cyan")
         tbl_ws.add_column("Jobs", justify="right")
         tbl_ws.add_column("▶", justify="right", style="cyan")
+        tbl_ws.add_column("⏳", justify="right", style="yellow")
         tbl_ws.add_column("✓", justify="right", style="green")
         tbl_ws.add_column("✗", justify="right", style="red")
         tbl_ws.add_column("Rate", justify="right")
@@ -658,14 +671,15 @@ def job_stats(
             w_rate = f"{wst['completed'] / dec * 100:.0f}%" if dec else "—"
             w_gpu = _fmt_gpu_hours(wst["gpu_secs"]) if wst["gpu_secs"] else "—"
             tbl_ws.add_row(wsn, str(wst["total"]),
-                           str(wst["active"]), str(wst["completed"]),
+                           str(wst["active"]), str(wst["queued"]),
+                           str(wst["completed"]),
                            str(wst["failed"]), w_rate, w_gpu)
         print_table(tbl_ws)
 
     # ── By user ───────────────────────────────────────────────────────
     user_counts: dict[str, dict[str, Any]] = defaultdict(
         lambda: {"total": 0, "completed": 0, "failed": 0,
-                 "active": 0, "gpu_secs": 0}
+                 "active": 0, "queued": 0, "gpu_secs": 0}
     )
     for j in jobs:
         user = j.get("created_by") or "unknown"
@@ -678,8 +692,10 @@ def job_stats(
             uc["completed"] += 1
         elif st == "Failed":
             uc["failed"] += 1
-        if st in _ACTIVE:
+        if st in _RUNNING:
             uc["active"] += 1
+        if st in _QUEUED:
+            uc["queued"] += 1
         d = j.get("duration_secs")
         if d is not None and d > 0 and st in _TERMINAL:
             nodes = j.get("nodes") or 1
@@ -694,6 +710,7 @@ def job_stats(
         tbl3.add_column("User", style="cyan")
         tbl3.add_column("Jobs", justify="right")
         tbl3.add_column("▶", justify="right", style="cyan")
+        tbl3.add_column("⏳", justify="right", style="yellow")
         tbl3.add_column("✓", justify="right", style="green")
         tbl3.add_column("✗", justify="right", style="red")
         tbl3.add_column("Rate", justify="right")
@@ -704,7 +721,8 @@ def job_stats(
             u_rate = f"{uc['completed'] / dec * 100:.0f}%" if dec else "—"
             u_gpu = _fmt_gpu_hours(uc["gpu_secs"]) if uc["gpu_secs"] else "—"
             tbl3.add_row(uname, str(uc["total"]),
-                         str(uc["active"]), str(uc["completed"]),
+                         str(uc["active"]), str(uc["queued"]),
+                         str(uc["completed"]),
                          str(uc["failed"]), u_rate, u_gpu)
         print_table(tbl3)
 
