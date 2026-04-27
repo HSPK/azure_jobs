@@ -97,7 +97,7 @@ def init(force: bool) -> None:
         except Exception:
             dim(".amltconfig exists")
         if not (force and _confirm_step("amlt project", force)):
-            _register_amlt_workspace(ws)
+            _register_amlt_workspaces(ws)
             success("aj initialised ✓")
             return
 
@@ -148,12 +148,35 @@ def init(force: bool) -> None:
     if result.stdout.strip():
         dim(result.stdout.strip())
 
-    # 7. Register workspace with amlt
-    _register_amlt_workspace(ws)
+    # 7. Register workspaces with amlt
+    _register_amlt_workspaces(ws)
 
 
-def _register_amlt_workspace(ws: dict[str, str]) -> None:
-    """Register the aj workspace with amlt.
+def _register_amlt_workspaces(aj_ws: dict[str, str]) -> None:
+    """Register all workspaces in the subscription with amlt."""
+    from azure_jobs.core.config import detect_workspaces
+    from azure_jobs.utils.ui import dim, info, warning
+
+    sub = aj_ws.get("subscription_id", "")
+    if not sub:
+        return
+
+    info("Detecting workspaces in subscription…")
+    all_ws = detect_workspaces(sub)
+    if not all_ws:
+        # Fall back to just the aj workspace
+        _register_amlt_workspace(
+            aj_ws["workspace_name"], sub, aj_ws["resource_group"],
+        )
+        return
+
+    dim(f"Found {len(all_ws)} workspace(s)")
+    for w in all_ws:
+        _register_amlt_workspace(w["name"], sub, w["resource_group"])
+
+
+def _register_amlt_workspace(name: str, subscription_id: str, resource_group: str) -> None:
+    """Register a single workspace with amlt.
 
     Uses ``pty.fork()`` to give the child a real controlling terminal
     so ``click.getchar()`` (which opens ``/dev/tty``) works.  We auto-
@@ -169,10 +192,7 @@ def _register_amlt_workspace(ws: dict[str, str]) -> None:
 
     from azure_jobs.utils.ui import dim, info, success, warning
 
-    name = ws.get("workspace_name", "")
-    sub = ws.get("subscription_id", "")
-    rg = ws.get("resource_group", "")
-    if not (name and sub and rg):
+    if not (name and subscription_id and resource_group):
         return
 
     if shutil.which("amlt") is None:
@@ -188,7 +208,7 @@ def _register_amlt_workspace(ws: dict[str, str]) -> None:
         os.execvp(
             "amlt",
             ["amlt", "workspace", "add", name,
-             "--subscription", sub, "--resource-group", rg],
+             "--subscription", subscription_id, "--resource-group", resource_group],
         )
         # unreachable
     else:
