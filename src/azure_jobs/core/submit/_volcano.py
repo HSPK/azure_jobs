@@ -231,7 +231,7 @@ def submit_volcano_job(
         tmp_path = f.name
 
     try:
-        cmd = ["kubectl", "apply", "-f", tmp_path]
+        cmd = ["kubectl", "create", "-f", tmp_path]
         if cfg.context:
             cmd.extend(["--context", cfg.context])
 
