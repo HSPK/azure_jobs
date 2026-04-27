@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 from ._models import SubmitRequest
 
 _RUNNER_FILENAME = "aj_runner.sh"
@@ -34,10 +32,10 @@ def _generate_runner_script(
     # --- SSH setup ---
     lines.append("# SSH key setup")
     lines.append('if [ -d "$AZUREML_CR_CODE_PATH/.ssh" ]; then')
-    lines.append('  mkdir -p $HOME/.ssh')
-    lines.append('  cp -n $AZUREML_CR_CODE_PATH/.ssh/* $HOME/.ssh/ 2>/dev/null || true')
-    lines.append('  chmod 700 $HOME/.ssh')
-    lines.append('  chmod 600 $HOME/.ssh/id_* 2>/dev/null || true')
+    lines.append("  mkdir -p $HOME/.ssh")
+    lines.append("  cp -n $AZUREML_CR_CODE_PATH/.ssh/* $HOME/.ssh/ 2>/dev/null || true")
+    lines.append("  chmod 700 $HOME/.ssh")
+    lines.append("  chmod 600 $HOME/.ssh/id_* 2>/dev/null || true")
     lines.append("fi")
     lines.append("")
 
@@ -49,13 +47,17 @@ def _generate_runner_script(
         lines.append("  export RANK=$OMPI_COMM_WORLD_RANK")
         lines.append("  export WORLD_SIZE=$OMPI_COMM_WORLD_SIZE")
         lines.append("  export LOCAL_RANK=$OMPI_COMM_WORLD_LOCAL_RANK")
-        lines.append("  export NODE_RANK=$((OMPI_COMM_WORLD_RANK / OMPI_COMM_WORLD_LOCAL_SIZE))")
+        lines.append(
+            "  export NODE_RANK=$((OMPI_COMM_WORLD_RANK / OMPI_COMM_WORLD_LOCAL_SIZE))"
+        )
         lines.append("fi")
         lines.append("")
 
         lines.append("# Master address resolution")
         lines.append('if [ -n "$AZ_BATCH_MASTER_NODE" ]; then')
-        lines.append('  export MASTER_ADDR=$(echo "$AZ_BATCH_MASTER_NODE" | cut -d: -f1)')
+        lines.append(
+            '  export MASTER_ADDR=$(echo "$AZ_BATCH_MASTER_NODE" | cut -d: -f1)'
+        )
         lines.append("fi")
         lines.append('if [ -n "$AZ_BATCHAI_MPI_MASTER_NODE" ]; then')
         lines.append("  export MASTER_ADDR=$AZ_BATCHAI_MPI_MASTER_NODE")
@@ -92,10 +94,20 @@ def _generate_runner_script(
                 lines.append(cmd)
         lines.append("")
 
-    # --- User command ---
-    lines.append("# Run")
+    # --- User command (with signal forwarding for graceful shutdown) ---
+    # Run user commands in a subshell with set -e, backgrounded so we can
+    # trap SIGINT/SIGTERM and forward to the process for checkpoint saving.
+    lines.append("# Run with signal forwarding")
+    lines.append("set +e")
+    lines.append("(")
+    lines.append("set -e")
     for cmd in request.command:
         lines.append(cmd)
+    lines.append(") &")
+    lines.append("_AJ_PID=$!")
+    lines.append('trap "kill -15 $_AJ_PID 2>/dev/null; wait $_AJ_PID" SIGINT SIGTERM')
+    lines.append("wait $_AJ_PID")
+    lines.append("exit $?")
     lines.append("")
 
     return "\n".join(lines)
