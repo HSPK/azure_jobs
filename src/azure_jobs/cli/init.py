@@ -10,12 +10,22 @@ import click
 from azure_jobs.cli import main
 
 
+def _confirm_step(name: str, force: bool) -> bool:
+    """In force mode, ask if user wants to redo this step."""
+    if not force:
+        return True
+    return click.confirm(f"  Reconfigure {name}?", default=True)
+
+
 @main.command()
-def init() -> None:
+@click.option("-f", "--force", is_flag=True, help="Re-run all steps (with skip option)")
+def init(force: bool) -> None:
     """Initialise aj project directory and configure amlt.
 
     Sets up .azure_jobs/ structure, configures workspace interactively
     if not already set, and generates .amltconfig for amlt integration.
+
+    Use -f to re-run all steps (each step can be skipped).
     """
     from pathlib import Path
 
@@ -23,7 +33,7 @@ def init() -> None:
     from azure_jobs.core.config import get_workspace_config, read_config, write_config
     from azure_jobs.utils.ui import console, dim, error, info, success, warning
 
-    # 1. Pull templates if .azure_jobs/ doesn't exist
+    # 1. Templates
     if not const.AJ_HOME.exists():
         repo_url = click.prompt(
             "Template repo URL (e.g. user/repo or git@github.com:…)",
@@ -32,13 +42,21 @@ def init() -> None:
         from azure_jobs.cli.pull import _do_pull
 
         _do_pull(repo_url, force=False)
+    elif force and _confirm_step("templates (re-pull from remote)", force):
+        from azure_jobs.cli.pull import _do_pull
+
+        cfg = read_config()
+        repo_url = cfg.get("repo_id") or click.prompt(
+            "Template repo URL", type=str,
+        )
+        _do_pull(repo_url, force=True)
     else:
         info(".azure_jobs/ already exists — skipping template pull")
 
-    # 2. Set up workspace config if not already configured
+    # 2. Workspace
     ws = get_workspace_config()
-    if not ws or not ws.get("workspace_name"):
-        info("No workspace configured — starting interactive setup")
+    need_ws = not ws or not ws.get("workspace_name")
+    if need_ws or (force and _confirm_step("workspace", force)):
         ws = _setup_workspace()
         if not ws:
             warning("Workspace not configured. Re-run [bold]aj init[/bold] after setting up.")
@@ -49,22 +67,25 @@ def init() -> None:
             f"(rg={ws['resource_group']}, sub={ws['subscription_id'][:8]}…)"
         )
 
-    # 3. Ensure experiment is set
+    # 3. Experiment
     cfg = read_config()
-    if not cfg.get("experiment"):
-        exp = _default_experiment_name()
+    need_exp = not cfg.get("experiment")
+    if need_exp or (force and _confirm_step("experiment", force)):
+        default = cfg.get("experiment") or _default_experiment_name()
+        exp = click.prompt("Experiment name", default=default)
         cfg["experiment"] = exp
         write_config(cfg)
         info(f"Experiment set to [bold]{exp}[/bold]")
 
-    # 4. Set up amlt if available
+    # 4. amlt
     if not shutil.which("amlt"):
         warning("amlt not found in PATH — skipping .amltconfig setup")
         dim("Install amlt with: pipx install amlt")
         success("aj initialised ✓")
         return
 
-    if Path(".amltconfig").exists():
+    has_amltconfig = Path(".amltconfig").exists()
+    if has_amltconfig and not (force and _confirm_step("amlt project", force)):
         info(".amltconfig already exists — skipping amlt project creation")
         success("aj initialised ✓")
         return
