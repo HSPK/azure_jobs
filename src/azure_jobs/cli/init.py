@@ -153,14 +153,12 @@ def init(force: bool) -> None:
 
 
 def _register_amlt_workspace(ws: dict[str, str]) -> None:
-    """Register the aj workspace with amlt using its Python API directly.
+    """Register the aj workspace with amlt.
 
-    Bypasses the interactive ``amlt workspace add`` CLI which uses
-    ``click.getchar()`` (reads /dev/tty) and cannot be piped to.
+    Runs ``amlt workspace add`` in a new session (no controlling TTY)
+    so that ``click.getchar()`` hits EOFError and falls back to defaults.
     """
-    import os
     import subprocess
-    import sys
 
     from rich.console import Console
 
@@ -175,74 +173,38 @@ def _register_amlt_workspace(ws: dict[str, str]) -> None:
     console = Console(stderr=True)
     info(f"Registering amlt workspace [bold]{name}[/bold]…")
 
-    # Find amlt's python interpreter (installed via pipx)
-    amlt_bin = _find_amlt_python()
-    if amlt_bin is None:
-        warning("Cannot find amlt Python — skipping workspace registration")
-        return
-
-    # Use amlt's Python API directly to avoid interactive prompts
-    script = f"""\
-import sys, os
-os.chdir({str(os.getcwd())!r})
-from amlt.helpers.clusters import _get_sing_workspace
-from amlt.api.target import WorkspaceAlreadyExistException
-from amlt.project import load_project
-
-project = load_project()
-try:
-    ws_cfg = _get_sing_workspace(project, {name!r}, {sub!r}, {rg!r})
-    project.targets.add_workspace_config(ws_cfg)
-    print("OK:added")
-except WorkspaceAlreadyExistException:
-    print("OK:exists")
-except Exception as e:
-    print(f"ERR:{{e}}", file=sys.stderr)
-    sys.exit(1)
-"""
-
-    result = subprocess.run(
-        [amlt_bin, "-c", script],
-        capture_output=True,
+    # start_new_session=True detaches from the controlling terminal.
+    # click.getchar() then gets EOFError → returns default ("Y").
+    # stdin=DEVNULL ensures no accidental reads block.
+    proc = subprocess.Popen(
+        [
+            "amlt", "workspace", "add", name,
+            "--subscription", sub,
+            "--resource-group", rg,
+        ],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
         text=True,
+        start_new_session=True,
     )
-    stdout = result.stdout.strip()
-    stderr = result.stderr.strip()
+    assert proc.stdout is not None
 
-    # Show any amlt log lines (they go to stderr) in dim
-    for line in stderr.splitlines():
-        stripped = line.strip()
-        if stripped and not stripped.startswith("ERR:"):
+    output_lines: list[str] = []
+    for line in proc.stdout:
+        stripped = line.rstrip()
+        if stripped:
             console.print(f"  {stripped}", style="dim")
+            output_lines.append(stripped)
 
-    if result.returncode == 0:
-        if "exists" in stdout:
-            dim(f"Workspace {name} already registered")
-        else:
-            success(f"Workspace [bold]{name}[/bold] registered ✓")
+    rc = proc.wait()
+    output = "\n".join(output_lines)
+    if rc == 0:
+        success(f"Workspace [bold]{name}[/bold] registered ✓")
+    elif "already" in output.lower():
+        dim(f"Workspace {name} already registered")
     else:
-        err_msg = stderr.strip() or stdout.strip()
-        warning(f"Failed to register {name}: {err_msg}")
-
-
-def _find_amlt_python() -> str | None:
-    """Locate amlt's Python interpreter."""
-    import shutil
-    from pathlib import Path
-
-    amlt_path = shutil.which("amlt")
-    if amlt_path is None:
-        return None
-    # amlt script's shebang points to the venv python
-    try:
-        first_line = Path(amlt_path).read_text().splitlines()[0]
-        if first_line.startswith("#!") and "python" in first_line:
-            py = first_line[2:].strip()
-            if Path(py).exists():
-                return py
-    except Exception:
-        pass
-    return None
+        warning(f"Failed to register {name} (exit {rc})")
 
 
 def _setup_workspace() -> dict[str, str] | None:
