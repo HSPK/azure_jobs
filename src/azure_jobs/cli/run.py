@@ -285,7 +285,7 @@ def run(
     elif amlt and _amlt_available():
         # Strip aj-specific fields that amlt doesn't understand
         _clean_config_for_amlt(submission_fp)
-        _submit_via_amlt(submission_fp, name, rec, name, interactive=interactive)
+        _submit_via_amlt(submission_fp, experiment, rec, name, interactive=interactive)
     else:
         from azure_jobs.core.submit import build_request_from_config
 
