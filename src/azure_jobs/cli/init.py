@@ -23,15 +23,17 @@ def init() -> None:
     from azure_jobs.core.config import get_workspace_config, read_config, write_config
     from azure_jobs.utils.ui import console, dim, error, info, success, warning
 
-    # 1. Create .azure_jobs/ directory structure
-    for d in [
-        const.AJ_HOME,
-        const.AJ_TEMPLATE_HOME,
-        const.AJ_SUBMISSION_HOME,
-    ]:
-        d.mkdir(parents=True, exist_ok=True)
+    # 1. Pull templates if .azure_jobs/ doesn't exist
+    if not const.AJ_HOME.exists():
+        repo_url = click.prompt(
+            "Template repo URL (e.g. user/repo or git@github.com:…)",
+            type=str,
+        )
+        from azure_jobs.cli.pull import _do_pull
 
-    info("Created .azure_jobs/ directory structure")
+        _do_pull(repo_url, force=False)
+    else:
+        info(".azure_jobs/ already exists — skipping template pull")
 
     # 2. Set up workspace config if not already configured
     ws = get_workspace_config()
@@ -55,19 +57,7 @@ def init() -> None:
         write_config(cfg)
         info(f"Experiment set to [bold]{exp}[/bold]")
 
-    # 4. Pull templates if repo_id configured
-    repo_id = cfg.get("repo_id")
-    if repo_id:
-        info(f"Pulling templates from {repo_id}…")
-        try:
-            from azure_jobs.cli.pull import _do_pull
-
-            _do_pull(repo_id, force=False)
-            success("Templates pulled ✓")
-        except Exception as exc:
-            warning(f"Template pull failed: {exc}")
-
-    # 5. Set up amlt if available
+    # 4. Set up amlt if available
     if not shutil.which("amlt"):
         warning("amlt not found in PATH — skipping .amltconfig setup")
         dim("Install amlt with: pipx install amlt")
@@ -79,7 +69,7 @@ def init() -> None:
         success("aj initialised ✓")
         return
 
-    # 6. Query workspace for default storage account
+    # 5. Query workspace for default storage account
     with console.status(
         "[bold cyan]Querying workspace storage…[/bold cyan]", spinner="dots"
     ):
@@ -105,7 +95,7 @@ def init() -> None:
 
     dim(f"Storage account: {storage_account}")
 
-    # 7. Create amlt project
+    # 6. Create amlt project
     project_name = ws["workspace_name"].lower().replace(" ", "-")
     info(f"Creating amlt project [bold]{project_name}[/bold]…")
 
