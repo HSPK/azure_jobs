@@ -171,6 +171,7 @@ def _register_amlt_workspace(ws: dict[str, str]) -> None:
             "--subscription", sub,
             "--resource-group", rg,
         ],
+        input="y\ny\ny\n",
         capture_output=True,
         text=True,
     )
