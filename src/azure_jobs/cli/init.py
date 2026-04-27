@@ -155,10 +155,15 @@ def init(force: bool) -> None:
 def _register_amlt_workspace(ws: dict[str, str]) -> None:
     """Register the aj workspace with amlt.
 
-    Runs ``amlt workspace add`` in a new session (no controlling TTY)
-    so that ``click.getchar()`` hits EOFError and falls back to defaults.
+    Uses ``pty.fork()`` to give the child a real controlling terminal
+    so ``click.getchar()`` (which opens ``/dev/tty``) works.  We auto-
+    answer every single-char prompt with Enter (= accept default).
     """
-    import subprocess
+    import errno
+    import os
+    import pty
+    import shutil
+    import signal
 
     from rich.console import Console
 
@@ -170,41 +175,56 @@ def _register_amlt_workspace(ws: dict[str, str]) -> None:
     if not (name and sub and rg):
         return
 
+    if shutil.which("amlt") is None:
+        warning("amlt not found — skipping workspace registration")
+        return
+
     console = Console(stderr=True)
     info(f"Registering amlt workspace [bold]{name}[/bold]…")
 
-    # start_new_session=True detaches from the controlling terminal.
-    # click.getchar() then gets EOFError → returns default ("Y").
-    # stdin=DEVNULL ensures no accidental reads block.
-    proc = subprocess.Popen(
-        [
-            "amlt", "workspace", "add", name,
-            "--subscription", sub,
-            "--resource-group", rg,
-        ],
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        start_new_session=True,
-    )
-    assert proc.stdout is not None
-
-    output_lines: list[str] = []
-    for line in proc.stdout:
-        stripped = line.rstrip()
-        if stripped:
-            console.print(f"  {stripped}", style="dim")
-            output_lines.append(stripped)
-
-    rc = proc.wait()
-    output = "\n".join(output_lines)
-    if rc == 0:
-        success(f"Workspace [bold]{name}[/bold] registered ✓")
-    elif "already" in output.lower():
-        dim(f"Workspace {name} already registered")
+    pid, master_fd = pty.fork()
+    if pid == 0:
+        # Child — has a controlling terminal via PTY
+        os.execvp(
+            "amlt",
+            ["amlt", "workspace", "add", name,
+             "--subscription", sub, "--resource-group", rg],
+        )
+        # unreachable
     else:
-        warning(f"Failed to register {name} (exit {rc})")
+        # Parent — read output, auto-answer prompts
+        output = []
+        try:
+            while True:
+                try:
+                    data = os.read(master_fd, 4096)
+                except OSError as e:
+                    if e.errno in (errno.EIO, errno.EBADF):
+                        break
+                    raise
+                if not data:
+                    break
+                text = data.decode("utf-8", errors="replace")
+                # Auto-answer single-char prompts (Y/n, y/N)
+                if "[Y/n]" in text or "[y/N]" in text:
+                    os.write(master_fd, b"\r")
+                for line in text.splitlines():
+                    stripped = line.strip()
+                    if stripped:
+                        console.print(f"  {stripped}", style="dim")
+                        output.append(stripped)
+        finally:
+            os.close(master_fd)
+
+        _, status = os.waitpid(pid, 0)
+        rc = os.WEXITSTATUS(status) if os.WIFEXITED(status) else 1
+        joined = "\n".join(output)
+        if rc == 0:
+            success(f"Workspace [bold]{name}[/bold] registered ✓")
+        elif "already" in joined.lower():
+            dim(f"Workspace {name} already registered")
+        else:
+            warning(f"Failed to register {name} (exit {rc})")
 
 
 def _setup_workspace() -> dict[str, str] | None:
