@@ -369,9 +369,10 @@ def _amlt_available() -> bool:
 def _clean_config_for_amlt(fp: Path) -> None:
     """Rewrite a submission YAML to be amlt-compatible.
 
-    1. Remove aj-specific fields from ``target`` that amlt rejects
-       (``subscription_id``, ``resource_group``, ``workspace_name``
-       are invalid when ``target.name`` is present).
+    1. Remove aj-specific fields from ``target`` that amlt rejects:
+       ``subscription_id`` and ``resource_group`` are only used by aj
+       for VC resolution and are invalid in amlt's target schema.
+       ``workspace_name`` is kept — amlt uses it to route cross-workspace jobs.
     2. Escape ``$`` → ``$$`` so amlt passes shell variables through
        literally.  Already-doubled ``$$`` is left untouched, and
        ``$CONFIG_DIR`` is preserved for amlt to resolve.
@@ -380,10 +381,10 @@ def _clean_config_for_amlt(fp: Path) -> None:
 
     conf = yaml.safe_load(fp.read_text()) or {}
 
-    # Strip aj-only target fields
+    # Strip aj-only target fields (VC subscription/rg used by direct REST path)
     target = conf.get("target")
-    if isinstance(target, dict) and target.get("name"):
-        for key in ("subscription_id", "resource_group", "workspace_name"):
+    if isinstance(target, dict):
+        for key in ("subscription_id", "resource_group"):
             target.pop(key, None)
 
     text = yaml.dump(conf, default_flow_style=False)
