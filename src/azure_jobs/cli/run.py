@@ -15,7 +15,14 @@ from azure_jobs.core import const
 from azure_jobs.core.conf import read_conf
 from azure_jobs.core.config import get_defaults, get_workspace_config, save_defaults
 from azure_jobs.core.record import SubmissionRecord, log_record
-from azure_jobs.utils.ui import console, dim, error, info, show_submission_preview, success
+from azure_jobs.utils.ui import (
+    console,
+    dim,
+    error,
+    info,
+    show_submission_preview,
+    success,
+)
 
 
 def validate_config(conf: dict, template_fp: Path) -> None:
@@ -45,9 +52,7 @@ def resolve_name(command: str, sid: str) -> str:
     return f"{name}_{sid}"
 
 
-def resolve_sku(
-    sku_template: str | dict, nodes: int, processes: int
-) -> str:
+def resolve_sku(sku_template: str | dict, nodes: int, processes: int) -> str:
     """Resolve a SKU template (string or range-dict) into a concrete SKU string."""
     if isinstance(sku_template, str):
         return sku_template.format(nodes=nodes, processes=processes)
@@ -180,17 +185,9 @@ def run(
     name = resolve_name(command, sid)
 
     extra = conf.get("_extra", {})
-    nodes_int = int(
-        nodes
-        or extra.get("nodes")
-        or defaults.get("nodes")
-        or 1
-    )
+    nodes_int = int(nodes or extra.get("nodes") or defaults.get("nodes") or 1)
     processes_int = int(
-        processes
-        or extra.get("processes")
-        or defaults.get("processes")
-        or 1
+        processes or extra.get("processes") or defaults.get("processes") or 1
     )
     conf.pop("_extra", None)
 
@@ -261,22 +258,26 @@ def run(
     )
 
     if use_amlt:
-        # amlt resolves $VAR in YAML — escape $ to $$ to pass through literally
-        _escape_dollars_for_amlt(submission_fp)
+        # Strip aj-specific fields that amlt doesn't understand
+        _clean_config_for_amlt(submission_fp)
         _submit_via_amlt(submission_fp, experiment, rec, name)
     else:
         from azure_jobs.core.submit import build_request_from_config
 
         workspace = get_workspace_config()
         request = build_request_from_config(
-            conf, name=name, workspace=workspace, experiment=experiment,
-            nodes=nodes_int, processes_per_node=processes_int,
+            conf,
+            name=name,
+            workspace=workspace,
+            experiment=experiment,
+            nodes=nodes_int,
+            processes_per_node=processes_int,
         )
         _submit_and_record(request, rec, name)
 
 
 def _submit_and_record(
-    request: Any,
+    request,
     rec: SubmissionRecord,
     display_name: str,
 ) -> None:
@@ -296,9 +297,7 @@ def _submit_and_record(
                 nonlocal _upload_progress, _upload_task_id
                 _upload_progress = None
                 _upload_task_id = None
-                live.update(
-                    Spinner("dots", text=f" [bold cyan]{text}[/bold cyan]")
-                )
+                live.update(Spinner("dots", text=f" [bold cyan]{text}[/bold cyan]"))
 
             def _on_status(step: str, detail: str) -> None:
                 _show_spinner(detail)
@@ -317,11 +316,11 @@ def _submit_and_record(
                     )
                     live.update(_upload_progress)
                 uploaded = completed - skipped
-                extra = (
-                    f"({uploaded} new, {skipped} cached)" if completed > 0 else ""
-                )
+                extra = f"({uploaded} new, {skipped} cached)" if completed > 0 else ""
                 _upload_progress.update(
-                    _upload_task_id, completed=completed, extra=extra  # type: ignore[arg-type]
+                    _upload_task_id,
+                    completed=completed,
+                    extra=extra,  # type: ignore[arg-type]
                 )
 
             _show_spinner("Authenticating…")
@@ -367,21 +366,32 @@ def _amlt_available() -> bool:
     return Path(".amltconfig").exists()
 
 
-def _escape_dollars_for_amlt(fp: Path) -> None:
-    """Escape ``$`` → ``$$`` in a YAML file so amlt passes them through.
+def _clean_config_for_amlt(fp: Path) -> None:
+    """Rewrite a submission YAML to be amlt-compatible.
 
-    amlt resolves ``$VAR`` references in config values.  Doubling the
-    dollar sign tells amlt to emit a literal ``$``.  Already-doubled
-    ``$$`` is left untouched (idempotent), and ``$CONFIG_DIR`` is
-    preserved since amlt should resolve it.
+    1. Remove aj-specific fields from ``target`` that amlt rejects
+       (``subscription_id``, ``resource_group``, ``workspace_name``
+       are invalid when ``target.name`` is present).
+    2. Escape ``$`` → ``$$`` so amlt passes shell variables through
+       literally.  Already-doubled ``$$`` is left untouched, and
+       ``$CONFIG_DIR`` is preserved for amlt to resolve.
     """
     import re
 
-    text = fp.read_text()
-    # Match $$ (keep as-is) or lone $ (double it), but skip $CONFIG_DIR
+    conf = yaml.safe_load(fp.read_text()) or {}
+
+    # Strip aj-only target fields
+    target = conf.get("target")
+    if isinstance(target, dict) and target.get("name"):
+        for key in ("subscription_id", "resource_group", "workspace_name"):
+            target.pop(key, None)
+
+    text = yaml.dump(conf, default_flow_style=False)
+
+    # Escape $ → $$ for amlt, preserving existing $$ and $CONFIG_DIR
     text = re.sub(
-        r'\$\$|\$(?!CONFIG_DIR\b)',
-        lambda m: m.group() if len(m.group()) == 2 else '$$',
+        r"\$\$|\$(?!CONFIG_DIR\b)",
+        lambda m: m.group() if len(m.group()) == 2 else "$$",
         text,
     )
     fp.write_text(text)
@@ -401,7 +411,10 @@ def _submit_via_amlt(
             "[bold cyan]Submitting via amlt…[/bold cyan]", spinner="dots"
         ):
             result = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=300,
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=300,
             )
 
         if result.returncode != 0:
