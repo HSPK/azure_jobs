@@ -153,12 +153,18 @@ def init(force: bool) -> None:
 
 
 def _register_amlt_workspace(ws: dict[str, str]) -> None:
-    """Register the aj workspace with amlt, streaming output in dim."""
+    """Register the aj workspace with amlt using its Python API directly.
+
+    Bypasses the interactive ``amlt workspace add`` CLI which uses
+    ``click.getchar()`` (reads /dev/tty) and cannot be piped to.
+    """
+    import os
     import subprocess
+    import sys
 
     from rich.console import Console
 
-    from azure_jobs.utils.ui import info, success, warning
+    from azure_jobs.utils.ui import dim, info, success, warning
 
     name = ws.get("workspace_name", "")
     sub = ws.get("subscription_id", "")
@@ -169,40 +175,74 @@ def _register_amlt_workspace(ws: dict[str, str]) -> None:
     console = Console(stderr=True)
     info(f"Registering amlt workspace [bold]{name}[/bold]…")
 
-    proc = subprocess.Popen(
-        [
-            "amlt", "workspace", "add", name,
-            "--subscription", sub,
-            "--resource-group", rg,
-        ],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
+    # Find amlt's python interpreter (installed via pipx)
+    amlt_bin = _find_amlt_python()
+    if amlt_bin is None:
+        warning("Cannot find amlt Python — skipping workspace registration")
+        return
+
+    # Use amlt's Python API directly to avoid interactive prompts
+    script = f"""\
+import sys, os
+os.chdir({str(os.getcwd())!r})
+from amlt.helpers.clusters import _get_sing_workspace
+from amlt.api.target import WorkspaceAlreadyExistException
+from amlt.project import load_project
+
+project = load_project()
+try:
+    ws_cfg = _get_sing_workspace(project, {name!r}, {sub!r}, {rg!r})
+    project.targets.add_workspace_config(ws_cfg)
+    print("OK:added")
+except WorkspaceAlreadyExistException:
+    print("OK:exists")
+except Exception as e:
+    print(f"ERR:{{e}}", file=sys.stderr)
+    sys.exit(1)
+"""
+
+    result = subprocess.run(
+        [amlt_bin, "-c", script],
+        capture_output=True,
         text=True,
     )
-    assert proc.stdin is not None and proc.stdout is not None
+    stdout = result.stdout.strip()
+    stderr = result.stderr.strip()
 
-    # Auto-confirm any prompts
-    proc.stdin.write("y\ny\ny\n")
-    proc.stdin.close()
-
-    # Stream output dim
-    output_lines: list[str] = []
-    for line in proc.stdout:
-        stripped = line.rstrip()
-        if stripped:
+    # Show any amlt log lines (they go to stderr) in dim
+    for line in stderr.splitlines():
+        stripped = line.strip()
+        if stripped and not stripped.startswith("ERR:"):
             console.print(f"  {stripped}", style="dim")
-            output_lines.append(stripped)
 
-    rc = proc.wait()
-    if rc == 0:
-        success(f"Workspace [bold]{name}[/bold] registered ✓")
-    else:
-        msg = "\n".join(output_lines)
-        if "already" in msg.lower():
-            console.print(f"  Workspace {name} already registered", style="dim")
+    if result.returncode == 0:
+        if "exists" in stdout:
+            dim(f"Workspace {name} already registered")
         else:
-            warning(f"Failed to register {name}: {msg}")
+            success(f"Workspace [bold]{name}[/bold] registered ✓")
+    else:
+        err_msg = stderr.strip() or stdout.strip()
+        warning(f"Failed to register {name}: {err_msg}")
+
+
+def _find_amlt_python() -> str | None:
+    """Locate amlt's Python interpreter."""
+    import shutil
+    from pathlib import Path
+
+    amlt_path = shutil.which("amlt")
+    if amlt_path is None:
+        return None
+    # amlt script's shebang points to the venv python
+    try:
+        first_line = Path(amlt_path).read_text().splitlines()[0]
+        if first_line.startswith("#!") and "python" in first_line:
+            py = first_line[2:].strip()
+            if Path(py).exists():
+                return py
+    except Exception:
+        pass
+    return None
 
 
 def _setup_workspace() -> dict[str, str] | None:
