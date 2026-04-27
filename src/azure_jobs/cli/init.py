@@ -14,11 +14,13 @@ from azure_jobs.cli import main
 def init() -> None:
     """Initialise aj project directory and configure amlt.
 
-    Creates .azure_jobs/ structure and generates .amltconfig by querying
-    the workspace's default storage account and calling ``amlt project create``.
+    Sets up .azure_jobs/ structure, configures workspace interactively
+    if not already set, and generates .amltconfig for amlt integration.
     """
+    from pathlib import Path
+
     from azure_jobs.core import const
-    from azure_jobs.core.config import get_workspace_config
+    from azure_jobs.core.config import get_workspace_config, read_config, write_config
     from azure_jobs.utils.ui import console, dim, error, info, success, warning
 
     # 1. Create .azure_jobs/ directory structure
@@ -31,33 +33,53 @@ def init() -> None:
 
     info("Created .azure_jobs/ directory structure")
 
-    # 2. Check workspace config
+    # 2. Set up workspace config if not already configured
     ws = get_workspace_config()
     if not ws or not ws.get("workspace_name"):
-        warning(
-            "No workspace configured. Run [bold]aj ws set[/bold] first, then re-run [bold]aj init[/bold]."
+        info("No workspace configured — starting interactive setup")
+        ws = _setup_workspace()
+        if not ws:
+            warning("Workspace not configured. Re-run [bold]aj init[/bold] after setting up.")
+            return
+    else:
+        dim(
+            f"Workspace: {ws['workspace_name']}  "
+            f"(rg={ws['resource_group']}, sub={ws['subscription_id'][:8]}…)"
         )
-        return
 
-    dim(
-        f"Workspace: {ws['workspace_name']}  "
-        f"(rg={ws['resource_group']}, sub={ws['subscription_id'][:8]}…)"
-    )
+    # 3. Ensure experiment is set
+    cfg = read_config()
+    if not cfg.get("experiment"):
+        exp = _default_experiment_name()
+        cfg["experiment"] = exp
+        write_config(cfg)
+        info(f"Experiment set to [bold]{exp}[/bold]")
 
-    # 3. Check if amlt is available
+    # 4. Pull templates if repo_id configured
+    repo_id = cfg.get("repo_id")
+    if repo_id:
+        info(f"Pulling templates from {repo_id}…")
+        try:
+            from azure_jobs.cli.pull import _do_pull
+
+            _do_pull(repo_id, force=False)
+            success("Templates pulled ✓")
+        except Exception as exc:
+            warning(f"Template pull failed: {exc}")
+
+    # 5. Set up amlt if available
     if not shutil.which("amlt"):
-        warning("amlt not found in PATH. Skipping .amltconfig setup.")
+        warning("amlt not found in PATH — skipping .amltconfig setup")
         dim("Install amlt with: pipx install amlt")
+        success("aj initialised ✓")
         return
-
-    # 4. Check if .amltconfig already exists
-    from pathlib import Path
 
     if Path(".amltconfig").exists():
         info(".amltconfig already exists — skipping amlt project creation")
+        success("aj initialised ✓")
         return
 
-    # 5. Query workspace for default storage account
+    # 6. Query workspace for default storage account
     with console.status(
         "[bold cyan]Querying workspace storage…[/bold cyan]", spinner="dots"
     ):
@@ -73,40 +95,86 @@ def init() -> None:
                 storage_account = storage_arm
         except Exception as exc:
             error(f"Failed to query workspace: {exc}")
+            success("aj initialised (without amlt) ✓")
             return
 
     if not storage_account:
         error("Could not determine workspace storage account.")
+        success("aj initialised (without amlt) ✓")
         return
 
     dim(f"Storage account: {storage_account}")
 
-    # 6. Create amlt project
+    # 7. Create amlt project
     project_name = ws["workspace_name"].lower().replace(" ", "-")
     info(f"Creating amlt project [bold]{project_name}[/bold]…")
 
     result = subprocess.run(
-        [
-            "amlt",
-            "project",
-            "create",
-            project_name,
-            storage_account,
-            "-d",
-            ".",
-        ],
+        ["amlt", "project", "create", project_name, storage_account, "-d", "."],
         capture_output=True,
         text=True,
     )
 
     if result.returncode != 0:
-        stderr = result.stderr.strip()
-        # amlt may print to stdout on error
-        msg = stderr or result.stdout.strip()
+        msg = (result.stderr.strip() or result.stdout.strip())
         error(f"amlt project create failed: {msg}")
         dim("You can set up amlt manually: amlt project create <name> <storage_account>")
+        success("aj initialised (without amlt) ✓")
         return
 
-    success("amlt project configured ✓")
+    success("aj initialised ✓")
     if result.stdout.strip():
         dim(result.stdout.strip())
+
+
+def _setup_workspace() -> dict[str, str] | None:
+    """Interactive workspace setup — detect subscription, list workspaces, pick one."""
+    from azure_jobs.core.config import (
+        detect_subscription,
+        detect_workspaces,
+        pick_workspace,
+        read_config,
+        write_config,
+    )
+    from azure_jobs.utils.ui import console, dim, error
+
+    sub = detect_subscription()
+    if not sub:
+        error("Cannot detect subscription. Run [bold]az login[/bold] first.")
+        return None
+
+    dim(f"Subscription: {sub['subscription_name']} ({sub['subscription_id'][:8]}…)")
+
+    with console.status(
+        "[bold cyan]Listing workspaces…[/bold cyan]", spinner="dots"
+    ):
+        workspaces = detect_workspaces(sub["subscription_id"])
+
+    if not workspaces:
+        error("No ML workspaces found in this subscription.")
+        return None
+
+    picked = pick_workspace(workspaces)
+    if not picked:
+        picked = {
+            "name": click.prompt("Workspace name"),
+            "resource_group": click.prompt("Resource group"),
+        }
+
+    ws = {
+        "subscription_id": sub["subscription_id"],
+        "resource_group": picked["resource_group"],
+        "workspace_name": picked["name"],
+    }
+
+    cfg = read_config()
+    cfg["workspace"] = ws
+    write_config(cfg)
+    return ws
+
+
+def _default_experiment_name() -> str:
+    """Derive a default experiment name from the current directory."""
+    from pathlib import Path
+
+    return Path.cwd().name.replace(" ", "_").lower()
