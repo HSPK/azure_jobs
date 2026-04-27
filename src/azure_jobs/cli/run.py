@@ -146,6 +146,11 @@ def build_command_list(
     is_flag=True,
     help="Submit via aj REST API instead of amlt",
 )
+@click.option(
+    "-i", "--interactive",
+    is_flag=True,
+    help="Interactive amlt submission (manual confirmation)",
+)
 @click.argument("command", nargs=1)
 @click.argument("args", nargs=-1)
 def run(
@@ -157,6 +162,7 @@ def run(
     dry_run: bool,
     run_local: bool,
     direct: bool,
+    interactive: bool,
     yes: bool,
 ) -> None:
     defaults = get_defaults()
@@ -260,7 +266,7 @@ def run(
     if use_amlt:
         # Strip aj-specific fields that amlt doesn't understand
         _clean_config_for_amlt(submission_fp)
-        _submit_via_amlt(submission_fp, experiment, rec, name)
+        _submit_via_amlt(submission_fp, experiment, rec, name, interactive=interactive)
     else:
         from azure_jobs.core.submit import build_request_from_config
 
@@ -403,45 +409,58 @@ def _submit_via_amlt(
     experiment: str,
     rec: SubmissionRecord,
     display_name: str,
+    *,
+    interactive: bool = False,
 ) -> None:
-    """Submit job via ``amlt run`` subprocess."""
-    cmd = ["amlt", "run", str(config_fp), experiment, "-y"]
+    """Submit job via ``amlt run`` with streaming output."""
+    cmd = ["amlt", "run", str(config_fp), experiment]
+    if not interactive:
+        cmd.append("-y")
 
     try:
-        with console.status(
-            "[bold cyan]Submitting via amlt…[/bold cyan]", spinner="dots"
-        ):
-            result = subprocess.run(
+        if interactive:
+            # Let user interact with amlt directly (stdin/stdout pass-through)
+            result = subprocess.run(cmd, timeout=600)
+            if result.returncode != 0:
+                rec.status = "failed"
+                rec.note = "amlt run failed"
+                error("amlt run failed")
+                raise SystemExit(1)
+            rec.status = "submitted"
+            success(f"Job [bold]{display_name}[/bold] submitted via amlt")
+        else:
+            # Stream output line-by-line as dim text, auto-confirm with -y
+            proc = subprocess.Popen(
                 cmd,
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
                 text=True,
-                timeout=300,
+                bufsize=1,
             )
-
-        if result.returncode != 0:
-            rec.status = "failed"
-            msg = result.stderr.strip() or result.stdout.strip()
-            rec.note = msg
-            error(f"amlt run failed:\n{msg}")
-            raise SystemExit(1)
-
-        # Parse amlt output for job info
-        stdout = result.stdout.strip()
-        portal_url = _extract_portal_url(stdout)
-
-        rec.status = "submitted"
-        if portal_url:
-            rec.portal = portal_url
-        success(f"Job [bold]{display_name}[/bold] submitted via amlt")
-        if stdout:
-            for line in stdout.splitlines():
+            output_lines: list[str] = []
+            for line in proc.stdout:  # type: ignore[union-attr]
+                line = line.rstrip()
+                output_lines.append(line)
                 dim(line)
+            proc.wait()
+
+            if proc.returncode != 0:
+                rec.status = "failed"
+                rec.note = "\n".join(output_lines[-10:])
+                error("amlt run failed")
+                raise SystemExit(1)
+
+            portal_url = _extract_portal_url("\n".join(output_lines))
+            rec.status = "submitted"
+            if portal_url:
+                rec.portal = portal_url
+            success(f"Job [bold]{display_name}[/bold] submitted via amlt")
     except SystemExit:
         raise
     except subprocess.TimeoutExpired:
         rec.status = "failed"
-        rec.note = "amlt run timed out after 300s"
-        error("amlt run timed out after 300s")
+        rec.note = "amlt run timed out"
+        error("amlt run timed out")
         raise SystemExit(1)
     except Exception as exc:
         rec.status = "failed"
