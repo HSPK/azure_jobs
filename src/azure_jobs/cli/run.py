@@ -280,12 +280,12 @@ def run(
         args=list(args),
     )
 
-    if service == "volcano":
-        _submit_via_volcano(conf, name, nodes_int, processes_int, rec, dry_run)
-    elif amlt and _amlt_available():
-        # Strip aj-specific fields that amlt doesn't understand
+    if amlt and _amlt_available():
+        # --amlt flag takes priority over all other backends
         _clean_config_for_amlt(submission_fp)
         _submit_via_amlt(submission_fp, experiment, rec, name, interactive=interactive)
+    elif service == "volcano":
+        _submit_via_volcano(conf, name, nodes_int, processes_int, rec, dry_run)
     else:
         from azure_jobs.core.submit import build_request_from_config
 
