@@ -261,6 +261,8 @@ def run(
     )
 
     if use_amlt:
+        # amlt resolves $VAR in YAML — escape $ to $$ to pass through literally
+        _escape_dollars_for_amlt(submission_fp)
         _submit_via_amlt(submission_fp, experiment, rec, name)
     else:
         from azure_jobs.core.submit import build_request_from_config
@@ -363,6 +365,26 @@ def _amlt_available() -> bool:
     if not shutil.which("amlt"):
         return False
     return Path(".amltconfig").exists()
+
+
+def _escape_dollars_for_amlt(fp: Path) -> None:
+    """Escape ``$`` → ``$$`` in a YAML file so amlt passes them through.
+
+    amlt resolves ``$VAR`` references in config values.  Doubling the
+    dollar sign tells amlt to emit a literal ``$``.  Already-doubled
+    ``$$`` is left untouched (idempotent), and ``$CONFIG_DIR`` is
+    preserved since amlt should resolve it.
+    """
+    import re
+
+    text = fp.read_text()
+    # Match $$ (keep as-is) or lone $ (double it), but skip $CONFIG_DIR
+    text = re.sub(
+        r'\$\$|\$(?!CONFIG_DIR\b)',
+        lambda m: m.group() if len(m.group()) == 2 else '$$',
+        text,
+    )
+    fp.write_text(text)
 
 
 def _submit_via_amlt(
