@@ -97,6 +97,7 @@ def init(force: bool) -> None:
         except Exception:
             dim(".amltconfig exists")
         if not (force and _confirm_step("amlt project", force)):
+            _register_amlt_workspaces(ws, force)
             success("aj initialised ✓")
             return
 
@@ -146,6 +147,89 @@ def init(force: bool) -> None:
     success("aj initialised ✓")
     if result.stdout.strip():
         dim(result.stdout.strip())
+
+    # 7. Register workspaces with amlt
+    _register_amlt_workspaces(ws, force)
+
+
+def _collect_workspaces(aj_ws: dict[str, str]) -> list[dict[str, str]]:
+    """Collect unique workspaces from aj config and all templates."""
+    from azure_jobs.core import const
+
+    seen: set[str] = set()
+    workspaces: list[dict[str, str]] = []
+
+    def _add(name: str, sub: str, rg: str) -> None:
+        key = f"{name}|{sub}|{rg}"
+        if key in seen or not (name and sub and rg):
+            return
+        seen.add(key)
+        workspaces.append({
+            "workspace_name": name,
+            "subscription_id": sub,
+            "resource_group": rg,
+        })
+
+    # From aj config workspace
+    _add(
+        aj_ws.get("workspace_name", ""),
+        aj_ws.get("subscription_id", ""),
+        aj_ws.get("resource_group", ""),
+    )
+
+    # From all templates — target section may have VC workspace info
+    import yaml
+
+    if const.AJ_TEMPLATE_HOME.exists():
+        for fp in sorted(const.AJ_TEMPLATE_HOME.glob("*.yaml")):
+            try:
+                raw = yaml.safe_load(fp.read_text()) or {}
+                target = raw.get("config", raw).get("target", {})
+                if isinstance(target, dict):
+                    _add(
+                        target.get("workspace_name", ""),
+                        target.get("subscription_id", ""),
+                        target.get("resource_group", ""),
+                    )
+            except Exception:
+                continue
+
+    return workspaces
+
+
+def _register_amlt_workspaces(aj_ws: dict[str, str], force: bool) -> None:
+    """Register all discovered workspaces with amlt."""
+    import subprocess
+
+    from azure_jobs.utils.ui import dim, info, success, warning
+
+    workspaces = _collect_workspaces(aj_ws)
+    if not workspaces:
+        return
+
+    for ws in workspaces:
+        name = ws["workspace_name"]
+        sub = ws["subscription_id"]
+        rg = ws["resource_group"]
+
+        info(f"Registering amlt workspace [bold]{name}[/bold]…")
+        result = subprocess.run(
+            [
+                "amlt", "workspace", "add", name,
+                "--subscription", sub,
+                "--resource-group", rg,
+            ],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0:
+            success(f"Workspace [bold]{name}[/bold] registered ✓")
+        else:
+            msg = result.stderr.strip() or result.stdout.strip()
+            if "already" in msg.lower():
+                dim(f"Workspace {name} already registered")
+            else:
+                warning(f"Failed to register {name}: {msg}")
 
 
 def _setup_workspace() -> dict[str, str] | None:
