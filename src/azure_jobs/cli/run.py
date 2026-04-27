@@ -266,7 +266,7 @@ def run(
     if use_amlt:
         # Strip aj-specific fields that amlt doesn't understand
         _clean_config_for_amlt(submission_fp)
-        _submit_via_amlt(submission_fp, experiment, rec, name, interactive=interactive)
+        _submit_via_amlt(submission_fp, name, rec, name, interactive=interactive)
     else:
         from azure_jobs.core.submit import build_request_from_config
 
@@ -406,7 +406,7 @@ def _clean_config_for_amlt(fp: Path) -> None:
 
 def _submit_via_amlt(
     config_fp: Path,
-    experiment: str,
+    exp_name: str,
     rec: SubmissionRecord,
     display_name: str,
     *,
@@ -417,7 +417,7 @@ def _submit_via_amlt(
     Default: auto-answer prompts (Enter + ``-y``) and stream output as dim.
     Interactive (``-i``): full stdin/stdout pass-through for manual control.
     """
-    cmd = ["amlt", "run", str(config_fp), experiment]
+    cmd = ["amlt", "run", str(config_fp), exp_name]
     if not interactive:
         cmd.append("-y")
 
