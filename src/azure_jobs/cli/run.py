@@ -94,6 +94,7 @@ def build_command_list(
     name: str,
     sid: str,
     template: str,
+    service: str = "aml",
 ) -> list[str]:
     """Assemble the full command list: env exports + template commands + user command."""
     cmd_list: list[str] = [
@@ -107,6 +108,18 @@ def build_command_list(
         f"export AJ_SUBMIT_TIMESTAMP_UTC={datetime.now(timezone.utc).isoformat()}",
         "export PATH=$HOME/.local/bin:$PATH",
     ]
+
+    # Volcano distributed env (fallback if not already set by amlt)
+    if service == "volcano" and nodes > 1:
+        cmd_list.extend([
+            '# Distributed env (Volcano)',
+            'JOB_NAME=$(echo "$HOSTNAME" | sed \'s/-\\(master\\|worker\\)-[0-9]*$//\')',
+            'if echo "$HOSTNAME" | grep -q "master"; then export NODE_RANK=0; else export NODE_RANK=$((${VK_TASK_INDEX:-0} + 1)); fi',
+            'export RANK=${RANK:-$NODE_RANK}',
+            f'export WORLD_SIZE=${{WORLD_SIZE:-{nodes}}}',
+            'export MASTER_ADDR="${MASTER_ADDR:-${JOB_NAME}-master-0.${JOB_NAME}}"',
+            'export MASTER_PORT=${MASTER_PORT:-6105}',
+        ])
     cmd_list.extend(conf_commands)
 
     if Path(user_command).is_file():
@@ -223,6 +236,7 @@ def run(
         name=name,
         sid=sid,
         template=template,
+        service=service,
     )
     final_cmd = conf["jobs"][0]["command"][-1]
 
