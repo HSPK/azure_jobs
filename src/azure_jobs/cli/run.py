@@ -412,14 +412,18 @@ def _submit_via_amlt(
     *,
     interactive: bool = False,
 ) -> None:
-    """Submit job via ``amlt run`` with streaming output."""
+    """Submit job via ``amlt run`` with streaming output.
+
+    Default: auto-answer prompts (Enter + ``-y``) and stream output as dim.
+    Interactive (``-i``): full stdin/stdout pass-through for manual control.
+    """
     cmd = ["amlt", "run", str(config_fp), experiment]
     if not interactive:
         cmd.append("-y")
 
     try:
         if interactive:
-            # Let user interact with amlt directly (stdin/stdout pass-through)
+            # Full pass-through — user controls amlt directly
             result = subprocess.run(cmd, timeout=600)
             if result.returncode != 0:
                 rec.status = "failed"
@@ -429,17 +433,28 @@ def _submit_via_amlt(
             rec.status = "submitted"
             success(f"Job [bold]{display_name}[/bold] submitted via amlt")
         else:
-            # Stream output line-by-line as dim text, auto-confirm with -y
+            # Auto-answer: pipe Enter for "press enter" prompt, -y for yes/no.
+            # Stream stdout line-by-line as dim text.
             proc = subprocess.Popen(
                 cmd,
+                stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
                 bufsize=1,
             )
+            # Feed newlines for any Enter prompts, then close stdin
+            try:
+                proc.stdin.write("\n\n\n")  # type: ignore[union-attr]
+                proc.stdin.close()  # type: ignore[union-attr]
+            except BrokenPipeError:
+                pass
+
             output_lines: list[str] = []
             for line in proc.stdout:  # type: ignore[union-attr]
                 line = line.rstrip()
+                if not line:
+                    continue
                 output_lines.append(line)
                 dim(line)
             proc.wait()
