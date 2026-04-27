@@ -65,6 +65,7 @@ class _BlobMixin:
         code_dir: str,
         ignore_patterns: list[str] | None = None,
         extra_files: dict[str, str | bytes] | None = None,
+        on_progress: Any = None,
     ) -> str:
         """Upload code files to workspace blob store and register as code asset.
 
@@ -76,6 +77,8 @@ class _BlobMixin:
             ignore_patterns: Glob patterns to exclude.
             extra_files: Extra files to inject into the code root.
                 Keys are relative paths, values are str or bytes content.
+            on_progress: Optional callback ``(completed, total, skipped) -> None``
+                called after each file is processed during upload.
 
         Returns the ARM resource ID of the created code version.
         """
@@ -130,13 +133,24 @@ class _BlobMixin:
             self._upload_blob(blob_url, data, sas_info)
             return True  # uploaded
 
+        total = len(files)
+        if on_progress:
+            on_progress(0, total, 0)
+
+        completed = 0
+        skipped = 0
         with ThreadPoolExecutor(max_workers=16) as pool:
             futures = {
                 pool.submit(_upload_one, rel, data): rel
                 for rel, data in files.items()
             }
             for fut in as_completed(futures):
-                fut.result()  # propagate exceptions
+                was_uploaded = fut.result()
+                if not was_uploaded:
+                    skipped += 1
+                completed += 1
+                if on_progress:
+                    on_progress(completed, total, skipped)
 
         # 4. Register as code version (content-addressed by hash)
         #    Use hash-derived integer as version name — same content maps to

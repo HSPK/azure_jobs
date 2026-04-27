@@ -271,11 +271,52 @@ def _submit_and_record(
     from azure_jobs.core.submit import SubmitResult, submit
 
     try:
-        with console.status("", spinner="dots") as status_ctx:
-            def _on_status(step: str, detail: str) -> None:
-                status_ctx.update(f"[bold cyan]{detail}[/bold cyan]")
+        from rich.live import Live
+        from rich.progress import BarColumn, Progress, TextColumn
+        from rich.spinner import Spinner
 
-            result: SubmitResult = submit(request, on_status=_on_status)
+        with Live(console=console, transient=True) as live:
+            _upload_progress: Progress | None = None
+            _upload_task_id: int | None = None
+
+            def _show_spinner(text: str) -> None:
+                nonlocal _upload_progress, _upload_task_id
+                _upload_progress = None
+                _upload_task_id = None
+                live.update(
+                    Spinner("dots", text=f" [bold cyan]{text}[/bold cyan]")
+                )
+
+            def _on_status(step: str, detail: str) -> None:
+                _show_spinner(detail)
+
+            def _on_upload(completed: int, total: int, skipped: int) -> None:
+                nonlocal _upload_progress, _upload_task_id
+                if _upload_progress is None:
+                    _upload_progress = Progress(
+                        TextColumn("[bold cyan]Uploading code"),
+                        BarColumn(bar_width=30),
+                        TextColumn("[bold]{task.completed}/{task.total}[/bold] files"),
+                        TextColumn("[dim]{task.fields[extra]}[/dim]"),
+                    )
+                    _upload_task_id = _upload_progress.add_task(
+                        "upload", total=total, extra=""
+                    )
+                    live.update(_upload_progress)
+                uploaded = completed - skipped
+                extra = (
+                    f"({uploaded} new, {skipped} cached)" if completed > 0 else ""
+                )
+                _upload_progress.update(
+                    _upload_task_id, completed=completed, extra=extra  # type: ignore[arg-type]
+                )
+
+            _show_spinner("Authenticating…")
+            result: SubmitResult = submit(
+                request,
+                on_status=_on_status,
+                on_upload_progress=_on_upload,
+            )
 
         if result.status == "failed":
             rec.status = "failed"

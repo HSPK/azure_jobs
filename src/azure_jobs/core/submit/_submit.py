@@ -113,13 +113,15 @@ def _collect_ssh_files(code_dir: str) -> dict[str, bytes]:
     return result
 
 
-def submit(request: SubmitRequest, on_status: Any = None) -> SubmitResult:
+def submit(request: SubmitRequest, on_status: Any = None, on_upload_progress: Any = None) -> SubmitResult:
     """Submit a job to Azure ML via REST API.
 
     Args:
         request: Complete submission specification.
         on_status: Optional callback ``(step: str, detail: str) -> None``
             called at each stage for progress reporting.
+        on_upload_progress: Optional callback ``(completed, total, skipped) -> None``
+            called during code upload for per-file progress.
 
     Returns:
         SubmitResult with job name and status.
@@ -169,6 +171,7 @@ def submit(request: SubmitRequest, on_status: Any = None) -> SubmitResult:
             request.code_dir,
             ignore_patterns=request.code_ignore or None,
             extra_files=extra_files,
+            on_progress=on_upload_progress,
         )
 
         command_str = f"bash {_RUNNER_FILENAME}"
