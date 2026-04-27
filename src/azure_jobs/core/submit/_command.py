@@ -29,16 +29,6 @@ def _generate_runner_script(
         lines.append(f"export AZURE_CLIENT_ID={identity_client_id}")
         lines.append("")
 
-    # --- SSH setup ---
-    lines.append("# SSH key setup")
-    lines.append('if [ -d "$AZUREML_CR_CODE_PATH/.ssh" ]; then')
-    lines.append("  mkdir -p $HOME/.ssh")
-    lines.append("  cp -n $AZUREML_CR_CODE_PATH/.ssh/* $HOME/.ssh/ 2>/dev/null || true")
-    lines.append("  chmod 700 $HOME/.ssh")
-    lines.append("  chmod 600 $HOME/.ssh/id_* 2>/dev/null || true")
-    lines.append("fi")
-    lines.append("")
-
     # --- Distributed preamble ---
     is_distributed = request.nodes > 1 or request.processes_per_node > 1
     if is_distributed:

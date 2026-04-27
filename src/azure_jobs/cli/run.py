@@ -97,6 +97,8 @@ def build_command_list(
 ) -> list[str]:
     """Assemble the full command list: env exports + template commands + user command."""
     cmd_list: list[str] = [
+        # SSH setup (works for both aj and amlt)
+        '[ -f ".azure_jobs/scripts/copy_ssh.sh" ] && bash .azure_jobs/scripts/copy_ssh.sh && [ -f /tmp/.aj_ssh_env ] && source /tmp/.aj_ssh_env',
         f"export AJ_NODES={nodes}",
         f"export AJ_PROCESSES={processes * nodes}",
         f"export AJ_NAME={name}",
