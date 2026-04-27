@@ -136,6 +136,11 @@ def build_command_list(
 )
 @click.option("-y", "--yes", is_flag=True, hidden=True, help="(Deprecated, no-op)")
 @click.option("-L", "--run-local", is_flag=True, help="Run the command locally")
+@click.option(
+    "--direct",
+    is_flag=True,
+    help="Submit via aj REST API instead of amlt",
+)
 @click.argument("command", nargs=1)
 @click.argument("args", nargs=-1)
 def run(
@@ -146,6 +151,7 @@ def run(
     processes: str | None,
     dry_run: bool,
     run_local: bool,
+    direct: bool,
     yes: bool,
 ) -> None:
     defaults = get_defaults()
@@ -236,16 +242,11 @@ def run(
         dim(f"Config written to {submission_fp}")
         return
 
-    # ── Submit to Azure ML ──────────────────────────────────────────
+    # ── Choose submission backend ────────────────────────────────────
     from azure_jobs.core.config import ensure_experiment
-    from azure_jobs.core.submit import build_request_from_config
 
     experiment = ensure_experiment()
-    workspace = get_workspace_config()
-    request = build_request_from_config(
-        conf, name=name, workspace=workspace, experiment=experiment,
-        nodes=nodes_int, processes_per_node=processes_int,
-    )
+    use_amlt = not direct and _amlt_available()
 
     rec = SubmissionRecord(
         id=sid,
@@ -259,7 +260,17 @@ def run(
         args=list(args),
     )
 
-    _submit_and_record(request, rec, name)
+    if use_amlt:
+        _submit_via_amlt(submission_fp, experiment, rec, name)
+    else:
+        from azure_jobs.core.submit import build_request_from_config
+
+        workspace = get_workspace_config()
+        request = build_request_from_config(
+            conf, name=name, workspace=workspace, experiment=experiment,
+            nodes=nodes_int, processes_per_node=processes_int,
+        )
+        _submit_and_record(request, rec, name)
 
 
 def _submit_and_record(
@@ -343,3 +354,74 @@ def _submit_and_record(
         raise click.ClickException(f"Submission failed: {exc}")
     finally:
         log_record(rec)
+
+
+def _amlt_available() -> bool:
+    """Check if amlt CLI is installed and a project is configured."""
+    import shutil
+
+    if not shutil.which("amlt"):
+        return False
+    return Path(".amltconfig").exists()
+
+
+def _submit_via_amlt(
+    config_fp: Path,
+    experiment: str,
+    rec: SubmissionRecord,
+    display_name: str,
+) -> None:
+    """Submit job via ``amlt run`` subprocess."""
+    cmd = ["amlt", "run", str(config_fp), experiment, "-y"]
+
+    try:
+        with console.status(
+            "[bold cyan]Submitting via amlt…[/bold cyan]", spinner="dots"
+        ):
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=300,
+            )
+
+        if result.returncode != 0:
+            rec.status = "failed"
+            msg = result.stderr.strip() or result.stdout.strip()
+            rec.note = msg
+            error(f"amlt run failed:\n{msg}")
+            raise SystemExit(1)
+
+        # Parse amlt output for job info
+        stdout = result.stdout.strip()
+        portal_url = _extract_portal_url(stdout)
+
+        rec.status = "submitted"
+        if portal_url:
+            rec.portal = portal_url
+        success(f"Job [bold]{display_name}[/bold] submitted via amlt")
+        if stdout:
+            for line in stdout.splitlines():
+                dim(line)
+    except SystemExit:
+        raise
+    except subprocess.TimeoutExpired:
+        rec.status = "failed"
+        rec.note = "amlt run timed out after 300s"
+        error("amlt run timed out after 300s")
+        raise SystemExit(1)
+    except Exception as exc:
+        rec.status = "failed"
+        rec.note = str(exc)
+        raise click.ClickException(f"Submission failed: {exc}")
+    finally:
+        log_record(rec)
+
+
+def _extract_portal_url(output: str) -> str:
+    """Extract Azure portal URL from amlt run output, if present."""
+    for line in output.splitlines():
+        stripped = line.strip()
+        if "portal.azure.com" in stripped or "ml.azure.com" in stripped:
+            # Find URL in the line
+            for token in stripped.split():
+                if token.startswith("http"):
+                    return token
+    return ""

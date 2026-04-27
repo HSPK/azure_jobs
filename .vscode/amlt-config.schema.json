@@ -1,0 +1,665 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/microsoft/amulet/schemas/amlt-config.schema.json",
+  "title": "Amulet Job Configuration",
+  "description": "Amulet job configuration file. Defines the compute target, Docker environment, code, data, storage, and jobs or hyperparameter search for an ML experiment.\n\nNote: Amulet config files support `$CONFIG_DIR` (expands to the config file's directory), environment variable substitution (`$VAR` / `$$VAR` for remote), YAML anchors/aliases, and `!include` directives for file composition. These features operate at the YAML level and cannot be fully validated by this schema.",
+  "type": "object",
+  "properties": {
+    "description": {
+      "type": "string",
+      "description": "Human-readable description of the experiment."
+    },
+    "target": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/TargetSchema"
+        }
+      ],
+      "description": "Compute target configuration. Can also be specified via CLI: `amlt run -t <target_name>`."
+    },
+    "environment": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/EnvironmentSchema"
+        }
+      ],
+      "description": "Docker environment configuration (required)."
+    },
+    "code": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/CodeSchema"
+        }
+      ],
+      "description": "Source code upload configuration."
+    },
+    "search": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/SearchSchema"
+        }
+      ],
+      "description": "Hyperparameter search configuration. Use instead of `jobs` for HP sweeps."
+    },
+    "jobs": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/JobCommandSchema"
+      },
+      "description": "List of job definitions to run. Use instead of `search` for fixed jobs."
+    },
+    "storage": {
+      "type": "object",
+      "description": "Named storage mounts. Keys are storage IDs (e.g. 'output', 'shared_data'). The special ID 'output' is used for job results.",
+      "additionalProperties": {
+        "$ref": "#/$defs/StorageSchema"
+      },
+      "propertyNames": {
+        "pattern": "^\\w+$"
+      }
+    },
+    "env_defaults": {
+      "type": "object",
+      "description": "Default values for environment variables. Keys are variable names; values are used only if the variable is not already set. Referenced via $VAR_NAME in the rest of the config.",
+      "additionalProperties": {
+        "type": [
+          "string",
+          "number",
+          "boolean"
+        ]
+      }
+    }
+  },
+  "required": [
+    "environment"
+  ],
+  "additionalProperties": false,
+  "patternProperties": {
+    "^(data|exp_name|version)$": true
+  },
+  "$defs": {
+    "TargetSchema": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Pre-configured target name from `amlt target list`. Usually sufficient on its own. Resolves to a Volcano namespace, Manifold VC, AML Compute cluster, or Azure Batch pool."
+        },
+        "service": {
+          "type": "string",
+          "enum": [
+            "aml",
+            "singularity",
+            "manifold",
+            "batch",
+            "volcano",
+            "local"
+          ],
+          "description": "Backend service: 'aml', 'singularity' (or 'manifold'), 'volcano', 'local', or 'batch'."
+        },
+        "cluster": {
+          "type": "string",
+          "description": "Compute cluster name."
+        },
+        "vc": {
+          "type": "string",
+          "description": "Virtual cluster name (Manifold)."
+        },
+        "subscription_id": {
+          "type": "string",
+          "description": "Azure subscription ID for the compute target."
+        },
+        "resource_group": {
+          "type": "string",
+          "description": "Azure resource group for the compute target."
+        },
+        "workspace_name": {
+          "type": "string",
+          "description": "Azure ML workspace name."
+        },
+        "workspace_subscription_id": {
+          "type": "string",
+          "description": "Subscription ID for the workspace (if different from target)."
+        },
+        "workspace_resource_group": {
+          "type": "string",
+          "description": "Resource group for the workspace (if different from target)."
+        },
+        "group_policy_name": {
+          "type": "string",
+          "description": "Manifold group policy name."
+        },
+        "queue": {
+          "type": "string",
+          "description": "Job queue name. Required for Volcano targets."
+        }
+      },
+      "additionalProperties": false,
+      "patternProperties": {
+        "^(metadata|type)$": true
+      },
+      "description": "Compute target configuration. In most cases, `name` from `amlt target list` is sufficient. For Manifold, a `workspace_name` must be set (here or in project settings). For Volcano, `queue` is typically required."
+    },
+    "EnvironmentSchema": {
+      "type": "object",
+      "properties": {
+        "registry": {
+          "type": "string",
+          "description": "Docker registry (default: Docker Hub). Example: 'myregistry.azurecr.io'."
+        },
+        "image": {
+          "type": "string",
+          "description": "Docker image in format `registry/image:tag`. For Manifold base images, use `amlt-sing/<image_name>`. See available images with `amlt cache base-images`.",
+          "examples": [
+            "pytorch/pytorch:1.5-cuda10.1-cudnn7-devel",
+            "nvcr.io/nvidia/pytorch:22.01-py3",
+            "amlt-sing/pytorch-1.12.1"
+          ]
+        },
+        "username": {
+          "type": "string",
+          "description": "Docker registry username (for private registries)."
+        },
+        "setup": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Shell commands to run before the job starts (after MPI setup). Use $$VAR to pass environment variables literally. Example: `['pip install torch', 'apt-get update']`."
+        },
+        "image_setup": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Shell commands baked into a custom image layer (cost paid once, not on every job)."
+        },
+        "conda_yaml_file": {
+          "type": "string",
+          "description": "Path to a conda environment YAML file."
+        },
+        "skip_conda_packages_on_sing": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Conda packages to skip when installing on Manifold (e.g. if the base image has a hardware-specific version)."
+        },
+        "env": {
+          "type": "object",
+          "description": "Environment variables to set in the container."
+        }
+      },
+      "required": [
+        "image"
+      ],
+      "additionalProperties": false,
+      "patternProperties": {
+        "^(conda_spec)$": true
+      },
+      "description": "Docker environment for the job."
+    },
+    "CodeSchema": {
+      "type": "object",
+      "properties": {
+        "local_dir": {
+          "type": "string",
+          "description": "Local directory containing your code. Use `$CONFIG_DIR` for paths relative to the config file location. Example: `$CONFIG_DIR/src`."
+        },
+        "ignore": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Additional patterns to ignore during code upload (extends .amltignore). Example: `['*.pyc', '__pycache__/', 'data/']`."
+        }
+      },
+      "additionalProperties": false,
+      "patternProperties": {
+        "^(git_branch|git_repo|git_repo_dir|git_sha|remote_dir|storage_id)$": true
+      },
+      "description": "Source code upload configuration."
+    },
+    "SearchSchema": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "random",
+            "grid",
+            "hyperdrive"
+          ],
+          "description": "Search type."
+        },
+        "seed": {
+          "type": "integer",
+          "description": "Random seed for reproducibility."
+        },
+        "max_trials": {
+          "type": "integer",
+          "description": "Maximum number of trials (required)."
+        },
+        "parallel_trials": {
+          "type": "integer",
+          "description": "Number of parallel trials. Defaults to 1 for bayesian."
+        },
+        "max_duration_hours": {
+          "type": "number",
+          "description": "Maximum duration in hours. Defaults to 336 (2 weeks), max 1440 (60 days)."
+        },
+        "metrics": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HDMetricsSchema"
+          },
+          "description": "Optimization metrics (required for bayesian sampling)."
+        },
+        "sampling": {
+          "type": "string",
+          "enum": [
+            "bayesian",
+            "random",
+            "grid"
+          ],
+          "description": "Sampling strategy."
+        },
+        "early_termination": {
+          "type": "string",
+          "description": "Early termination policy string (e.g. 'BanditPolicy(slack_factor=0.15)'). Not supported with bayesian sampling."
+        },
+        "params": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ParamSchema"
+          },
+          "description": "Hyperparameters to search over."
+        },
+        "job_template": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/JobCommandSchema"
+            }
+          ],
+          "description": "Job template with {param_name} placeholders."
+        }
+      },
+      "required": [
+        "max_trials",
+        "job_template"
+      ],
+      "additionalProperties": false,
+      "patternProperties": {
+        "^(optimizer_settings|optimizer_url)$": true
+      },
+      "description": "Hyperparameter search configuration."
+    },
+    "HDMetricsSchema": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Name of the metric to optimize (as logged by the training script)."
+        },
+        "goal": {
+          "type": "string",
+          "enum": [
+            "maximize",
+            "minimize"
+          ],
+          "description": "Optimization direction."
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "additionalProperties": false,
+      "description": "Metric to optimize during hyperparameter search."
+    },
+    "ParamSchema": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Parameter name, used as {name} in job_template commands."
+        },
+        "spec": {
+          "type": "string",
+          "enum": [
+            "discrete",
+            "uniform",
+            "log_uniform",
+            "hyperdrive"
+          ],
+          "default": "hyperdrive",
+          "description": "Distribution specification."
+        },
+        "low": {
+          "type": "number",
+          "description": "Lower bound (for uniform/log_uniform distributions)."
+        },
+        "high": {
+          "type": "number",
+          "description": "Upper bound (for uniform/log_uniform distributions)."
+        },
+        "values": {
+          "description": "Possible values for discrete/hyperdrive specs. Can be a list or a Hyperdrive expression like 'choice(1, 2, 3)' or 'uniform(0.01, 0.5)'."
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "additionalProperties": false,
+      "description": "Hyperparameter definition for search."
+    },
+    "JobCommandSchema": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Unique name for this job within the experiment."
+        },
+        "sku": {
+          "type": "string",
+          "description": "GPU SKU specification. Examples: 'G1' (1 GPU), 'G4' (4 GPUs), '2xG4' (2 nodes × 4 GPUs), 'NDv4:G2' (specific VM type with 2 GPUs).",
+          "examples": [
+            "G1",
+            "G4",
+            "2xG4",
+            "NDv4:G2",
+            "2xG4-V100-IB"
+          ]
+        },
+        "process_count_per_node": {
+          "type": "integer",
+          "description": "Number of processes per node. Use -1 for one process per GPU. Set to 0 (default) for single process on head node."
+        },
+        "mpi": {
+          "type": "boolean",
+          "description": "Enable MPI distributed training. Requires process_count_per_node > 0."
+        },
+        "identity": {
+          "type": "string",
+          "description": "Identity type for the job: 'user' or 'managed'. On Volcano, set AMLT_VOLCANO_SERVICE_ACCOUNT in environment_variables to enable managed identity."
+        },
+        "command": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Shell commands to execute. Each list item is a separate command line. Commands run from the uploaded code directory (code.local_dir). Write outputs to $AMLT_OUTPUT_DIR for Amulet-managed results retrieval. Use $$VAR to pass environment variables literally (single $ is interpolated from the local environment at submission time)."
+        },
+        "submit_args": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/BashSubmitArgsSchema"
+            }
+          ],
+          "description": "Advanced submission arguments."
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Tags for the job. Must start with a letter. Optional 'key:value' format with a colon separator."
+        },
+        "preemptible": {
+          "type": "boolean",
+          "description": "Whether the job can be preempted (Manifold/ARC)."
+        },
+        "sla_tier": {
+          "type": "string",
+          "enum": [
+            "premium",
+            "Premium",
+            "standard",
+            "Standard",
+            "basic",
+            "Basic"
+          ],
+          "description": "SLA tier for the job (Manifold/ARC)."
+        },
+        "priority": {
+          "type": "string",
+          "enum": [
+            "high",
+            "High",
+            "medium",
+            "Medium",
+            "low",
+            "Low"
+          ],
+          "description": "Job priority (Manifold/Volcano)."
+        }
+      },
+      "required": [
+        "name",
+        "command"
+      ],
+      "additionalProperties": false,
+      "patternProperties": {
+        "^(archived_data|attachments|azml_int|execution_mode)$": true
+      },
+      "description": "A single job definition."
+    },
+    "BashSubmitArgsSchema": {
+      "type": "object",
+      "properties": {
+        "max_attempts": {
+          "type": "integer",
+          "description": "Maximum number of retry attempts."
+        },
+        "max_run_duration_seconds": {
+          "type": "integer",
+          "description": "Maximum job run time in seconds."
+        },
+        "container_args": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/BashContainerArgsSchema"
+            }
+          ],
+          "description": "Docker container arguments (e.g. shared memory size). Accepts arbitrary keys for docker CLI passthrough."
+        },
+        "env": {
+          "type": "object",
+          "description": "Environment variables for job submission.",
+          "properties": {
+            "AMLT_DOCKERFILE_TEMPLATE": {
+              "type": [
+                "string",
+                "number",
+                "boolean"
+              ],
+              "description": "Controls Dockerfile generation for Manifold submissions. Set to 'default' to skip installer/validator, or 'none' to skip Dockerfile entirely. Only relevant for non-base images on Manifold."
+            },
+            "DATASET_MOUNT_READ_BUFFER_BLOCK_COUNT": {
+              "type": [
+                "string",
+                "number",
+                "boolean"
+              ],
+              "description": "Number of blocks to cache when reading mounted data (Manifold). Default: 32."
+            },
+            "DATASET_MOUNT_READ_BLOCK_SIZE": {
+              "type": [
+                "string",
+                "number",
+                "boolean"
+              ],
+              "description": "Size of each cache block in bytes when reading mounted data (Manifold). Default: 2MB."
+            },
+            "DATASET_MOUNT_BLOCK_BASED_CACHE_ENABLED": {
+              "type": [
+                "string",
+                "number",
+                "boolean"
+              ],
+              "description": "Set to 'false' to cache whole files instead of blocks. Preferred for random access over many files (Manifold)."
+            },
+            "AMLT_DIRSYNC_FREQ": {
+              "type": [
+                "string",
+                "number",
+                "boolean"
+              ],
+              "description": "How often (seconds) to sync job output files to blob storage. Default: 30."
+            },
+            "AMLT_DIRSYNC_MOVE": {
+              "type": [
+                "string",
+                "number",
+                "boolean"
+              ],
+              "description": "If 'true', files synced to blob storage are removed from local disk to save space."
+            },
+            "AMLT_DIRSYNC_EXCLUDE": {
+              "type": [
+                "string",
+                "number",
+                "boolean"
+              ],
+              "description": "Space-separated patterns to exclude from background file sync to blob storage."
+            },
+            "AMLT_DIRSYNC_INCLUDE": {
+              "type": [
+                "string",
+                "number",
+                "boolean"
+              ],
+              "description": "Space-separated patterns to include despite matching AMLT_DIRSYNC_EXCLUDE."
+            },
+            "AMLT_DIRSYNC_THREADS": {
+              "type": [
+                "string",
+                "number",
+                "boolean"
+              ],
+              "description": "Max parallel threads for background file syncing. Default: unset (auto)."
+            },
+            "AMLT_NO_RUNTIME_DEPS": {
+              "type": [
+                "string",
+                "number",
+                "boolean"
+              ],
+              "description": "If 'true', skip installing runtime dependencies (azure-identity, wrapt, etc.) before running the job. May break HyperDrive job renaming and tensorboard patching."
+            },
+            "AMLT_NO_FAULTHANDLER": {
+              "type": [
+                "string",
+                "number",
+                "boolean"
+              ],
+              "description": "If 'true', do not install Python faulthandler in AML/Manifold jobs."
+            },
+            "AMLT_PERSISTENT_VOLUME_NAME": {
+              "type": [
+                "string",
+                "number",
+                "boolean"
+              ],
+              "description": "Mount a Kubernetes persistent volume claim (e.g. NFS) with this name at /data. Volcano only."
+            },
+            "AMLT_PERSISTENT_VOLUME_MOUNT_DIR": {
+              "type": [
+                "string",
+                "number",
+                "boolean"
+              ],
+              "description": "Custom mount path for AMLT_PERSISTENT_VOLUME_NAME (default: /data). Volcano only."
+            },
+            "AMLT_EXCLUDED_NODE_LIST": {
+              "type": [
+                "string",
+                "number",
+                "boolean"
+              ],
+              "description": "Comma-separated list of Kubernetes nodes to exclude from scheduling. Volcano only."
+            },
+            "_AZUREML_SINGULARITY_JOB_UAI": {
+              "type": [
+                "string",
+                "number",
+                "boolean"
+              ],
+              "description": "Resource ID of a user-assigned managed identity to use in the job. Required for Manifold jobs. Allows the job to authenticate to Azure resources (storage, key vault, etc.) using this identity."
+            }
+          },
+          "additionalProperties": {
+            "type": [
+              "string",
+              "number",
+              "boolean"
+            ]
+          }
+        }
+      },
+      "additionalProperties": false,
+      "patternProperties": {
+        "^(application_master_version|constraints|no_progress_timeout|queue|runtime_utils_version|timeout|tool_name|tool_name_other|verbose)$": true
+      },
+      "description": "Advanced job submission arguments."
+    },
+    "BashContainerArgsSchema": {
+      "type": "object",
+      "properties": {
+        "user": {
+          "type": "string",
+          "description": "User to run the container as."
+        },
+        "shm_size": {
+          "type": "string",
+          "description": "Shared memory size (e.g. '16g')."
+        }
+      },
+      "patternProperties": {
+        "^(shm_size_per_gpu)$": true
+      },
+      "description": "Docker container arguments. Known fields: user, shm_size, shm_size_per_gpu. Additional arbitrary keys are passed through to the Docker CLI."
+    },
+    "StorageSchema": {
+      "type": "object",
+      "properties": {
+        "container_name": {
+          "type": "string",
+          "description": "Blob container name (3-63 chars, alphanumeric and dashes, no consecutive dashes). Mutually exclusive with `file_share_name`."
+        },
+        "file_share_name": {
+          "type": "string",
+          "description": "Azure Files share name. Mutually exclusive with `container_name`."
+        },
+        "storage_account_name": {
+          "type": "string",
+          "description": "Azure storage account name (3-24 lowercase alphanumeric chars)."
+        },
+        "mount_dir": {
+          "type": "string",
+          "description": "Mount path inside the container (e.g. '/mnt/data'). Default: `/mnt/<storage_id>`."
+        },
+        "is_output": {
+          "type": "boolean",
+          "description": "Whether this storage is used for job output."
+        },
+        "local_dir": {
+          "type": "string",
+          "description": "Local directory mounted instead of blob storage when using the `local` target backend."
+        },
+        "mount_options": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Additional mount options for blob storage (AML and local backends only, not for Azure Files)."
+        },
+        "datastore_name": {
+          "type": "string",
+          "description": "Name of an existing AzureML datastore (alternative to storage_account_name)."
+        }
+      },
+      "additionalProperties": false,
+      "description": "Azure storage mount configuration."
+    }
+  }
+}

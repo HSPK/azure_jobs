@@ -39,6 +39,8 @@ class _LazyGroup(click.Group):
         "ds": ".ds",
         # sku.py
         "sku": ".sku",
+        # init.py
+        "init": ".init",
     }
 
     def list_commands(self, ctx: click.Context) -> list[str]:
