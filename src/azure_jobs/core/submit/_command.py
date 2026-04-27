@@ -34,10 +34,10 @@ def _generate_runner_script(
     # --- SSH setup ---
     lines.append("# SSH key setup")
     lines.append('if [ -d "$AZUREML_CR_CODE_PATH/.ssh" ]; then')
-    lines.append('  mkdir -p $$HOME/.ssh')
-    lines.append('  cp -n $$AZUREML_CR_CODE_PATH/.ssh/* $$HOME/.ssh/ 2>/dev/null || true')
-    lines.append('  chmod 700 $$HOME/.ssh')
-    lines.append('  chmod 600 $$HOME/.ssh/id_* 2>/dev/null || true')
+    lines.append('  mkdir -p $HOME/.ssh')
+    lines.append('  cp -n $AZUREML_CR_CODE_PATH/.ssh/* $HOME/.ssh/ 2>/dev/null || true')
+    lines.append('  chmod 700 $HOME/.ssh')
+    lines.append('  chmod 600 $HOME/.ssh/id_* 2>/dev/null || true')
     lines.append("fi")
     lines.append("")
 
