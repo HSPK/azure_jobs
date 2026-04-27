@@ -153,10 +153,12 @@ def init(force: bool) -> None:
 
 
 def _register_amlt_workspace(ws: dict[str, str]) -> None:
-    """Register the aj workspace with amlt."""
+    """Register the aj workspace with amlt, streaming output in dim."""
     import subprocess
 
-    from azure_jobs.utils.ui import dim, info, success, warning
+    from rich.console import Console
+
+    from azure_jobs.utils.ui import info, success, warning
 
     name = ws.get("workspace_name", "")
     sub = ws.get("subscription_id", "")
@@ -164,23 +166,41 @@ def _register_amlt_workspace(ws: dict[str, str]) -> None:
     if not (name and sub and rg):
         return
 
+    console = Console(stderr=True)
     info(f"Registering amlt workspace [bold]{name}[/bold]…")
-    result = subprocess.run(
+
+    proc = subprocess.Popen(
         [
             "amlt", "workspace", "add", name,
             "--subscription", sub,
             "--resource-group", rg,
         ],
-        input="y\ny\ny\n",
-        capture_output=True,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
         text=True,
     )
-    if result.returncode == 0:
+    assert proc.stdin is not None and proc.stdout is not None
+
+    # Auto-confirm any prompts
+    proc.stdin.write("y\ny\ny\n")
+    proc.stdin.close()
+
+    # Stream output dim
+    output_lines: list[str] = []
+    for line in proc.stdout:
+        stripped = line.rstrip()
+        if stripped:
+            console.print(f"  {stripped}", style="dim")
+            output_lines.append(stripped)
+
+    rc = proc.wait()
+    if rc == 0:
         success(f"Workspace [bold]{name}[/bold] registered ✓")
     else:
-        msg = result.stderr.strip() or result.stdout.strip()
+        msg = "\n".join(output_lines)
         if "already" in msg.lower():
-            dim(f"Workspace {name} already registered")
+            console.print(f"  Workspace {name} already registered", style="dim")
         else:
             warning(f"Failed to register {name}: {msg}")
 
