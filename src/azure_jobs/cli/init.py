@@ -85,10 +85,20 @@ def init(force: bool) -> None:
         return
 
     has_amltconfig = Path(".amltconfig").exists()
-    if has_amltconfig and not (force and _confirm_step("amlt project", force)):
-        info(".amltconfig already exists — skipping amlt project creation")
-        success("aj initialised ✓")
-        return
+    if has_amltconfig:
+        import json
+
+        try:
+            amlt_cfg = json.loads(Path(".amltconfig").read_text())
+            dim(
+                f"amlt project: {amlt_cfg.get('project_name', '?')}  "
+                f"(storage={amlt_cfg.get('storage_account_name', '?')})"
+            )
+        except Exception:
+            dim(".amltconfig exists")
+        if not (force and _confirm_step("amlt project", force)):
+            success("aj initialised ✓")
+            return
 
     # 5. Query workspace for default storage account
     with console.status(
