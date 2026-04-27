@@ -272,6 +272,8 @@ def build_volcano_config_from_template(
     # Environment variables
     env_vars = dict(submit_args.get("env", {}))
 
+    container_args = submit_args.get("container_args", {})
+
     return VolcanoConfig(
         name=name,
         namespace=target.get("namespace", "default"),
@@ -279,15 +281,17 @@ def build_volcano_config_from_template(
         context=target.get("context", ""),
         nodes=nodes,
         gpus_per_node=target.get("gpus_per_node", 8),
-        cpus_per_node=target.get("cpus_per_node", 104),
-        memory=target.get("memory", "2808Gi"),
+        cpus_per_node=target.get("cpus_per_node", 0)
+        or container_args.get("cpus", 104),
+        memory=target.get("memory", "")
+        or container_args.get("memory", "2808Gi"),
         processes_per_node=processes_per_node,
         image=env.get("image", ""),
         command=command,
         setup_commands=setup,
         env_vars=env_vars,
         rdma=target.get("rdma", True),
-        shm_size=submit_args.get("container_args", {}).get("shm_size", "100Gi"),
+        shm_size=container_args.get("shm_size", "100Gi"),
         priority_class=target.get("priority_class", ""),
         labels=target.get("labels", {}),
     )
