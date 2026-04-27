@@ -149,7 +149,8 @@ def build_command_list(
     help="Submit via amlt instead of aj REST API",
 )
 @click.option(
-    "-i", "--interactive",
+    "-i",
+    "--interactive",
     is_flag=True,
     help="Interactive amlt submission (manual confirmation)",
 )
@@ -207,12 +208,9 @@ def run(
 
     conf["description"] = name
     conf["jobs"][0]["name"] = name
-
-    # SKU resolution only for AML/Singularity
-    if service != "volcano":
-        conf["jobs"][0]["sku"] = resolve_sku(
-            conf["jobs"][0]["sku"], nodes_int, processes_int
-        )
+    conf["jobs"][0]["sku"] = resolve_sku(
+        conf["jobs"][0]["sku"], nodes_int, processes_int
+    )
 
     conf["jobs"][0]["command"] = build_command_list(
         conf["jobs"][0].get("command", []),
@@ -240,7 +238,7 @@ def run(
         job_id=sid,
         job_name=name,
         template=template,
-        sku=conf["jobs"][0].get("sku", f"volcano/{service}"),
+        sku=conf["jobs"][0]["sku"],
         nodes=nodes_int,
         processes=processes_int,
         command=final_cmd,
@@ -257,7 +255,10 @@ def run(
             )
 
             vcfg = build_volcano_config_from_template(
-                conf, name=name, nodes=nodes_int, processes_per_node=processes_int,
+                conf,
+                name=name,
+                nodes=nodes_int,
+                processes_per_node=processes_int,
             )
             info("Generated Volcano Job YAML:")
             click.echo(yaml.dump(build_volcano_job(vcfg), default_flow_style=False))
@@ -397,7 +398,10 @@ def _submit_via_volcano(
     )
 
     vcfg = build_volcano_config_from_template(
-        conf, name=name, nodes=nodes, processes_per_node=processes,
+        conf,
+        name=name,
+        nodes=nodes,
+        processes_per_node=processes,
     )
     ok, output = submit_volcano_job(vcfg, dry_run=dry_run)
 
