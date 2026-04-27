@@ -182,8 +182,6 @@ def _register_amlt_workspace(ws: dict[str, str]) -> None:
             dim(f"Workspace {name} already registered")
         else:
             warning(f"Failed to register {name}: {msg}")
-            else:
-                warning(f"Failed to register {name}: {msg}")
 
 
 def _setup_workspace() -> dict[str, str] | None:
