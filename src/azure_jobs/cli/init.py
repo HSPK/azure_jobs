@@ -17,21 +17,32 @@ def _confirm_step(name: str, force: bool) -> bool:
     return click.confirm(f"  Reconfigure {name}?", default=True)
 
 
-@main.command()
+@main.group(invoke_without_command=True)
 @click.option("-f", "--force", is_flag=True, help="Re-run all steps (with skip option)")
-def init(force: bool) -> None:
-    """Initialise aj project directory and configure amlt.
+@click.pass_context
+def init(ctx: click.Context, force: bool) -> None:
+    """Initialise aj project directory.
 
-    Sets up .azure_jobs/ structure, configures workspace interactively
-    if not already set, and generates .amltconfig for amlt integration.
+    Sets up .azure_jobs/ structure, configures workspace and experiment
+    interactively if not already set.
 
+    Use ``aj init amlt`` to additionally set up amlt integration.
     Use -f to re-run all steps (each step can be skipped).
     """
-    from pathlib import Path
+    if ctx.invoked_subcommand is not None:
+        # Subcommand (e.g. 'aj init amlt') will handle its own logic
+        ctx.ensure_object(dict)
+        ctx.obj["force"] = force
+        return
 
+    _init_aj(force)
+
+
+def _init_aj(force: bool) -> None:
+    """Core aj initialisation: templates, workspace, experiment."""
     from azure_jobs.core import const
     from azure_jobs.core.config import get_workspace_config, read_config, write_config
-    from azure_jobs.utils.ui import console, dim, error, info, success, warning
+    from azure_jobs.utils.ui import dim, info, success, warning
 
     # 1. Templates
     if not const.AJ_HOME.exists():
@@ -77,13 +88,38 @@ def init(force: bool) -> None:
         write_config(cfg)
         info(f"Experiment set to [bold]{exp}[/bold]")
 
-    # 4. amlt
+    success("aj initialised ✓")
+
+
+@init.command("amlt")
+@click.option("-f", "--force", is_flag=True, help="Re-run all steps (with skip option)")
+@click.pass_context
+def init_amlt(ctx: click.Context, force: bool) -> None:
+    """Set up amlt integration (project + workspace registration).
+
+    Creates .amltconfig and prints workspace registration commands.
+    Requires amlt to be installed (``pipx install amlt``).
+    """
+    from pathlib import Path
+
+    from azure_jobs.core.config import get_workspace_config
+    from azure_jobs.utils.ui import console, dim, error, info, success, warning
+
+    # Inherit -f from parent if set
+    parent_force = (ctx.parent and ctx.parent.obj or {}).get("force", False)
+    force = force or parent_force
+
     if not shutil.which("amlt"):
-        warning("amlt not found in PATH — skipping .amltconfig setup")
+        error("amlt not found in PATH")
         dim("Install amlt with: pipx install amlt")
-        success("aj initialised ✓")
         return
 
+    ws = get_workspace_config()
+    if not ws or not ws.get("workspace_name"):
+        error("Workspace not configured. Run [bold]aj init[/bold] first.")
+        return
+
+    # 1. Check existing .amltconfig
     has_amltconfig = Path(".amltconfig").exists()
     if has_amltconfig:
         import json
@@ -98,10 +134,10 @@ def init(force: bool) -> None:
             dim(".amltconfig exists")
         if not (force and _confirm_step("amlt project", force)):
             _print_amlt_workspace_commands(ws)
-            success("aj initialised ✓")
+            success("amlt configured ✓")
             return
 
-    # 5. Query workspace for default storage account
+    # 2. Query workspace for default storage account
     with console.status(
         "[bold cyan]Querying workspace storage…[/bold cyan]", spinner="dots"
     ):
@@ -117,17 +153,15 @@ def init(force: bool) -> None:
                 storage_account = storage_arm
         except Exception as exc:
             error(f"Failed to query workspace: {exc}")
-            success("aj initialised (without amlt) ✓")
             return
 
     if not storage_account:
         error("Could not determine workspace storage account.")
-        success("aj initialised (without amlt) ✓")
         return
 
     dim(f"Storage account: {storage_account}")
 
-    # 6. Create amlt project
+    # 3. Create amlt project
     project_name = ws["workspace_name"].lower().replace(" ", "-")
     info(f"Creating amlt project [bold]{project_name}[/bold]…")
 
@@ -141,15 +175,14 @@ def init(force: bool) -> None:
         msg = (result.stderr.strip() or result.stdout.strip())
         error(f"amlt project create failed: {msg}")
         dim("You can set up amlt manually: amlt project create <name> <storage_account>")
-        success("aj initialised (without amlt) ✓")
         return
 
-    success("aj initialised ✓")
     if result.stdout.strip():
         dim(result.stdout.strip())
 
-    # 7. Print workspace registration commands
+    # 4. Print workspace registration commands
     _print_amlt_workspace_commands(ws)
+    success("amlt configured ✓")
 
 
 def _print_amlt_workspace_commands(aj_ws: dict[str, str]) -> None:

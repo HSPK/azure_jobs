@@ -142,9 +142,9 @@ def build_command_list(
 @click.option("-y", "--yes", is_flag=True, hidden=True, help="(Deprecated, no-op)")
 @click.option("-L", "--run-local", is_flag=True, help="Run the command locally")
 @click.option(
-    "--direct",
+    "--amlt",
     is_flag=True,
-    help="Submit via aj REST API instead of amlt",
+    help="Submit via amlt instead of aj REST API",
 )
 @click.option(
     "-i", "--interactive",
@@ -161,7 +161,7 @@ def run(
     processes: str | None,
     dry_run: bool,
     run_local: bool,
-    direct: bool,
+    amlt: bool,
     interactive: bool,
     yes: bool,
 ) -> None:
@@ -249,7 +249,7 @@ def run(
     from azure_jobs.core.config import ensure_experiment
 
     experiment = ensure_experiment()
-    use_amlt = not direct and _amlt_available()
+    use_amlt = amlt and _amlt_available()
 
     rec = SubmissionRecord(
         id=sid,
