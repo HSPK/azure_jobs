@@ -35,7 +35,9 @@ def validate_config(conf: dict, template_fp: Path) -> None:
         raise click.ClickException(
             f"Template {template_fp}: 'jobs' must be a non-empty list."
         )
-    if "sku" not in conf["jobs"][0]:
+    # SKU is required for AML/Singularity but not Volcano
+    service = conf.get("target", {}).get("service", "aml")
+    if service != "volcano" and "sku" not in conf["jobs"][0]:
         raise click.ClickException(
             f"Template {template_fp}: first job is missing required 'sku' key."
         )
@@ -201,11 +203,16 @@ def run(
     validate_config(conf, template_fp)
     save_defaults(template=template)
 
+    service = conf.get("target", {}).get("service", "aml")
+
     conf["description"] = name
     conf["jobs"][0]["name"] = name
-    conf["jobs"][0]["sku"] = resolve_sku(
-        conf["jobs"][0]["sku"], nodes_int, processes_int
-    )
+
+    # SKU resolution only for AML/Singularity
+    if service != "volcano":
+        conf["jobs"][0]["sku"] = resolve_sku(
+            conf["jobs"][0]["sku"], nodes_int, processes_int
+        )
 
     conf["jobs"][0]["command"] = build_command_list(
         conf["jobs"][0].get("command", []),
@@ -233,7 +240,7 @@ def run(
         job_id=sid,
         job_name=name,
         template=template,
-        sku=conf["jobs"][0]["sku"],
+        sku=conf["jobs"][0].get("sku", f"volcano/{service}"),
         nodes=nodes_int,
         processes=processes_int,
         command=final_cmd,
@@ -243,13 +250,23 @@ def run(
 
     if dry_run:
         dim(f"Config written to {submission_fp}")
+        if service == "volcano":
+            from azure_jobs.core.submit._volcano import (
+                build_volcano_config_from_template,
+                build_volcano_job,
+            )
+
+            vcfg = build_volcano_config_from_template(
+                conf, name=name, nodes=nodes_int, processes_per_node=processes_int,
+            )
+            info("Generated Volcano Job YAML:")
+            click.echo(yaml.dump(build_volcano_job(vcfg), default_flow_style=False))
         return
 
     # ── Choose submission backend ────────────────────────────────────
     from azure_jobs.core.config import ensure_experiment
 
     experiment = ensure_experiment()
-    use_amlt = amlt and _amlt_available()
 
     rec = SubmissionRecord(
         id=sid,
@@ -263,7 +280,9 @@ def run(
         args=list(args),
     )
 
-    if use_amlt:
+    if service == "volcano":
+        _submit_via_volcano(conf, name, nodes_int, processes_int, rec, dry_run)
+    elif amlt and _amlt_available():
         # Strip aj-specific fields that amlt doesn't understand
         _clean_config_for_amlt(submission_fp)
         _submit_via_amlt(submission_fp, name, rec, name, interactive=interactive)
@@ -361,6 +380,43 @@ def _submit_and_record(
         raise click.ClickException(f"Submission failed: {exc}")
     finally:
         log_record(rec)
+
+
+def _submit_via_volcano(
+    conf: dict,
+    name: str,
+    nodes: int,
+    processes: int,
+    rec: SubmissionRecord,
+    dry_run: bool,
+) -> None:
+    """Submit job to Kubernetes via Volcano (kubectl apply)."""
+    from azure_jobs.core.submit._volcano import (
+        build_volcano_config_from_template,
+        submit_volcano_job,
+    )
+
+    vcfg = build_volcano_config_from_template(
+        conf, name=name, nodes=nodes, processes_per_node=processes,
+    )
+    ok, output = submit_volcano_job(vcfg, dry_run=dry_run)
+
+    if dry_run:
+        info("Generated Volcano Job YAML:")
+        click.echo(output)
+        return
+
+    if ok:
+        rec.status = "submitted"
+        log_record(rec)
+        success(f"Job [bold]{name}[/bold] submitted to Volcano")
+        dim(output)
+    else:
+        rec.status = "failed"
+        rec.note = output
+        log_record(rec)
+        error(f"kubectl apply failed: {output}")
+        raise SystemExit(1)
 
 
 def _amlt_available() -> bool:
