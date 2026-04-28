@@ -421,7 +421,11 @@ def _submit_via_volcano(
         nodes=nodes,
         processes_per_node=processes,
     )
-    ok, output = submit_volcano_job(vcfg, dry_run=dry_run)
+
+    def _on_status(phase: str, msg: str) -> None:
+        dim(msg)
+
+    ok, output = submit_volcano_job(vcfg, dry_run=dry_run, on_status=_on_status)
 
     if dry_run:
         info("Generated Volcano Job YAML:")

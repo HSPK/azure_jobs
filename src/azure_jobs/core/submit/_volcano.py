@@ -60,14 +60,27 @@ class VolcanoConfig:
     priority_class: str = ""
     labels: dict[str, str] = field(default_factory=dict)
 
+    # Code upload
+    code_dir: str = ""
+    code_ignore: list[str] = field(default_factory=list)
+
+    # PVC mount (from AMLT_PERSISTENT_VOLUME_*)
+    pvc_name: str = ""
+    pvc_mount_dir: str = ""
+
 
 def build_volcano_job(cfg: VolcanoConfig) -> dict[str, Any]:
     """Build a Volcano Job spec dict from config."""
     job_name = cfg.name.lower().replace("_", "-")[:50]
     app_label = job_name
 
+    # Code directory on PVC
+    code_path = f"{cfg.pvc_mount_dir}/aj_code/{cfg.name}" if cfg.pvc_name and cfg.pvc_mount_dir else ""
+
     # Build the shell script that each node runs
     script_lines = []
+    if code_path:
+        script_lines.append(f"cd {code_path}")
     if cfg.setup_commands:
         script_lines.extend(cfg.setup_commands)
     script_lines.extend(cfg.command)
@@ -109,6 +122,25 @@ def build_volcano_job(cfg: VolcanoConfig) -> dict[str, Any]:
             "effect": "NoSchedule",
         })
 
+    # Volumes and mounts
+    volumes: list[dict[str, Any]] = [
+        {"name": "dshm", "emptyDir": {"medium": "Memory", "sizeLimit": cfg.shm_size}},
+    ]
+    volume_mounts: list[dict[str, Any]] = [
+        {"name": "dshm", "mountPath": "/dev/shm"},
+    ]
+
+    # Add PVC mount if configured
+    if cfg.pvc_name and cfg.pvc_mount_dir:
+        volumes.append({
+            "name": "pvc-data",
+            "persistentVolumeClaim": {"claimName": cfg.pvc_name},
+        })
+        volume_mounts.append({
+            "name": "pvc-data",
+            "mountPath": cfg.pvc_mount_dir,
+        })
+
     # Pod spec (shared between master and workers)
     def _make_pod_spec(role: str) -> dict[str, Any]:
         container: dict[str, Any] = {
@@ -117,9 +149,7 @@ def build_volcano_job(cfg: VolcanoConfig) -> dict[str, Any]:
             "command": ["/bin/bash", "-lc"],
             "args": [f"set -eo pipefail\n{script}"],
             "resources": resources,
-            "volumeMounts": [
-                {"name": "dshm", "mountPath": "/dev/shm"},
-            ],
+            "volumeMounts": list(volume_mounts),
         }
         if env_list:
             container["env"] = env_list
@@ -129,12 +159,7 @@ def build_volcano_job(cfg: VolcanoConfig) -> dict[str, Any]:
         pod_spec: dict[str, Any] = {
             "schedulerName": "volcano",
             "restartPolicy": "Never",
-            "volumes": [
-                {
-                    "name": "dshm",
-                    "emptyDir": {"medium": "Memory", "sizeLimit": cfg.shm_size},
-                },
-            ],
+            "volumes": list(volumes),
             "tolerations": tolerations,
             "containers": [container],
         }
@@ -222,23 +247,130 @@ def build_volcano_job(cfg: VolcanoConfig) -> dict[str, Any]:
     return job_spec
 
 
+def _upload_code_to_pvc(
+    cfg: VolcanoConfig,
+    *,
+    namespace: str,
+    on_status: Any = None,
+) -> bool:
+    """Upload local code to PVC via a temporary kubectl pod.
+
+    Creates a short-lived busybox pod that mounts the PVC, pipes a tar
+    archive of the code directory into it, and cleans up.
+
+    Returns True on success.
+    """
+    import json
+
+    if not cfg.code_dir or not cfg.pvc_name or not cfg.pvc_mount_dir:
+        return False
+
+    code_path = Path(cfg.code_dir).resolve()
+    if not code_path.is_dir():
+        return False
+
+    dest_dir = f"{cfg.pvc_mount_dir}/aj_code/{cfg.name}"
+    pod_name = f"aj-upload-{cfg.name[:30].lower().replace('_', '-')}"
+
+    # Build exclude args from code_ignore
+    exclude_args: list[str] = []
+    for pattern in cfg.code_ignore:
+        exclude_args.extend(["--exclude", pattern.rstrip("/")])
+
+    _status = on_status or (lambda *a: None)
+    _status("upload", f"Uploading code to PVC {cfg.pvc_name}:{dest_dir}")
+
+    # Pod override spec for kubectl run
+    overrides = json.dumps({
+        "spec": {
+            "volumes": [{
+                "name": "pvc-data",
+                "persistentVolumeClaim": {"claimName": cfg.pvc_name},
+            }],
+            "containers": [{
+                "name": pod_name,
+                "image": "busybox:latest",
+                "volumeMounts": [{
+                    "name": "pvc-data",
+                    "mountPath": cfg.pvc_mount_dir,
+                }],
+                "stdin": True,
+                "stdinOnce": True,
+                "command": [
+                    "sh", "-c",
+                    f"mkdir -p {dest_dir} && tar xf - -C {dest_dir}",
+                ],
+            }],
+            "restartPolicy": "Never",
+        },
+    })
+
+    # Create tar and pipe into kubectl run
+    tar_cmd = ["tar", "cf", "-", "-C", str(code_path), "."]
+    tar_cmd.extend(exclude_args)
+
+    kube_cmd = [
+        "kubectl", "run", pod_name,
+        "--rm", "-i",
+        "--image=busybox:latest",
+        f"--namespace={namespace}",
+        f"--overrides={overrides}",
+        "--restart=Never",
+    ]
+    if cfg.context:
+        kube_cmd.extend(["--context", cfg.context])
+
+    try:
+        tar_proc = subprocess.Popen(tar_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        result = subprocess.run(
+            kube_cmd,
+            stdin=tar_proc.stdout,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        tar_proc.stdout.close()
+        tar_proc.wait()
+        if result.returncode != 0:
+            err = result.stderr.strip() or result.stdout.strip()
+            _status("upload_error", f"Code upload failed: {err}")
+            return False
+        _status("upload_done", f"Code uploaded to {dest_dir}")
+        return True
+    except subprocess.TimeoutExpired:
+        _status("upload_error", "Code upload timed out (120s)")
+        return False
+    except Exception as exc:
+        _status("upload_error", f"Code upload error: {exc}")
+        return False
+
+
 def submit_volcano_job(
     cfg: VolcanoConfig,
     *,
     dry_run: bool = False,
+    on_status: Any = None,
 ) -> tuple[bool, str]:
     """Generate Volcano YAML and submit via kubectl.
 
+    If the config includes code_dir + PVC, uploads code first.
     Returns (success, output_message).
     """
     if not shutil.which("kubectl"):
         return False, "kubectl not found in PATH"
 
     job_spec = build_volcano_job(cfg)
+    namespace = job_spec["metadata"]["namespace"]
     job_yaml = yaml.dump(job_spec, default_flow_style=False)
 
     if dry_run:
         return True, job_yaml
+
+    # Upload code to PVC if configured
+    if cfg.code_dir and cfg.pvc_name and cfg.pvc_mount_dir:
+        ok = _upload_code_to_pvc(cfg, namespace=namespace, on_status=on_status)
+        if not ok:
+            return False, "Code upload to PVC failed"
 
     # Write to temp file and apply
     with tempfile.NamedTemporaryFile(
@@ -276,11 +408,15 @@ def build_volcano_config_from_template(
     Reads Volcano-specific fields from ``target`` section:
       - namespace, queue, context, gpus_per_node, cpus_per_node, memory
       - rdma, priority_class
+    Reads code upload from ``code`` section:
+      - local_dir, ignore
+    Detects PVC from env vars AMLT_PERSISTENT_VOLUME_NAME/MOUNT_DIR.
     """
     target = conf.get("target", {})
     env = conf.get("environment", {})
     job = conf.get("jobs", [{}])[0]
     submit_args = job.get("submit_args", {})
+    code = conf.get("code", {})
 
     # Build full command from job config
     setup = env.get("setup", [])
@@ -290,6 +426,18 @@ def build_volcano_config_from_template(
     env_vars = dict(submit_args.get("env", {}))
 
     container_args = submit_args.get("container_args", {})
+
+    # Code directory
+    code_dir = code.get("local_dir", ".")
+    if code_dir.startswith("$CONFIG_DIR"):
+        code_dir = code_dir.replace("$CONFIG_DIR/../../", "").replace("$CONFIG_DIR/../", "").replace("$CONFIG_DIR", ".")
+        if not code_dir or code_dir == "/":
+            code_dir = "."
+    code_ignore = code.get("ignore", [])
+
+    # PVC from env vars (amlt convention)
+    pvc_name = env_vars.get("AMLT_PERSISTENT_VOLUME_NAME", "")
+    pvc_mount_dir = env_vars.get("AMLT_PERSISTENT_VOLUME_MOUNT_DIR", "")
 
     return VolcanoConfig(
         name=name,
@@ -311,4 +459,8 @@ def build_volcano_config_from_template(
         shm_size=container_args.get("shm_size", "100Gi"),
         priority_class=target.get("priority_class", ""),
         labels=target.get("labels", {}),
+        code_dir=code_dir,
+        code_ignore=code_ignore,
+        pvc_name=pvc_name,
+        pvc_mount_dir=pvc_mount_dir,
     )
