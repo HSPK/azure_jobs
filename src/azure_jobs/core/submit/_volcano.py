@@ -253,15 +253,13 @@ def _upload_code_to_pvc(
     namespace: str,
     on_status: Any = None,
 ) -> bool:
-    """Upload local code to PVC via a temporary kubectl pod.
+    """Upload local code to PVC via a temporary pod.
 
-    Creates a short-lived busybox pod that mounts the PVC, pipes a tar
-    archive of the code directory into it, and cleans up.
+    Creates a pod with ``kubectl apply``, waits for it to be ready, pipes
+    a tar archive via ``kubectl exec``, then deletes the pod.
 
     Returns True on success.
     """
-    import json
-
     if not cfg.code_dir or not cfg.pvc_name or not cfg.pvc_mount_dir:
         return False
 
@@ -272,7 +270,6 @@ def _upload_code_to_pvc(
     dest_dir = f"{cfg.pvc_mount_dir}/aj_code/{cfg.name}"
     pod_name = f"aj-upload-{cfg.name[:30].lower().replace('_', '-')}"
 
-    # Build exclude args from code_ignore
     exclude_args: list[str] = []
     for pattern in cfg.code_ignore:
         exclude_args.extend(["--exclude", pattern.rstrip("/")])
@@ -280,73 +277,96 @@ def _upload_code_to_pvc(
     _status = on_status or (lambda *a: None)
     _status("upload", f"Uploading code to PVC {cfg.pvc_name}:{dest_dir}")
 
-    # Pod override spec for kubectl run
-    overrides = json.dumps({
+    ctx_args = ["--context", cfg.context] if cfg.context else []
+
+    # Full pod spec — kubectl run --overrides doesn't reliably merge resources
+    pod_spec = {
+        "apiVersion": "v1",
+        "kind": "Pod",
+        "metadata": {"name": pod_name, "namespace": namespace},
         "spec": {
+            "restartPolicy": "Never",
             "volumes": [{
                 "name": "pvc-data",
                 "persistentVolumeClaim": {"claimName": cfg.pvc_name},
             }],
             "containers": [{
-                "name": pod_name,
+                "name": "upload",
                 "image": "busybox:latest",
                 "resources": {
                     "requests": {"cpu": "100m", "memory": "256Mi"},
-                    "limits": {"cpu": "1", "memory": "1Gi"},
+                    "limits": {"cpu": "500m", "memory": "512Mi"},
                 },
                 "volumeMounts": [{
                     "name": "pvc-data",
                     "mountPath": cfg.pvc_mount_dir,
                 }],
-                "stdin": True,
-                "stdinOnce": True,
-                "command": [
-                    "sh", "-c",
-                    f"mkdir -p {dest_dir} && tar xf - -C {dest_dir}",
-                ],
+                "command": ["sh", "-c", f"mkdir -p {dest_dir} && sleep 300"],
             }],
-            "restartPolicy": "Never",
         },
-    })
+    }
 
-    # Create tar and pipe into kubectl run
-    tar_cmd = ["tar", "cf", "-", "-C", str(code_path), "."]
-    tar_cmd.extend(exclude_args)
-
-    kube_cmd = [
-        "kubectl", "run", pod_name,
-        "--rm", "-i",
-        "--image=busybox:latest",
-        f"--namespace={namespace}",
-        f"--overrides={overrides}",
-        "--restart=Never",
-    ]
-    if cfg.context:
-        kube_cmd.extend(["--context", cfg.context])
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".yaml", prefix="aj-upload-pod-", delete=False,
+    ) as f:
+        f.write(yaml.dump(pod_spec, default_flow_style=False))
+        pod_yaml_path = f.name
 
     try:
-        tar_proc = subprocess.Popen(tar_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        # Create the pod
         result = subprocess.run(
-            kube_cmd,
+            ["kubectl", "apply", "-f", pod_yaml_path, *ctx_args],
+            capture_output=True, text=True, timeout=30,
+        )
+        if result.returncode != 0:
+            err = result.stderr.strip() or result.stdout.strip()
+            _status("upload_error", f"Upload pod creation failed: {err}")
+            return False
+
+        # Wait for pod to be running
+        result = subprocess.run(
+            ["kubectl", "wait", "--for=condition=Ready", f"pod/{pod_name}",
+             f"--namespace={namespace}", "--timeout=120s", *ctx_args],
+            capture_output=True, text=True, timeout=130,
+        )
+        if result.returncode != 0:
+            _status("upload_error", "Upload pod failed to become ready")
+            return False
+
+        # Pipe tar into kubectl exec
+        tar_cmd = ["tar", "cf", "-", "-C", str(code_path), "."] + exclude_args
+        tar_proc = subprocess.Popen(tar_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        exec_result = subprocess.run(
+            ["kubectl", "exec", "-i", pod_name, f"--namespace={namespace}",
+             *ctx_args, "--", "tar", "xf", "-", "-C", dest_dir],
             stdin=tar_proc.stdout,
-            capture_output=True,
-            text=True,
-            timeout=120,
+            capture_output=True, text=True, timeout=120,
         )
         tar_proc.stdout.close()
         tar_proc.wait()
-        if result.returncode != 0:
-            err = result.stderr.strip() or result.stdout.strip()
-            _status("upload_error", f"Code upload failed: {err}")
+
+        if exec_result.returncode != 0:
+            err = exec_result.stderr.strip() or exec_result.stdout.strip()
+            _status("upload_error", f"Code copy failed: {err}")
             return False
+
         _status("upload_done", f"Code uploaded to {dest_dir}")
         return True
+
     except subprocess.TimeoutExpired:
-        _status("upload_error", "Code upload timed out (120s)")
+        _status("upload_error", "Code upload timed out")
         return False
     except Exception as exc:
         _status("upload_error", f"Code upload error: {exc}")
         return False
+    finally:
+        Path(pod_yaml_path).unlink(missing_ok=True)
+        # Always clean up the upload pod
+        subprocess.run(
+            ["kubectl", "delete", "pod", pod_name, f"--namespace={namespace}",
+             "--ignore-not-found", *ctx_args],
+            capture_output=True, text=True, timeout=30,
+        )
 
 
 def submit_volcano_job(
