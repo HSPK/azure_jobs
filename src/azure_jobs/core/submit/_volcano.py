@@ -290,6 +290,10 @@ def _upload_code_to_pvc(
             "containers": [{
                 "name": pod_name,
                 "image": "busybox:latest",
+                "resources": {
+                    "requests": {"cpu": "100m", "memory": "256Mi"},
+                    "limits": {"cpu": "1", "memory": "1Gi"},
+                },
                 "volumeMounts": [{
                     "name": "pvc-data",
                     "mountPath": cfg.pvc_mount_dir,
