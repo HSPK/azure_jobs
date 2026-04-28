@@ -172,6 +172,71 @@ class _JobsMixin:
         return str(err)
 
     def get_run_log_urls(self, job_name: str) -> dict[str, str]:
-        """Return ``{log_path: signed_url}`` for a run via Run History API."""
+        """Return ``{log_path: signed_url}`` for a run via Run History API.
+
+        Falls back to the Artifact API if ``logFiles`` is empty (common for
+        amlt-submitted jobs).
+        """
         data = self._get_run_history(job_name)
-        return data.get("logFiles", {}) or {}
+        log_files = data.get("logFiles", {}) or {}
+        if log_files:
+            return log_files
+        # Fallback: Artifact API (ExperimentRun container)
+        return self._list_artifact_log_urls(job_name)
+
+    def _list_artifact_log_urls(self, job_name: str) -> dict[str, str]:
+        """List log artifacts via the Artifact v2 API and return signed URLs.
+
+        Scans ``logs/`` and ``user_logs/`` prefixes in the
+        ``ExperimentRun/dcid.{job_name}`` container.
+        """
+        self._get_location()  # type: ignore[attr-defined]
+        if not self._data_plane_base:  # type: ignore[attr-defined]
+            return {}
+        token = self._ensure_data_token()  # type: ignore[attr-defined]
+        dcid = f"dcid.{job_name}"
+        base_url = (
+            f"{self._data_plane_base}/artifact/v2.0/"  # type: ignore[attr-defined]
+            f"{self._scope_path}/artifacts"  # type: ignore[attr-defined]
+        )
+        headers = {"Authorization": f"Bearer {token}"}
+
+        # List artifacts under known prefixes
+        result: dict[str, str] = {}
+        for prefix in ("logs/", "user_logs/", "azureml-logs/"):
+            url = f"{base_url}/prefix/contentinfo/ExperimentRun/{dcid}"
+            try:
+                resp = self._session.get(  # type: ignore[attr-defined]
+                    url,
+                    headers=headers,
+                    params={"path": prefix, "count": 100},
+                    timeout=30,
+                )
+                if not resp.ok:
+                    continue
+                for item in resp.json().get("value", []):
+                    path = item.get("path", "")
+                    if path:
+                        result[path] = ""  # placeholder, resolve below
+            except Exception:
+                continue
+
+        if not result:
+            return {}
+
+        # Resolve signed URLs for each artifact
+        resolved: dict[str, str] = {}
+        for path in result:
+            try:
+                url = f"{base_url}/contentinfo/ExperimentRun/{dcid}/{path}"
+                resp = self._session.get(  # type: ignore[attr-defined]
+                    url, headers=headers, timeout=15,
+                )
+                if resp.ok:
+                    content_uri = resp.json().get("contentUri", "")
+                    if content_uri:
+                        resolved[path] = content_uri
+            except Exception:
+                continue
+
+        return resolved

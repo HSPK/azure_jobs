@@ -5,6 +5,7 @@ log file.  Works for both running and terminal-state jobs — no SDK needed.
 
 Typical log file locations (in priority order):
 - ``user_logs/std_log.txt``  — user stdout/stderr
+- ``user_logs/std_log_process_*.txt`` — multi-process logs
 - ``azureml-logs/70_driver_log.txt`` — driver log
 - ``azureml-logs/70_driver_log_0.txt`` — multi-node driver log
 """
@@ -15,13 +16,55 @@ from typing import Any
 
 import requests as _requests
 
-# Log files to look for, in priority order
-_LOG_FILES = [
-    "user_logs/std_log.txt",
-    "azureml-logs/70_driver_log.txt",
-    "azureml-logs/70_driver_log_0.txt",
-    "azureml-logs/75_job_post-tvmps.txt",
+# Prefix priority for auto-pick (first match wins)
+_LOG_PRIORITY = [
+    "user_logs/std_log",
+    "logs/amlt_code_runner",
+    "azureml-logs/70_driver_log",
+    "azureml-logs/75_job_post",
+    "logs/",
 ]
+
+
+def list_log_files(
+    job_name: str,
+    *,
+    rest_client: Any | None = None,
+    workspace: dict[str, str] | None = None,
+) -> list[str]:
+    """Return sorted list of all log file paths for a job.
+
+    Groups by directory, then sorts by filename within each group.
+    Only includes ``.txt`` and ``.log`` files.
+    """
+    log_urls = _get_log_urls(job_name, rest_client, workspace)
+    paths = [
+        p for p in log_urls
+        if p.endswith((".txt", ".log", ".out", ".err"))
+        or "/std_log" in p
+    ]
+    paths.sort(key=lambda p: (p.rsplit("/", 1)[0] if "/" in p else "", p))
+    return paths
+
+
+def download_single_log(
+    job_name: str,
+    log_path: str,
+    *,
+    rest_client: Any | None = None,
+    workspace: dict[str, str] | None = None,
+) -> tuple[str, str]:
+    """Download a specific log file. Returns ``(content, error_msg)``."""
+    try:
+        log_urls = _get_log_urls(job_name, rest_client, workspace)
+        url = log_urls.get(log_path)
+        if not url:
+            return "", f"Log file not found: {log_path}"
+        resp = _requests.get(url, timeout=60)
+        resp.raise_for_status()
+        return _filter_content(resp.text), ""
+    except Exception as exc:
+        return "", str(exc)[:500]
 
 
 def download_job_logs(
@@ -33,52 +76,25 @@ def download_job_logs(
 ) -> tuple[str, str]:
     """Download and return log content for a job via Run History API.
 
-    Parameters
-    ----------
-    job_name:
-        Azure ML job name (the long ``…_xxxx`` name).
-    status:
-        Current job status (unused — kept for API compat).
-    rest_client:
-        Optional ``AzureMLJobsClient`` (avoids re-creating one).
-    workspace:
-        Workspace dict — used to create rest_client if not provided.
-
+    Auto-picks the best log file using priority heuristics.
     Returns ``(content, error_msg)`` — both may be empty strings.
     """
-    return _download_via_history(job_name, rest_client, workspace)
-
-
-# ---------------------------------------------------------------------------
-# Run History API (data plane – works for running AND terminal-state jobs)
-# ---------------------------------------------------------------------------
-
-
-def _download_via_history(
-    job_name: str,
-    rest_client: Any | None = None,
-    workspace: dict[str, str] | None = None,
-) -> tuple[str, str]:
-    """Fetch log content via the Run History API (signed blob URLs)."""
     try:
-        if rest_client is None:
-            from azure_jobs.core.rest_client import create_rest_client
-            rest_client = create_rest_client(workspace)
-
-        log_urls: dict[str, str] = rest_client.get_run_log_urls(job_name)
+        log_urls = _get_log_urls(job_name, rest_client, workspace)
         if not log_urls:
             return "", ""
 
-        # Try log files in priority order
-        for log_path in _LOG_FILES:
-            url = log_urls.get(log_path)
-            if url:
+        # Try priority prefixes first
+        for prefix in _LOG_PRIORITY:
+            matches = sorted(p for p in log_urls if p.startswith(prefix))
+            for path in matches:
+                url = log_urls[path]
                 resp = _requests.get(url, timeout=60)
                 resp.raise_for_status()
                 return _filter_content(resp.text), ""
 
-        # Fallback: try any .txt file
-        for name, url in log_urls.items():
+        # Fallback: any .txt file
+        for name, url in sorted(log_urls.items()):
             if name.endswith(".txt"):
                 resp = _requests.get(url, timeout=60)
                 resp.raise_for_status()
@@ -90,8 +106,36 @@ def _download_via_history(
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Internal helpers
 # ---------------------------------------------------------------------------
+
+
+def _get_log_urls(
+    job_name: str,
+    rest_client: Any | None = None,
+    workspace: dict[str, str] | None = None,
+) -> dict[str, str]:
+    """Get ``{log_path: signed_url}`` dict from REST API."""
+    if rest_client is None:
+        from azure_jobs.core.rest_client import create_rest_client
+        rest_client = create_rest_client(workspace)
+    return rest_client.get_run_log_urls(job_name)
+
+
+def get_log_content_uri(
+    job_name: str,
+    log_path: str,
+    *,
+    rest_client: Any | None = None,
+    workspace: dict[str, str] | None = None,
+) -> str:
+    """Get the signed blob URL for a specific log file.
+
+    Returns empty string if not found. The URL can be passed to
+    ``LogStreamer`` for incremental reading.
+    """
+    log_urls = _get_log_urls(job_name, rest_client, workspace)
+    return log_urls.get(log_path, "")
 
 
 def _filter_content(raw: str) -> str:

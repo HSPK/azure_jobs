@@ -126,6 +126,10 @@ class WorkspaceMixin:
         self._next_link = None
         self._has_more = True
         self._logs_job = ""
+        self._logs_files = []
+        self._logs_current_file = ""
+        if self._log_streaming:
+            self._stop_streaming()
 
         self._update_ws_label()
         self._update_titles()
