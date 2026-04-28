@@ -16,12 +16,26 @@ from typing import Any
 import yaml
 
 
+def _kubectl_namespace(context: str = "") -> str:
+    """Detect namespace from current kubectl context. Falls back to 'default'."""
+    try:
+        cmd = ["kubectl", "config", "view", "--minify", "-o",
+               "jsonpath={.contexts[0].context.namespace}"]
+        if context:
+            cmd.extend(["--context", context])
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+        ns = out.stdout.strip()
+        return ns if ns else "default"
+    except Exception:
+        return "default"
+
+
 @dataclass
 class VolcanoConfig:
     """Configuration for a Volcano job submission."""
 
     name: str
-    namespace: str = "default"
+    namespace: str = ""
     queue: str = "default"
     context: str = ""  # kubectl context (empty = current)
 
@@ -178,13 +192,16 @@ def build_volcano_job(cfg: VolcanoConfig) -> dict[str, Any]:
             },
         })
 
+    # Resolve namespace: explicit > kubectl context > "default"
+    namespace = cfg.namespace or _kubectl_namespace(cfg.context)
+
     # Volcano Job spec
     job_spec: dict[str, Any] = {
         "apiVersion": "batch.volcano.sh/v1alpha1",
         "kind": "Job",
         "metadata": {
             "generateName": f"{job_name}-",
-            "namespace": cfg.namespace,
+            "namespace": namespace,
             "labels": {"app": app_label, **cfg.labels},
         },
         "spec": {
@@ -276,7 +293,7 @@ def build_volcano_config_from_template(
 
     return VolcanoConfig(
         name=name,
-        namespace=target.get("namespace", "default"),
+        namespace=target.get("namespace", ""),
         queue=target.get("queue", "default"),
         context=target.get("context", ""),
         nodes=nodes,
