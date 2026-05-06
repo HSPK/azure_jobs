@@ -165,11 +165,13 @@ _FAMILY_MAP: dict[str, dict[str, Any]] = {
         },
     },
     # --- A100 40GB (NDv4) ---
+    # Note: amlt shorthand convention does NOT add ``-NvLink`` for NDv4
+    # (it is reserved for NDAMv4 / 80GB).  Keep nvlink=False to match.
     "NDv4": {
         "cpu": False,
         "gpu_model": "A100",
         "gpu_memory": 40,
-        "nvlink": True,
+        "nvlink": False,
         "instances_by_gpu": {
             1: "ND12_v4",
             2: "ND24_v4",
@@ -657,7 +659,7 @@ def resolve_instance_type(
         )
 
     # Match against known families
-    results: list[str] = []
+    matches: list[tuple[str, dict, str]] = []  # (family_id, info, instance)
     for family_id, family_info in _FAMILY_MAP.items():
         # If we have VC info, only consider available families
         if available_families is not None and family_id not in available_families:
@@ -665,6 +667,25 @@ def resolve_instance_type(
 
         instance = _match_family(spec, family_id, family_info)
         if instance:
-            results.append(instance)
+            matches.append((family_id, family_info, instance))
 
-    return results[:4]  # up to 4 alternatives, like amlt
+    # Azure rejects mixed host families (NvidiaGpu + AmdGpu).  Group by vendor
+    # and keep only one vendor's matches.  Prefer Nvidia when ambiguous.
+    _AMD_GPUS = {"MI50", "MI100", "MI200", "MI300X"}
+
+    def _vendor(info: dict) -> str:
+        if info.get("cpu"):
+            return "cpu"
+        model = (info.get("gpu_model") or "").upper()
+        return "amd" if model in _AMD_GPUS else "nvidia"
+
+    if matches:
+        vendors = {_vendor(info) for _, info, _ in matches}
+        if len(vendors) > 1:
+            # If user explicitly named an accelerator, that already constrains
+            # vendor in ``_match_family``; this branch only triggers for
+            # accelerator-less shorthand like ``80G8``.  Default to Nvidia.
+            preferred = "nvidia" if "nvidia" in vendors else next(iter(vendors))
+            matches = [m for m in matches if _vendor(m[1]) == preferred]
+
+    return [inst for _, _, inst in matches[:4]]  # up to 4 alternatives, like amlt

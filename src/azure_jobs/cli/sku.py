@@ -61,45 +61,57 @@ def sku_list(template: str | None, show_all: bool) -> None:
                 arm_client=arm,
             )
 
-    # Render one table per VC
+    # Determine which SLA tiers are active across ALL VCs (matches quota list style)
+    active_tiers: list[str] = []
+    has_overall = False
     for vc in vcs:
+        for tier in SLA_TIERS:
+            if tier not in active_tiers and any(tier in sq.tiers for sq in vc.quotas):
+                active_tiers.append(tier)
+        if not has_overall and any(sq.overall for sq in vc.quotas):
+            has_overall = True
+
+    table = Table(
+        title="[bold]Singularity SKUs[/bold]",
+        title_style="",
+        show_header=True,
+        header_style="bold",
+        show_lines=False,
+        pad_edge=True,
+        border_style="dim",
+    )
+    table.add_column("VC", style="bold magenta", no_wrap=True)
+    table.add_column("GPU / CPU", no_wrap=True)
+    table.add_column("Instance Type", style="cyan", no_wrap=True)
+    table.add_column("SKU Shorthand", style="green", no_wrap=True)
+    for tier in active_tiers:
+        color = {
+            "Premium": "green",
+            "Standard": "yellow",
+            "Basic": "bright_red",
+        }.get(tier, "white")
+        table.add_column(f"[{color}]{tier}[/{color}]", justify="right", no_wrap=True)
+    if has_overall:
+        table.add_column("[cyan]Quota[/cyan]", justify="right", no_wrap=True)
+
+    for vi, vc in enumerate(vcs):
         if not vc.quotas:
-            console.print(
-                f"[bold magenta]{vc.name}[/bold magenta]  [dim]no quotas[/dim]"
-            )
+            empty: list[str] = [vc.name, "[dim]no quotas[/dim]", "", ""]
+            empty += [""] * len(active_tiers)
+            if has_overall:
+                empty.append("")
+            table.add_row(*empty)
+            if vi < len(vcs) - 1:
+                table.add_section()
             continue
 
-        # Determine active SLA tiers for this VC
-        active_tiers = [t for t in SLA_TIERS if any(t in sq.tiers for sq in vc.quotas)]
-        has_overall = any(sq.overall for sq in vc.quotas)
-
-        table = Table(
-            title=f"[bold magenta]{vc.name}[/bold magenta]  SKU List",
-            title_style="",
-            show_header=True,
-            header_style="bold",
-            show_lines=False,
-            pad_edge=True,
-        )
-        table.add_column("GPU / CPU", no_wrap=True)
-        table.add_column("Instance Type", style="cyan", no_wrap=True)
-        table.add_column("SKU Shorthand", style="green", no_wrap=True)
-        for tier in active_tiers:
-            color = {
-                "Premium": "green",
-                "Standard": "yellow",
-                "Basic": "bright_red",
-            }.get(tier, "white")
-            table.add_column(
-                f"[{color}]{tier}[/{color}]", justify="right", no_wrap=True
-            )
-        if has_overall:
-            table.add_column("[cyan]Quota[/cyan]", justify="right", no_wrap=True)
-
+        first_row_in_vc = True
         for sq in vc.quotas:
             rows = _series_to_rows(sq)
             for gpu_label, instance, shorthand in rows:
-                row: list[str] = [gpu_label, instance, shorthand]
+                vc_label = vc.name if first_row_in_vc else ""
+                first_row_in_vc = False
+                row: list[str] = [vc_label, gpu_label, instance, shorthand]
                 for tier in active_tiers:
                     tq = sq.tiers.get(tier)
                     row.append(_fmt_quota(tq) if tq else "[dim]·[/dim]")
@@ -111,7 +123,10 @@ def sku_list(template: str | None, show_all: bool) -> None:
                     )
                 table.add_row(*row)
 
-        print_table(table)
+        if vi < len(vcs) - 1:
+            table.add_section()
+
+    print_table(table)
 
 
 @sku_group.command(name="check")

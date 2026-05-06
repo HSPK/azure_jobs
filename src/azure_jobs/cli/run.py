@@ -76,24 +76,6 @@ def resolve_name(command: str, sid: str) -> str:
     is_flag=True,
     help="Submit via amlt instead of aj REST API",
 )
-@click.option(
-    "-i",
-    "--interactive",
-    is_flag=True,
-    help="Interactive amlt submission (manual confirmation)",
-)
-@click.option(
-    "--no-check",
-    "no_check",
-    is_flag=True,
-    help="Skip pre-flight SKU/quota/compute validation.",
-)
-@click.option(
-    "--refresh-cache",
-    "refresh_cache",
-    is_flag=True,
-    help="Bypass cached SKU/compute lookups and re-fetch from Azure.",
-)
 @click.argument("command", nargs=1)
 @click.argument("args", nargs=-1)
 def run(
@@ -105,9 +87,6 @@ def run(
     dry_run: bool,
     run_local: bool,
     amlt: bool,
-    interactive: bool,
-    no_check: bool,
-    refresh_cache: bool,
 ) -> None:
     """Submit a job to Azure ML using a template.
 
@@ -220,10 +199,7 @@ def run(
     if amlt and amlt_available():
         # --amlt flag takes priority over all other backends
         ok, portal_url, note = submit_via_amlt(
-            submission_fp,
-            experiment,
-            interactive=interactive,
-            on_output_line=None if interactive else dim,
+            submission_fp, experiment, on_output_line=dim
         )
         if ok:
             rec.status = "submitted"
@@ -268,31 +244,7 @@ def run(
             error(f"kubectl apply failed: {output}")
             raise SystemExit(1)
     else:
-        if not no_check:
-            _run_precheck(request, refresh=refresh_cache)
         _submit_and_record(request, rec, name)
-
-
-def _run_precheck(request, *, refresh: bool) -> None:
-    """Run pre-flight checks; abort on error, print warnings, stay silent on OK."""
-    from azure_jobs.core.submit import precheck
-    from azure_jobs.utils.ui import dim, error, warning
-
-    with console.status("[bold cyan]Pre-flight check…[/bold cyan]", spinner="dots"):
-        result = precheck(request, refresh=refresh)
-
-    if result.severity == "error":
-        error(result.title)
-        for line in result.detail:
-            dim(f"  {line}")
-        dim("(use --no-check to skip; --refresh-cache to re-fetch quotas)")
-        raise SystemExit(1)
-    if result.severity == "warn":
-        warning(result.title)
-        for line in result.detail:
-            dim(f"  {line}")
-    elif result.title:
-        dim(result.title)
 
 
 def _submit_and_record(

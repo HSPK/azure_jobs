@@ -65,14 +65,18 @@ def _build_resources(
         return None
 
     arm_id = compute_id or _resolve_compute(request)
-    sku_raw = request.env_vars.get("_sku_raw", "") or "C1"
 
     from azure_jobs.core.sku import resolve_instance_type
 
+    sku = request.sku
     if on_status:
-        on_status("sku", f"Resolving SKU {sku_raw}…")
+        on_status("sku", f"Resolving SKU {sku}…")
+    from IPython import embed
+
+    embed()
+    exit(0)
     instance_names = resolve_instance_type(
-        sku_raw,
+        sku,
         vc_subscription_id=request.vc_subscription_id or request.subscription_id,
         vc_resource_group=request.vc_resource_group or request.resource_group,
         vc_name=request.compute,
@@ -80,7 +84,7 @@ def _build_resources(
     if instance_names:
         instance_types = [f"Singularity.{n}" for n in instance_names]
     else:
-        stripped = sku_raw.strip()
+        stripped = sku.strip()
         stripped = stripped.split("x", 1)[-1] if "x" in stripped else stripped
         instance_types = [f"Singularity.{stripped}"]
 

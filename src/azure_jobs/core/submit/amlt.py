@@ -54,7 +54,6 @@ def submit_via_amlt(
     config_fp: Path,
     exp_name: str,
     *,
-    interactive: bool = False,
     on_output_line: Callable[[str], None] | None = None,
 ) -> tuple[bool, str, str]:
     """Submit job via ``amlt run``.
@@ -62,17 +61,9 @@ def submit_via_amlt(
     Returns:
         (ok, portal_url, note)
     """
-    cmd = ["amlt", "run", str(config_fp), exp_name]
-    if not interactive:
-        cmd.append("-y")
+    cmd = ["amlt", "run", str(config_fp), exp_name, "-y"]
 
     try:
-        if interactive:
-            result = subprocess.run(cmd, timeout=600)
-            if result.returncode != 0:
-                return False, "", "amlt run failed"
-            return True, "", ""
-
         proc = subprocess.Popen(
             cmd,
             stdin=subprocess.PIPE,
