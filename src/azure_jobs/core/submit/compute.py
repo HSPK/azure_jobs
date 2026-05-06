@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from ._environment import _SING_IMAGE_PREFIX
-from ._models import SubmitRequest
+from .environment import _SING_IMAGE_PREFIX
+from .models import SubmitRequest
+
+if TYPE_CHECKING:
+    from azure_jobs.core.rest_client import AzureMLClient
 
 log = logging.getLogger(__name__)
 
@@ -23,10 +26,11 @@ def _build_distribution(request: SubmitRequest) -> dict[str, Any] | None:
 
 
 def _resolve_compute(request: SubmitRequest) -> str:
-    """Return the compute target reference.
+    """Return the compute target reference as a fully-qualified ARM ID.
 
-    For AML: just the cluster name.
-    For Singularity: full ARM resource ID of the virtual cluster.
+    For AML: ``/subscriptions/.../workspaces/{ws}/computes/{name}``.
+    For Singularity: ``/subscriptions/.../virtualclusters/{name}`` (using the
+    VC's own subscription/resource group when distinct from the workspace).
     """
     if request.service == "sing":
         sub = request.vc_subscription_id or request.subscription_id
@@ -37,7 +41,13 @@ def _resolve_compute(request: SubmitRequest) -> str:
             f"/providers/Microsoft.MachineLearningServices"
             f"/virtualclusters/{request.compute}"
         )
-    return request.compute
+    return (
+        f"/subscriptions/{request.subscription_id}"
+        f"/resourceGroups/{request.resource_group}"
+        f"/providers/Microsoft.MachineLearningServices"
+        f"/workspaces/{request.workspace_name}"
+        f"/computes/{request.compute}"
+    )
 
 
 def _build_resources(
@@ -78,7 +88,7 @@ def _build_resources(
     image_version = ""
     image = request.image or ""
     if image.startswith(_SING_IMAGE_PREFIX):
-        image_version = image[len(_SING_IMAGE_PREFIX):]
+        image_version = image[len(_SING_IMAGE_PREFIX) :]
 
     res: dict[str, Any] = {
         "properties": {
@@ -103,7 +113,7 @@ def _build_resources(
 
 def _resolve_sing_identity(
     request: SubmitRequest,
-    client: Any,
+    client: AzureMLClient,
 ) -> str | None:
     """Look up the Singularity UAI client_id from workspace identity config.
 

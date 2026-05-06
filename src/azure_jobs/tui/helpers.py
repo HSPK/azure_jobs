@@ -27,7 +27,8 @@ def get_page_size() -> int:
     """Return dashboard page size from config, defaulting to PAGE_SIZE."""
     try:
         from azure_jobs.core.config import read_config
-        return int(read_config().get("dashboard", {}).get("page_size", PAGE_SIZE))
+
+        return read_config().dashboard.page_size
     except Exception:
         return PAGE_SIZE
 
@@ -43,7 +44,7 @@ def trunc(s: str, maxlen: int = NAME_MAX) -> str:
     if len(s) <= maxlen:
         return s
     half = (maxlen - 3) // 2
-    return s[:half] + "..." + s[-(maxlen - 3 - half):]
+    return s[:half] + "..." + s[-(maxlen - 3 - half) :]
 
 
 def make_option(job: dict[str, Any]) -> Option:
@@ -96,5 +97,5 @@ def info_block(job: dict[str, Any]) -> str:
 
 def fmt_dur(secs: int) -> str:
     from azure_jobs.utils.time import format_duration
-    return format_duration(secs)
 
+    return format_duration(secs)

@@ -31,6 +31,7 @@ def template_list() -> None:
 def template_pull(repo_id: str | None, force: bool) -> None:
     """Pull templates from a git repository."""
     from azure_jobs.cli.pull import _do_pull
+
     _do_pull(repo_id, force)
 
 
@@ -39,6 +40,7 @@ def template_pull(repo_id: str | None, force: bool) -> None:
 def template_push(message: str | None) -> None:
     """Push local template changes to the remote repository."""
     from azure_jobs.cli.pull import _do_push
+
     _do_push(message)
 
 
@@ -67,8 +69,11 @@ def template_show(name: str) -> None:
         console.print(f"\n[dim]Inheritance:[/dim] {chain}")
 
     # Pretty-print the resolved YAML
-    output = yaml.dump(merged, default_flow_style=False, sort_keys=False, allow_unicode=True)
+    output = yaml.dump(
+        merged, default_flow_style=False, sort_keys=False, allow_unicode=True
+    )
     from rich.syntax import Syntax
+
     console.print()
     console.print(Syntax(output, "yaml", theme="monokai", line_numbers=False))
 
@@ -137,6 +142,7 @@ def template_validate(name: str | None) -> None:
         success(f"{ok_count} template(s) valid")
     for tname, msg in errors:
         from azure_jobs.utils.ui import error as ui_error
+
         ui_error(f"{tname}: {msg}")
 
     if errors:
@@ -151,7 +157,7 @@ def template_diff() -> None:
     import tempfile
 
     config = read_config()
-    repo_id = config.get("repo_id")
+    repo_id = config.repo_id
     if not repo_id:
         raise click.ClickException(
             "No remote repo configured. Run `aj pull <repo>` first."
@@ -174,24 +180,38 @@ def template_diff() -> None:
         return files
 
     def _unified_diff(rel: str, a_path: Path | None, b_path: Path | None) -> list[str]:
-        a_lines = a_path.read_text(errors="replace").splitlines(keepends=True) if a_path else []
-        b_lines = b_path.read_text(errors="replace").splitlines(keepends=True) if b_path else []
-        return list(difflib.unified_diff(
-            a_lines, b_lines,
-            fromfile=f"remote/{rel}", tofile=f"local/{rel}",
-        ))
+        a_lines = (
+            a_path.read_text(errors="replace").splitlines(keepends=True)
+            if a_path
+            else []
+        )
+        b_lines = (
+            b_path.read_text(errors="replace").splitlines(keepends=True)
+            if b_path
+            else []
+        )
+        return list(
+            difflib.unified_diff(
+                a_lines,
+                b_lines,
+                fromfile=f"remote/{rel}",
+                tofile=f"local/{rel}",
+            )
+        )
 
     with tempfile.TemporaryDirectory() as tmp:
         try:
-            with console.status("[bold cyan]Fetching remote…[/bold cyan]", spinner="dots"):
+            with console.status(
+                "[bold cyan]Fetching remote…[/bold cyan]", spinner="dots"
+            ):
                 subprocess.run(
                     ["git", "clone", "--depth=1", repo_id, tmp],
-                    check=True, capture_output=True, text=True,
+                    check=True,
+                    capture_output=True,
+                    text=True,
                 )
         except subprocess.CalledProcessError as exc:
-            raise click.ClickException(
-                f"Failed to clone remote: {exc.stderr.strip()}"
-            )
+            raise click.ClickException(f"Failed to clone remote: {exc.stderr.strip()}")
 
         remote_files = _collect_files(Path(tmp))
         local_files = _collect_files(const.AJ_HOME)
@@ -214,13 +234,17 @@ def template_diff() -> None:
             return
 
         from rich.syntax import Syntax
+
         console.print()
-        console.print(Syntax("".join(diff_output), "diff", theme="monokai", line_numbers=False))
+        console.print(
+            Syntax("".join(diff_output), "diff", theme="monokai", line_numbers=False)
+        )
 
 
 # ---------------------------------------------------------------------------
 # Top-level aliases (backward compat / convenience)
 # ---------------------------------------------------------------------------
+
 
 @main.command(name="tl", hidden=True)
 def _alias_tl() -> None:
@@ -235,6 +259,7 @@ def _alias_tl() -> None:
 )
 def pull_alias(repo_id: str | None, force: bool) -> None:
     from azure_jobs.cli.pull import _do_pull
+
     _do_pull(repo_id, force)
 
 
@@ -242,6 +267,7 @@ def pull_alias(repo_id: str | None, force: bool) -> None:
 @click.option("-m", "--message", default=None, help="Commit message")
 def push_alias(message: str | None) -> None:
     from azure_jobs.cli.pull import _do_push
+
     _do_push(message)
 
 
@@ -255,7 +281,7 @@ def _show_templates() -> None:
         return
 
     defaults = get_defaults()
-    default_template = defaults.get("template")
+    default_template = defaults.template
 
     templates: list[dict] = []
     for tp in template_files:

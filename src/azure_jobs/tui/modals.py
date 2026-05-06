@@ -7,44 +7,46 @@ from typing import Any
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
+from textual.containers import Vertical
 from textual.screen import ModalScreen
-from textual.widgets import Button, OptionList, Static
+from textual.widgets import OptionList, Static
 from textual.widgets.option_list import Option
-from textual.containers import Horizontal, Vertical
 
 
 class ConfirmCancel(ModalScreen[bool]):
-    """Modal dialog asking user to confirm job cancellation."""
+    """Modal dialog asking the user to confirm job cancellation.
+
+    Keyboard-first, styled to match :class:`PickerModal` and
+    :class:`HelpScreen` for a consistent design language.
+    """
 
     CSS = """
     ConfirmCancel {
         align: center middle;
     }
-    #confirm-dialog {
+    #confirm-box {
         width: 56;
         height: auto;
-        max-height: 12;
-        border: thick $accent;
+        border: round #3465a4;
         background: $surface;
         padding: 1 2;
+    }
+    #confirm-title {
+        width: 100%;
+        margin-bottom: 1;
     }
     #confirm-msg {
         width: 100%;
         margin-bottom: 1;
     }
-    #confirm-btns {
+    #confirm-hint {
         width: 100%;
-        height: 3;
-        align: center middle;
-    }
-    #confirm-btns Button {
-        margin: 0 1;
-        min-width: 12;
     }
     """
 
     BINDINGS = [
         Binding("y", "confirm", "Yes", show=False),
+        Binding("enter", "confirm", "Yes", show=False),
         Binding("n", "cancel_dialog", "No", show=False),
         Binding("escape", "cancel_dialog", "Cancel", show=False),
     ]
@@ -54,17 +56,17 @@ class ConfirmCancel(ModalScreen[bool]):
         self._job_display = job_display
 
     def compose(self) -> ComposeResult:
-        with Vertical(id="confirm-dialog"):
+        with Vertical(id="confirm-box"):
+            yield Static("[bold]⚠  Cancel Job[/bold]", id="confirm-title")
             yield Static(
-                f"Cancel job [bold]{self._job_display}[/bold]?",
+                f"Cancel [bold cyan]{self._job_display}[/bold cyan]?",
                 id="confirm-msg",
             )
-            with Horizontal(id="confirm-btns"):
-                yield Button("[Y]es", variant="error", id="btn-yes")
-                yield Button("[N]o", variant="default", id="btn-no")
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        self.dismiss(event.button.id == "btn-yes")
+            yield Static(
+                "  [bold]y[/bold]/[bold]Enter[/bold] confirm   "
+                "[bold]n[/bold]/[bold]Esc[/bold] dismiss",
+                id="confirm-hint",
+            )
 
     def action_confirm(self) -> None:
         self.dismiss(True)
@@ -233,4 +235,3 @@ class HelpScreen(ModalScreen[None]):
 
     def action_close_help(self) -> None:
         self.dismiss(None)
-

@@ -7,7 +7,12 @@ import click
 from . import main
 
 
-@main.command(name="sku")
+@main.group(name="sku")
+def sku_group() -> None:
+    """List Singularity SKUs and quota."""
+
+
+@sku_group.command(name="list")
 @click.option("-t", "--template", default=None, help="Read VC config from a template")
 @click.option("--all", "show_all", is_flag=True, help="Include zero-quota families")
 def sku_list(template: str | None, show_all: bool) -> None:
@@ -21,8 +26,6 @@ def sku_list(template: str | None, show_all: bool) -> None:
     from azure_jobs.core.rest_client import AzureARMClient
     from azure_jobs.core.sku import (
         SLA_TIERS,
-        _FAMILY_MAP,
-        _SERIES_GPU_INFO,
         fetch_vc_quotas,
     )
     from azure_jobs.utils.ui import console, error, print_table
@@ -39,7 +42,9 @@ def sku_list(template: str | None, show_all: bool) -> None:
 
     if not vcs:
         error("No Singularity virtual clusters found")
-        console.print("  Make sure you are logged in (`az login`) and have access to VCs")
+        console.print(
+            "  Make sure you are logged in (`az login`) and have access to VCs"
+        )
         raise SystemExit(1)
 
     # Fetch quotas for each VC
@@ -59,7 +64,9 @@ def sku_list(template: str | None, show_all: bool) -> None:
     # Render one table per VC
     for vc in vcs:
         if not vc.quotas:
-            console.print(f"[bold magenta]{vc.name}[/bold magenta]  [dim]no quotas[/dim]")
+            console.print(
+                f"[bold magenta]{vc.name}[/bold magenta]  [dim]no quotas[/dim]"
+            )
             continue
 
         # Determine active SLA tiers for this VC
@@ -78,8 +85,14 @@ def sku_list(template: str | None, show_all: bool) -> None:
         table.add_column("Instance Type", style="cyan", no_wrap=True)
         table.add_column("SKU Shorthand", style="green", no_wrap=True)
         for tier in active_tiers:
-            color = {"Premium": "green", "Standard": "yellow", "Basic": "bright_red"}.get(tier, "white")
-            table.add_column(f"[{color}]{tier}[/{color}]", justify="right", no_wrap=True)
+            color = {
+                "Premium": "green",
+                "Standard": "yellow",
+                "Basic": "bright_red",
+            }.get(tier, "white")
+            table.add_column(
+                f"[{color}]{tier}[/{color}]", justify="right", no_wrap=True
+            )
         if has_overall:
             table.add_column("[cyan]Quota[/cyan]", justify="right", no_wrap=True)
 
@@ -91,15 +104,93 @@ def sku_list(template: str | None, show_all: bool) -> None:
                     tq = sq.tiers.get(tier)
                     row.append(_fmt_quota(tq) if tq else "[dim]·[/dim]")
                 if has_overall:
-                    row.append(f"[cyan]{sq.overall.limit}[/cyan]" if sq.overall else "[dim]·[/dim]")
+                    row.append(
+                        f"[cyan]{sq.overall.limit}[/cyan]"
+                        if sq.overall
+                        else "[dim]·[/dim]"
+                    )
                 table.add_row(*row)
 
         print_table(table)
 
 
+@sku_group.command(name="check")
+@click.option("-t", "--template", required=True, help="Template to validate")
+@click.option("-n", "--nodes", default=1, type=int, help="Node count")
+@click.option("-p", "--processes", default=1, type=int, help="Processes per node")
+@click.option("--refresh", is_flag=True, help="Bypass cached VC/compute lookups")
+def sku_check(template: str, nodes: int, processes: int, refresh: bool) -> None:
+    """Pre-flight check: SKU resolves, target exists, quota / SLA tier match.
+
+    Same logic that ``aj run`` runs by default.  Use this when iterating on a
+    template to confirm it will be accepted before incurring an upload.
+    """
+
+    from azure_jobs.core import const
+    from azure_jobs.core.conf import read_conf
+    from azure_jobs.core.config import ensure_experiment, get_workspace_config
+    from azure_jobs.core.submit import build_submit_request, precheck
+    from azure_jobs.core.template import Template
+    from azure_jobs.utils.ui import console, dim, error, success, warning
+
+    template_fp = const.AJ_TEMPLATE_HOME / f"{template}.yaml"
+    if not template_fp.exists():
+        error(f"Template not found: {template_fp}")
+        raise SystemExit(1)
+
+    conf = read_conf(template_fp)
+    if not conf or "jobs" not in conf or not conf["jobs"]:
+        error(f"Template {template} is missing a 'jobs' section")
+        raise SystemExit(1)
+
+    # Resolve sku template into a concrete value (mirrors aj run)
+    from .run import resolve_sku
+
+    first_job = conf.get("jobs", [{}])[0]
+    job_sku = first_job.get("sku")
+
+    sku_resolved = resolve_sku(job_sku, nodes, processes) if job_sku else ""
+
+    template_obj = Template.from_dict(conf)
+    try:
+        request = build_submit_request(
+            template_obj,
+            name=f"check_{template}",
+            sid="check",
+            sku=sku_resolved,
+            user_command="echo test",
+            user_args=(),
+            workspace=get_workspace_config(),
+            experiment=ensure_experiment(),
+            nodes=nodes,
+            processes_per_node=processes,
+        )
+    except ValueError as e:
+        error(str(e))
+        raise SystemExit(1)
+
+    with console.status("[bold cyan]Pre-flight check…[/bold cyan]", spinner="dots"):
+        result = precheck(request, refresh=refresh)
+
+    if result.severity == "error":
+        error(result.title)
+        for line in result.detail:
+            dim(f"  {line}")
+        raise SystemExit(1)
+    if result.severity == "warn":
+        warning(result.title)
+        for line in result.detail:
+            dim(f"  {line}")
+    else:
+        success(result.title or "OK")
+        for line in result.detail:
+            dim(f"  {line}")
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _fmt_quota(tq: object) -> str:
     """Format a used/limit quota cell."""
@@ -135,15 +226,24 @@ def _series_to_rows(sq: object) -> list[tuple[str, str, str]]:
         return [(label, f"[dim]{series}[/dim]", "[dim]—[/dim]")]
 
     # Completely unknown series
-    label = f"[dim]{gpu_model} {gpu_mem}GB[/dim]" if gpu_model else f"[dim]{series}[/dim]"
+    label = (
+        f"[dim]{gpu_model} {gpu_mem}GB[/dim]" if gpu_model else f"[dim]{series}[/dim]"
+    )
     return [(label, f"[dim]{series}[/dim]", "[dim]—[/dim]")]
 
 
 # vCPU counts for known CPU instances (from amlt fallback data)
 _CPU_VCPU: dict[str, int] = {
-    "E4ads_v5": 4, "E8ads_v5": 8, "E16ads_v5": 16,
-    "E32ads_v5": 32, "E64ads_v5": 64,
-    "D4_v3": 4, "D8_v3": 8, "D16_v3": 16, "D32_v3": 32, "D64_v3": 64,
+    "E4ads_v5": 4,
+    "E8ads_v5": 8,
+    "E16ads_v5": 16,
+    "E32ads_v5": 32,
+    "E64ads_v5": 64,
+    "D4_v3": 4,
+    "D8_v3": 8,
+    "D16_v3": 16,
+    "D32_v3": 32,
+    "D64_v3": 64,
 }
 
 
@@ -172,7 +272,11 @@ def _family_rows(
     for gpu_count in sorted(instances_by_gpu.keys()):
         instance = instances_by_gpu[gpu_count]
         label = f"[bold]{gpu_count}×{model}[/bold] [dim]{mem}GB[/dim]{nvlink_flag}"
-        shorthand = f"{mem}G{gpu_count}-{model}{nvlink_suffix}" if mem else f"G{gpu_count}-{model}{nvlink_suffix}"
+        shorthand = (
+            f"{mem}G{gpu_count}-{model}{nvlink_suffix}"
+            if mem
+            else f"G{gpu_count}-{model}{nvlink_suffix}"
+        )
         rows.append((label, instance, shorthand))
 
     return rows

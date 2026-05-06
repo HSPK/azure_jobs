@@ -2,12 +2,46 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, TypedDict
 
 from azure_jobs.utils.time import calc_duration, calc_duration_secs, format_time
 
 
-def _extract_error_message(err: dict | str | None) -> str:
+class JobInfo(TypedDict, total=False):
+    """Lightweight, display-oriented view of an Azure ML job.
+
+    Returned by :func:`extract_rest_job`.  ``total=False`` because callers
+    routinely use ``.get(key, default)`` and not every field is always set.
+    """
+
+    name: str
+    display_name: str
+    status: str
+    compute: str
+    portal_url: str
+    start_time: str
+    end_time: str
+    duration: str
+    duration_secs: int | None
+    queue_time: str
+    queue_secs: int | None
+    experiment: str
+    type: str
+    description: str
+    tags: str
+    environment: str
+    command: str
+    created: str
+    created_utc: str
+    created_by: str
+    error: str
+    instance_type: str
+    nodes: int
+    sla_tier: str
+    processes_per_node: int
+
+
+def extract_error_message(err: dict | str | None) -> str:
     """Walk nested ``innerError`` chain and return the most specific message."""
     if not err:
         return ""
@@ -26,14 +60,14 @@ def _extract_error_message(err: dict | str | None) -> str:
     return str(err)
 
 
-def _trim_arm_id(arm_id: str) -> str:
+def trim_arm_id(arm_id: str) -> str:
     """Extract the trailing name segment from an ARM resource ID."""
     if "/" in arm_id:
         return arm_id.rstrip("/").rsplit("/", 1)[-1]
     return arm_id
 
 
-def _extract_rest_job(raw: dict[str, Any]) -> dict[str, Any]:
+def extract_rest_job(raw: dict[str, Any]) -> JobInfo:
     """Convert a REST API job JSON object → lightweight display dict."""
     props = raw.get("properties", {})
     inner_props = props.get("properties", {}) or {}
@@ -58,7 +92,7 @@ def _extract_rest_job(raw: dict[str, Any]) -> dict[str, Any]:
         queue_secs = calc_duration_secs(created_raw[:19], start)
 
     # Compute — trim ARM ID to short name
-    compute = _trim_arm_id(props.get("computeId", "") or "")
+    compute = trim_arm_id(props.get("computeId", "") or "")
 
     # Tags — filter out internal AML system tags
     tags = props.get("tags", {}) or {}
@@ -66,7 +100,7 @@ def _extract_rest_job(raw: dict[str, Any]) -> dict[str, Any]:
     tags_str = ", ".join(f"{k}={v}" for k, v in tags.items()) if tags else ""
 
     # Environment — trim ARM ID and strip version suffix
-    env_str = _trim_arm_id(props.get("environmentId", "") or "")
+    env_str = trim_arm_id(props.get("environmentId", "") or "")
     if ":" in env_str:
         env_str = env_str.rsplit(":", 1)[0]
 
@@ -77,7 +111,7 @@ def _extract_rest_job(raw: dict[str, Any]) -> dict[str, Any]:
     created_by = sys_data.get("createdBy", "") or ""
 
     # Error
-    error_msg = _extract_error_message(props.get("error", None))
+    error_msg = extract_error_message(props.get("error", None))
 
     # Portal URL
     services = props.get("services", {}) or {}
@@ -92,7 +126,7 @@ def _extract_rest_job(raw: dict[str, Any]) -> dict[str, Any]:
     if instance_type:
         instance_type = instance_type.split(",")[0].strip()
         if instance_type.startswith("Singularity."):
-            instance_type = instance_type[len("Singularity."):]
+            instance_type = instance_type[len("Singularity.") :]
     nodes = resources.get("instanceCount", 1) or aisc.get("instanceCount", 1)
     sla_tier = aisc.get("slaTier", "") or ""
 

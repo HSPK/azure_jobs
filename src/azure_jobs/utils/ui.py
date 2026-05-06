@@ -7,15 +7,19 @@ so that `aj --help` stays fast.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from typing import Any
+from datetime import datetime
+from typing import TYPE_CHECKING, Any
 
 from rich.console import Console
+from rich.markup import escape as _esc
 from rich.panel import Panel
 from rich.table import Table
+from rich.theme import Theme
 
 from azure_jobs.utils.time import time_ago
-from rich.theme import Theme
+
+if TYPE_CHECKING:
+    from azure_jobs.core.submit import SubmitRequest
 
 _THEME = Theme(
     {
@@ -46,35 +50,93 @@ def print_table(table: Table) -> None:
 
 
 def show_submission_preview(
+    request: SubmitRequest,
     *,
-    job_id: str,
-    job_name: str,
-    template: str,
-    sku: str,
-    nodes: int,
-    processes: int,
-    command: str,
     submission_file: str,
     dry_run: bool = False,
 ) -> None:
-    """Display a rich panel summarising the job before submission."""
-    grid = Table.grid(padding=(0, 2))
-    grid.add_column(style="key", justify="right")
-    grid.add_column(style="value")
+    """Display a rich panel summarising the job before submission.
 
-    grid.add_row("Job ID", f"[bold]{job_id}[/bold]")
-    grid.add_row("Job name", job_name)
-    grid.add_row("Template", template)
-    grid.add_row("SKU", sku)
-    grid.add_row("Nodes", str(nodes))
-    grid.add_row("Processes", f"{processes * nodes}  ({processes} × {nodes})")
-    grid.add_row("Command", f"[highlight]{command}[/highlight]")
-    grid.add_row("Config", str(submission_file))
+    Args:
+        request: SubmitRequest with job details (name, sku, nodes, processes, sid, template_name, command).
+        submission_file: Path to submission config file.
+        dry_run: Whether this is a dry run.
+    """
+    total_processes = request.nodes * request.processes_per_node
+    final_cmd = request.command[-1] if request.command else ""
+    storage_count = len(request.storage)
+    tag_text = ", ".join(request.tags[:4]) if request.tags else "-"
+    if len(request.tags) > 4:
+        tag_text += " ..."
+    created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    def _section(title: str, rows: list[tuple[str, str]]) -> Table:
+        section = Table.grid(padding=(0, 1))
+        section.add_column(style="key", justify="right")
+        section.add_column(style="value")
+        section.add_row("", f"[bold cyan]{title}[/bold cyan]")
+        for key, value in rows:
+            section.add_row(key, value)
+        return section
+
+    left = _section(
+        "Identity",
+        [
+            ("Job ID", f"[bold]{_esc(request.sid)}[/bold]"),
+            ("Name", _esc(request.name)),
+            ("Template", _esc(request.template_name or "-")),
+            ("Experiment", _esc(request.experiment_name or "-")),
+            ("Service", _esc(request.service or "-")),
+        ],
+    )
+    right = _section(
+        "Runtime",
+        [
+            ("Compute", _esc(request.compute or "-")),
+            ("SKU", _esc(request.sku or "auto")),
+            ("Nodes", str(request.nodes)),
+            (
+                "Processes",
+                f"{total_processes}  ({request.processes_per_node} x {request.nodes})",
+            ),
+            ("Priority", _esc(request.priority)),
+        ],
+    )
+
+    top = Table.grid(expand=False, padding=(0, 4))
+    top.add_column(vertical="top")
+    top.add_column(vertical="top")
+    top.add_row(left, right)
+
+    details = Table.grid(padding=(0, 2))
+    details.add_column(style="key", justify="right")
+    details.add_column(style="value")
+    details.add_row("Image", _esc(request.image or "-"))
+    details.add_row("Registry", _esc(request.image_registry or "-"))
+    details.add_row("Code", _esc(request.code_dir or "."))
+    details.add_row("Workspace", _esc(request.workspace_name or "-"))
+    details.add_row("Resource Group", _esc(request.resource_group or "-"))
+    details.add_row("Created", created_at)
+    details.add_row("Storage", f"{storage_count} mounts")
+    details.add_row("Tags", _esc(tag_text))
+
+    body = Table.grid(padding=(0, 0))
+    body.add_column()
+    body.add_row(top)
+    body.add_row("")
+    body.add_row(details)
+    body.add_row("")
+    body.add_row(
+        f"[key]Command[/key]      [highlight]{_esc(final_cmd or '-')}[/highlight]"
+    )
+    body.add_row(f"[key]AMLT Config[/key]  {_esc(str(submission_file))}")
 
     title = "Dry Run Preview" if dry_run else "Submission Preview"
     style = "cyan" if dry_run else "green"
     console.print()
-    console.print(Panel(grid, title=f"[bold]{title}[/bold]", border_style=style, expand=False))
+    console.print(
+        Panel(body, title=f"[bold]{title}[/bold]", border_style=style, expand=False)
+    )
     console.print()
 
 
@@ -158,7 +220,9 @@ def show_jobs_table(records: list[dict[str, Any]]) -> None:
     table.add_column("P", justify="right")
     table.add_column("When", style="dim", no_wrap=True)
     table.add_column("Command", ratio=1)
-    table.add_column("Note", style="dim", max_width=40, no_wrap=True, overflow="ellipsis")
+    table.add_column(
+        "Note", style="dim", max_width=40, no_wrap=True, overflow="ellipsis"
+    )
 
     for r in records:
         status = r.get("status", "unknown")
@@ -223,15 +287,30 @@ def dim(msg: str) -> None:
 # ---------------------------------------------------------------------------
 
 AZ_ICON: dict[str, str] = {
-    "Completed": "✓", "Running": "▶", "Starting": "◉", "Preparing": "◉",
-    "Queued": "◷", "Failed": "✗", "Canceled": "⊘", "CancelRequested": "⊘",
-    "NotStarted": "○", "Provisioning": "◉", "Finalizing": "◉",
+    "Completed": "✓",
+    "Running": "▶",
+    "Starting": "◉",
+    "Preparing": "◉",
+    "Queued": "◷",
+    "Failed": "✗",
+    "Canceled": "⊘",
+    "CancelRequested": "⊘",
+    "NotStarted": "○",
+    "Provisioning": "◉",
+    "Finalizing": "◉",
 }
 AZ_STYLE: dict[str, str] = {
-    "Completed": "bold green", "Running": "bold cyan", "Starting": "bold cyan",
-    "Preparing": "bold yellow", "Queued": "yellow", "Failed": "bold red",
-    "Canceled": "dim", "CancelRequested": "dim yellow",
-    "NotStarted": "dim", "Provisioning": "bold yellow", "Finalizing": "bold cyan",
+    "Completed": "bold green",
+    "Running": "bold cyan",
+    "Starting": "bold cyan",
+    "Preparing": "bold yellow",
+    "Queued": "yellow",
+    "Failed": "bold red",
+    "Canceled": "dim",
+    "CancelRequested": "dim yellow",
+    "NotStarted": "dim",
+    "Provisioning": "bold yellow",
+    "Finalizing": "bold cyan",
 }
 
 # backward-compat aliases — kept for show_job_status above
@@ -262,8 +341,6 @@ def short_portal_url(url: str, *, rich_link: bool = True) -> str:
     return display
 
 
-
-
 def show_job_status(job_status: Any) -> None:
     """Display job status as a rich panel."""
     status = job_status.status
@@ -285,7 +362,7 @@ def show_job_status(job_status: Any) -> None:
     if job_status.portal_url:
         rows.append(("Portal", short_portal_url(job_status.portal_url)))
     if job_status.error:
-        rows.append(("Error", f"[error]{job_status.error}[/error]"))
+        rows.append(("Error", f"[error]{_esc(str(job_status.error))}[/error]"))
 
     max_key_len = max(len(k) for k, _ in rows)
     lines = []
@@ -293,12 +370,14 @@ def show_job_status(job_status: Any) -> None:
         lines.append(f"  [key]{key:>{max_key_len}}[/key]  {val}")
 
     console.print()
-    console.print(Panel(
-        "\n".join(lines),
-        title="[bold]Job Status[/bold]",
-        border_style="cyan",
-        expand=False,
-    ))
+    console.print(
+        Panel(
+            "\n".join(lines),
+            title="[bold]Job Status[/bold]",
+            border_style="cyan",
+            expand=False,
+        )
+    )
     console.print()
 
 
@@ -312,11 +391,17 @@ def _trunc(s: str, maxlen: int = 30) -> str:
     if len(s) <= maxlen:
         return s
     half = (maxlen - 1) // 2
-    return s[:half] + "…" + s[-(maxlen - half - 1):]
+    return s[:half] + "…" + s[-(maxlen - half - 1) :]
+
+
+# Public alias for use outside this module.
+truncate_middle = _trunc
 
 
 def show_cloud_jobs_table(
-    jobs: list[dict[str, Any]], *, title: str = "Jobs",
+    jobs: list[dict[str, Any]],
+    *,
+    title: str = "Jobs",
 ) -> None:
     """Display cloud jobs in a rich table."""
     if not jobs:
@@ -324,8 +409,11 @@ def show_cloud_jobs_table(
         return
 
     table = Table(
-        show_header=True, header_style="bold", pad_edge=True,
-        title=f"[bold]{title}[/bold]", title_style="",
+        show_header=True,
+        header_style="bold",
+        pad_edge=True,
+        title=f"[bold]{title}[/bold]",
+        title_style="",
     )
     table.add_column("Status", no_wrap=True)
     table.add_column("Display Name", style="cyan", max_width=40, overflow="ellipsis")
@@ -385,20 +473,22 @@ def build_job_info_lines(
     error_msg = job.get("error", "")
     if error_msg:
         lines.append("")
-        lines.append(f"  [bold red]{'─' * 3} Error {'─' * (header_width - 2 - len('Error'))}[/bold red]")
+        lines.append(
+            f"  [bold red]{'─' * 3} Error {'─' * (header_width - 2 - len('Error'))}[/bold red]"
+        )
         for err_line in error_msg.splitlines():
-            lines.append(f"  [red]{err_line}[/red]")
+            lines.append(f"  [red]{_esc(err_line)}[/red]")
 
     # Overview
     lines.append("")
     lines.append(_hdr("Overview"))
-    lines.append(_kv("Display Name", f"[bold]{display}[/bold]"))
+    lines.append(_kv("Display Name", f"[bold]{_esc(display)}[/bold]"))
     if display != name:
-        lines.append(_kv("Run ID", f"[dim]{name}[/dim]"))
+        lines.append(_kv("Run ID", f"[dim]{_esc(name)}[/dim]"))
     if job.get("experiment"):
-        lines.append(_kv("Experiment", job["experiment"]))
+        lines.append(_kv("Experiment", _esc(str(job["experiment"]))))
     if job.get("type"):
-        lines.append(_kv("Type", job["type"]))
+        lines.append(_kv("Type", _esc(str(job["type"]))))
 
     # Compute
     has_compute = job.get("compute") or job.get("environment") or job.get("command")
@@ -406,9 +496,9 @@ def build_job_info_lines(
         lines.append("")
         lines.append(_hdr("Compute"))
         if job.get("compute"):
-            lines.append(_kv("Target", f"[bold]{job['compute']}[/bold]"))
+            lines.append(_kv("Target", f"[bold]{_esc(str(job['compute']))}[/bold]"))
         if job.get("instance_type"):
-            lines.append(_kv("Instance", job["instance_type"]))
+            lines.append(_kv("Instance", _esc(str(job["instance_type"]))))
         nodes = job.get("nodes", 0)
         ppn = job.get("processes_per_node", 0)
         if nodes and nodes > 1:
@@ -417,19 +507,20 @@ def build_job_info_lines(
                 node_str += f"  ×{ppn} processes"
             lines.append(_kv("Nodes", node_str))
         if job.get("sla_tier"):
-            lines.append(_kv("SLA", job["sla_tier"]))
+            lines.append(_kv("SLA", _esc(str(job["sla_tier"]))))
         if job.get("environment"):
-            lines.append(_kv("Env", job["environment"]))
+            lines.append(_kv("Env", _esc(str(job["environment"]))))
         if job.get("command"):
             cmd = job["command"]
             if len(cmd) > cmd_max:
-                cmd = cmd[:cmd_max - 3] + "…"
-            lines.append(_kv("Command", f"[dim]{cmd}[/dim]"))
+                cmd = cmd[: cmd_max - 3] + "…"
+            lines.append(_kv("Command", f"[dim]{_esc(cmd)}[/dim]"))
 
     # Timing
     timing: list[str] = []
     for label, key in [
-        ("Created", "created"), ("Started", "start_time"),
+        ("Created", "created"),
+        ("Started", "start_time"),
         ("Ended", "end_time"),
     ]:
         val = job.get(key, "")
@@ -451,14 +542,14 @@ def build_job_info_lines(
     # Meta
     meta: list[str] = []
     if job.get("created_by"):
-        meta.append(_kv("User", job["created_by"]))
+        meta.append(_kv("User", _esc(str(job["created_by"]))))
     if job.get("tags"):
-        meta.append(_kv("Tags", job["tags"]))
+        meta.append(_kv("Tags", _esc(str(job["tags"]))))
     if job.get("description"):
         desc = job["description"]
         if len(desc) > cmd_max:
-            desc = desc[:cmd_max - 3] + "…"
-        meta.append(_kv("Description", desc))
+            desc = desc[: cmd_max - 3] + "…"
+        meta.append(_kv("Description", _esc(desc)))
     if meta:
         lines.append("")
         lines.append(_hdr("Meta"))
@@ -471,7 +562,9 @@ def build_job_info_lines(
         if not short.startswith("http"):
             short = f"https://{short}"
         lines.append("")
-        lines.append(f"  [dim]→[/dim] [link={url}][cyan underline]{short}[/cyan underline][/link]")
+        lines.append(
+            f"  [dim]→[/dim] [link={url}][cyan underline]{short}[/cyan underline][/link]"
+        )
 
     return lines
 
@@ -481,8 +574,12 @@ def show_job_detail(job: dict[str, Any]) -> None:
     lines = build_job_info_lines(job)
 
     console.print()
-    console.print(Panel(
-        "\n".join(lines), title="[bold]Job Detail[/bold]",
-        border_style="cyan", expand=False,
-    ))
+    console.print(
+        Panel(
+            "\n".join(lines),
+            title="[bold]Job Detail[/bold]",
+            border_style="cyan",
+            expand=False,
+        )
+    )
     console.print()

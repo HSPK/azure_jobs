@@ -26,6 +26,7 @@ def resolve_tz(name: str) -> Any:
         return _tz_cache[name]
     try:
         from zoneinfo import ZoneInfo
+
         tz = ZoneInfo(name)
     except (ImportError, KeyError):
         if name == "Asia/Shanghai":
@@ -51,7 +52,9 @@ def get_display_tz_name() -> str:
     global _display_tz_name
     if _display_tz_name is None:
         from azure_jobs.core.config import read_config
-        _display_tz_name = read_config().get("timezone", _DEFAULT_TZ)
+
+        tz = read_config().timezone
+        _display_tz_name = tz if tz else _DEFAULT_TZ
     return _display_tz_name
 
 

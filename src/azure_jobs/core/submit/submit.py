@@ -3,19 +3,23 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+import os
+from typing import TYPE_CHECKING, Any
 
-from ._command import _RUNNER_FILENAME, _generate_runner_script
-from ._compute import (
+if TYPE_CHECKING:
+    from azure_jobs.core.rest_client import AzureMLClient
+
+from .command import _RUNNER_FILENAME, _generate_runner_script
+from .compute import (
     _build_distribution,
     _build_identity,
     _build_resources,
     _resolve_compute,
     _resolve_sing_identity,
 )
-from ._environment import _build_environment
-from ._models import SubmitRequest, SubmitResult
-from ._storage import _build_storage_mounts
+from .environment import _build_environment
+from .models import SubmitRequest, SubmitResult
+from .storage import _build_storage_mounts
 
 log = logging.getLogger(__name__)
 
@@ -32,6 +36,7 @@ _SING_DEFAULT_ENV = {
 def _extract_error_message(exc: Exception) -> str:
     """Extract a concise error message from an Azure REST exception."""
     import json
+
     msg = str(exc)
     if "{" in msg:
         try:
@@ -46,17 +51,20 @@ def _extract_error_message(exc: Exception) -> str:
     return first
 
 
-def _get_rest_client(request: SubmitRequest) -> Any:
+def _get_rest_client(request: SubmitRequest) -> AzureMLClient:
     """Create a REST client from a SubmitRequest."""
-    from azure_jobs.core.rest_client import AzureMLJobsClient
-    return AzureMLJobsClient(
+    from azure_jobs.core.rest_client import AzureMLClient
+
+    return AzureMLClient(
         subscription_id=request.subscription_id,
         resource_group=request.resource_group,
         workspace_name=request.workspace_name,
     )
 
 
-def _build_env_vars(request: SubmitRequest, dataref_env: dict[str, str]) -> dict[str, str]:
+def _build_env_vars(
+    request: SubmitRequest, dataref_env: dict[str, str]
+) -> dict[str, str]:
     """Build the environment variables dict for the job."""
     env_vars = {
         k: v for k, v in request.env_vars.items() if k not in _INTERNAL_ENV_KEYS
@@ -113,15 +121,18 @@ def _collect_ssh_files(code_dir: str) -> dict[str, bytes]:
     return result
 
 
-def submit(request: SubmitRequest, on_status: Any = None, on_upload_progress: Any = None) -> SubmitResult:
+def submit(
+    request: SubmitRequest, on_status: Any = None, on_upload_progress: Any = None
+) -> SubmitResult:
     """Submit a job to Azure ML via REST API.
 
     Args:
         request: Complete submission specification.
         on_status: Optional callback ``(step: str, detail: str) -> None``
             called at each stage for progress reporting.
-        on_upload_progress: Optional callback ``(completed, total, skipped) -> None``
-            called during code upload for per-file progress.
+        on_upload_progress: Optional callback
+            ``(completed, total, skipped, current) -> None`` for per-file
+            upload progress; ``current`` is the relative path just processed.
 
     Returns:
         SubmitResult with job name and status.
@@ -135,15 +146,14 @@ def submit(request: SubmitRequest, on_status: Any = None, on_upload_progress: An
         _status("auth", "Authenticating…")
         # Late import for mockability — tests patch azure_jobs.core.submit._get_rest_client
         import azure_jobs.core.submit as _pkg
+
         client = _pkg._get_rest_client(request)
 
         _status("environment", "Preparing environment…")
         env_id = _build_environment(request, client)
 
         _status("storage", f"Configuring {len(request.storage)} storage mount(s)…")
-        outputs, poc_props, dataref_env = _build_storage_mounts(
-            request, client
-        )
+        outputs, poc_props, dataref_env = _build_storage_mounts(request, client)
 
         _status("command", "Building command…")
         distribution = _build_distribution(request)
@@ -163,12 +173,14 @@ def submit(request: SubmitRequest, on_status: Any = None, on_upload_progress: An
 
         extra_files: dict[str, str | bytes] = {_RUNNER_FILENAME: runner_script}
 
+        code_root = os.getcwd()
+
         # Include .ssh keys — use local .ssh/ if present, otherwise ~/.ssh/
-        extra_files.update(_collect_ssh_files(request.code_dir))
+        extra_files.update(_collect_ssh_files(code_root))
 
         _status("code", "Uploading code…")
-        code_id = client.upload_code(
-            request.code_dir,
+        code_id = client.blob.upload_code(
+            code_root,
             ignore_patterns=request.code_ignore or None,
             extra_files=extra_files,
             on_progress=on_upload_progress,
@@ -237,7 +249,7 @@ def submit(request: SubmitRequest, on_status: Any = None, on_upload_progress: An
         if request.shm_size:
             job_props["resources"]["shmSize"] = request.shm_size
 
-        returned_job = client.create_or_update_job(request.name, job_body)
+        returned_job = client.jobs.create_or_update(request.name, job_body)
 
         # Extract portal URL from response
         portal_url = ""

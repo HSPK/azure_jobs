@@ -13,7 +13,7 @@ For development:
 ## Quick Start
 
 ```bash
-aj ws set                             # configure workspace (interactive)
+aj init                               # set up .azure_jobs/, workspace, experiment (interactive)
 aj template pull user/templates       # clone shared templates
 aj template list                      # show available templates
 aj run -t gpu python train.py         # submit a job
@@ -46,6 +46,7 @@ aj job logs <id>                      # view logs
     aj job show <id>                    # show job details
     aj job cancel <id>                  # cancel a running job
     aj job logs <id>                    # download and display logs
+    aj job stats                        # aggregate stats over recent jobs
     aj list                             # show local submission history
 
 ### Templates
@@ -53,6 +54,7 @@ aj job logs <id>                      # view logs
     aj template list                    # list available templates
     aj template show <name>             # display resolved config after inheritance
     aj template validate                # check all templates for errors
+    aj template diff                    # show local edits vs remote
     aj template pull <repo>             # clone template repository
     aj template push -m "msg"           # commit and push local changes
 
@@ -73,11 +75,19 @@ aj job logs <id>                      # view logs
     aj quota list --aml                 # show AML compute cluster availability
     aj exp list                         # list experiments (aggregated from jobs)
     aj image list                       # list Singularity curated base images
+    aj sku list                         # list Singularity SKUs and quota by VC
+    aj sku check -t <template>          # pre-flight: SKU/quota/compute validation
+
+### Setup
+
+    aj init                             # initialise .azure_jobs/, workspace, experiment
+    aj init amlt                        # additionally configure amlt integration
 
 ### Other
 
     aj config show                      # print all configuration
     aj config timezone Asia/Shanghai    # set display timezone
+    aj config experiment <name>         # set default experiment name
     aj dash                             # open interactive TUI dashboard
 
 ## How It Works

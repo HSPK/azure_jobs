@@ -1,8 +1,6 @@
 import json
-import os
 import shutil
 import subprocess
-from dataclasses import asdict
 from pathlib import Path
 from unittest.mock import patch
 
@@ -13,12 +11,11 @@ from click.testing import CliRunner
 from azure_jobs.cli import main
 from azure_jobs.cli.pull import resolve_repo_url
 from azure_jobs.cli.run import (
-    build_command_list,
     resolve_name,
     resolve_sku,
-    validate_config,
 )
 from azure_jobs.core.record import SubmissionRecord
+from azure_jobs.core.submit import SubmitRequest
 
 
 @pytest.fixture
@@ -36,6 +33,7 @@ def aj_env(aj_home, tmp_path, monkeypatch):
         "aj_home": aj_home,
         "template_home": aj_home / "template",
         "submission_home": aj_home / "submission",
+        "dryrun_home": aj_home / "dryrun",
         "record_fp": aj_home / "record.jsonl",
         "config_fp": config_fp,
         "workdir": workdir,
@@ -57,20 +55,21 @@ MINIMAL_JOB_CONF = {
 class TestSubmissionRecord:
     def test_dataclass_fields(self):
         rec = SubmissionRecord(
-            id="abc123",
-            template="gpu",
-            nodes=2,
-            processes=4,
+            request=SubmitRequest(
+                name="job",
+                sid="abc123",
+                template_name="gpu",
+                nodes=2,
+                processes_per_node=4,
+                command=["python train.py"],
+            ),
             portal="azure",
             created_at="2026-01-01T00:00:00",
             status="success",
-            command="python",
-            args=["train.py"],
         )
-        d = asdict(rec)
-        assert d["id"] == "abc123"
-        assert d["nodes"] == 2
-        assert d["args"] == ["train.py"]
+        assert rec.request.sid == "abc123"
+        assert rec.request.nodes == 2
+        assert rec.request.command == ["python train.py"]
 
 
 class TestListCommand:
@@ -83,11 +82,19 @@ class TestListCommand:
         assert "No jobs found" in result.output
 
     def test_list_shows_records(self, aj_env):
-        record = json.dumps({
-            "id": "abc12345", "template": "gpu", "nodes": 2, "processes": 4,
-            "portal": "azure", "created_at": "2026-01-01T00:00:00+00:00",
-            "status": "success", "command": "python", "args": ["train.py"],
-        })
+        record = json.dumps(
+            {
+                "id": "abc12345",
+                "template": "gpu",
+                "nodes": 2,
+                "processes": 4,
+                "portal": "azure",
+                "created_at": "2026-01-01T00:00:00+00:00",
+                "status": "success",
+                "command": "python",
+                "args": ["train.py"],
+            }
+        )
         aj_env["record_fp"].write_text(record + "\n")
         runner = CliRunner()
         result = runner.invoke(main, ["list"])
@@ -96,12 +103,32 @@ class TestListCommand:
         assert "gpu" in result.output
 
     def test_list_filter_by_template(self, aj_env):
-        r1 = json.dumps({"id": "a1", "template": "gpu", "nodes": 1, "processes": 1,
-                          "portal": "azure", "created_at": "2026-01-01T00:00:00",
-                          "status": "success", "command": "echo", "args": []})
-        r2 = json.dumps({"id": "b2", "template": "cpu", "nodes": 1, "processes": 1,
-                          "portal": "azure", "created_at": "2026-01-01T01:00:00",
-                          "status": "success", "command": "echo", "args": []})
+        r1 = json.dumps(
+            {
+                "id": "a1",
+                "template": "gpu",
+                "nodes": 1,
+                "processes": 1,
+                "portal": "azure",
+                "created_at": "2026-01-01T00:00:00",
+                "status": "success",
+                "command": "echo",
+                "args": [],
+            }
+        )
+        r2 = json.dumps(
+            {
+                "id": "b2",
+                "template": "cpu",
+                "nodes": 1,
+                "processes": 1,
+                "portal": "azure",
+                "created_at": "2026-01-01T01:00:00",
+                "status": "success",
+                "command": "echo",
+                "args": [],
+            }
+        )
         aj_env["record_fp"].write_text(r1 + "\n" + r2 + "\n")
         runner = CliRunner()
         result = runner.invoke(main, ["list", "-t", "gpu"])
@@ -142,10 +169,14 @@ class TestTemplateShowCommand:
         base_conf = {"target": {"service": "aml"}, "jobs": [{"sku": "G1"}]}
         write_template(aj_env["template_home"], "base", base_conf)
         child_fp = aj_env["template_home"] / "child.yaml"
-        child_fp.write_text(yaml.dump({
-            "base": "base",
-            "config": {"target": {"name": "myCluster"}},
-        }))
+        child_fp.write_text(
+            yaml.dump(
+                {
+                    "base": "base",
+                    "config": {"target": {"name": "myCluster"}},
+                }
+            )
+        )
         runner = CliRunner()
         result = runner.invoke(main, ["template", "show", "child"])
         assert result.exit_code == 0
@@ -182,10 +213,14 @@ class TestTemplateValidateCommand:
     def test_validate_single_missing_jobs(self, aj_env):
         # Submittable template (has base) but missing jobs
         fp = aj_env["template_home"] / "bad.yaml"
-        fp.write_text(yaml.dump({
-            "base": "base",
-            "config": {"target": {"service": "aml", "name": "gpu01"}},
-        }))
+        fp.write_text(
+            yaml.dump(
+                {
+                    "base": "base",
+                    "config": {"target": {"service": "aml", "name": "gpu01"}},
+                }
+            )
+        )
         write_template(aj_env["template_home"], "base", {})
         runner = CliRunner()
         result = runner.invoke(main, ["template", "validate", "bad"])
@@ -201,10 +236,14 @@ class TestTemplateValidateCommand:
         fp_good = aj_env["template_home"] / "good.yaml"
         fp_good.write_text(yaml.dump({"base": "base", "config": good}))
         fp_bad = aj_env["template_home"] / "bad.yaml"
-        fp_bad.write_text(yaml.dump({
-            "base": "base",
-            "config": {"target": {"service": "aml", "name": "gpu02"}},
-        }))
+        fp_bad.write_text(
+            yaml.dump(
+                {
+                    "base": "base",
+                    "config": {"target": {"service": "aml", "name": "gpu02"}},
+                }
+            )
+        )
         runner = CliRunner()
         result = runner.invoke(main, ["template", "validate"])
         assert result.exit_code != 0
@@ -219,10 +258,14 @@ class TestTemplateValidateCommand:
     def test_validate_missing_target(self, aj_env):
         write_template(aj_env["template_home"], "base", {})
         fp = aj_env["template_home"] / "notarget.yaml"
-        fp.write_text(yaml.dump({
-            "base": "base",
-            "config": {"jobs": [{"sku": "G1"}]},
-        }))
+        fp.write_text(
+            yaml.dump(
+                {
+                    "base": "base",
+                    "config": {"jobs": [{"sku": "G1"}]},
+                }
+            )
+        )
         runner = CliRunner()
         result = runner.invoke(main, ["template", "validate", "notarget"])
         assert result.exit_code != 0
@@ -231,13 +274,17 @@ class TestTemplateValidateCommand:
     def test_validate_missing_sku(self, aj_env):
         write_template(aj_env["template_home"], "base", {})
         fp = aj_env["template_home"] / "nosku.yaml"
-        fp.write_text(yaml.dump({
-            "base": "base",
-            "config": {
-                "target": {"service": "aml", "name": "gpu01"},
-                "jobs": [{"name": "j1"}],
-            },
-        }))
+        fp.write_text(
+            yaml.dump(
+                {
+                    "base": "base",
+                    "config": {
+                        "target": {"service": "aml", "name": "gpu01"},
+                        "jobs": [{"name": "j1"}],
+                    },
+                }
+            )
+        )
         runner = CliRunner()
         result = runner.invoke(main, ["template", "validate", "nosku"])
         assert result.exit_code != 0
@@ -245,7 +292,9 @@ class TestTemplateValidateCommand:
 
     def test_validate_building_block_passes(self, aj_env):
         """Templates without a base key are building blocks — always valid."""
-        write_template(aj_env["template_home"], "fragment", {"code": {"local_dir": "."}})
+        write_template(
+            aj_env["template_home"], "fragment", {"code": {"local_dir": "."}}
+        )
         runner = CliRunner()
         result = runner.invoke(main, ["template", "validate", "fragment"])
         assert result.exit_code == 0
@@ -277,11 +326,17 @@ class TestTemplateDiffCommand:
             if "clone" in cmd:
                 # Create a clone dir that mirrors AJ_HOME so no diffs
                 from azure_jobs.core import const as _const
+
                 dest = cmd[-1]
                 import shutil as _sh
+
                 _sh.copytree(str(_const.AJ_HOME), dest, dirs_exist_ok=True)
-                return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
-            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+                return subprocess.CompletedProcess(
+                    args=cmd, returncode=0, stdout="", stderr=""
+                )
+            return subprocess.CompletedProcess(
+                args=cmd, returncode=0, stdout="", stderr=""
+            )
 
         with patch("azure_jobs.cli.templates.subprocess.run", side_effect=mock_run):
             result = runner.invoke(main, ["template", "diff"])
@@ -304,8 +359,12 @@ class TestTemplateDiffCommand:
                 tdir = Path(dest) / "template"
                 tdir.mkdir()
                 (tdir / "base.yaml").write_text("remote: true\n")
-                return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
-            return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+                return subprocess.CompletedProcess(
+                    args=cmd, returncode=0, stdout="", stderr=""
+                )
+            return subprocess.CompletedProcess(
+                args=cmd, returncode=0, stdout="", stderr=""
+            )
 
         with patch("azure_jobs.cli.templates.subprocess.run", side_effect=mock_run):
             result = runner.invoke(main, ["template", "diff"])
@@ -318,25 +377,37 @@ class TestJobListCommand:
     """``aj job list`` now fetches cloud jobs via REST API."""
 
     def test_job_list_empty(self, aj_env):
-        from unittest.mock import patch, MagicMock
+        from unittest.mock import MagicMock, patch
+
         mock_client = MagicMock()
-        mock_client.list_jobs_page.return_value = ([], None)
-        with patch("azure_jobs.core.rest_client.create_rest_client", return_value=mock_client):
+        mock_client.jobs.list_page.return_value = ([], None)
+        with patch(
+            "azure_jobs.core.rest_client.create_rest_client", return_value=mock_client
+        ):
             runner = CliRunner()
             result = runner.invoke(main, ["job", "list"])
         assert result.exit_code == 0
         assert "No jobs found" in result.output
 
     def test_job_list_shows_cloud_jobs(self, aj_env):
-        from unittest.mock import patch, MagicMock
+        from unittest.mock import MagicMock, patch
+
         jobs = [
-            {"name": "azure_jobs_abc12345", "display_name": "train-gpt",
-             "status": "Completed", "experiment": "exp1", "compute": "gpu-vc",
-             "duration": "5m 30s", "created": "2026-04-17 10:00"},
+            {
+                "name": "azure_jobs_abc12345",
+                "display_name": "train-gpt",
+                "status": "Completed",
+                "experiment": "exp1",
+                "compute": "gpu-vc",
+                "duration": "5m 30s",
+                "created": "2026-04-17 10:00",
+            },
         ]
         mock_client = MagicMock()
-        mock_client.list_jobs_page.return_value = (jobs, None)
-        with patch("azure_jobs.core.rest_client.create_rest_client", return_value=mock_client):
+        mock_client.jobs.list_page.return_value = (jobs, None)
+        with patch(
+            "azure_jobs.core.rest_client.create_rest_client", return_value=mock_client
+        ):
             runner = CliRunner()
             result = runner.invoke(main, ["job", "list"])
         assert result.exit_code == 0
@@ -344,16 +415,33 @@ class TestJobListCommand:
         assert "Completed" in result.output
 
     def test_job_list_filter_by_status(self, aj_env):
-        from unittest.mock import patch, MagicMock
+        from unittest.mock import MagicMock, patch
+
         jobs = [
-            {"name": "j1", "display_name": "ok", "status": "Completed",
-             "experiment": "", "compute": "", "duration": "", "created": ""},
-            {"name": "j2", "display_name": "fail", "status": "Failed",
-             "experiment": "", "compute": "", "duration": "", "created": ""},
+            {
+                "name": "j1",
+                "display_name": "ok",
+                "status": "Completed",
+                "experiment": "",
+                "compute": "",
+                "duration": "",
+                "created": "",
+            },
+            {
+                "name": "j2",
+                "display_name": "fail",
+                "status": "Failed",
+                "experiment": "",
+                "compute": "",
+                "duration": "",
+                "created": "",
+            },
         ]
         mock_client = MagicMock()
-        mock_client.list_jobs_page.return_value = (jobs, None)
-        with patch("azure_jobs.core.rest_client.create_rest_client", return_value=mock_client):
+        mock_client.jobs.list_page.return_value = (jobs, None)
+        with patch(
+            "azure_jobs.core.rest_client.create_rest_client", return_value=mock_client
+        ):
             runner = CliRunner()
             result = runner.invoke(main, ["job", "list", "-s", "Failed"])
         assert result.exit_code == 0
@@ -362,16 +450,33 @@ class TestJobListCommand:
         assert "ok" not in result.output or "Failed" in result.output
 
     def test_job_list_filter_by_experiment(self, aj_env):
-        from unittest.mock import patch, MagicMock
+        from unittest.mock import MagicMock, patch
+
         jobs = [
-            {"name": "j1", "display_name": "a", "status": "Completed",
-             "experiment": "exp-A", "compute": "", "duration": "", "created": ""},
-            {"name": "j2", "display_name": "b", "status": "Completed",
-             "experiment": "exp-B", "compute": "", "duration": "", "created": ""},
+            {
+                "name": "j1",
+                "display_name": "a",
+                "status": "Completed",
+                "experiment": "exp-A",
+                "compute": "",
+                "duration": "",
+                "created": "",
+            },
+            {
+                "name": "j2",
+                "display_name": "b",
+                "status": "Completed",
+                "experiment": "exp-B",
+                "compute": "",
+                "duration": "",
+                "created": "",
+            },
         ]
         mock_client = MagicMock()
-        mock_client.list_jobs_page.return_value = (jobs, None)
-        with patch("azure_jobs.core.rest_client.create_rest_client", return_value=mock_client):
+        mock_client.jobs.list_page.return_value = (jobs, None)
+        with patch(
+            "azure_jobs.core.rest_client.create_rest_client", return_value=mock_client
+        ):
             runner = CliRunner()
             result = runner.invoke(main, ["job", "list", "-e", "exp-A"])
         assert result.exit_code == 0
@@ -384,19 +489,28 @@ class TestJobStatusCommand:
         from unittest.mock import MagicMock, patch
 
         mock_client = MagicMock()
-        mock_client.get_job.return_value = {
+        mock_client.jobs.get.return_value = {
             "name": "my-job-xyz",
             "display_name": "azure_jobs_abc123",
             "status": "Running",
             "duration": "5m 30s",
             "compute": "msrresrchvc",
             "portal_url": "https://ml.azure.com/runs/my-job-xyz",
-            "start_time": "", "end_time": "", "queue_time": "",
-            "experiment": "", "type": "Command", "description": "",
-            "tags": "", "environment": "", "command": "", "created": "",
+            "start_time": "",
+            "end_time": "",
+            "queue_time": "",
+            "experiment": "",
+            "type": "Command",
+            "description": "",
+            "tags": "",
+            "environment": "",
+            "command": "",
+            "created": "",
             "error": "",
         }
-        with patch("azure_jobs.core.rest_client.create_rest_client", return_value=mock_client):
+        with patch(
+            "azure_jobs.core.rest_client.create_rest_client", return_value=mock_client
+        ):
             runner = CliRunner()
             result = runner.invoke(main, ["job", "status", "my-job-xyz"])
         assert result.exit_code == 0
@@ -407,63 +521,99 @@ class TestJobStatusCommand:
         """Short aj ID should resolve to azure_name via record.jsonl."""
         from unittest.mock import MagicMock, patch
 
-        record = json.dumps({
-            "id": "abc12345", "template": "cpu", "nodes": 1, "processes": 1,
-            "portal": "azure", "created_at": "2026-01-01T00:00:00",
-            "status": "submitted", "command": "echo", "args": [],
-            "azure_name": "resolved-azure-name",
-        })
+        record = json.dumps(
+            {
+                "id": "abc12345",
+                "template": "cpu",
+                "nodes": 1,
+                "processes": 1,
+                "portal": "azure",
+                "created_at": "2026-01-01T00:00:00",
+                "status": "submitted",
+                "command": "echo",
+                "args": [],
+                "azure_name": "resolved-azure-name",
+            }
+        )
         aj_env["record_fp"].write_text(record + "\n")
 
         mock_client = MagicMock()
-        mock_client.get_job.return_value = {
-            "name": "resolved-azure-name", "display_name": "",
-            "status": "Completed", "duration": "", "compute": "",
-            "portal_url": "", "start_time": "", "end_time": "",
-            "queue_time": "", "experiment": "", "type": "", "description": "",
-            "tags": "", "environment": "", "command": "", "created": "",
+        mock_client.jobs.get.return_value = {
+            "name": "resolved-azure-name",
+            "display_name": "",
+            "status": "Completed",
+            "duration": "",
+            "compute": "",
+            "portal_url": "",
+            "start_time": "",
+            "end_time": "",
+            "queue_time": "",
+            "experiment": "",
+            "type": "",
+            "description": "",
+            "tags": "",
+            "environment": "",
+            "command": "",
+            "created": "",
             "error": "",
         }
-        with patch("azure_jobs.core.rest_client.create_rest_client", return_value=mock_client):
+        with patch(
+            "azure_jobs.core.rest_client.create_rest_client", return_value=mock_client
+        ):
             runner = CliRunner()
             result = runner.invoke(main, ["job", "status", "abc12345"])
-        mock_client.get_job.assert_called_once_with("resolved-azure-name")
+        mock_client.jobs.get.assert_called_once_with("resolved-azure-name")
         assert result.exit_code == 0
         assert "Completed" in result.output
 
 
 class TestJobCancelCommand:
     def test_cancel_success(self, aj_env):
-        from unittest.mock import MagicMock, patch as mock_patch
+        from unittest.mock import MagicMock
+        from unittest.mock import patch as mock_patch
 
-        record = json.dumps({
-            "id": "abc12345", "template": "cpu", "nodes": 1, "processes": 1,
-            "portal": "", "created_at": "2026-01-01T00:00:00",
-            "status": "submitted", "command": "echo", "args": [],
-            "azure_name": "azure_jobs_abc12345",
-        })
+        record = json.dumps(
+            {
+                "id": "abc12345",
+                "template": "cpu",
+                "nodes": 1,
+                "processes": 1,
+                "portal": "",
+                "created_at": "2026-01-01T00:00:00",
+                "status": "submitted",
+                "command": "echo",
+                "args": [],
+                "azure_name": "azure_jobs_abc12345",
+            }
+        )
         aj_env["record_fp"].write_text(record + "\n")
 
         mock_client = MagicMock()
         # First get_job call returns Running, second returns Canceled
-        mock_client.get_job.side_effect = [
+        mock_client.jobs.get.side_effect = [
             {"name": "azure_jobs_abc12345", "status": "Running"},
             {"name": "azure_jobs_abc12345", "status": "Canceled"},
         ]
-        with mock_patch("azure_jobs.core.rest_client.create_rest_client", return_value=mock_client):
+        with mock_patch(
+            "azure_jobs.core.rest_client.create_rest_client", return_value=mock_client
+        ):
             runner = CliRunner()
             result = runner.invoke(main, ["job", "cancel", "abc12345"])
         assert result.exit_code == 0
         assert "cancelled" in result.output.lower()
 
     def test_cancel_already_completed(self, aj_env):
-        from unittest.mock import MagicMock, patch as mock_patch
+        from unittest.mock import MagicMock
+        from unittest.mock import patch as mock_patch
 
         mock_client = MagicMock()
-        mock_client.get_job.return_value = {
-            "name": "some-job", "status": "Completed",
+        mock_client.jobs.get.return_value = {
+            "name": "some-job",
+            "status": "Completed",
         }
-        with mock_patch("azure_jobs.core.rest_client.create_rest_client", return_value=mock_client):
+        with mock_patch(
+            "azure_jobs.core.rest_client.create_rest_client", return_value=mock_client
+        ):
             runner = CliRunner()
             result = runner.invoke(main, ["job", "cancel", "some-job"])
         assert result.exit_code == 0
@@ -473,14 +623,19 @@ class TestJobCancelCommand:
 class TestJobLogsCommand:
     def test_logs_queued_job_skips_sdk(self, aj_env):
         """Queued jobs should show a message and not try SDK streaming."""
-        from unittest.mock import MagicMock, patch as mock_patch
+        from unittest.mock import MagicMock
+        from unittest.mock import patch as mock_patch
 
         mock_client = MagicMock()
-        mock_client.get_job.return_value = {
-            "name": "some-job", "display_name": "my-train",
-            "status": "Queued", "portal_url": "",
+        mock_client.jobs.get.return_value = {
+            "name": "some-job",
+            "display_name": "my-train",
+            "status": "Queued",
+            "portal_url": "",
         }
-        with mock_patch("azure_jobs.core.rest_client.create_rest_client", return_value=mock_client):
+        with mock_patch(
+            "azure_jobs.core.rest_client.create_rest_client", return_value=mock_client
+        ):
             runner = CliRunner()
             result = runner.invoke(main, ["job", "logs", "some-job"])
         assert result.exit_code == 0
@@ -488,15 +643,26 @@ class TestJobLogsCommand:
 
     def test_logs_completed_job(self, aj_env):
         """Completed jobs should download logs via log_download module."""
-        from unittest.mock import MagicMock, patch as mock_patch
+        from unittest.mock import MagicMock
+        from unittest.mock import patch as mock_patch
 
         mock_client = MagicMock()
-        mock_client.get_job.return_value = {
-            "name": "some-job", "display_name": "my-train",
-            "status": "Completed", "portal_url": "",
+        mock_client.jobs.get.return_value = {
+            "name": "some-job",
+            "display_name": "my-train",
+            "status": "Completed",
+            "portal_url": "",
         }
-        with mock_patch("azure_jobs.core.rest_client.create_rest_client", return_value=mock_client), \
-             mock_patch("azure_jobs.core.log_download.download_job_logs", return_value=("Hello from training", "")):
+        with (
+            mock_patch(
+                "azure_jobs.core.rest_client.create_rest_client",
+                return_value=mock_client,
+            ),
+            mock_patch(
+                "azure_jobs.core.log_download.download_job_logs",
+                return_value=("Hello from training", ""),
+            ),
+        ):
             runner = CliRunner()
             result = runner.invoke(main, ["job", "logs", "some-job"])
         assert result.exit_code == 0
@@ -504,15 +670,26 @@ class TestJobLogsCommand:
 
     def test_logs_running_job(self, aj_env):
         """Running jobs should also fetch logs (via History API path)."""
-        from unittest.mock import MagicMock, patch as mock_patch
+        from unittest.mock import MagicMock
+        from unittest.mock import patch as mock_patch
 
         mock_client = MagicMock()
-        mock_client.get_job.return_value = {
-            "name": "some-job", "display_name": "my-train",
-            "status": "Running", "portal_url": "",
+        mock_client.jobs.get.return_value = {
+            "name": "some-job",
+            "display_name": "my-train",
+            "status": "Running",
+            "portal_url": "",
         }
-        with mock_patch("azure_jobs.core.rest_client.create_rest_client", return_value=mock_client), \
-             mock_patch("azure_jobs.core.log_download.download_job_logs", return_value=("Epoch 1/10 loss=0.5", "")):
+        with (
+            mock_patch(
+                "azure_jobs.core.rest_client.create_rest_client",
+                return_value=mock_client,
+            ),
+            mock_patch(
+                "azure_jobs.core.log_download.download_job_logs",
+                return_value=("Epoch 1/10 loss=0.5", ""),
+            ),
+        ):
             runner = CliRunner()
             result = runner.invoke(main, ["job", "logs", "some-job"])
         assert result.exit_code == 0
@@ -540,7 +717,7 @@ class TestRunCommand:
         result = runner.invoke(main, ["run", "-d", "echo", "hello"])
         assert result.exit_code == 0
         assert "Dry Run" in result.output
-        submissions = list(aj_env["submission_home"].glob("*.yaml"))
+        submissions = list(aj_env["dryrun_home"].glob("*.yaml"))
         assert len(submissions) == 1
 
     def test_dry_run_submission_content(self, aj_env):
@@ -548,59 +725,79 @@ class TestRunCommand:
         runner = CliRunner()
         result = runner.invoke(main, ["run", "-d", "-n", "2", "echo", "hello"])
         assert result.exit_code == 0
-        sub_file = list(aj_env["submission_home"].glob("*.yaml"))[0]
+        sub_file = list(aj_env["dryrun_home"].glob("*.yaml"))[0]
         sub = yaml.safe_load(sub_file.read_text())
         assert sub["jobs"][0]["sku"] == "Standard_NC2s_v3"
 
     def test_str_sku_template_formatting(self, aj_env):
         conf = {
             "description": "placeholder",
-            "jobs": [{"name": "placeholder", "sku": "ND_A100_{nodes}x{processes}", "command": []}],
+            "jobs": [
+                {
+                    "name": "placeholder",
+                    "sku": "ND_A100_{nodes}x{processes}",
+                    "command": [],
+                }
+            ],
         }
         write_template(aj_env["template_home"], "default", conf)
         runner = CliRunner()
         result = runner.invoke(main, ["run", "-d", "-n", "4", "-p", "8", "echo"])
         assert result.exit_code == 0
-        sub_file = list(aj_env["submission_home"].glob("*.yaml"))[0]
+        sub_file = list(aj_env["dryrun_home"].glob("*.yaml"))[0]
         sub = yaml.safe_load(sub_file.read_text())
         assert sub["jobs"][0]["sku"] == "ND_A100_4x8"
 
     def test_dict_sku_exact_match(self, aj_env):
         conf = {
             "description": "placeholder",
-            "jobs": [{"name": "placeholder", "sku": {"1": "small", "2": "medium"}, "command": []}],
+            "jobs": [
+                {
+                    "name": "placeholder",
+                    "sku": {"1": "small", "2": "medium"},
+                    "command": [],
+                }
+            ],
         }
         write_template(aj_env["template_home"], "default", conf)
         runner = CliRunner()
         result = runner.invoke(main, ["run", "-d", "-n", "2", "echo"])
         assert result.exit_code == 0
-        sub_file = list(aj_env["submission_home"].glob("*.yaml"))[0]
+        sub_file = list(aj_env["dryrun_home"].glob("*.yaml"))[0]
         sub = yaml.safe_load(sub_file.read_text())
         assert sub["jobs"][0]["sku"] == "medium"
 
     def test_dict_sku_range_match(self, aj_env):
         conf = {
             "description": "placeholder",
-            "jobs": [{"name": "placeholder", "sku": {"1-2": "small_{nodes}", "3-8": "large_{nodes}"}, "command": []}],
+            "jobs": [
+                {
+                    "name": "placeholder",
+                    "sku": {"1-2": "small_{nodes}", "3-8": "large_{nodes}"},
+                    "command": [],
+                }
+            ],
         }
         write_template(aj_env["template_home"], "default", conf)
         runner = CliRunner()
         result = runner.invoke(main, ["run", "-d", "-n", "5", "echo"])
         assert result.exit_code == 0
-        sub_file = list(aj_env["submission_home"].glob("*.yaml"))[0]
+        sub_file = list(aj_env["dryrun_home"].glob("*.yaml"))[0]
         sub = yaml.safe_load(sub_file.read_text())
         assert sub["jobs"][0]["sku"] == "large_5"
 
     def test_dict_sku_plus_match(self, aj_env):
         conf = {
             "description": "placeholder",
-            "jobs": [{"name": "placeholder", "sku": {"4+": "huge_{nodes}"}, "command": []}],
+            "jobs": [
+                {"name": "placeholder", "sku": {"4+": "huge_{nodes}"}, "command": []}
+            ],
         }
         write_template(aj_env["template_home"], "default", conf)
         runner = CliRunner()
         result = runner.invoke(main, ["run", "-d", "-n", "8", "echo"])
         assert result.exit_code == 0
-        sub_file = list(aj_env["submission_home"].glob("*.yaml"))[0]
+        sub_file = list(aj_env["dryrun_home"].glob("*.yaml"))[0]
         sub = yaml.safe_load(sub_file.read_text())
         assert sub["jobs"][0]["sku"] == "huge_8"
 
@@ -641,7 +838,7 @@ class TestRunCommand:
         runner = CliRunner()
         result = runner.invoke(main, ["run", "-d", "train.py", "--lr", "0.01"])
         assert result.exit_code == 0
-        sub_file = list(aj_env["submission_home"].glob("*.yaml"))[0]
+        sub_file = list(aj_env["dryrun_home"].glob("*.yaml"))[0]
         sub = yaml.safe_load(sub_file.read_text())
         cmds = sub["jobs"][0]["command"]
         assert any("uv run train.py --lr 0.01" in c for c in cmds)
@@ -653,7 +850,7 @@ class TestRunCommand:
         runner = CliRunner()
         result = runner.invoke(main, ["run", "-d", "run.sh"])
         assert result.exit_code == 0
-        sub_file = list(aj_env["submission_home"].glob("*.yaml"))[0]
+        sub_file = list(aj_env["dryrun_home"].glob("*.yaml"))[0]
         sub = yaml.safe_load(sub_file.read_text())
         cmds = sub["jobs"][0]["command"]
         assert any("bash run.sh" in c for c in cmds)
@@ -663,44 +860,58 @@ class TestRunCommand:
         runner = CliRunner()
         result = runner.invoke(main, ["run", "-d", "-n", "2", "-p", "4", "echo"])
         assert result.exit_code == 0
-        sub_file = list(aj_env["submission_home"].glob("*.yaml"))[0]
+        sub_file = list(aj_env["dryrun_home"].glob("*.yaml"))[0]
         sub = yaml.safe_load(sub_file.read_text())
         cmds = sub["jobs"][0]["command"]
         assert any("AJ_NODES=2" in c for c in cmds)
         assert any("AJ_PROCESSES=8" in c for c in cmds)  # 4 * 2
 
-    def test_nodes_processes_from_extra(self, aj_env):
+    def test_ignores_extra_nodes_processes(self, aj_env):
         conf = {
             "description": "placeholder",
             "_extra": {"nodes": 4, "processes": 2},
-            "jobs": [{"name": "placeholder", "sku": "sku_{nodes}_{processes}", "command": []}],
+            "jobs": [
+                {"name": "placeholder", "sku": "sku_{nodes}_{processes}", "command": []}
+            ],
         }
         write_template(aj_env["template_home"], "default", conf)
         runner = CliRunner()
         result = runner.invoke(main, ["run", "-d", "echo"])
         assert result.exit_code == 0
-        sub_file = list(aj_env["submission_home"].glob("*.yaml"))[0]
+        sub_file = list(aj_env["dryrun_home"].glob("*.yaml"))[0]
         sub = yaml.safe_load(sub_file.read_text())
-        assert sub["jobs"][0]["sku"] == "sku_4_2"
+        assert sub["jobs"][0]["sku"] == "sku_1_1"
         assert "_extra" not in sub
 
     def test_record_logged_on_submit(self, aj_env):
         write_template(aj_env["template_home"], "default", MINIMAL_JOB_CONF)
-        aj_env["config_fp"].write_text(json.dumps({
-            "defaults": {"template": "default"},
-            "experiment": "test",
-            "workspace": {"subscription_id": "s", "resource_group": "r", "workspace_name": "w"},
-        }))
+        aj_env["config_fp"].write_text(
+            json.dumps(
+                {
+                    "defaults": {"template": "default"},
+                    "experiment": "test",
+                    "workspace": {
+                        "subscription_id": "s",
+                        "resource_group": "r",
+                        "workspace_name": "w",
+                    },
+                }
+            )
+        )
         runner = CliRunner()
         from azure_jobs.core.submit import SubmitResult
-        mock_result = SubmitResult(job_name="test-job", status="submitted", portal_url="https://example.com")
+
+        mock_result = SubmitResult(
+            job_name="test-job", status="submitted", portal_url="https://example.com"
+        )
         with patch("azure_jobs.core.submit.submit", return_value=mock_result):
             result = runner.invoke(main, ["run", "echo", "hello"])
         assert result.exit_code == 0
         assert aj_env["record_fp"].exists()
         record = json.loads(aj_env["record_fp"].read_text().strip())
-        assert record["template"] == "default"
-        assert record["command"] == "echo"
+        assert record["request"]["template_name"] == "default"
+        assert record["request"]["sid"]
+        assert record["request"]["command"][-1] == "echo hello"
         assert record["status"] == "submitted"
 
 
@@ -712,7 +923,9 @@ class TestPullCommand:
         assert "Repository ID must be provided" in result.output
 
     def test_pull_uses_saved_repo_id(self, aj_env):
-        aj_env["config_fp"].write_text(json.dumps({"repo_id": "https://example.com/repo.git"}))
+        aj_env["config_fp"].write_text(
+            json.dumps({"repo_id": "https://example.com/repo.git"})
+        )
         runner = CliRunner()
         with patch("azure_jobs.cli.pull.subprocess.run") as mock_run:
             mock_run.return_value.returncode = 0
@@ -764,10 +977,16 @@ class TestResolveRepoUrl:
         assert resolve_repo_url("user/repo") == "git@github.com:user/repo.git"
 
     def test_shorthand_with_dots(self):
-        assert resolve_repo_url("org.name/my.repo") == "git@github.com:org.name/my.repo.git"
+        assert (
+            resolve_repo_url("org.name/my.repo")
+            == "git@github.com:org.name/my.repo.git"
+        )
 
     def test_full_https_unchanged(self):
-        assert resolve_repo_url("https://github.com/u/r.git") == "https://github.com/u/r.git"
+        assert (
+            resolve_repo_url("https://github.com/u/r.git")
+            == "https://github.com/u/r.git"
+        )
 
     def test_full_ssh_unchanged(self):
         assert resolve_repo_url("git@github.com:u/r.git") == "git@github.com:u/r.git"
@@ -808,50 +1027,6 @@ class TestResolveSku:
             resolve_sku({}, 1, 1)
 
 
-class TestBuildCommandList:
-    def test_basic_command(self):
-        cmds = build_command_list(
-            [],
-            "echo",
-            ("hello",),
-            nodes=1,
-            processes=1,
-            name="test_job",
-            sid="abc123",
-            template="default",
-        )
-        assert cmds[-1] == "echo hello"
-        assert any("AJ_NODES=1" in c for c in cmds)
-        assert any("AJ_PROCESSES=1" in c for c in cmds)
-
-    def test_includes_template_commands(self):
-        cmds = build_command_list(
-            ["pip install -r requirements.txt"],
-            "echo",
-            (),
-            nodes=2,
-            processes=4,
-            name="test",
-            sid="x",
-            template="gpu",
-        )
-        assert "pip install -r requirements.txt" in cmds
-        assert cmds[-1] == "echo"
-
-    def test_processes_multiplied_by_nodes(self):
-        cmds = build_command_list(
-            [],
-            "echo",
-            (),
-            nodes=4,
-            processes=2,
-            name="test",
-            sid="x",
-            template="t",
-        )
-        assert any("AJ_PROCESSES=8" in c for c in cmds)
-
-
 class TestResolveName:
     def test_uses_cwd_name(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
@@ -871,30 +1046,6 @@ class TestResolveName:
         script.write_text("print('hi')")
         name = resolve_name("train.py", "abc123")
         assert name == f"{tmp_path.name}_train_abc123"
-
-
-class TestValidateConfig:
-    def test_missing_jobs_key(self, tmp_path):
-        with pytest.raises(Exception, match="missing required 'jobs' key"):
-            validate_config({"description": "test"}, tmp_path / "t.yaml")
-
-    def test_empty_jobs_list(self, tmp_path):
-        with pytest.raises(Exception, match="'jobs' must be a non-empty list"):
-            validate_config({"jobs": []}, tmp_path / "t.yaml")
-
-    def test_jobs_not_a_list(self, tmp_path):
-        with pytest.raises(Exception, match="'jobs' must be a non-empty list"):
-            validate_config({"jobs": "not a list"}, tmp_path / "t.yaml")
-
-    def test_missing_sku_key(self, tmp_path):
-        with pytest.raises(Exception, match="missing required 'sku' key"):
-            validate_config({"jobs": [{"name": "test"}]}, tmp_path / "t.yaml")
-
-    def test_valid_config_passes(self, tmp_path):
-        validate_config(
-            {"jobs": [{"name": "test", "sku": "small"}]},
-            tmp_path / "t.yaml",
-        )
 
 
 class TestRunErrorPaths:
@@ -918,14 +1069,25 @@ class TestRunErrorPaths:
     def test_submit_failure_surfaces_error(self, aj_env):
         """When submission fails, error should be shown to user."""
         write_template(aj_env["template_home"], "default", MINIMAL_JOB_CONF)
-        aj_env["config_fp"].write_text(json.dumps({
-            "defaults": {"template": "default"},
-            "experiment": "test",
-            "workspace": {"subscription_id": "s", "resource_group": "r", "workspace_name": "w"},
-        }))
+        aj_env["config_fp"].write_text(
+            json.dumps(
+                {
+                    "defaults": {"template": "default"},
+                    "experiment": "test",
+                    "workspace": {
+                        "subscription_id": "s",
+                        "resource_group": "r",
+                        "workspace_name": "w",
+                    },
+                }
+            )
+        )
         runner = CliRunner()
         from azure_jobs.core.submit import SubmitResult
-        mock_result = SubmitResult(job_name="test", status="failed", error="auth failed")
+
+        mock_result = SubmitResult(
+            job_name="test", status="failed", error="auth failed"
+        )
         with patch("azure_jobs.core.submit.submit", return_value=mock_result):
             result = runner.invoke(main, ["run", "echo", "hello"])
         assert result.exit_code != 0
@@ -934,14 +1096,25 @@ class TestRunErrorPaths:
     def test_submit_failure_logs_failed_record(self, aj_env):
         """Failed submissions should still be logged with status='failed' and note."""
         write_template(aj_env["template_home"], "default", MINIMAL_JOB_CONF)
-        aj_env["config_fp"].write_text(json.dumps({
-            "defaults": {"template": "default"},
-            "experiment": "test",
-            "workspace": {"subscription_id": "s", "resource_group": "r", "workspace_name": "w"},
-        }))
+        aj_env["config_fp"].write_text(
+            json.dumps(
+                {
+                    "defaults": {"template": "default"},
+                    "experiment": "test",
+                    "workspace": {
+                        "subscription_id": "s",
+                        "resource_group": "r",
+                        "workspace_name": "w",
+                    },
+                }
+            )
+        )
         runner = CliRunner()
         from azure_jobs.core.submit import SubmitResult
-        mock_result = SubmitResult(job_name="test", status="failed", error="compute not found")
+
+        mock_result = SubmitResult(
+            job_name="test", status="failed", error="compute not found"
+        )
         with patch("azure_jobs.core.submit.submit", return_value=mock_result):
             runner.invoke(main, ["run", "echo", "hello"])
         assert aj_env["record_fp"].exists()
@@ -968,9 +1141,7 @@ class TestPullErrorPaths:
                 128, "git", stderr="fatal: repo not found"
             ),
         ):
-            result = runner.invoke(
-                main, ["pull", "-f", "https://example.com/bad.git"]
-            )
+            result = runner.invoke(main, ["pull", "-f", "https://example.com/bad.git"])
         assert result.exit_code != 0
         assert "Failed to clone" in result.output
 
@@ -978,6 +1149,7 @@ class TestPullErrorPaths:
 class TestPushCommand:
     def test_push_no_home_errors(self, aj_env):
         import shutil
+
         shutil.rmtree(aj_env["aj_home"])
         runner = CliRunner()
         result = runner.invoke(main, ["push"])
@@ -1027,7 +1199,9 @@ class TestPushCommand:
                 args=cmd, returncode=0, stdout="", stderr=""
             )
 
-        with patch("azure_jobs.cli.pull.subprocess.run", side_effect=mock_run_side_effect):
+        with patch(
+            "azure_jobs.cli.pull.subprocess.run", side_effect=mock_run_side_effect
+        ):
             with patch("azure_jobs.cli.pull.shutil.copytree"):
                 with patch("azure_jobs.cli.pull.shutil.copy2"):
                     result = runner.invoke(main, ["push", "-m", "test update"])
@@ -1068,7 +1242,9 @@ class TestPushCommand:
                 args=cmd, returncode=0, stdout="", stderr=""
             )
 
-        with patch("azure_jobs.cli.pull.subprocess.run", side_effect=mock_run_side_effect):
+        with patch(
+            "azure_jobs.cli.pull.subprocess.run", side_effect=mock_run_side_effect
+        ):
             with patch("azure_jobs.cli.pull.shutil.copytree"):
                 with patch("azure_jobs.cli.pull.shutil.copy2"):
                     result = runner.invoke(main, ["push", "-m", "my custom msg"])

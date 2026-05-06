@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import TYPE_CHECKING
 
-from ._models import SubmitRequest
+from .models import SubmitRequest
+
+if TYPE_CHECKING:
+    from azure_jobs.core.rest_client import AzureMLClient
 
 log = logging.getLogger(__name__)
 
@@ -15,7 +18,7 @@ _SING_IMAGE_PREFIX = "amlt-sing/"
 _SING_DUMMY_IMAGE = "mcr.microsoft.com/azureml/openmpi4.1.0-ubuntu20.04:latest"
 
 
-def _build_environment(request: SubmitRequest, client: Any) -> str:
+def _build_environment(request: SubmitRequest, client: AzureMLClient) -> str:
     """Register a Docker image as an environment and return its ARM ID.
 
     For Singularity curated images (``amlt-sing/...``), uses a dummy MCR image
@@ -39,14 +42,16 @@ def _build_environment(request: SubmitRequest, client: Any) -> str:
 
     # Reuse existing environment if available
     try:
-        cached = client.get_environment_version(env_name, version)
+        cached = client.resources.get_environment_version(env_name, version)
         if cached:
             return cached.get("id", "")
     except Exception:
         log.debug("Environment %s:%s not cached, creating new", env_name, version)
 
     try:
-        registered = client.create_or_update_environment(env_name, version, image)
+        registered = client.resources.create_or_update_environment(
+            env_name, version, image
+        )
         return registered.get("id", "")
     except Exception:
         log.debug("Failed to register environment, using inline", exc_info=True)

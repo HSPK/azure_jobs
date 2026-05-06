@@ -25,6 +25,10 @@ def aj_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     submission_home.mkdir()
     monkeypatch.setattr("azure_jobs.core.const.AJ_SUBMISSION_HOME", submission_home)
 
+    dryrun_home = home / "dryrun"
+    dryrun_home.mkdir()
+    monkeypatch.setattr("azure_jobs.core.const.AJ_DRYRUN_HOME", dryrun_home)
+
     return home
 
 

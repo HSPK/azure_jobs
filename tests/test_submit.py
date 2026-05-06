@@ -4,23 +4,57 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-import pytest
-
+from azure_jobs.core.config import AJWorkspace
 from azure_jobs.core.submit import (
+    _INTERNAL_ENV_KEYS,
+    _SING_DUMMY_IMAGE,
+    StorageMount,
     SubmitRequest,
-    SubmitResult,
     _build_environment,
     _build_identity,
+    _build_resources,
     _build_storage_mounts,
     _extract_error_message,
     _resolve_compute,
     _resolve_sing_identity,
-    _build_resources,
-    _INTERNAL_ENV_KEYS,
-    _SING_DUMMY_IMAGE,
-    _SING_IMAGE_PREFIX,
-    build_request_from_config,
+    build_submit_request,
+    render_amlt_config,
 )
+from azure_jobs.core.template import Template
+
+
+def _make_request(
+    conf: dict,
+    *,
+    name: str = "test-job",
+    sku: str | None = None,
+    workspace: AJWorkspace | None = None,
+    **kwargs,
+) -> SubmitRequest:
+    """Helper to build SubmitRequest from dict config for testing.
+
+    Calls build_submit_request and returns the request object.
+    """
+    if workspace is None:
+        workspace = AJWorkspace(
+            subscription_id="s", resource_group="r", workspace_name="w"
+        )
+    if sku is None:
+        sku = conf.get("jobs", [{}])[0].get("sku", "default")
+
+    template_obj = Template.from_dict(conf)
+    return build_submit_request(
+        template_obj,
+        name=name,
+        sid="test123",
+        sku=sku,
+        user_command="echo test",
+        user_args=(),
+        workspace=workspace,
+        nodes=1,
+        processes_per_node=1,
+        **kwargs,
+    )
 
 
 class TestSubmitRequest:
@@ -54,8 +88,10 @@ class TestBuildRequestFromConfig:
             "jobs": [{"sku": "G1", "identity": "managed", "command": ["echo hi"]}],
             "code": {"local_dir": "."},
         }
-        ws = {"subscription_id": "sub1", "resource_group": "rg1", "workspace_name": "ws1"}
-        r = build_request_from_config(conf, name="test-job", workspace=ws)
+        ws = AJWorkspace(
+            subscription_id="sub1", resource_group="rg1", workspace_name="ws1"
+        )
+        r = _make_request(conf, name="test-job", workspace=ws)
         assert r.compute == "gpu01"
         assert r.image == "pytorch:2.0"
         assert r.image_registry == "docker.io"
@@ -69,13 +105,17 @@ class TestBuildRequestFromConfig:
             "environment": {"image": "img"},
             "jobs": [{"sku": "G1"}],
             "storage": {
-                "fast": {"storage_account_name": "acct", "container_name": "c", "mount_dir": "/mnt/fast"},
+                "fast": StorageMount(
+                    storage_account_name="acct",
+                    container_name="c",
+                    mount_dir="/mnt/fast",
+                )
             },
         }
-        ws = {"subscription_id": "s", "resource_group": "r", "workspace_name": "w"}
-        r = build_request_from_config(conf, name="j", workspace=ws)
+        ws = AJWorkspace(subscription_id="s", resource_group="r", workspace_name="w")
+        r = _make_request(conf, name="j", workspace=ws)
         assert "fast" in r.storage
-        assert r.storage["fast"]["storage_account_name"] == "acct"
+        assert r.storage["fast"].storage_account_name == "acct"
 
     def test_workspace_name_from_target(self):
         """target.workspace_name overrides config workspace."""
@@ -84,20 +124,22 @@ class TestBuildRequestFromConfig:
             "environment": {"image": "img"},
             "jobs": [{"sku": "G1"}],
         }
-        ws = {"subscription_id": "s", "resource_group": "r", "workspace_name": "default_ws"}
-        r = build_request_from_config(conf, name="j", workspace=ws)
+        ws = AJWorkspace(
+            subscription_id="s", resource_group="r", workspace_name="default_ws"
+        )
+        r = _make_request(conf, name="j", workspace=ws)
         assert r.workspace_name == "FastAML"
 
-    def test_config_dir_substitution(self):
+    def test_config_dir_preserved(self):
         conf = {
             "target": {"name": "c1", "service": "aml"},
             "environment": {"image": "img"},
             "jobs": [{"sku": "G1"}],
             "code": {"local_dir": "$CONFIG_DIR/../../"},
         }
-        ws = {"subscription_id": "s", "resource_group": "r", "workspace_name": "w"}
-        r = build_request_from_config(conf, name="j", workspace=ws)
-        assert r.code_dir == "."
+        ws = AJWorkspace(subscription_id="s", resource_group="r", workspace_name="w")
+        r = _make_request(conf, name="j", workspace=ws)
+        assert r.code_dir == "$CONFIG_DIR/../../"
 
     def test_env_vars_from_submit_args(self):
         conf = {
@@ -105,9 +147,58 @@ class TestBuildRequestFromConfig:
             "environment": {"image": "img"},
             "jobs": [{"sku": "G1", "submit_args": {"env": {"FOO": "bar"}}}],
         }
-        ws = {"subscription_id": "s", "resource_group": "r", "workspace_name": "w"}
-        r = build_request_from_config(conf, name="j", workspace=ws)
+        ws = AJWorkspace(subscription_id="s", resource_group="r", workspace_name="w")
+        r = _make_request(conf, name="j", workspace=ws)
         assert r.env_vars.get("FOO") == "bar"
+
+    def test_container_args_from_submit_args(self):
+        conf = {
+            "target": {"name": "c1", "service": "aml"},
+            "environment": {"image": "img"},
+            "jobs": [
+                {
+                    "sku": "G1",
+                    "submit_args": {
+                        "container_args": {
+                            "cpus": 104,
+                            "memory": "2808Gi",
+                            "shm_size": "1024g",
+                        }
+                    },
+                }
+            ],
+        }
+        ws = AJWorkspace(subscription_id="s", resource_group="r", workspace_name="w")
+        r = _make_request(conf, name="j", workspace=ws)
+        assert r.container_args.get("cpus") == 104
+        assert r.container_args.get("memory") == "2808Gi"
+        assert r.shm_size == "1024g"
+
+        amlt_conf = r.get_amlt_config()
+        got = amlt_conf["jobs"][0]["submit_args"]["container_args"]
+        assert got["cpus"] == 104
+        assert got["memory"] == "2808Gi"
+        assert got["shm_size"] == "1024g"
+
+
+class TestRenderAmltConfig:
+    def test_escapes_dollar_signs(self):
+        request = SubmitRequest(
+            name="j",
+            description="run $HOME",
+            command=["echo $HOME"],
+            env_vars={"PATH_APPEND": "$HOME/.local/bin"},
+            code_dir="$CONFIG_DIR/project",
+        )
+
+        conf = render_amlt_config(request)
+        assert conf["description"] == "run $$HOME"
+        assert conf["jobs"][0]["command"][0] == "echo $$HOME"
+        assert (
+            conf["jobs"][0]["submit_args"]["env"]["PATH_APPEND"] == "$$HOME/.local/bin"
+        )
+        # Keep AMLT-resolved path token unchanged
+        assert conf["code"]["local_dir"] == "$CONFIG_DIR/project"
 
 
 class TestSubmitMocked:
@@ -129,17 +220,17 @@ class TestSubmitMocked:
         mock_returned = {
             "name": "test-job-abc",
             "properties": {
-                "services": {
-                    "Studio": {"endpoint": "https://portal.azure.com/job/123"}
-                }
+                "services": {"Studio": {"endpoint": "https://portal.azure.com/job/123"}}
             },
         }
 
         with patch("azure_jobs.core.submit._get_rest_client") as mock_factory:
             mock_client = mock_factory.return_value
-            mock_client.get_environment_version.return_value = {"id": "env-id-1"}
-            mock_client.upload_code.return_value = "code-id-1"
-            mock_client.create_or_update_job.return_value = mock_returned
+            mock_client.resources.get_environment_version.return_value = {
+                "id": "env-id-1"
+            }
+            mock_client.blob.upload_code.return_value = "code-id-1"
+            mock_client.jobs.create_or_update.return_value = mock_returned
             result = submit(request)
 
         assert result.status == "submitted"
@@ -187,9 +278,11 @@ class TestSubmitMocked:
 
         with patch("azure_jobs.core.submit._get_rest_client") as mock_factory:
             mock_client = mock_factory.return_value
-            mock_client.get_environment_version.return_value = {"id": "env-id"}
-            mock_client.upload_code.return_value = "code-id"
-            mock_client.create_or_update_job.return_value = mock_returned
+            mock_client.resources.get_environment_version.return_value = {
+                "id": "env-id"
+            }
+            mock_client.blob.upload_code.return_value = "code-id"
+            mock_client.jobs.create_or_update.return_value = mock_returned
             submit(request, on_status=on_status)
 
         assert "auth" in steps
@@ -216,13 +309,28 @@ class TestExtractErrorMessage:
 
 class TestResolveCompute:
     def test_aml_returns_name(self):
-        r = SubmitRequest(name="j", compute="gpu01", service="aml")
-        assert _resolve_compute(r) == "gpu01"
+        r = SubmitRequest(
+            name="j",
+            compute="gpu01",
+            service="aml",
+            subscription_id="sub-123",
+            resource_group="rg-1",
+            workspace_name="ws-1",
+        )
+        arm = _resolve_compute(r)
+        assert arm == (
+            "/subscriptions/sub-123/resourceGroups/rg-1"
+            "/providers/Microsoft.MachineLearningServices"
+            "/workspaces/ws-1/computes/gpu01"
+        )
 
     def test_sing_returns_arm_id(self):
         r = SubmitRequest(
-            name="j", compute="msrresrchvc", service="sing",
-            subscription_id="sub-123", resource_group="rg-1",
+            name="j",
+            compute="msrresrchvc",
+            service="sing",
+            subscription_id="sub-123",
+            resource_group="rg-1",
         )
         arm = _resolve_compute(r)
         assert arm.startswith("/subscriptions/sub-123/")
@@ -230,9 +338,13 @@ class TestResolveCompute:
 
     def test_sing_uses_vc_overrides(self):
         r = SubmitRequest(
-            name="j", compute="vc1", service="sing",
-            subscription_id="ws-sub", resource_group="ws-rg",
-            vc_subscription_id="vc-sub", vc_resource_group="vc-rg",
+            name="j",
+            compute="vc1",
+            service="sing",
+            subscription_id="ws-sub",
+            resource_group="ws-rg",
+            vc_subscription_id="vc-sub",
+            vc_resource_group="vc-rg",
         )
         arm = _resolve_compute(r)
         assert "/subscriptions/vc-sub/" in arm
@@ -244,19 +356,30 @@ class TestBuildResources:
         r = SubmitRequest(name="j", service="aml")
         assert _build_resources(r) is None
 
-    @patch("azure_jobs.core.sku.resolve_instance_type", return_value=["ND40rs_v2", "ND40s_v3"])
+    @patch(
+        "azure_jobs.core.sku.resolve_instance_type",
+        return_value=["ND40rs_v2", "ND40s_v3"],
+    )
     def test_sing_returns_aisupercomputer(self, mock_resolve):
         r = SubmitRequest(
-            name="j", compute="vc1", service="sing",
-            subscription_id="s", resource_group="r",
-            nodes=2, sla_tier="Premium", priority="high",
+            name="j",
+            compute="vc1",
+            service="sing",
+            subscription_id="s",
+            resource_group="r",
+            nodes=2,
+            sla_tier="Premium",
+            priority="high",
             env_vars={"_sku_raw": "2xG1"},
         )
         res = _build_resources(r)
         assert "AISuperComputer" in res["properties"]
         aisc = res["properties"]["AISuperComputer"]
         assert aisc["instanceType"] == "Singularity.ND40rs_v2,Singularity.ND40s_v3"
-        assert aisc["instanceTypes"] == ["Singularity.ND40rs_v2", "Singularity.ND40s_v3"]
+        assert aisc["instanceTypes"] == [
+            "Singularity.ND40rs_v2",
+            "Singularity.ND40s_v3",
+        ]
         assert aisc["instanceCount"] == 2
         assert aisc["slaTier"] == "Premium"
         assert "virtualclusters/vc1" in aisc["VirtualClusterArmId"]
@@ -265,8 +388,11 @@ class TestBuildResources:
     @patch("azure_jobs.core.sku.resolve_instance_type", return_value=["D2_v3"])
     def test_sing_image_version_from_amlt_sing_prefix(self, mock_resolve):
         r = SubmitRequest(
-            name="j", compute="vc1", service="sing",
-            subscription_id="s", resource_group="r",
+            name="j",
+            compute="vc1",
+            service="sing",
+            subscription_id="s",
+            resource_group="r",
             image="amlt-sing/acpt-torch2.7.1-py3.10-cuda12.6-ubuntu22.04",
             env_vars={"_sku_raw": "1xC1"},
         )
@@ -277,8 +403,11 @@ class TestBuildResources:
     @patch("azure_jobs.core.sku.resolve_instance_type", return_value=["D2_v3"])
     def test_sing_image_version_empty_for_non_sing_image(self, mock_resolve):
         r = SubmitRequest(
-            name="j", compute="vc1", service="sing",
-            subscription_id="s", resource_group="r",
+            name="j",
+            compute="vc1",
+            service="sing",
+            subscription_id="s",
+            resource_group="r",
             image="pytorch:2.0",
             env_vars={"_sku_raw": "1xC1"},
         )
@@ -290,8 +419,11 @@ class TestBuildResources:
     def test_sing_fallback_strips_node_prefix(self, mock_resolve):
         """When API resolution fails, strip {nodes}x prefix and use raw SKU."""
         r = SubmitRequest(
-            name="j", compute="vc1", service="sing",
-            subscription_id="s", resource_group="r",
+            name="j",
+            compute="vc1",
+            service="sing",
+            subscription_id="s",
+            resource_group="r",
             env_vars={"_sku_raw": "2xC1"},
         )
         res = _build_resources(r)
@@ -312,8 +444,8 @@ class TestBuildRequestSingularity:
             "environment": {"image": "img"},
             "jobs": [{"sku": "2xC1"}],
         }
-        ws = {"subscription_id": "ws-sub", "resource_group": "ws-rg"}
-        r = build_request_from_config(conf, name="j", workspace=ws)
+        ws = AJWorkspace(subscription_id="ws-sub", resource_group="ws-rg")
+        r = _make_request(conf, name="j", workspace=ws)
         assert r.service == "sing"
         assert r.vc_subscription_id == "vc-sub"
         assert r.vc_resource_group == "vc-rg"
@@ -325,8 +457,8 @@ class TestBuildRequestSingularity:
             "environment": {"image": "img"},
             "jobs": [{"sku": "G1"}],
         }
-        ws = {"subscription_id": "s", "resource_group": "r", "workspace_name": "w"}
-        r = build_request_from_config(conf, name="j", workspace=ws)
+        ws = AJWorkspace(subscription_id="s", resource_group="r", workspace_name="w")
+        r = _make_request(conf, name="j", workspace=ws)
         assert "_sku_raw" not in r.env_vars
 
 
@@ -352,40 +484,45 @@ class TestBuildEnvironment:
     def test_sing_curated_image_uses_dummy(self):
         """amlt-sing/ images should register with dummy MCR image."""
         r = SubmitRequest(
-            name="j", service="sing",
+            name="j",
+            service="sing",
             image="amlt-sing/acpt-torch2.7.1-py3.10-cuda12.6-ubuntu22.04",
         )
         client = MagicMock()
         # Simulate no cached environment
-        client.get_environment_version.return_value = None
-        client.create_or_update_environment.return_value = {"id": "env-arm-id"}
+        client.resources.get_environment_version.return_value = None
+        client.resources.create_or_update_environment.return_value = {
+            "id": "env-arm-id"
+        }
         env_id = _build_environment(r, client)
         assert env_id == "env-arm-id"
         # Check that the dummy image was passed
-        call_args = client.create_or_update_environment.call_args
+        call_args = client.resources.create_or_update_environment.call_args
         assert call_args.args[2] == _SING_DUMMY_IMAGE  # image arg
 
     def test_regular_image_unchanged(self):
         """Non-sing images should be used as-is."""
         r = SubmitRequest(name="j", service="aml", image="pytorch:2.0")
         client = MagicMock()
-        client.get_environment_version.return_value = None
-        client.create_or_update_environment.return_value = {"id": "env-id"}
+        client.resources.get_environment_version.return_value = None
+        client.resources.create_or_update_environment.return_value = {"id": "env-id"}
         env_id = _build_environment(r, client)
         assert env_id == "env-id"
-        call_args = client.create_or_update_environment.call_args
+        call_args = client.resources.create_or_update_environment.call_args
         assert call_args.args[2] == "pytorch:2.0"
 
     def test_registry_prepended(self):
         r = SubmitRequest(
-            name="j", service="aml",
-            image="pytorch:2.0", image_registry="docker.io",
+            name="j",
+            service="aml",
+            image="pytorch:2.0",
+            image_registry="docker.io",
         )
         client = MagicMock()
-        client.get_environment_version.return_value = None
-        client.create_or_update_environment.return_value = {"id": "env-id"}
+        client.resources.get_environment_version.return_value = None
+        client.resources.create_or_update_environment.return_value = {"id": "env-id"}
         _build_environment(r, client)
-        call_args = client.create_or_update_environment.call_args
+        call_args = client.resources.create_or_update_environment.call_args
         assert call_args.args[2] == "docker.io/pytorch:2.0"
 
 
@@ -400,14 +537,20 @@ class TestResolveSingIdentity:
 
     def test_matches_workspace_uai(self):
         r = SubmitRequest(
-            name="j", service="sing", workspace_name="ws",
-            env_vars={"_AZUREML_SINGULARITY_JOB_UAI": "/subs/1/rg/Identity/providers/ManagedIdentity/uai/RL"},
+            name="j",
+            service="sing",
+            workspace_name="ws",
+            env_vars={
+                "_AZUREML_SINGULARITY_JOB_UAI": "/subs/1/rg/Identity/providers/ManagedIdentity/uai/RL"
+            },
         )
         client = MagicMock()
         client.get_workspace.return_value = {
             "identity": {
                 "userAssignedIdentities": {
-                    "/subs/1/rg/Identity/providers/ManagedIdentity/uai/RL": {"clientId": "abc-123"},
+                    "/subs/1/rg/Identity/providers/ManagedIdentity/uai/RL": {
+                        "clientId": "abc-123"
+                    },
                 }
             }
         }
@@ -415,7 +558,9 @@ class TestResolveSingIdentity:
 
     def test_case_insensitive_match(self):
         r = SubmitRequest(
-            name="j", service="sing", workspace_name="ws",
+            name="j",
+            service="sing",
+            workspace_name="ws",
             env_vars={"_AZUREML_SINGULARITY_JOB_UAI": "/SUBS/1/RG/IDENTITY"},
         )
         client = MagicMock()
@@ -430,7 +575,9 @@ class TestResolveSingIdentity:
 
     def test_no_match_returns_none(self):
         r = SubmitRequest(
-            name="j", service="sing", workspace_name="ws",
+            name="j",
+            service="sing",
+            workspace_name="ws",
             env_vars={"_AZUREML_SINGULARITY_JOB_UAI": "/subs/other"},
         )
         ml = MagicMock()
@@ -443,7 +590,9 @@ class TestResolveSingIdentity:
 
     def test_workspace_error_returns_none(self):
         r = SubmitRequest(
-            name="j", service="sing", workspace_name="ws",
+            name="j",
+            service="sing",
+            workspace_name="ws",
             env_vars={"_AZUREML_SINGULARITY_JOB_UAI": "/subs/1"},
         )
         ml = MagicMock()
@@ -466,20 +615,20 @@ class TestBuildStorageMounts:
             resource_group="rg1",
             workspace_name="ws1",
             storage={
-                "fast_shared": {
-                    "storage_account_name": "fastaml123",
-                    "container_name": "shared",
-                    "mount_dir": "/mnt/fast_shared",
-                },
+                "fast_shared": StorageMount(
+                    storage_account_name="fastaml123",
+                    container_name="shared",
+                    mount_dir="/mnt/fast_shared",
+                ),
             },
         )
         client = MagicMock()
-        client.get_datastore.return_value = None  # not found
+        client.resources.get_datastore.return_value = None  # not found
         outputs, poc, env = _build_storage_mounts(r, client)
 
         # Datastore should have been created
-        client.create_or_update_datastore.assert_called_once()
-        call_kwargs = client.create_or_update_datastore.call_args
+        client.resources.get_or_create_datastore.assert_called_once()
+        call_kwargs = client.resources.get_or_create_datastore.call_args
         assert call_kwargs.kwargs["name"] == "aj_fast_shared"
         assert call_kwargs.kwargs["account_name"] == "fastaml123"
 
@@ -496,21 +645,25 @@ class TestBuildStorageMounts:
     def test_reuses_existing_datastore(self):
         r = SubmitRequest(
             name="j",
-            subscription_id="s", resource_group="r", workspace_name="w",
+            subscription_id="s",
+            resource_group="r",
+            workspace_name="w",
             storage={
-                "data": {
-                    "storage_account_name": "acct",
-                    "container_name": "container",
-                    "mount_dir": "/mnt/data",
-                },
+                "data": StorageMount(
+                    storage_account_name="acct",
+                    container_name="container",
+                    mount_dir="/mnt/data",
+                ),
             },
         )
         client = MagicMock()
-        client.get_datastore.return_value = {"name": "aj_data"}  # already exists
+        client.resources.get_datastore.return_value = {
+            "name": "aj_data"
+        }  # already exists
         outputs, poc, env = _build_storage_mounts(r, client)
 
-        # Should NOT call create for datastore
-        client.create_or_update_datastore.assert_not_called()
+        # get_or_create_datastore is called (it handles get/create internally)
+        client.resources.get_or_create_datastore.assert_called_once()
         assert "data" in outputs
 
 

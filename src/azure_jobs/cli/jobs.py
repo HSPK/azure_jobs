@@ -22,11 +22,16 @@ def job_group() -> None:
 
 @job_group.command(name="list")
 @click.option(
-    "-n", "--last", default=30, show_default=True,
+    "-n",
+    "--last",
+    default=30,
+    show_default=True,
     help="Number of jobs to show",
 )
 @click.option(
-    "-s", "--status", default=None,
+    "-s",
+    "--status",
+    default=None,
     type=click.Choice(
         ["Running", "Completed", "Failed", "Canceled", "Queued"],
         case_sensitive=False,
@@ -34,11 +39,16 @@ def job_group() -> None:
     help="Filter by job status (client-side)",
 )
 @click.option(
-    "-e", "--experiment", default=None,
+    "-e",
+    "--experiment",
+    default=None,
     help="Filter by experiment name (client-side)",
 )
 @click.option(
-    "-T", "--type", "job_type", default=None,
+    "-T",
+    "--type",
+    "job_type",
+    default=None,
     type=click.Choice(
         ["Command", "Pipeline", "Sweep", "AutoML"],
         case_sensitive=False,
@@ -47,7 +57,10 @@ def job_group() -> None:
 )
 @click.option("--tag", default=None, help="Filter by tag key (server-side)")
 @click.option(
-    "-a", "--archived", is_flag=True, default=False,
+    "-a",
+    "--archived",
+    is_flag=True,
+    default=False,
     help="Include archived jobs",
 )
 @click.option("--ws", "ws_name", default=None, help="Workspace name override")
@@ -74,7 +87,7 @@ def job_list(
 
     with console.status("[bold cyan]Fetching jobs…[/bold cyan]", spinner="dots") as st:
         while len(all_jobs) < last and scanned < max_scan:
-            jobs, next_link = client.list_jobs_page(
+            jobs, next_link = client.jobs.list_page(
                 next_link=next_link,
                 top=last,
                 list_view_type=view_type,
@@ -115,7 +128,7 @@ def _fetch_and_show_job(job_id: str, ws_name: str | None = None) -> None:
 
     try:
         with console.status("[bold cyan]Fetching job…[/bold cyan]", spinner="dots"):
-            job = client.get_job(name)
+            job = client.jobs.get(name)
     except HTTPError as exc:
         if exc.response is not None and exc.response.status_code == 404:
             error(f"Job not found: [bold]{name}[/bold]")
@@ -167,7 +180,7 @@ def job_cancel(job_id: str) -> None:
 
     # Check current status first
     with console.status("[bold cyan]Checking job…[/bold cyan]", spinner="dots"):
-        job = client.get_job(azure_name)
+        job = client.jobs.get(azure_name)
 
     current = job.get("status", "")
     if current in ("Completed", "Failed", "Canceled"):
@@ -175,9 +188,9 @@ def job_cancel(job_id: str) -> None:
         return
 
     with console.status("[bold cyan]Cancelling job…[/bold cyan]", spinner="dots"):
-        client.cancel_job(azure_name)
+        client.jobs.cancel(azure_name)
         # Fetch updated status
-        job = client.get_job(azure_name)
+        job = client.jobs.get(azure_name)
 
     final = job.get("status", "?")
     if final in ("Canceled", "CancelRequested"):
@@ -204,7 +217,7 @@ def job_logs(job_id: str) -> None:
     # Phase 1: fast REST status check
     with console.status("[bold cyan]Checking job status…[/bold cyan]", spinner="dots"):
         client = create_rest_client()
-        job = client.get_job(azure_name)
+        job = client.jobs.get(azure_name)
 
     status = job.get("status", "")
     display = job.get("display_name") or azure_name
@@ -230,7 +243,9 @@ def job_logs(job_id: str) -> None:
 
     with console.status("[bold cyan]Downloading logs…[/bold cyan]", spinner="dots"):
         content, error_msg = download_job_logs(
-            azure_name, status=status, rest_client=client,
+            azure_name,
+            status=status,
+            rest_client=client,
         )
 
     if content:
@@ -239,11 +254,14 @@ def job_logs(job_id: str) -> None:
 
     if error_msg:
         from rich.panel import Panel
-        console.print(Panel(
-            f"[red]{error_msg}[/red]",
-            title="[bold red]Error[/bold red]",
-            border_style="red",
-        ))
+
+        console.print(
+            Panel(
+                f"[red]{error_msg}[/red]",
+                title="[bold red]Error[/bold red]",
+                border_style="red",
+            )
+        )
 
     if not content and not error_msg:
         console.print("[dim]No logs available for this job.[/dim]")
@@ -267,12 +285,18 @@ def _fetch_jobs_for_stats(
 
     client = create_rest_client(ws_name=ws_name)
     with console.status(
-        "[bold cyan]Fetching jobs…[/bold cyan]", spinner="dots",
+        "[bold cyan]Fetching jobs…[/bold cyan]",
+        spinner="dots",
     ) as status_ctx:
+
         def _on_progress(count: int) -> None:
             status_ctx.update(f"[bold cyan]Fetching jobs… {count} loaded[/bold cyan]")
+
         return _fetch_jobs_from_client(
-            client, n, cutoff_utc=cutoff_utc, console=console,
+            client,
+            n,
+            cutoff_utc=cutoff_utc,
+            console=console,
             on_progress=_on_progress,
         )
 
@@ -283,12 +307,13 @@ def _fetch_jobs_all_ws(
     cutoff_utc: datetime | None = None,
 ) -> list[dict[str, Any]]:
     """Fetch jobs from all discovered workspaces."""
-    from azure_jobs.core.rest_client import AzureARMClient, AzureMLJobsClient
+    from azure_jobs.core.rest_client import AzureARMClient, AzureMLClient
     from azure_jobs.utils.ui import console, warning
 
     arm = AzureARMClient()
     with console.status(
-        "[bold cyan]Discovering workspaces…[/bold cyan]", spinner="dots",
+        "[bold cyan]Discovering workspaces…[/bold cyan]",
+        spinner="dots",
     ):
         workspaces = arm.list_ml_workspaces()
 
@@ -304,13 +329,15 @@ def _fetch_jobs_all_ws(
             spinner="dots",
         ):
             try:
-                client = AzureMLJobsClient(
+                client = AzureMLClient(
                     subscription_id=ws["subscriptionId"],
                     resource_group=ws["resourceGroup"],
                     workspace_name=ws_name,
                 )
                 jobs = _fetch_jobs_from_client(
-                    client, n_per_ws, cutoff_utc=cutoff_utc,
+                    client,
+                    n_per_ws,
+                    cutoff_utc=cutoff_utc,
                     label=ws_name,
                 )
                 # Tag each job with its workspace for display
@@ -338,8 +365,10 @@ def _fetch_jobs_from_client(
     next_link = None
 
     while len(jobs) < n:
-        page, next_link = client.list_jobs_page(
-            next_link=next_link, top=n, list_view_type="ActiveOnly",
+        page, next_link = client.jobs.list_page(
+            next_link=next_link,
+            top=n,
+            list_view_type="ActiveOnly",
         )
         if not page:
             break
@@ -367,28 +396,28 @@ def _fetch_jobs_from_client(
     return jobs[:n]
 
 
-def _median(vals: list[int]) -> int:
-    """Return the median of a sorted list of ints."""
-    if not vals:
-        return 0
-    s = sorted(vals)
-    mid = len(s) // 2
-    if len(s) % 2 == 0:
-        return (s[mid - 1] + s[mid]) // 2
-    return s[mid]
-
-
 @job_group.command(name="stats")
 @click.option(
-    "-n", "--last", default=None, type=int,
+    "-n",
+    "--last",
+    default=None,
+    type=int,
     help="Max jobs to analyse (per workspace with --all)",
 )
 @click.option(
-    "-d", "--days", default=7, show_default=True, type=int,
+    "-d",
+    "--days",
+    default=7,
+    show_default=True,
+    type=int,
     help="Only include jobs from the last N days (0 = no limit)",
 )
 @click.option(
-    "-a", "--all", "all_ws", is_flag=True, default=False,
+    "-a",
+    "--all",
+    "all_ws",
+    is_flag=True,
+    default=False,
     help="Aggregate across all workspaces",
 )
 @click.option("--ws", "ws_name", default=None, help="Workspace name override")
@@ -407,6 +436,25 @@ def job_stats(
     from rich.panel import Panel
     from rich.table import Table
 
+    from azure_jobs.utils.stats import (
+        STATUS_QUEUED as _QUEUED,
+    )
+    from azure_jobs.utils.stats import (
+        STATUS_RUNNING as _RUNNING,
+    )
+    from azure_jobs.utils.stats import (
+        STATUS_TERMINAL as _TERMINAL,
+    )
+    from azure_jobs.utils.stats import (
+        aggregate_by_experiment,
+        render_experiment_table,
+    )
+    from azure_jobs.utils.stats import (
+        fmt_gpu_hours as _fmt_gpu_hours,
+    )
+    from azure_jobs.utils.stats import (
+        median as _median,
+    )
     from azure_jobs.utils.time import format_duration
     from azure_jobs.utils.ui import console, print_table
 
@@ -425,6 +473,7 @@ def job_stats(
     # Apply cutoff filter to collected jobs (in case a partial page slipped)
     if cutoff:
         from azure_jobs.utils.time import _parse_utc
+
         filtered = []
         for j in jobs:
             raw = j.get("created_utc", "")
@@ -442,11 +491,6 @@ def job_stats(
         return
 
     # ── Classify statuses ─────────────────────────────────────────────
-    _TERMINAL = {"Completed", "Failed", "Canceled", "CancelRequested"}
-    _RUNNING = {"Running", "Starting", "Preparing",
-                "Provisioning", "Finalizing", "NotStarted"}
-    _QUEUED = {"Queued"}
-
     total = len(jobs)
     by_status: dict[str, int] = defaultdict(int)
     for j in jobs:
@@ -476,14 +520,10 @@ def job_stats(
         if q is not None and q >= 0:
             all_queue.append(q)
 
-    def _fmt_gpu_hours(secs: int) -> str:
-        h = secs / 3600
-        if h >= 100:
-            return f"{h:,.0f}h"
-        return f"{h:,.1f}h"
-
     total_gpu = _fmt_gpu_hours(sum(all_gpu_secs)) if all_gpu_secs else "—"
-    avg_gpu = _fmt_gpu_hours(sum(all_gpu_secs) // len(all_gpu_secs)) if all_gpu_secs else "—"
+    avg_gpu = (
+        _fmt_gpu_hours(sum(all_gpu_secs) // len(all_gpu_secs)) if all_gpu_secs else "—"
+    )
     avg_queue = format_duration(sum(all_queue) // len(all_queue)) if all_queue else "—"
     med_queue = format_duration(_median(all_queue)) if all_queue else "—"
 
@@ -510,72 +550,30 @@ def job_stats(
     grid.add_row("Avg Queue", f"{avg_queue}  (median {med_queue})")
 
     console.print()
-    console.print(Panel(
-        grid,
-        title=f"[bold]Job Statistics[/bold]  ({scope})",
-        border_style="cyan",
-        expand=False,
-    ))
+    console.print(
+        Panel(
+            grid,
+            title=f"[bold]Job Statistics[/bold]  ({scope})",
+            border_style="cyan",
+            expand=False,
+        )
+    )
 
     # ── By experiment ─────────────────────────────────────────────────
-    exp_stats: dict[str, dict[str, Any]] = defaultdict(
-        lambda: {"total": 0, "completed": 0, "failed": 0, "canceled": 0,
-                 "active": 0, "queued": 0, "gpu_secs": 0, "queue": []}
-    )
-    for j in jobs:
-        exp = j.get("experiment") or "Default"
-        es = exp_stats[exp]
-        es["total"] += 1
-        st = j.get("status", "")
-        if st == "Completed":
-            es["completed"] += 1
-        elif st == "Failed":
-            es["failed"] += 1
-        elif st in ("Canceled", "CancelRequested"):
-            es["canceled"] += 1
-        if st in _RUNNING:
-            es["active"] += 1
-        if st in _QUEUED:
-            es["queued"] += 1
-        d = j.get("duration_secs")
-        if d is not None and d > 0 and st in _TERMINAL:
-            nodes = j.get("nodes") or 1
-            es["gpu_secs"] += d * nodes
-        q = j.get("queue_secs")
-        if q is not None and q >= 0 and st in _TERMINAL:
-            es["queue"].append(q)
-
-    sorted_exps = sorted(exp_stats.items(), key=lambda x: x[1]["gpu_secs"], reverse=True)
-
-    tbl = Table(title="By Experiment", box=ROUNDED, title_style="bold",
-                header_style="bold", pad_edge=True)
-    tbl.add_column("Experiment", style="cyan")
-    tbl.add_column("Jobs", justify="right")
-    tbl.add_column("▶", justify="right", style="cyan")
-    tbl.add_column("⏳", justify="right", style="yellow")
-    tbl.add_column("✓", justify="right", style="green")
-    tbl.add_column("✗", justify="right", style="red")
-    tbl.add_column("Rate", justify="right")
-    tbl.add_column("GPU Hours", justify="right")
-
-    for exp_name, es in sorted_exps:
-        dec = es["completed"] + es["failed"]
-        exp_rate = f"{es['completed'] / dec * 100:.0f}%" if dec else "—"
-        exp_gpu = _fmt_gpu_hours(es["gpu_secs"]) if es["gpu_secs"] else "—"
-
-        tbl.add_row(
-            exp_name, str(es["total"]),
-            str(es["active"]), str(es["queued"]),
-            str(es["completed"]), str(es["failed"]),
-            exp_rate, exp_gpu,
-        )
-
-    print_table(tbl)
+    exp_stats = aggregate_by_experiment(jobs)
+    print_table(render_experiment_table(exp_stats))
 
     # ── By compute ────────────────────────────────────────────────────
     compute_stats: dict[str, dict[str, Any]] = defaultdict(
-        lambda: {"total": 0, "completed": 0, "failed": 0,
-                 "active": 0, "queued": 0, "gpu_secs": 0, "queue": []}
+        lambda: {
+            "total": 0,
+            "completed": 0,
+            "failed": 0,
+            "active": 0,
+            "queued": 0,
+            "gpu_secs": 0,
+            "queue": [],
+        }
     )
     for j in jobs:
         comp = j.get("compute") or "unknown"
@@ -599,11 +597,18 @@ def job_stats(
             cs["queue"].append(q)
 
     sorted_computes = sorted(
-        compute_stats.items(), key=lambda x: x[1]["gpu_secs"], reverse=True,
+        compute_stats.items(),
+        key=lambda x: x[1]["gpu_secs"],
+        reverse=True,
     )
 
-    tbl2 = Table(title="By Compute", box=ROUNDED, title_style="bold",
-                 header_style="bold", pad_edge=True)
+    tbl2 = Table(
+        title="By Compute",
+        box=ROUNDED,
+        title_style="bold",
+        header_style="bold",
+        pad_edge=True,
+    )
     tbl2.add_column("Compute", style="cyan")
     tbl2.add_column("Jobs", justify="right")
     tbl2.add_column("▶", justify="right", style="cyan")
@@ -616,16 +621,26 @@ def job_stats(
     tbl2.add_column("GPU Hours", justify="right")
 
     for comp_name, cs in sorted_computes:
-        q_avg = format_duration(sum(cs["queue"]) // len(cs["queue"])) if cs["queue"] else "—"
+        q_avg = (
+            format_duration(sum(cs["queue"]) // len(cs["queue"]))
+            if cs["queue"]
+            else "—"
+        )
         q_p50 = format_duration(_median(cs["queue"])) if cs["queue"] else "—"
         q_max = format_duration(max(cs["queue"])) if cs["queue"] else "—"
         c_gpu = _fmt_gpu_hours(cs["gpu_secs"]) if cs["gpu_secs"] else "—"
 
         tbl2.add_row(
-            comp_name, str(cs["total"]),
-            str(cs["active"]), str(cs["queued"]),
-            str(cs["completed"]), str(cs["failed"]),
-            q_avg, q_p50, q_max, c_gpu,
+            comp_name,
+            str(cs["total"]),
+            str(cs["active"]),
+            str(cs["queued"]),
+            str(cs["completed"]),
+            str(cs["failed"]),
+            q_avg,
+            q_p50,
+            q_max,
+            c_gpu,
         )
 
     print_table(tbl2)
@@ -633,8 +648,14 @@ def job_stats(
     # ── By workspace (only with --all) ────────────────────────────────
     if all_ws:
         ws_stats: dict[str, dict[str, Any]] = defaultdict(
-            lambda: {"total": 0, "completed": 0, "failed": 0,
-                     "active": 0, "queued": 0, "gpu_secs": 0}
+            lambda: {
+                "total": 0,
+                "completed": 0,
+                "failed": 0,
+                "active": 0,
+                "queued": 0,
+                "gpu_secs": 0,
+            }
         )
         for j in jobs:
             wsn = j.get("_workspace") or "unknown"
@@ -654,9 +675,16 @@ def job_stats(
                 nodes = j.get("nodes") or 1
                 ws["gpu_secs"] += d * nodes
 
-        sorted_ws = sorted(ws_stats.items(), key=lambda x: x[1]["gpu_secs"], reverse=True)
-        tbl_ws = Table(title="By Workspace", box=ROUNDED, title_style="bold",
-                       header_style="bold", pad_edge=True)
+        sorted_ws = sorted(
+            ws_stats.items(), key=lambda x: x[1]["gpu_secs"], reverse=True
+        )
+        tbl_ws = Table(
+            title="By Workspace",
+            box=ROUNDED,
+            title_style="bold",
+            header_style="bold",
+            pad_edge=True,
+        )
         tbl_ws.add_column("Workspace", style="cyan")
         tbl_ws.add_column("Jobs", justify="right")
         tbl_ws.add_column("▶", justify="right", style="cyan")
@@ -670,16 +698,28 @@ def job_stats(
             dec = wst["completed"] + wst["failed"]
             w_rate = f"{wst['completed'] / dec * 100:.0f}%" if dec else "—"
             w_gpu = _fmt_gpu_hours(wst["gpu_secs"]) if wst["gpu_secs"] else "—"
-            tbl_ws.add_row(wsn, str(wst["total"]),
-                           str(wst["active"]), str(wst["queued"]),
-                           str(wst["completed"]),
-                           str(wst["failed"]), w_rate, w_gpu)
+            tbl_ws.add_row(
+                wsn,
+                str(wst["total"]),
+                str(wst["active"]),
+                str(wst["queued"]),
+                str(wst["completed"]),
+                str(wst["failed"]),
+                w_rate,
+                w_gpu,
+            )
         print_table(tbl_ws)
 
     # ── By user ───────────────────────────────────────────────────────
     user_counts: dict[str, dict[str, Any]] = defaultdict(
-        lambda: {"total": 0, "completed": 0, "failed": 0,
-                 "active": 0, "queued": 0, "gpu_secs": 0}
+        lambda: {
+            "total": 0,
+            "completed": 0,
+            "failed": 0,
+            "active": 0,
+            "queued": 0,
+            "gpu_secs": 0,
+        }
     )
     for j in jobs:
         user = j.get("created_by") or "unknown"
@@ -703,10 +743,17 @@ def job_stats(
 
     if len(user_counts) > 1:
         sorted_users = sorted(
-            user_counts.items(), key=lambda x: x[1]["gpu_secs"], reverse=True,
+            user_counts.items(),
+            key=lambda x: x[1]["gpu_secs"],
+            reverse=True,
         )
-        tbl3 = Table(title="By User", box=ROUNDED, title_style="bold",
-                     header_style="bold", pad_edge=True)
+        tbl3 = Table(
+            title="By User",
+            box=ROUNDED,
+            title_style="bold",
+            header_style="bold",
+            pad_edge=True,
+        )
         tbl3.add_column("User", style="cyan")
         tbl3.add_column("Jobs", justify="right")
         tbl3.add_column("▶", justify="right", style="cyan")
@@ -720,10 +767,16 @@ def job_stats(
             dec = uc["completed"] + uc["failed"]
             u_rate = f"{uc['completed'] / dec * 100:.0f}%" if dec else "—"
             u_gpu = _fmt_gpu_hours(uc["gpu_secs"]) if uc["gpu_secs"] else "—"
-            tbl3.add_row(uname, str(uc["total"]),
-                         str(uc["active"]), str(uc["queued"]),
-                         str(uc["completed"]),
-                         str(uc["failed"]), u_rate, u_gpu)
+            tbl3.add_row(
+                uname,
+                str(uc["total"]),
+                str(uc["active"]),
+                str(uc["queued"]),
+                str(uc["completed"]),
+                str(uc["failed"]),
+                u_rate,
+                u_gpu,
+            )
         print_table(tbl3)
 
 
@@ -733,7 +786,9 @@ def job_stats(
 
 
 def _show_local_records(
-    last: int, template: str | None, status: str | None,
+    last: int,
+    template: str | None,
+    status: str | None,
 ) -> None:
     """Display local submission records."""
     records = read_records(last=last * 3 if (template or status) else last)
@@ -746,11 +801,20 @@ def _show_local_records(
 
 
 @main.command(name="list")
-@click.option("-n", "--last", default=20, show_default=True,
-              help="Number of recent records to show")
+@click.option(
+    "-n",
+    "--last",
+    default=20,
+    show_default=True,
+    help="Number of recent records to show",
+)
 @click.option("-t", "--template", default=None, help="Filter by template")
-@click.option("-s", "--status", default=None,
-              type=click.Choice(["success", "failed"], case_sensitive=False))
+@click.option(
+    "-s",
+    "--status",
+    default=None,
+    type=click.Choice(["success", "failed"], case_sensitive=False),
+)
 def list_local(last: int, template: str | None, status: str | None) -> None:
     """Show recent local job submissions."""
     _show_local_records(last, template, status)
@@ -774,6 +838,7 @@ def _resolve_job_id(job_id: str) -> str:
 # Top-level shortcuts
 # ---------------------------------------------------------------------------
 
+
 @main.command(name="js", hidden=True)
 @click.argument("job_id")
 def _alias_js(job_id: str) -> None:
@@ -790,8 +855,12 @@ def _alias_js(job_id: str) -> None:
 @click.option("-a", "--archived", is_flag=True, default=False)
 @click.option("--ws", "ws_name", default=None)
 def _alias_jl(
-    last: int, status: str | None, experiment: str | None,
-    job_type: str | None, tag: str | None, archived: bool,
+    last: int,
+    status: str | None,
+    experiment: str | None,
+    job_type: str | None,
+    tag: str | None,
+    archived: bool,
     ws_name: str | None,
 ) -> None:
     """Shortcut for ``aj job list`` (cloud)."""

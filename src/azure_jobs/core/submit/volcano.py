@@ -11,16 +11,41 @@ import subprocess
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import yaml
+
+
+def submit_via_volcano(
+    conf: dict[str, Any],
+    name: str,
+    nodes: int,
+    processes: int,
+    *,
+    dry_run: bool,
+    on_status: Callable[[str, str], None] | None = None,
+) -> tuple[bool, str]:
+    """Submit job to Kubernetes via Volcano (kubectl apply)."""
+    vcfg = build_volcano_config_from_template(
+        conf,
+        name=name,
+        nodes=nodes,
+        processes_per_node=processes,
+    )
+    return submit_volcano_job(vcfg, dry_run=dry_run, on_status=on_status)
 
 
 def _kubectl_namespace(context: str = "") -> str:
     """Detect namespace from current kubectl context. Falls back to 'default'."""
     try:
-        cmd = ["kubectl", "config", "view", "--minify", "-o",
-               "jsonpath={.contexts[0].context.namespace}"]
+        cmd = [
+            "kubectl",
+            "config",
+            "view",
+            "--minify",
+            "-o",
+            "jsonpath={.contexts[0].context.namespace}",
+        ]
         if context:
             cmd.extend(["--context", context])
         out = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
@@ -75,7 +100,11 @@ def build_volcano_job(cfg: VolcanoConfig) -> dict[str, Any]:
     app_label = job_name
 
     # Code directory on PVC
-    code_path = f"{cfg.pvc_mount_dir}/aj_code/{cfg.name}" if cfg.pvc_name and cfg.pvc_mount_dir else ""
+    code_path = (
+        f"{cfg.pvc_mount_dir}/aj_code/{cfg.name}"
+        if cfg.pvc_name and cfg.pvc_mount_dir
+        else ""
+    )
 
     # Build the shell script that each node runs
     script_lines = []
@@ -110,17 +139,21 @@ def build_volcano_job(cfg: VolcanoConfig) -> dict[str, Any]:
     # Tolerations for GPU/RDMA nodes
     tolerations = []
     if cfg.gpus_per_node > 0:
-        tolerations.append({
-            "key": "nvidia.com/gpu",
-            "operator": "Exists",
-            "effect": "NoSchedule",
-        })
+        tolerations.append(
+            {
+                "key": "nvidia.com/gpu",
+                "operator": "Exists",
+                "effect": "NoSchedule",
+            }
+        )
     if cfg.rdma:
-        tolerations.append({
-            "key": "rdma",
-            "operator": "Exists",
-            "effect": "NoSchedule",
-        })
+        tolerations.append(
+            {
+                "key": "rdma",
+                "operator": "Exists",
+                "effect": "NoSchedule",
+            }
+        )
 
     # Volumes and mounts
     volumes: list[dict[str, Any]] = [
@@ -132,14 +165,18 @@ def build_volcano_job(cfg: VolcanoConfig) -> dict[str, Any]:
 
     # Add PVC mount if configured
     if cfg.pvc_name and cfg.pvc_mount_dir:
-        volumes.append({
-            "name": "pvc-data",
-            "persistentVolumeClaim": {"claimName": cfg.pvc_name},
-        })
-        volume_mounts.append({
-            "name": "pvc-data",
-            "mountPath": cfg.pvc_mount_dir,
-        })
+        volumes.append(
+            {
+                "name": "pvc-data",
+                "persistentVolumeClaim": {"claimName": cfg.pvc_name},
+            }
+        )
+        volume_mounts.append(
+            {
+                "name": "pvc-data",
+                "mountPath": cfg.pvc_mount_dir,
+            }
+        )
 
     # Pod spec (shared between master and workers)
     def _make_pod_spec(role: str) -> dict[str, Any]:
@@ -184,38 +221,44 @@ def build_volcano_job(cfg: VolcanoConfig) -> dict[str, Any]:
     # Build tasks — all nodes run the same command, differentiated by VC_* env vars
     tasks = []
     if cfg.nodes == 1:
-        tasks.append({
-            "name": "master",
-            "replicas": 1,
-            "template": {
-                "metadata": {
-                    "labels": {"app": app_label, "role": "master"},
+        tasks.append(
+            {
+                "name": "master",
+                "replicas": 1,
+                "template": {
+                    "metadata": {
+                        "labels": {"app": app_label, "role": "master"},
+                    },
+                    "spec": _make_pod_spec("master"),
                 },
-                "spec": _make_pod_spec("master"),
-            },
-        })
+            }
+        )
     else:
         # Multi-node: master (1) + workers (N-1)
-        tasks.append({
-            "name": "master",
-            "replicas": 1,
-            "template": {
-                "metadata": {
-                    "labels": {"app": app_label, "role": "master"},
+        tasks.append(
+            {
+                "name": "master",
+                "replicas": 1,
+                "template": {
+                    "metadata": {
+                        "labels": {"app": app_label, "role": "master"},
+                    },
+                    "spec": _make_pod_spec("master"),
                 },
-                "spec": _make_pod_spec("master"),
-            },
-        })
-        tasks.append({
-            "name": "worker",
-            "replicas": cfg.nodes - 1,
-            "template": {
-                "metadata": {
-                    "labels": {"app": app_label, "role": "worker"},
+            }
+        )
+        tasks.append(
+            {
+                "name": "worker",
+                "replicas": cfg.nodes - 1,
+                "template": {
+                    "metadata": {
+                        "labels": {"app": app_label, "role": "worker"},
+                    },
+                    "spec": _make_pod_spec("worker"),
                 },
-                "spec": _make_pod_spec("worker"),
-            },
-        })
+            }
+        )
 
     # Resolve namespace: explicit > kubectl context > "default"
     namespace = cfg.namespace or _kubectl_namespace(cfg.context)
@@ -286,28 +329,37 @@ def _upload_code_to_pvc(
         "metadata": {"name": pod_name, "namespace": namespace},
         "spec": {
             "restartPolicy": "Never",
-            "volumes": [{
-                "name": "pvc-data",
-                "persistentVolumeClaim": {"claimName": cfg.pvc_name},
-            }],
-            "containers": [{
-                "name": "upload",
-                "image": "busybox:latest",
-                "resources": {
-                    "requests": {"cpu": "100m", "memory": "256Mi"},
-                    "limits": {"cpu": "500m", "memory": "512Mi"},
-                },
-                "volumeMounts": [{
+            "volumes": [
+                {
                     "name": "pvc-data",
-                    "mountPath": cfg.pvc_mount_dir,
-                }],
-                "command": ["sh", "-c", f"mkdir -p {dest_dir} && sleep 300"],
-            }],
+                    "persistentVolumeClaim": {"claimName": cfg.pvc_name},
+                }
+            ],
+            "containers": [
+                {
+                    "name": "upload",
+                    "image": "busybox:latest",
+                    "resources": {
+                        "requests": {"cpu": "100m", "memory": "256Mi"},
+                        "limits": {"cpu": "500m", "memory": "512Mi"},
+                    },
+                    "volumeMounts": [
+                        {
+                            "name": "pvc-data",
+                            "mountPath": cfg.pvc_mount_dir,
+                        }
+                    ],
+                    "command": ["sh", "-c", f"mkdir -p {dest_dir} && sleep 300"],
+                }
+            ],
         },
     }
 
     with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".yaml", prefix="aj-upload-pod-", delete=False,
+        mode="w",
+        suffix=".yaml",
+        prefix="aj-upload-pod-",
+        delete=False,
     ) as f:
         f.write(yaml.dump(pod_spec, default_flow_style=False))
         pod_yaml_path = f.name
@@ -316,7 +368,9 @@ def _upload_code_to_pvc(
         # Create the pod
         result = subprocess.run(
             ["kubectl", "apply", "-f", pod_yaml_path, *ctx_args],
-            capture_output=True, text=True, timeout=30,
+            capture_output=True,
+            text=True,
+            timeout=30,
         )
         if result.returncode != 0:
             err = result.stderr.strip() or result.stdout.strip()
@@ -325,9 +379,18 @@ def _upload_code_to_pvc(
 
         # Wait for pod to be running
         result = subprocess.run(
-            ["kubectl", "wait", "--for=condition=Ready", f"pod/{pod_name}",
-             f"--namespace={namespace}", "--timeout=120s", *ctx_args],
-            capture_output=True, text=True, timeout=130,
+            [
+                "kubectl",
+                "wait",
+                "--for=condition=Ready",
+                f"pod/{pod_name}",
+                f"--namespace={namespace}",
+                "--timeout=120s",
+                *ctx_args,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=130,
         )
         if result.returncode != 0:
             _status("upload_error", "Upload pod failed to become ready")
@@ -335,12 +398,28 @@ def _upload_code_to_pvc(
 
         # Pipe tar into kubectl exec
         tar_cmd = ["tar", "cf", "-", "-C", str(code_path), "."] + exclude_args
-        tar_proc = subprocess.Popen(tar_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        tar_proc = subprocess.Popen(
+            tar_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+        )
         exec_result = subprocess.run(
-            ["kubectl", "exec", "-i", pod_name, f"--namespace={namespace}",
-             *ctx_args, "--", "tar", "xf", "-", "-C", dest_dir],
+            [
+                "kubectl",
+                "exec",
+                "-i",
+                pod_name,
+                f"--namespace={namespace}",
+                *ctx_args,
+                "--",
+                "tar",
+                "xf",
+                "-",
+                "-C",
+                dest_dir,
+            ],
             stdin=tar_proc.stdout,
-            capture_output=True, text=True, timeout=120,
+            capture_output=True,
+            text=True,
+            timeout=120,
         )
         tar_proc.stdout.close()
         tar_proc.wait()
@@ -363,9 +442,18 @@ def _upload_code_to_pvc(
         Path(pod_yaml_path).unlink(missing_ok=True)
         # Always clean up the upload pod
         subprocess.run(
-            ["kubectl", "delete", "pod", pod_name, f"--namespace={namespace}",
-             "--ignore-not-found", *ctx_args],
-            capture_output=True, text=True, timeout=30,
+            [
+                "kubectl",
+                "delete",
+                "pod",
+                pod_name,
+                f"--namespace={namespace}",
+                "--ignore-not-found",
+                *ctx_args,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
         )
 
 
@@ -409,7 +497,10 @@ def submit_volcano_job(
             cmd.extend(["--context", cfg.context])
 
         result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=30,
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=30,
         )
         if result.returncode == 0:
             output = result.stdout.strip()
@@ -454,7 +545,11 @@ def build_volcano_config_from_template(
     # Code directory
     code_dir = code.get("local_dir", ".")
     if code_dir.startswith("$CONFIG_DIR"):
-        code_dir = code_dir.replace("$CONFIG_DIR/../../", "").replace("$CONFIG_DIR/../", "").replace("$CONFIG_DIR", ".")
+        code_dir = (
+            code_dir.replace("$CONFIG_DIR/../../", "")
+            .replace("$CONFIG_DIR/../", "")
+            .replace("$CONFIG_DIR", ".")
+        )
         if not code_dir or code_dir == "/":
             code_dir = "."
     code_ignore = code.get("ignore", [])
@@ -470,10 +565,8 @@ def build_volcano_config_from_template(
         context=target.get("context", ""),
         nodes=nodes,
         gpus_per_node=target.get("gpus_per_node", 8),
-        cpus_per_node=target.get("cpus_per_node", 0)
-        or container_args.get("cpus", 104),
-        memory=target.get("memory", "")
-        or container_args.get("memory", "2808Gi"),
+        cpus_per_node=target.get("cpus_per_node", 0) or container_args.get("cpus", 104),
+        memory=target.get("memory", "") or container_args.get("memory", "2808Gi"),
         processes_per_node=processes_per_node,
         image=env.get("image", ""),
         command=command,

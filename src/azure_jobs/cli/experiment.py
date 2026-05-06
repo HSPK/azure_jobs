@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import click
@@ -16,87 +17,84 @@ def exp_group() -> None:
 
 @exp_group.command(name="list")
 @click.option(
-    "-n", "--last", default=200, show_default=True,
-    help="Number of recent jobs to scan for experiments",
+    "-n",
+    "--last",
+    default=None,
+    type=int,
+    help="Max jobs to scan (default: 10000 when --days is set)",
+)
+@click.option(
+    "-d",
+    "--days",
+    default=7,
+    show_default=True,
+    type=int,
+    help="Only include jobs from the last N days (0 = no limit)",
+)
+@click.option(
+    "-a",
+    "--all",
+    "all_ws",
+    is_flag=True,
+    default=False,
+    help="Aggregate across all workspaces",
 )
 @click.option("--ws", "ws_name", default=None, help="Workspace name override")
-def exp_list(last: int, ws_name: str | None) -> None:
+def exp_list(
+    last: int | None,
+    days: int,
+    all_ws: bool,
+    ws_name: str | None,
+) -> None:
     """List experiments in the current workspace.
 
-    Scans recent jobs and groups them by experiment name.
+    Scans recent jobs and groups them by experiment, showing job counts,
+    success rate, and GPU hours per experiment. Uses the same aggregation
+    as ``aj job stats``.
     """
-    from rich.table import Table
+    from azure_jobs.cli.jobs import _fetch_jobs_all_ws, _fetch_jobs_for_stats
+    from azure_jobs.utils.stats import (
+        aggregate_by_experiment,
+        render_experiment_table,
+    )
+    from azure_jobs.utils.ui import print_table, warning
 
-    from azure_jobs.core.rest_client import create_rest_client
-    from azure_jobs.utils.ui import AZ_STYLE, console, warning
+    cutoff: datetime | None = None
+    if days:
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
 
-    client = create_rest_client(ws_name=ws_name)
-    experiments: dict[str, dict[str, Any]] = {}
-    next_link = None
-    fetched = 0
-    max_pages = max(1, last // 100 + 1)
+    max_jobs = last if last is not None else 10000
 
-    with console.status("[bold cyan]Fetching experiments…[/bold cyan]", spinner="dots") as st:
-        for _ in range(max_pages):
-            page_size = min(100, last - fetched)
-            if page_size <= 0:
-                break
-            jobs, next_link = client.list_jobs_page(
-                next_link=next_link, top=page_size,
-            )
-            if not jobs:
-                break
-            for j in jobs:
-                exp = j.get("experiment", "") or "Default"
-                if exp not in experiments:
-                    experiments[exp] = {
-                        "count": 0,
-                        "latest_status": j.get("status", ""),
-                        "latest_created": j.get("created", ""),
-                    }
-                experiments[exp]["count"] += 1
-            fetched += len(jobs)
-            st.update(
-                f"[bold cyan]Scanning… {fetched} jobs, "
-                f"{len(experiments)} experiments[/bold cyan]"
-            )
-            if not next_link:
-                break
+    if all_ws:
+        jobs = _fetch_jobs_all_ws(max_jobs, cutoff_utc=cutoff)
+    else:
+        jobs = _fetch_jobs_for_stats(max_jobs, ws_name, cutoff_utc=cutoff)
 
-    if not experiments:
+    if not jobs:
         warning("No experiments found")
         return
 
-    sorted_exps = sorted(
-        experiments.items(), key=lambda x: x[1]["count"], reverse=True,
-    )
+    exp_stats = aggregate_by_experiment(jobs)
 
-    table = Table(
-        show_header=True, header_style="bold", pad_edge=True,
-        title="[bold]Experiments[/bold]", title_style="",
-    )
-    table.add_column("Experiment", style="cyan bold")
-    table.add_column("Jobs", justify="right")
-    table.add_column("Latest Status")
-    table.add_column("Latest Created", style="dim")
-
-    for name, info in sorted_exps:
-        status = info["latest_status"]
-        style = AZ_STYLE.get(status, "white")
-        table.add_row(
-            name, str(info["count"]),
-            f"[{style}]{status}[/{style}]",
-            info["latest_created"],
+    scope = f"last {days}d" if days else f"last {len(jobs)}"
+    if all_ws:
+        ws_count = len({j.get("_workspace", "") for j in jobs})
+        scope += f", {ws_count} workspace{'s' if ws_count != 1 else ''}"
+    print_table(
+        render_experiment_table(
+            exp_stats,
+            title=f"Experiments  ({scope})",
         )
-
-    from azure_jobs.utils.ui import print_table
-    print_table(table)
+    )
 
 
 @exp_group.command(name="show")
 @click.argument("name")
 @click.option(
-    "-n", "--last", default=30, show_default=True,
+    "-n",
+    "--last",
+    default=30,
+    show_default=True,
     help="Number of jobs to show for the experiment",
 )
 @click.option("--ws", "ws_name", default=None, help="Workspace name override")
@@ -115,11 +113,13 @@ def exp_show(name: str, last: int, ws_name: str | None) -> None:
     max_pages = 5
 
     with console.status(
-        f"[bold cyan]Fetching jobs for '{name}'…[/bold cyan]", spinner="dots",
+        f"[bold cyan]Fetching jobs for '{name}'…[/bold cyan]",
+        spinner="dots",
     ) as st:
         for _ in range(max_pages):
-            jobs, next_link = client.list_jobs_page(
-                next_link=next_link, top=100,
+            jobs, next_link = client.jobs.list_page(
+                next_link=next_link,
+                top=100,
             )
             if not jobs:
                 break

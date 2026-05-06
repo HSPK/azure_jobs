@@ -36,12 +36,12 @@ def _rm_readonly(func, path, _exc_info):  # noqa: ANN001
 def _do_pull(repo_id: str | None, force: bool) -> None:
     """Core pull logic shared by template pull and top-level alias."""
     config = read_config()
-    if repo_id is None:
-        repo_id = config.get("repo_id")
-    if repo_id is None:
+    if repo_id is None or not repo_id:
+        repo_id = config.repo_id
+    if not repo_id:
         raise click.ClickException("Repository ID must be provided")
     repo_id = resolve_repo_url(repo_id)
-    config["repo_id"] = repo_id
+    config.repo_id = repo_id
 
     if const.AJ_HOME.exists() and not force:
         warning(f"AJ home {const.AJ_HOME} already exists. Use -f to force.")
@@ -52,15 +52,17 @@ def _do_pull(repo_id: str | None, force: bool) -> None:
 
     const.AJ_HOME.mkdir(parents=True, exist_ok=True)
     try:
-        with console.status(f"[bold cyan]Cloning {repo_id}…[/bold cyan]", spinner="dots"):
+        with console.status(
+            f"[bold cyan]Cloning {repo_id}…[/bold cyan]", spinner="dots"
+        ):
             subprocess.run(
                 ["git", "clone", repo_id, str(const.AJ_HOME)],
-                check=True, capture_output=True, text=True,
+                check=True,
+                capture_output=True,
+                text=True,
             )
     except subprocess.CalledProcessError as exc:
-        raise click.ClickException(
-            f"Failed to clone {repo_id}: {exc.stderr.strip()}"
-        )
+        raise click.ClickException(f"Failed to clone {repo_id}: {exc.stderr.strip()}")
 
     # Remove .git — keep .azure_jobs as a plain directory
     git_fp = const.AJ_HOME / ".git"
@@ -80,7 +82,7 @@ def _do_push(message: str | None) -> None:
         raise click.ClickException("No AJ home found. Run `aj pull` first.")
 
     config = read_config()
-    repo_id = config.get("repo_id")
+    repo_id = config.repo_id
     if not repo_id:
         raise click.ClickException(
             "No remote repo configured. Run `aj pull <repo>` first."
@@ -88,17 +90,20 @@ def _do_push(message: str | None) -> None:
 
     with tempfile.TemporaryDirectory() as tmp:
         try:
-            with console.status("[bold cyan]Syncing with remote…[/bold cyan]", spinner="dots"):
+            with console.status(
+                "[bold cyan]Syncing with remote…[/bold cyan]", spinner="dots"
+            ):
                 subprocess.run(
                     ["git", "clone", repo_id, tmp],
-                    check=True, capture_output=True, text=True,
+                    check=True,
+                    capture_output=True,
+                    text=True,
                 )
         except subprocess.CalledProcessError as exc:
-            raise click.ClickException(
-                f"Failed to clone remote: {exc.stderr.strip()}"
-            )
+            raise click.ClickException(f"Failed to clone remote: {exc.stderr.strip()}")
 
         from pathlib import Path
+
         for item in Path(tmp).iterdir():
             if item.name == ".git":
                 continue
@@ -118,7 +123,8 @@ def _do_push(message: str | None) -> None:
 
         status = subprocess.run(
             ["git", "-C", tmp, "status", "--porcelain"],
-            capture_output=True, text=True,
+            capture_output=True,
+            text=True,
         )
         if not status.stdout.strip():
             info("No changes to push")
@@ -126,28 +132,30 @@ def _do_push(message: str | None) -> None:
 
         subprocess.run(
             ["git", "-C", tmp, "add", "-A"],
-            check=True, capture_output=True, text=True,
+            check=True,
+            capture_output=True,
+            text=True,
         )
         if message is None:
             message = "update templates"
         try:
             subprocess.run(
                 ["git", "-C", tmp, "commit", "-m", message],
-                check=True, capture_output=True, text=True,
+                check=True,
+                capture_output=True,
+                text=True,
             )
         except subprocess.CalledProcessError as exc:
-            raise click.ClickException(
-                f"Failed to commit: {exc.stderr.strip()}"
-            )
+            raise click.ClickException(f"Failed to commit: {exc.stderr.strip()}")
         try:
             with console.status("[bold cyan]Pushing…[/bold cyan]", spinner="dots"):
                 subprocess.run(
                     ["git", "-C", tmp, "push"],
-                    check=True, capture_output=True, text=True,
+                    check=True,
+                    capture_output=True,
+                    text=True,
                 )
         except subprocess.CalledProcessError as exc:
-            raise click.ClickException(
-                f"Failed to push: {exc.stderr.strip()}"
-            )
+            raise click.ClickException(f"Failed to push: {exc.stderr.strip()}")
 
     success("Templates pushed to remote")

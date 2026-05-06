@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from ._models import SubmitRequest
+from .models import SubmitRequest
 
 _RUNNER_FILENAME = "aj_runner.sh"
 

@@ -31,6 +31,7 @@ from textual.widgets import (
 )
 from textual.worker import get_current_worker
 
+from azure_jobs.core.config import AJWorkspace
 from azure_jobs.tui.helpers import (
     STATUS_CYCLE,
     get_page_size,
@@ -78,14 +79,16 @@ class AjDashboard(WorkspaceMixin, App):
         self.workers.cancel_all()
         self.exit()
 
-    def __init__(self, last: int = 100, page_size: int | None = None, **kwargs: Any) -> None:
+    def __init__(
+        self, last: int = 100, page_size: int | None = None, **kwargs: Any
+    ) -> None:
         super().__init__(**kwargs)
         self._page_size: int = page_size if page_size is not None else get_page_size()
         # Job data
         self._all_jobs: list[dict[str, Any]] = []
         self._job_idx: dict[str, int] = {}
         self._filtered: list[dict[str, Any]] = []
-        self._workspace: dict[str, str] | None = None
+        self._workspace: AJWorkspace | None = None
         self._workspaces: list[dict[str, str]] = []
         self._subscription_id: str = ""
         self._selected_idx: int = -1
@@ -130,8 +133,12 @@ class AjDashboard(WorkspaceMixin, App):
                 with VerticalScroll(id="info-scroll"):
                     yield Static(id="info-content")
                 yield LogViewer(
-                    id="log-content", highlight=True, markup=True,
-                    wrap=True, auto_scroll=True, classes="hidden",
+                    id="log-content",
+                    highlight=True,
+                    markup=True,
+                    wrap=True,
+                    auto_scroll=True,
+                    classes="hidden",
                 )
         yield Footer()
 
@@ -161,7 +168,9 @@ class AjDashboard(WorkspaceMixin, App):
         ws = self._ensure_workspace()
         if ws is None:
             self.call_from_thread(
-                self.notify, "No workspace configured – press w", severity="warning",
+                self.notify,
+                "No workspace configured – press w",
+                severity="warning",
             )
             self.call_from_thread(
                 self._update_loading,
@@ -174,18 +183,19 @@ class AjDashboard(WorkspaceMixin, App):
         self.call_from_thread(self._update_ws_label)
         self.call_from_thread(self._update_loading, "Authenticating…")
 
-        from azure_jobs.core.rest_client import AzureMLJobsClient
+        from azure_jobs.core.rest_client import AzureMLClient
 
         try:
-            self._rest_client = AzureMLJobsClient(
-                subscription_id=ws.get("subscription_id", self._subscription_id),
-                resource_group=ws.get("resource_group", ""),
-                workspace_name=ws.get("workspace_name", ws.get("name", "")),
+            self._rest_client = AzureMLClient(
+                subscription_id=ws.subscription_id or self._subscription_id,
+                resource_group=ws.resource_group,
+                workspace_name=ws.workspace_name,
             )
         except Exception as exc:
             if not worker.is_cancelled:
                 self.call_from_thread(
-                    self._update_loading, f"[red]Error:[/red] {str(exc)[:100]}",
+                    self._update_loading,
+                    f"[red]Error:[/red] {str(exc)[:100]}",
                 )
             return
         if worker.is_cancelled:
@@ -193,7 +203,7 @@ class AjDashboard(WorkspaceMixin, App):
 
         self.call_from_thread(
             self._update_loading,
-            f"Fetching jobs from [bold]{ws.get('workspace_name', '')}[/bold]…",
+            f"Fetching jobs from [bold]{ws.workspace_name}[/bold]…",
         )
         self._pages.clear()
         self._current_page = 0
@@ -210,14 +220,16 @@ class AjDashboard(WorkspaceMixin, App):
 
         while needed > 0:
             try:
-                jobs, nxt = self._rest_client.list_jobs_page(
-                    next_link=self._next_link, top=self._page_size,
+                jobs, nxt = self._rest_client.jobs.list_page(
+                    next_link=self._next_link,
+                    top=self._page_size,
                 )
             except Exception as exc:
                 self._has_more = False
                 if not worker.is_cancelled:
                     self.call_from_thread(
-                        self._update_loading, f"[red]Error:[/red] {str(exc)[:100]}",
+                        self._update_loading,
+                        f"[red]Error:[/red] {str(exc)[:100]}",
                     )
                 return
 
@@ -229,7 +241,8 @@ class AjDashboard(WorkspaceMixin, App):
             if not jobs:
                 if is_first and not self._pages:
                     self.call_from_thread(
-                        self._update_loading, "No jobs found in this workspace.",
+                        self._update_loading,
+                        "No jobs found in this workspace.",
                     )
                 return
 
@@ -279,7 +292,9 @@ class AjDashboard(WorkspaceMixin, App):
     def _on_jobs_loaded(self, jobs: list[dict[str, Any]]) -> None:
         """Full replace (used by tests and refresh)."""
         ps = self._page_size
-        self._pages = [jobs[i:i + ps] for i in range(0, len(jobs), ps)] if jobs else [[]]
+        self._pages = (
+            [jobs[i : i + ps] for i in range(0, len(jobs), ps)] if jobs else [[]]
+        )
         self._all_jobs = list(jobs)
         self._job_idx = {j.get("name", ""): i for i, j in enumerate(self._all_jobs)}
         self._current_page = 0
@@ -383,7 +398,7 @@ class AjDashboard(WorkspaceMixin, App):
         display = job.get("display_name") or job.get("name", "")
         max_name = max(20, (rp.size.width or 60) - 20)
         if len(display) > max_name:
-            display = display[:max_name - 1] + "…"
+            display = display[: max_name - 1] + "…"
         rp.border_subtitle = f"{display}  [{sty}]{icon} {status}[/{sty}]"
 
     # ---- job list events ----------------------------------------------------
@@ -396,7 +411,9 @@ class AjDashboard(WorkspaceMixin, App):
                 self._w_info.update(kv([("", "")], hint="Refreshing..."))
             self._fetch_single(self._filtered[idx])
 
-    def on_option_list_option_highlighted(self, event: OptionList.OptionHighlighted) -> None:
+    def on_option_list_option_highlighted(
+        self, event: OptionList.OptionHighlighted
+    ) -> None:
         if event.option_list.id != "job-list":
             return
         idx = event.option_index
@@ -442,12 +459,14 @@ class AjDashboard(WorkspaceMixin, App):
     def _fetch_single(self, job: dict[str, Any]) -> None:
         if self._rest_client is None:
             self.call_from_thread(
-                self.notify, "Workspace not configured", severity="warning",
+                self.notify,
+                "Workspace not configured",
+                severity="warning",
             )
             return
         name = job.get("name", "")
         try:
-            updated = self._rest_client.get_job(name)
+            updated = self._rest_client.jobs.get(name)
         except Exception as exc:
             self.call_from_thread(self.notify, str(exc)[:80], severity="error")
             return
@@ -596,7 +615,11 @@ class AjDashboard(WorkspaceMixin, App):
         self._log_line_count = 0
         if content:
             self._append_log_lines(content)
-            file_hint = f"  [dim italic]{self._logs_current_file}[/dim italic]" if self._logs_current_file else ""
+            file_hint = (
+                f"  [dim italic]{self._logs_current_file}[/dim italic]"
+                if self._logs_current_file
+                else ""
+            )
             lw.write(
                 f"\n[dim]── End ({self._log_line_count} lines) ──[/dim]{file_hint}"
                 f"\n[dim]Press [bold]o[/bold] to switch files, [bold]L[/bold] to stream[/dim]",
@@ -619,7 +642,8 @@ class AjDashboard(WorkspaceMixin, App):
         except Exception as exc:
             if not worker.is_cancelled:
                 self.call_from_thread(
-                    self._log_status, f"[bold red]Error:[/bold red] {exc!s:.200}",
+                    self._log_status,
+                    f"[bold red]Error:[/bold red] {exc!s:.200}",
                 )
             return
 
@@ -630,14 +654,16 @@ class AjDashboard(WorkspaceMixin, App):
 
         if not files:
             self.call_from_thread(
-                self._log_status, "[dim]No log files found for this job.[/dim]",
+                self._log_status,
+                "[dim]No log files found for this job.[/dim]",
             )
             return
 
         if len(files) == 1:
             self._logs_current_file = files[0]
             self.call_from_thread(
-                self._log_status, f"[dim]Downloading {files[0]}…[/dim]",
+                self._log_status,
+                f"[dim]Downloading {files[0]}…[/dim]",
             )
             self._do_download_log(azure_name, files[0], worker)
         else:
@@ -648,6 +674,7 @@ class AjDashboard(WorkspaceMixin, App):
                 items = [(p, p) for p in files]
                 picker = PickerModal("Log Files", items)
                 self.push_screen(picker, self._on_log_file_picked)
+
             self.call_from_thread(_show_picker)
 
     @work(thread=True, exclusive=True, group="logs")
@@ -659,7 +686,9 @@ class AjDashboard(WorkspaceMixin, App):
         from azure_jobs.core.log_download import download_single_log
 
         content, error_msg = download_single_log(
-            azure_name, log_path, rest_client=self._rest_client,
+            azure_name,
+            log_path,
+            rest_client=self._rest_client,
         )
         if worker.is_cancelled or self._logs_job != azure_name:
             return
@@ -728,12 +757,15 @@ class AjDashboard(WorkspaceMixin, App):
                 files = list_log_files(azure_name, rest_client=self._rest_client)
                 self._logs_files = files
                 if not files:
-                    self.call_from_thread(self._log_status, "[dim]No log files found.[/dim]")
+                    self.call_from_thread(
+                        self._log_status, "[dim]No log files found.[/dim]"
+                    )
                     return
                 log_path = files[0]
             except Exception as exc:
                 self.call_from_thread(
-                    self._log_status, f"[bold red]Error:[/bold red] {exc!s:.200}",
+                    self._log_status,
+                    f"[bold red]Error:[/bold red] {exc!s:.200}",
                 )
                 return
 
@@ -744,16 +776,21 @@ class AjDashboard(WorkspaceMixin, App):
         # Get signed URL
         try:
             content_uri = get_log_content_uri(
-                azure_name, log_path, rest_client=self._rest_client,
+                azure_name,
+                log_path,
+                rest_client=self._rest_client,
             )
         except Exception as exc:
             self.call_from_thread(
-                self._log_status, f"[bold red]Error:[/bold red] {exc!s:.200}",
+                self._log_status,
+                f"[bold red]Error:[/bold red] {exc!s:.200}",
             )
             return
 
         if not content_uri:
-            self.call_from_thread(self._log_status, f"[dim]No content URI for {log_path}[/dim]")
+            self.call_from_thread(
+                self._log_status, f"[dim]No content URI for {log_path}[/dim]"
+            )
             return
         if worker.is_cancelled or self._logs_job != azure_name:
             return
@@ -793,8 +830,10 @@ class AjDashboard(WorkspaceMixin, App):
                 break
             new_text = streamer.poll()
             if new_text and self._logs_job == azure_name:
+
                 def _append(t: str = new_text) -> None:
                     self._append_log_lines(t)
+
                 self.call_from_thread(_append)
 
         # Cleanup
@@ -842,7 +881,9 @@ class AjDashboard(WorkspaceMixin, App):
         worker = get_current_worker()
         if self._rest_client is None:
             self.call_from_thread(
-                self.notify, "No workspace configured", severity="warning",
+                self.notify,
+                "No workspace configured",
+                severity="warning",
             )
             return
         if worker.is_cancelled:
@@ -852,7 +893,7 @@ class AjDashboard(WorkspaceMixin, App):
         new_jobs: list[dict[str, Any]] = []
         updated = 0
         try:
-            jobs, _ = self._rest_client.list_jobs_page()
+            jobs, _ = self._rest_client.jobs.list_page()
             for d in jobs:
                 if worker.is_cancelled:
                     return
@@ -881,7 +922,9 @@ class AjDashboard(WorkspaceMixin, App):
         self._job_idx = {j.get("name", ""): i for i, j in enumerate(self._all_jobs)}
         ps = self._page_size
         all_j = self._all_jobs
-        self._pages = [all_j[i:i + ps] for i in range(0, len(all_j), ps)] if all_j else [[]]
+        self._pages = (
+            [all_j[i : i + ps] for i in range(0, len(all_j), ps)] if all_j else [[]]
+        )
         prev_name = ""
         if 0 <= self._selected_idx < len(self._filtered):
             prev_name = self._filtered[self._selected_idx].get("name", "")
@@ -939,9 +982,9 @@ class AjDashboard(WorkspaceMixin, App):
             self.notify(f"Status: {value or 'All'}")
 
     def action_pick_experiment(self) -> None:
-        experiments = sorted({
-            j.get("experiment", "") for j in self._all_jobs if j.get("experiment")
-        })
+        experiments = sorted(
+            {j.get("experiment", "") for j in self._all_jobs if j.get("experiment")}
+        )
         if not experiments:
             self.notify("No experiments to filter")
             return
@@ -959,7 +1002,9 @@ class AjDashboard(WorkspaceMixin, App):
             self.notify(f"Experiment: {value or 'All'}")
 
     def action_clear_filters(self) -> None:
-        changed = bool(self._status_filter or self._experiment_filter or self._search_query)
+        changed = bool(
+            self._status_filter or self._experiment_filter or self._search_query
+        )
         self._status_filter = ""
         self._experiment_filter = ""
         self._search_query = ""
@@ -992,19 +1037,21 @@ class AjDashboard(WorkspaceMixin, App):
     def _do_cancel(self, job: dict[str, Any]) -> None:
         if self._rest_client is None:
             self.call_from_thread(
-                self.notify, "Workspace not configured", severity="warning",
+                self.notify,
+                "Workspace not configured",
+                severity="warning",
             )
             return
         name = job.get("name", "")
         display = job.get("display_name") or name
         try:
-            cur = self._rest_client.get_job(name)
+            cur = self._rest_client.jobs.get(name)
             st = cur.get("status", "")
             if st in ("Completed", "Failed", "Canceled"):
                 self.call_from_thread(self.notify, f"{display}: already {st}")
                 return
-            self._rest_client.cancel_job(name)
-            final_job = self._rest_client.get_job(name)
+            self._rest_client.jobs.cancel(name)
+            final_job = self._rest_client.jobs.get(name)
             final = final_job.get("status", "?")
         except Exception as exc:
             self.call_from_thread(self.notify, str(exc)[:80], severity="error")

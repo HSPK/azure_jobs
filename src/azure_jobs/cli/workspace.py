@@ -19,9 +19,7 @@ def _ensure_workspaces() -> tuple[dict[str, str], list[dict[str, str]]]:
 
     sub = detect_subscription()
     if not sub:
-        raise click.ClickException(
-            "Cannot detect subscription. Run `az login` first."
-        )
+        raise click.ClickException("Cannot detect subscription. Run `az login` first.")
 
     with console.status("[bold cyan]Listing workspaces…[/bold cyan]", spinner="dots"):
         workspaces = detect_workspaces(sub["subscription_id"])
@@ -47,11 +45,14 @@ def ws_list() -> None:
         f" ({sub['subscription_id'][:8]}…)[/dim]"
     )
 
-    current_ws = read_config().get("workspace", {}).get("workspace_name", "")
+    current_ws = read_config().workspace.workspace_name
 
     table = Table(
-        show_header=True, header_style="bold", pad_edge=True,
-        title="[bold]Workspaces[/bold]", title_style="",
+        show_header=True,
+        header_style="bold",
+        pad_edge=True,
+        title="[bold]Workspaces[/bold]",
+        title_style="",
     )
     table.add_column("", width=2)
     table.add_column("Name", style="cyan bold")
@@ -85,24 +86,29 @@ def ws_show(name: str | None) -> None:
         except ValueError as exc:
             raise click.ClickException(str(exc))
     else:
-        ws = read_config().get("workspace", {})
-        if not ws or not ws.get("workspace_name"):
+        cfg = read_config()
+        if not cfg.workspace.workspace_name:
             warning("No workspace configured. Run `aj ws set` to configure.")
             return
+        ws = cfg.workspace
 
     grid = Table.grid(padding=(0, 2))
     grid.add_column(style="bold white", justify="right")
     grid.add_column()
-    grid.add_row("Workspace", f"[bold cyan]{ws.get('workspace_name', '—')}[/bold cyan]")
-    grid.add_row("Resource Group", ws.get("resource_group", "—"))
-    grid.add_row("Subscription", ws.get("subscription_id", "—"))
+    grid.add_row("Workspace", f"[bold cyan]{ws.workspace_name or '—'}[/bold cyan]")
+    grid.add_row("Resource Group", ws.resource_group or "—")
+    grid.add_row("Subscription", ws.subscription_id or "—")
 
-    title = f"Workspace: {ws.get('workspace_name', '')}" if name else "Current Workspace"
+    title = f"Workspace: {ws.workspace_name}" if name else "Current Workspace"
     console.print()
-    console.print(Panel(
-        grid, title=f"[bold]{title}[/bold]",
-        border_style="cyan", expand=False,
-    ))
+    console.print(
+        Panel(
+            grid,
+            title=f"[bold]{title}[/bold]",
+            border_style="cyan",
+            expand=False,
+        )
+    )
     console.print()
 
 

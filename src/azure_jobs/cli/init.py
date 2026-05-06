@@ -58,7 +58,8 @@ def _init_aj(force: bool) -> None:
 
         cfg = read_config()
         repo_url = cfg.get("repo_id") or click.prompt(
-            "Template repo URL", type=str,
+            "Template repo URL",
+            type=str,
         )
         _do_pull(repo_url, force=True)
     else:
@@ -70,7 +71,9 @@ def _init_aj(force: bool) -> None:
     if need_ws or (force and _confirm_step("workspace", force)):
         ws = _setup_workspace()
         if not ws:
-            warning("Workspace not configured. Re-run [bold]aj init[/bold] after setting up.")
+            warning(
+                "Workspace not configured. Re-run [bold]aj init[/bold] after setting up."
+            )
             return
     else:
         dim(
@@ -103,7 +106,7 @@ def init_amlt(ctx: click.Context, force: bool) -> None:
     from pathlib import Path
 
     from azure_jobs.core.config import get_workspace_config
-    from azure_jobs.utils.ui import console, dim, error, info, success, warning
+    from azure_jobs.utils.ui import console, dim, error, info, success
 
     # Inherit -f from parent if set
     parent_force = (ctx.parent and ctx.parent.obj or {}).get("force", False)
@@ -172,9 +175,11 @@ def init_amlt(ctx: click.Context, force: bool) -> None:
     )
 
     if result.returncode != 0:
-        msg = (result.stderr.strip() or result.stdout.strip())
+        msg = result.stderr.strip() or result.stdout.strip()
         error(f"amlt project create failed: {msg}")
-        dim("You can set up amlt manually: amlt project create <name> <storage_account>")
+        dim(
+            "You can set up amlt manually: amlt project create <name> <storage_account>"
+        )
         return
 
     if result.stdout.strip():
@@ -188,7 +193,7 @@ def init_amlt(ctx: click.Context, force: bool) -> None:
 def _print_amlt_workspace_commands(aj_ws: dict[str, str]) -> None:
     """Print amlt workspace add commands for the user to run manually."""
     from azure_jobs.core.config import detect_workspaces
-    from azure_jobs.utils.ui import dim, info
+    from azure_jobs.utils.ui import info
 
     sub = aj_ws.get("subscription_id", "")
     if not sub:
@@ -197,10 +202,12 @@ def _print_amlt_workspace_commands(aj_ws: dict[str, str]) -> None:
     info("Detecting workspaces in subscription…")
     all_ws = detect_workspaces(sub)
     if not all_ws:
-        all_ws = [{
-            "name": aj_ws.get("workspace_name", ""),
-            "resource_group": aj_ws.get("resource_group", ""),
-        }]
+        all_ws = [
+            {
+                "name": aj_ws.get("workspace_name", ""),
+                "resource_group": aj_ws.get("resource_group", ""),
+            }
+        ]
 
     info(f"Run the following to register {len(all_ws)} workspace(s) with amlt:")
     click.echo()
@@ -233,9 +240,7 @@ def _setup_workspace() -> dict[str, str] | None:
 
     dim(f"Subscription: {sub['subscription_name']} ({sub['subscription_id'][:8]}…)")
 
-    with console.status(
-        "[bold cyan]Listing workspaces…[/bold cyan]", spinner="dots"
-    ):
+    with console.status("[bold cyan]Listing workspaces…[/bold cyan]", spinner="dots"):
         workspaces = detect_workspaces(sub["subscription_id"])
 
     if not workspaces:

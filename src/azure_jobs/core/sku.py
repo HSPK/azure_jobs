@@ -18,10 +18,43 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
+import click
+
 log = logging.getLogger(__name__)
 
 # Module-level caches for avoiding redundant ARM API calls
 _vc_families_cache: dict[str, list[str]] = {}  # vc_name → families
+
+
+def resolve_sku(sku_template: str | dict[str, str], nodes: int, processes: int) -> str:
+    """Resolve a SKU template (string or range-dict) into a concrete SKU string."""
+    if isinstance(sku_template, str):
+        return sku_template.format(nodes=nodes, processes=processes)
+
+    if isinstance(sku_template, dict):
+        for key, value in sku_template.items():
+            key_str = str(key)
+            if "-" in key_str:
+                min_s, max_s = key_str.split("-", 1)
+                min_val = int(min_s)
+                max_val = int(max_s) if max_s != "+" else float("inf")
+                if min_val <= nodes <= max_val:
+                    return value.format(nodes=nodes, processes=processes)
+            elif key_str.endswith("+"):
+                if nodes >= int(key_str[:-1]):
+                    return value.format(nodes=nodes, processes=processes)
+            else:
+                if int(key_str) == nodes:
+                    return value.format(nodes=nodes, processes=processes)
+
+        raise click.ClickException(
+            f"No matching SKU template found for {nodes} nodes in {sku_template}"
+        )
+
+    raise click.ClickException(
+        f"Unsupported SKU template type: {type(sku_template).__name__}. "
+        "Only str and dict are supported."
+    )
 
 
 @dataclass
@@ -67,7 +100,9 @@ class SkuSpec:
         spec.num_units = int(m.group(4)) if m.group(4) else 1
 
         if m.group(5):
-            parts = [p.strip().upper() for p in re.split(r"[-]", m.group(5)) if p.strip()]
+            parts = [
+                p.strip().upper() for p in re.split(r"[-]", m.group(5)) if p.strip()
+            ]
             for p in parts:
                 if p == "NVLINK":
                     spec.nvlink = True
@@ -336,10 +371,13 @@ def _fetch_vc_families(
     try:
         if arm_client is None:
             from azure_jobs.core.rest_client import AzureARMClient
+
             arm_client = AzureARMClient()
 
         data = arm_client.get_vc_quotas_raw(
-            vc_subscription_id, vc_resource_group, vc_name,
+            vc_subscription_id,
+            vc_resource_group,
+            vc_name,
         )
         managed = data.get("properties", {}).get("managed", {})
         quotas = managed.get("defaultGroupPolicyOverallQuotas", {}).get("limits", [])
@@ -429,11 +467,14 @@ def fetch_vc_quotas(
     """
     if arm_client is None:
         from azure_jobs.core.rest_client import AzureARMClient
+
         arm_client = AzureARMClient()
 
     try:
         data = arm_client.get_vc_quotas_raw(
-            vc_subscription_id, vc_resource_group, vc_name,
+            vc_subscription_id,
+            vc_resource_group,
+            vc_name,
         )
     except Exception:
         log.debug("Failed to fetch VC quotas for %s", vc_name, exc_info=True)
@@ -497,6 +538,7 @@ def discover_virtual_clusters(
     """
     if arm_client is None:
         from azure_jobs.core.rest_client import AzureARMClient
+
         arm_client = AzureARMClient()
 
     if not subscription_ids:

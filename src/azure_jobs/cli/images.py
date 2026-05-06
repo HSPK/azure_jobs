@@ -13,7 +13,10 @@ def image_group() -> None:
 
 @image_group.command(name="list")
 @click.option(
-    "--filter", "-f", "query", default=None,
+    "--filter",
+    "-f",
+    "query",
+    default=None,
     help="Filter images by name (e.g. 'torch2.7', 'cuda12')",
 )
 def image_list(query: str | None) -> None:
@@ -29,7 +32,8 @@ def image_list(query: str | None) -> None:
 
     if query:
         images = [
-            img for img in images
+            img
+            for img in images
             if query.lower() in img["name"].lower()
             or any(query.lower() in a.lower() for a in img["aliases"])
         ]
@@ -61,6 +65,7 @@ def image_list(query: str | None) -> None:
         )
 
     from azure_jobs.utils.ui import print_table
+
     print_table(table)
     console.print(f"[dim]{len(images)} images available[/dim]")
     console.print()
@@ -95,10 +100,12 @@ def _parse_images(raw_images: list[dict]) -> list[dict]:
     for entry in raw_images:
         names = entry.get("names", [])
         name = next((n for n in names if ":" in n), names[-1] if names else "")
-        images.append({
-            "id": entry.get("id", ""),
-            "name": name,
-            "aliases": names,
-        })
+        images.append(
+            {
+                "id": entry.get("id", ""),
+                "name": name,
+                "aliases": names,
+            }
+        )
     images.sort(key=lambda x: x["name"])
     return images

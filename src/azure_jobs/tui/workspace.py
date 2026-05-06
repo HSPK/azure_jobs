@@ -6,12 +6,13 @@ instance at runtime.  This module only imports Textual at type-check time.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from textual import work
 from textual.widgets import OptionList, Static
 from textual.worker import get_current_worker
 
+from azure_jobs.core.config import AJWorkspace
 from azure_jobs.tui.helpers import kv
 from azure_jobs.tui.modals import PickerModal
 
@@ -24,14 +25,16 @@ class WorkspaceMixin:
 
     # ---- workspace / client -------------------------------------------------
 
-    def _ensure_workspace(self: "AjDashboard") -> dict[str, str] | None:
+    def _ensure_workspace(self: "AjDashboard") -> AJWorkspace | None:
         if self._workspace is not None:
             return self._workspace
         from azure_jobs.core.config import read_config
-        ws = read_config().get("workspace", {})
-        if all(ws.get(k) for k in ("subscription_id", "resource_group", "workspace_name")):
+
+        cfg = read_config()
+        ws = cfg.workspace
+        if ws.subscription_id and ws.resource_group and ws.workspace_name:
             self._workspace = ws
-            self._subscription_id = ws["subscription_id"]
+            self._subscription_id = ws.subscription_id
             return ws
         return None
 
@@ -39,15 +42,13 @@ class WorkspaceMixin:
         """Update the always-visible workspace panel."""
         ws = self._workspace
         if ws:
-            name = ws.get("workspace_name", "")
-            rg = ws.get("resource_group", "")
+            name = ws.workspace_name
+            rg = ws.resource_group
             self.query_one("#ws-current", Static).update(
                 f"[bold]{name}[/bold]  [dim]{rg}[/dim]"
             )
         else:
-            self.query_one("#ws-current", Static).update(
-                "[dim]Not configured[/dim]"
-            )
+            self.query_one("#ws-current", Static).update("[dim]Not configured[/dim]")
 
     # ---- workspace selector -------------------------------------------------
 
@@ -69,7 +70,9 @@ class WorkspaceMixin:
             return
         if not sub:
             self.call_from_thread(
-                self.notify, "Cannot detect Azure subscription", severity="warning",
+                self.notify,
+                "Cannot detect Azure subscription",
+                severity="warning",
             )
             return
         sub_id = sub["subscription_id"]
@@ -78,7 +81,9 @@ class WorkspaceMixin:
             self.call_from_thread(self._on_workspaces_ready, sub_id, wss)
 
     def _on_workspaces_ready(
-        self: "AjDashboard", sub_id: str, workspaces: list[dict[str, str]],
+        self: "AjDashboard",
+        sub_id: str,
+        workspaces: list[dict[str, str]],
     ) -> None:
         self._subscription_id = sub_id
         self._workspaces = workspaces
@@ -88,7 +93,7 @@ class WorkspaceMixin:
         self._show_ws_picker()
 
     def _show_ws_picker(self: "AjDashboard") -> None:
-        cur_name = (self._workspace or {}).get("workspace_name", "")
+        cur_name = self._workspace.workspace_name if self._workspace else ""
         items: list[tuple[str, str]] = []
         for ws in self._workspaces:
             name = ws.get("name", "")
@@ -101,7 +106,7 @@ class WorkspaceMixin:
         )
 
     def _on_workspace_picked(self: "AjDashboard", value: str) -> None:
-        cur_name = (self._workspace or {}).get("workspace_name", "")
+        cur_name = self._workspace.workspace_name if self._workspace else ""
         if value == cur_name or not value:
             return
         for idx, ws in enumerate(self._workspaces):
@@ -113,11 +118,11 @@ class WorkspaceMixin:
         if idx < 0 or idx >= len(self._workspaces):
             return
         ws = self._workspaces[idx]
-        self._workspace = {
-            "subscription_id": self._subscription_id,
-            "resource_group": ws["resource_group"],
-            "workspace_name": ws["name"],
-        }
+        self._workspace = AJWorkspace(
+            subscription_id=self._subscription_id,
+            resource_group=ws["resource_group"],
+            workspace_name=ws["name"],
+        )
         self._rest_client = None
         self._all_jobs.clear()
         self._filtered.clear()
@@ -133,9 +138,7 @@ class WorkspaceMixin:
 
         self._update_ws_label()
         self._update_titles()
-        self.query_one("#info-content", Static).update(
-            kv([], hint="Loading jobs…")
-        )
+        self.query_one("#info-content", Static).update(kv([], hint="Loading jobs…"))
         self._init_fetch()
         self.query_one("#job-list", OptionList).focus()
         self.notify(f"Switched to {ws['name']}")

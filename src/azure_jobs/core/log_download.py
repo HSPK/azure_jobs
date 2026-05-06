@@ -119,7 +119,7 @@ def _get_log_urls(
     if rest_client is None:
         from azure_jobs.core.rest_client import create_rest_client
         rest_client = create_rest_client(workspace)
-    return rest_client.get_run_log_urls(job_name)
+    return rest_client.jobs.get_run_log_urls(job_name)
 
 
 def get_log_content_uri(

@@ -2,38 +2,17 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from ._models import SubmitRequest
+from .models import SubmitRequest
 
-
-def _get_or_create_datastore(
-    client: Any, ds_name: str, account: str, container: str, mount_name: str,
-) -> None:
-    """Ensure a blob datastore exists in the workspace (create if missing)."""
-    try:
-        existing = client.get_datastore(ds_name)
-        if existing:
-            return
-    except Exception:
-        pass
-    try:
-        client.create_or_update_datastore(
-            name=ds_name,
-            account_name=account,
-            container_name=container,
-            description=f"Created by aj for {mount_name}",
-        )
-    except Exception as exc:
-        raise RuntimeError(
-            f"Failed to create datastore '{ds_name}' "
-            f"(account={account}, container={container}): {exc}"
-        ) from exc
+if TYPE_CHECKING:
+    from azure_jobs.core.rest_client import AzureMLClient
 
 
 def _build_storage_mounts(
     request: SubmitRequest,
-    client: Any,
+    client: AzureMLClient,
 ) -> tuple[dict[str, Any], dict[str, str], dict[str, str]]:
     """Set up storage mounts via workspace datastores.
 
@@ -51,12 +30,17 @@ def _build_storage_mounts(
         return outputs, path_on_compute, dataref_env
 
     for mount_name, mount_cfg in request.storage.items():
-        account = mount_cfg.get("storage_account_name", "")
-        container = mount_cfg.get("container_name", "")
-        mount_dir = mount_cfg.get("mount_dir", f"/mnt/{mount_name}")
+        account = mount_cfg.storage_account_name
+        container = mount_cfg.container_name
+        mount_dir = mount_cfg.mount_dir or f"/mnt/{mount_name}"
         ds_name = f"aj_{mount_name}".replace("-", "_")
 
-        _get_or_create_datastore(client, ds_name, account, container, mount_name)
+        client.resources.get_or_create_datastore(
+            name=ds_name,
+            account_name=account,
+            container_name=container,
+            description=f"Created by aj for {mount_name}",
+        )
 
         # Short-form URI — the long ARM-style azureml:// is rejected by Singularity
         uri = f"azureml://datastores/{ds_name}/paths/{request.name}/"
