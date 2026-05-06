@@ -71,10 +71,7 @@ def _build_resources(
     sku = request.sku
     if on_status:
         on_status("sku", f"Resolving SKU {sku}…")
-    from IPython import embed
 
-    embed()
-    exit(0)
     instance_names = resolve_instance_type(
         sku,
         vc_subscription_id=request.vc_subscription_id or request.subscription_id,
