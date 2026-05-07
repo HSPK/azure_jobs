@@ -45,22 +45,25 @@ chmod 600 "$HOME/.ssh"/id_* 2>/dev/null || true
 
 echo "=== ssh -T git@github.com (key probe) ==="
 # GitHub returns exit 1 with a "Hi <user>" greeting when the key works;
-# permission errors come back on stderr.
-ssh_out=$(ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes -T git@github.com 2>&1)
+# permission errors come back on stderr. Allow this probe to fail without
+# aborting the script — the real check is `git ls-remote` below.
+ssh_out=$(ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes -T git@github.com 2>&1 || true)
 ssh_rc=$?
 echo "$ssh_out"
 if echo "$ssh_out" | grep -qiE "successfully authenticated|Hi .*!"; then
     ok "github accepted the SSH key (rc=$ssh_rc)"
 else
-    fail "github did NOT accept the SSH key (rc=$ssh_rc)"
+    echo "[WARN] github did NOT confirm the SSH key via ssh -T (rc=$ssh_rc); continuing"
 fi
 echo
 
 # Some images export an empty GIT_SSH / GIT_SSH_COMMAND, which makes git
 # try to exec "" and fail with "cannot run : No such file or directory".
-# Force both to a real ssh invocation (env wins over -c core.sshCommand).
-unset GIT_SSH
-export GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes"
+# Only force a real ssh invocation when no usable command is already set.
+if [[ -z "${GIT_SSH_COMMAND:-}" ]]; then
+    unset GIT_SSH
+    export GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes"
+fi
 
 echo "=== git ls-remote $REPO HEAD ==="
 echo "GIT_SSH_COMMAND=$GIT_SSH_COMMAND"
