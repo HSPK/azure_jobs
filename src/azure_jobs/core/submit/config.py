@@ -8,6 +8,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from azure_jobs.utils.fs import read_ignore_file
+
 from ..config import AJWorkspace
 from .models import SubmitRequest
 
@@ -222,6 +224,18 @@ def build_submit_request(
     # Keep AMLT convention path tokens (e.g. $CONFIG_DIR) as-is.
     code_dir = code.local_dir
 
+    # Merge ignore patterns: template ``code.ignore`` first, then any
+    # patterns from ``.codeignore`` / ``.amltignore`` discovered next to
+    # the resolved code directory. Duplicates are removed while preserving
+    # order so the final list is stable across runs.
+    file_ignore = read_ignore_file(code_dir)
+    seen: set[str] = set()
+    code_ignore: list[str] = []
+    for pat in list(code.ignore) + file_ignore:
+        if pat not in seen:
+            seen.add(pat)
+            code_ignore.append(pat)
+
     # Environment variables (with Singularity support)
     env_extra = dict(submit_args.get("env", {}))
     container_args = dict(submit_args.get("container_args", {}))
@@ -234,6 +248,22 @@ def build_submit_request(
         sub_id = workspace.subscription_id
         rg = workspace.resource_group
     ws_name = target.workspace_name or workspace.workspace_name
+
+    # Backend-specific target metadata. Volcano needs k8s scheduling fields
+    # (namespace/queue/context/rdma/...) that mean nothing to AML.
+    target_extra: dict[str, Any] = {}
+    if service == "volcano":
+        target_extra = {
+            "namespace": target.namespace,
+            "queue": target.queue,
+            "context": target.context,
+            "gpus_per_node": target.gpus_per_node,
+            "cpus_per_node": target.cpus_per_node,
+            "memory": target.memory,
+            "rdma": target.rdma,
+            "priority_class": target.priority_class,
+            "labels": dict(target.labels),
+        }
 
     # ─────────────────────────────────────────────────────────────────────
     # Build and return SubmitRequest
@@ -251,7 +281,7 @@ def build_submit_request(
         image=env.image,
         image_registry=env.registry or None,
         code_dir=code_dir,
-        code_ignore=code.ignore,
+        code_ignore=code_ignore,
         setup_commands=env.setup,
         command=command_list,
         storage=storage,
@@ -267,6 +297,7 @@ def build_submit_request(
         resource_group=rg,
         workspace_name=ws_name,
         service=service,
+        target_extra=target_extra,
         vc_subscription_id=target.subscription_id,
         vc_resource_group=target.resource_group,
         group_policy=getattr(target, "group_policy_name", ""),

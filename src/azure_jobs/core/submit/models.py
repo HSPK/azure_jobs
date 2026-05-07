@@ -75,6 +75,10 @@ class SubmitRequest:
     # ─── Service Type ─────────────────────────────────────────────────────
     service: str = "aml"
 
+    # Backend-specific target metadata (e.g. Volcano namespace/queue/rdma).
+    # Opaque to non-target backends; consumers cast/lookup as needed.
+    target_extra: dict[str, Any] = field(default_factory=dict)
+
     # ─── Singularity-Specific (when service == "sing") ────────────────────
     vc_subscription_id: str = ""
     vc_resource_group: str = ""
@@ -166,3 +170,35 @@ class SubmitResult:
     status: str = ""  # "submitted" or "failed"
     portal_url: str = ""
     error: str = ""
+    # Free-form backend output (e.g. ``kubectl create`` stdout for Volcano).
+    note: str = ""
+
+
+@dataclass
+class SubmitEvent:
+    """Structured progress event emitted by submission backends.
+
+    Backends call ``on_event(SubmitEvent(...))`` at each stage so the
+    caller (CLI / TUI) can render a single, uniform progress UI without
+    knowing backend details.
+
+    Event ``kind`` taxonomy:
+
+    * ``"auth"``, ``"environment"``, ``"storage"``, ``"command"``,
+      ``"identity"``, ``"submit"`` — status milestones; ``detail`` carries
+      a human-readable hint.
+    * ``"code"`` — emitted once when code upload starts (status hint).
+    * ``"upload"`` — fine-grained per-file progress;
+      ``completed``/``total``/``skipped``/``current`` are populated.
+    * ``"done"`` — terminal success milestone.
+    * ``"error"`` — terminal failure milestone (also returned via
+      :class:`SubmitResult.error`).
+    """
+
+    kind: str
+    detail: str = ""
+    # Per-file progress, populated only when ``kind == "upload"``.
+    completed: int = 0
+    total: int = 0
+    skipped: int = 0
+    current: str = ""

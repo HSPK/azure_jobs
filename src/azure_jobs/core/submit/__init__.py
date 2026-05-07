@@ -23,7 +23,7 @@ from .amlt import (
     submit_via_amlt,
 )
 from .config import build_submit_request, render_amlt_config
-from .models import StorageMount, SubmitRequest, SubmitResult
+from .models import StorageMount, SubmitEvent, SubmitRequest, SubmitResult
 from .native import (
     _SING_DUMMY_IMAGE,
     CheckResult,
@@ -41,6 +41,7 @@ from .native import (
     submit,
     submit_via_native,
 )
+from .runner import submit_and_record
 from .volcano import submit_via_volcano
 
 __all__ = [
@@ -48,7 +49,9 @@ __all__ = [
     "StorageMount",
     "SubmitRequest",
     "SubmitResult",
+    "SubmitEvent",
     "submit",
+    "submit_and_record",
     "build_submit_request",
     "render_amlt_config",
     "CheckResult",

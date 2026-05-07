@@ -18,6 +18,17 @@ class Target:
     resource_group: str = ""
     workspace_name: str = ""
 
+    # Volcano / Kubernetes-specific target fields. Ignored by other backends.
+    namespace: str = ""
+    queue: str = "default"
+    context: str = ""
+    gpus_per_node: int = 8
+    cpus_per_node: int = 0
+    memory: str = ""
+    rdma: bool = True
+    priority_class: str = ""
+    labels: dict[str, str] = field(default_factory=dict)
+
 
 @dataclass
 class Environment:
