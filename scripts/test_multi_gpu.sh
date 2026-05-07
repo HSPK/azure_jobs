@@ -17,9 +17,15 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+echo "=== install torch ==="
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/_install_torch.sh"
+echo
+
 : "${NNODES:=1}"
 : "${NPROC_PER_NODE:=$(nvidia-smi -L | wc -l)}"
 : "${NODE_RANK:=0}"
+: "${RANK:=0}"
 : "${MASTER_ADDR:=127.0.0.1}"
 : "${MASTER_PORT:=29500}"
 
@@ -29,12 +35,7 @@ echo
 
 echo "=== distributed env ==="
 echo "NNODES=$NNODES  NPROC_PER_NODE=$NPROC_PER_NODE  NODE_RANK=$NODE_RANK"
-echo "MASTER_ADDR=$MASTER_ADDR  MASTER_PORT=$MASTER_PORT"
-echo
-
-echo "=== install torch ==="
-# shellcheck disable=SC1091
-source "$SCRIPT_DIR/_install_torch.sh"
+echo "RANK=$RANK MASTER_ADDR=$MASTER_ADDR  MASTER_PORT=$MASTER_PORT"
 echo
 
 echo "=== torchrun ==="

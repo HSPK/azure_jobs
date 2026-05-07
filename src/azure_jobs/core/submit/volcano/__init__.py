@@ -20,7 +20,7 @@ def submit_via_volcano(
     conf: dict[str, Any],
     name: str,
     nodes: int,
-    processes: int,
+    processes_per_node: int,
     *,
     dry_run: bool,
     on_status: Callable[[str, str], None] | None = None,
@@ -30,7 +30,7 @@ def submit_via_volcano(
         conf,
         name=name,
         nodes=nodes,
-        processes_per_node=processes,
+        processes_per_node=processes_per_node,
     )
     return submit_volcano_job(vcfg, dry_run=dry_run, on_status=on_status)
 
@@ -516,7 +516,7 @@ def build_volcano_config_from_template(
     *,
     name: str,
     nodes: int,
-    processes_per_node: int,
+    processes_per_node: int = 1,
 ) -> VolcanoConfig:
     """Convert an aj merged template config into a VolcanoConfig.
 

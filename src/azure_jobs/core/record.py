@@ -71,7 +71,13 @@ def _normalize_record(record: dict[str, Any]) -> dict[str, Any]:
     normalized.setdefault("id", request.get("sid", ""))
     normalized.setdefault("template", request.get("template_name", ""))
     normalized.setdefault("nodes", request.get("nodes", ""))
-    normalized.setdefault("processes", request.get("processes_per_node", ""))
+    # Dashboard "processes" column shows GPUs per node (the user-facing concept),
+    # falling back to ``processes_per_node`` for older records that pre-date
+    # the gpus_per_node split.
+    normalized.setdefault(
+        "processes",
+        request.get("gpus_per_node") or request.get("processes_per_node", ""),
+    )
     normalized.setdefault("command", command)
     normalized.setdefault("args", args)
     return normalized

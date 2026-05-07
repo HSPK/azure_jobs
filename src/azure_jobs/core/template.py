@@ -5,8 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-import yaml
-
 from .dataclass_utils import dataclass_from_dict
 
 
@@ -83,13 +81,3 @@ class Template:
     @classmethod
     def from_dict(cls, conf: dict[str, Any]) -> Template:
         return dataclass_from_dict(cls, conf)
-
-    def dump_amlt_config(self) -> str:
-        """Dump template as YAML string for amlt submission.
-
-        Returns:
-            YAML string representation of template config.
-        """
-        from dataclasses import asdict
-
-        return yaml.dump(asdict(self), default_flow_style=False, allow_unicode=True)

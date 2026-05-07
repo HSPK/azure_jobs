@@ -34,6 +34,11 @@ class SubmitRequest:
     compute: str = ""
     sku: str = ""
     nodes: int = 1
+    # GPUs per node (resource description, drives SKU + AJ_PROCESSES env).
+    # Equals the template's ``processes`` field / CLI ``-p`` value.
+    gpus_per_node: int = 1
+    # Launcher processes per node (e.g. torch.distributed.launch ``--nproc-per-node``).
+    # Independent of ``gpus_per_node`` and defaults to 1; user controls it via ``--ppn``.
     processes_per_node: int = 1
 
     # ─── Environment ──────────────────────────────────────────────────────

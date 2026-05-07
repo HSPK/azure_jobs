@@ -8,17 +8,13 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-echo "=== nvidia-smi ==="
-nvidia-smi || { echo "[FAIL] nvidia-smi missing"; exit 1; }
-echo
-
-echo "=== AJ env ==="
-echo "AJ_NODES=${AJ_NODES:-<unset>}  AJ_PROCESSES=${AJ_PROCESSES:-<unset>}"
-echo
-
 echo "=== install torch ==="
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/_install_torch.sh"
+echo
+
+echo "=== nvidia-smi ==="
+nvidia-smi || { echo "[FAIL] nvidia-smi missing"; exit 1; }
 echo
 
 echo "=== torchrun --standalone --nproc_per_node=1 ==="

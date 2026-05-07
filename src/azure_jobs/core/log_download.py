@@ -50,24 +50,18 @@ def list_log_files(
     return paths
 
 
-def download_single_log(
-    job_name: str,
-    log_path: str,
-    *,
-    rest_client: Any | None = None,
-    workspace: dict[str, str] | None = None,
-) -> tuple[str, str]:
-    """Download a specific log file. Returns ``(content, error_msg)``."""
-    try:
-        log_urls = _get_log_urls(job_name, rest_client, workspace)
-        url = log_urls.get(log_path)
-        if not url:
-            return "", f"Log file not found: {log_path}"
-        resp = _requests.get(url, timeout=60)
-        resp.raise_for_status()
-        return _filter_content(resp.text), ""
-    except Exception as exc:
-        return "", str(exc)[:500]
+def pick_default_log(files: list[str]) -> str:
+    """Pick the most useful log file from *files* using :data:`_LOG_PRIORITY`.
+
+    Falls back to the first file in the list. Returns ``""`` if empty.
+    """
+    if not files:
+        return ""
+    for prefix in _LOG_PRIORITY:
+        for p in files:
+            if p.startswith(prefix):
+                return p
+    return files[0]
 
 
 def download_job_logs(

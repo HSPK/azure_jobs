@@ -66,7 +66,19 @@ def resolve_name(command: str, sid: str) -> str:
     default=None,
 )
 @click.option("-n", "--nodes", default=None, help="Number of nodes")
-@click.option("-p", "--processes", default=None, help="Number of processes")
+@click.option(
+    "-p",
+    "--processes",
+    default=None,
+    help="GPUs per node (drives SKU resolution and AJ_PROCESSES env)",
+)
+@click.option(
+    "--ppn",
+    "--processes-per-node",
+    "ppn",
+    default=None,
+    help="Launcher processes per node (e.g. torchrun --nproc-per-node). Default: 1",
+)
 @click.option(
     "-d", "--dry-run", is_flag=True, help="Dry run the command without executing"
 )
@@ -84,6 +96,7 @@ def run(
     template: str | None,
     nodes: str | None,
     processes: str | None,
+    ppn: str | None,
     dry_run: bool,
     run_local: bool,
     amlt: bool,
@@ -125,6 +138,7 @@ def run(
 
     nodes_int = int(nodes or defaults.nodes or 1)
     processes_int = int(processes or defaults.processes or 1)
+    ppn_int = int(ppn or 1)
     sku_resolved = resolve_sku(tmpl.jobs[0].sku, nodes_int, processes_int)
 
     # Remember this template as the new default (only after template validation passes)
@@ -146,7 +160,8 @@ def run(
             template_name=template,
             experiment=experiment,
             nodes=nodes_int,
-            processes_per_node=processes_int,
+            processes=processes_int,
+            processes_per_node=ppn_int,
         )
     except ValueError as e:
         raise click.ClickException(str(e))
@@ -171,21 +186,6 @@ def run(
     )
 
     if dry_run:
-        dim(f"Config written to {submission_fp}")
-        if tmpl.target.service == "volcano":
-            from azure_jobs.core.submit.volcano import (
-                build_volcano_config_from_template,
-                build_volcano_job,
-            )
-
-            vcfg = build_volcano_config_from_template(
-                amlt_conf,
-                name=name,
-                nodes=nodes_int,
-                processes_per_node=processes_int,
-            )
-            info("Generated Volcano Job YAML:")
-            click.echo(yaml.dump(build_volcano_job(vcfg), default_flow_style=False))
         return
 
     # ── Choose submission backend ────────────────────────────────────
@@ -222,15 +222,10 @@ def run(
             amlt_conf,
             name,
             nodes_int,
-            processes_int,
+            ppn_int,
             dry_run=dry_run,
             on_status=_on_status,
         )
-
-        if dry_run:
-            info("Generated Volcano Job YAML:")
-            click.echo(output)
-            return
 
         if ok:
             rec.status = "submitted"

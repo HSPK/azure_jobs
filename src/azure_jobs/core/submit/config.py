@@ -104,7 +104,8 @@ def build_submit_request(
     template_name: str = "unknown",
     experiment: str = "aj",
     nodes: int,
-    processes_per_node: int,
+    processes: int = 1,
+    processes_per_node: int = 1,
 ) -> SubmitRequest:
     """Build a SubmitRequest from template and submission parameters.
 
@@ -125,7 +126,11 @@ def build_submit_request(
         template_name: Name of the template (for AJ_TEMPLATE export).
         experiment: Experiment name.
         nodes: Override for node count (takes precedence over job config).
-        processes_per_node: Override for processes per node.
+        processes: GPUs per node (template ``processes`` / CLI ``-p``).
+            Drives SKU resolution and the ``AJ_PROCESSES`` env (= ``nodes * processes``).
+        processes_per_node: Launcher processes per node
+            (e.g. ``torchrun --nproc-per-node``). Independent of ``processes``,
+            defaults to 1, and is exposed via ``AJ_PROCESSES_PER_NODE``.
 
     Returns:
         SubmitRequest ready for submission to any backend.
@@ -161,7 +166,10 @@ def build_submit_request(
         # SSH setup (works for both aj and amlt)
         "[ -f /tmp/.aj_ssh_env ] && source /tmp/.aj_ssh_env",
         f"export AJ_NODES={nodes}",
-        f"export AJ_PROCESSES={processes_per_node * nodes}",
+        # AJ_PROCESSES = total GPUs (gpus_per_node * nodes), useful for distributed launchers.
+        f"export AJ_PROCESSES={processes * nodes}",
+        f"export AJ_GPUS_PER_NODE={processes}",
+        f"export AJ_PROCESSES_PER_NODE={processes_per_node}",
         f"export AJ_NAME={name}",
         f"export AJ_ID={sid}",
         f"export AJ_TEMPLATE={template_name}",
@@ -238,6 +246,7 @@ def build_submit_request(
         compute=target.name,
         sku=sku,
         nodes=nodes,
+        gpus_per_node=processes,
         processes_per_node=processes_per_node,
         image=env.image,
         image_registry=env.registry or None,
