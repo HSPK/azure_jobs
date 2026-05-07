@@ -11,6 +11,7 @@ dependencies = [
     "rich>=14.3.3",
     "textual>=1.0.0",
     "requests>=2.31.0",
+    "azure-identity>=1.15.0",
 ]
 
 [project.scripts]
