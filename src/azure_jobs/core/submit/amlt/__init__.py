@@ -10,6 +10,8 @@ from typing import Callable
 
 import yaml
 
+from ..models import SubmitEvent, SubmitResult
+
 
 def amlt_available() -> bool:
     """Check if amlt CLI is installed and a project is configured."""
@@ -52,16 +54,37 @@ def extract_portal_url(output: str) -> str:
 
 def submit_via_amlt(
     config_fp: Path,
-    exp_name: str,
+    experiment: str,
     *,
-    on_output_line: Callable[[str], None] | None = None,
-) -> tuple[bool, str, str]:
-    """Submit job via ``amlt run``.
+    name: str = "",
+    on_event: Callable[[SubmitEvent], None] | None = None,
+) -> SubmitResult:
+    """Submit a job via the external ``amlt run`` CLI.
 
-    Returns:
-        (ok, portal_url, note)
+    Operates on a rendered submission YAML on disk plus an experiment
+    name — keeps amlt decoupled from :class:`SubmitRequest` since the
+    config has already been materialized. The ``submit_and_record``
+    contract is satisfied by wrapping the call in a closure that fixes
+    the positional args, e.g.::
+
+        submit_and_record(
+            lambda on_event: submit_via_amlt(fp, exp, name=name, on_event=on_event),
+            ...,
+        )
+
+    Each line of ``amlt`` output is forwarded as a ``log`` event so the
+    caller can render it above the spinner.
     """
-    cmd = ["amlt", "run", str(config_fp), exp_name, "-y"]
+    emit = on_event or (lambda _ev: None)
+    job_name = name or config_fp.stem
+
+    if not config_fp.exists():
+        msg = f"Submission YAML not found: {config_fp}"
+        emit(SubmitEvent(kind="error", detail=msg))
+        return SubmitResult(job_name=job_name, status="failed", error=msg)
+
+    cmd = ["amlt", "run", str(config_fp), experiment, "-y"]
+    emit(SubmitEvent(kind="submit", detail=f"amlt run → {experiment}"))
 
     try:
         proc = subprocess.Popen(
@@ -84,17 +107,32 @@ def submit_via_amlt(
             if not line:
                 continue
             output_lines.append(line)
-            if on_output_line is not None:
-                on_output_line(line)
+            emit(SubmitEvent(kind="log", detail=line))
         proc.wait()
 
         if proc.returncode != 0:
-            note = "\n".join(output_lines[-10:])
-            return False, "", note or "amlt run failed"
+            note = "\n".join(output_lines[-10:]) or "amlt run failed"
+            emit(SubmitEvent(kind="error", detail=note[:120]))
+            return SubmitResult(
+                job_name=job_name,
+                status="failed",
+                error=note,
+                note=note,
+            )
 
         portal_url = extract_portal_url("\n".join(output_lines))
-        return True, portal_url, ""
+        emit(SubmitEvent(kind="done", detail=job_name))
+        return SubmitResult(
+            job_name=job_name,
+            azure_name=job_name,
+            status="submitted",
+            portal_url=portal_url,
+        )
     except subprocess.TimeoutExpired:
-        return False, "", "amlt run timed out"
+        msg = "amlt run timed out"
+        emit(SubmitEvent(kind="error", detail=msg))
+        return SubmitResult(job_name=job_name, status="failed", error=msg)
     except Exception as exc:  # pragma: no cover
-        return False, "", str(exc)
+        msg = str(exc)
+        emit(SubmitEvent(kind="error", detail=msg))
+        return SubmitResult(job_name=job_name, status="failed", error=msg)

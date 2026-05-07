@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Callable
 
-from ..models import SubmitRequest, SubmitResult
+from ..models import SubmitEvent, SubmitRequest, SubmitResult
 from .compute import (
     _build_identity,
     _build_resources,
@@ -24,19 +24,16 @@ from .submit import (
 def submit_via_native(
     request: SubmitRequest,
     *,
-    on_status: Callable[[str, str], None] | None = None,
-    on_upload_progress: Callable[[int, int, int, str], None] | None = None,
+    on_event: Callable[[SubmitEvent], None] | None = None,
 ) -> SubmitResult:
-    """Submit via the native AJ REST backend."""
-    # Look up ``submit`` via the package so tests can patch
-    # ``azure_jobs.core.submit.submit`` to mock the whole submission.
+    """Submit via the native AJ REST backend.
+
+    Thin alias over :func:`submit` looked up through the package so tests
+    can patch ``azure_jobs.core.submit.submit`` to mock the whole flow.
+    """
     import azure_jobs.core.submit as _pkg
 
-    return _pkg.submit(
-        request,
-        on_status=on_status,
-        on_upload_progress=on_upload_progress,
-    )
+    return _pkg.submit(request, on_event=on_event)
 
 
 __all__ = [

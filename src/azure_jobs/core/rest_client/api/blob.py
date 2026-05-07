@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import base64
-import fnmatch
 import hashlib
 import hmac
 import logging
@@ -16,6 +15,8 @@ from typing import Any
 from urllib.parse import urlparse
 
 import requests
+
+from azure_jobs.utils.fs import walk_code
 
 from ..auth import (
     API_VERSION,
@@ -35,7 +36,6 @@ log = logging.getLogger(__name__)
 _BLOB_API_VERSION = "2024-11-04"
 _STORAGE_API_VERSION = "2023-01-01"
 _MAX_UPLOAD_WORKERS = 16
-_IGNORE_DIR_NAMES = ("__pycache__", ".git", ".venv", "node_modules")
 
 
 @dataclass
@@ -70,27 +70,6 @@ class _Credentials:
     @classmethod
     def from_bearer(cls, token: str) -> "_Credentials":
         return cls(bearer=token)
-
-
-def _should_ignore(
-    fp: Path,
-    root: Path,
-    patterns: list[str] | None,
-) -> bool:
-    """Check if a file should be excluded from code upload."""
-    rel = str(fp.relative_to(root))
-    parts = rel.split("/")
-    for skip in _IGNORE_DIR_NAMES:
-        if skip in parts:
-            return True
-    # Skip .azure_jobs metadata but keep .azure_jobs/scripts/
-    if ".azure_jobs" in parts:
-        aj_idx = parts.index(".azure_jobs")
-        if aj_idx + 1 >= len(parts) or parts[aj_idx + 1] != "scripts":
-            return True
-    if not patterns:
-        return False
-    return any(fnmatch.fnmatch(rel, p) for p in patterns)
 
 
 class BlobAPI:
@@ -220,11 +199,9 @@ class BlobAPI:
         extra_files: dict[str, str | bytes] | None,
     ) -> tuple[dict[str, Path], dict[str, bytes]]:
         """Walk *code_dir* and split into on-disk paths and in-memory blobs."""
-        code_path = Path(code_dir).resolve()
-        on_disk: dict[str, Path] = {}
-        for fp in sorted(code_path.rglob("*")):
-            if fp.is_file() and not _should_ignore(fp, code_path, ignore_patterns):
-                on_disk[str(fp.relative_to(code_path))] = fp
+        on_disk: dict[str, Path] = {
+            cf.rel: cf.path for cf in walk_code(code_dir, ignore_patterns)
+        }
         in_memory: dict[str, bytes] = {}
         if extra_files:
             for name, content in extra_files.items():

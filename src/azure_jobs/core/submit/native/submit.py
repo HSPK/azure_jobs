@@ -5,13 +5,13 @@ from __future__ import annotations
 import logging
 import os
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable
 
 if TYPE_CHECKING:
     from azure_jobs.core.rest_client import AzureMLClient
 
 from ...errors import extract_json_error as _extract_error_message
-from ..models import SubmitRequest, SubmitResult
+from ..models import SubmitEvent, SubmitRequest, SubmitResult
 from .command import _RUNNER_FILENAME, _generate_runner_script
 from .compute import (
     _build_distribution,
@@ -100,25 +100,38 @@ def _collect_ssh_files(code_dir: str) -> dict[str, bytes]:
 
 
 def submit(
-    request: SubmitRequest, on_status: Any = None, on_upload_progress: Any = None
+    request: SubmitRequest,
+    *,
+    on_event: Callable[[SubmitEvent], None] | None = None,
 ) -> SubmitResult:
     """Submit a job to Azure ML via REST API.
 
     Args:
         request: Complete submission specification.
-        on_status: Optional callback ``(step: str, detail: str) -> None``
-            called at each stage for progress reporting.
-        on_upload_progress: Optional callback
-            ``(completed, total, skipped, current) -> None`` for per-file
-            upload progress; ``current`` is the relative path just processed.
+        on_event: Optional structured callback receiving :class:`SubmitEvent`
+            records for each lifecycle step (``auth`` → ``environment`` →
+            ``storage`` → ``command`` → ``code`` → ``submit`` → ``done``),
+            per-file upload progress (``upload``), and informational lines
+            (``log``) printable above any progress UI.
 
     Returns:
         SubmitResult with job name and status.
     """
+    emit = on_event or (lambda _ev: None)
 
     def _status(step: str, detail: str = "") -> None:
-        if on_status:
-            on_status(step, detail)
+        emit(SubmitEvent(kind=step, detail=detail))
+
+    def _on_upload(completed: int, total: int, skipped: int, current: str = "") -> None:
+        emit(
+            SubmitEvent(
+                kind="upload",
+                completed=completed,
+                total=total,
+                skipped=skipped,
+                current=current,
+            )
+        )
 
     try:
         _status("auth", "Authenticating…")
@@ -132,12 +145,11 @@ def submit(
 
         _status("storage", f"Configuring {len(request.storage)} storage mount(s)…")
         outputs, poc_props, dataref_env = _build_storage_mounts(request, client)
-
         _status("command", "Building command…")
         distribution = _build_distribution(request)
         identity = _build_identity(request)
         compute = _resolve_compute(request)
-        resources = _build_resources(request, compute_id=compute, on_status=_status)
+        resources = _build_resources(request, compute_id=compute, on_log=_status)
         env_vars = _build_env_vars(request, dataref_env)
 
         # Singularity identity: resolve UAI client_id for storage auth
@@ -161,7 +173,7 @@ def submit(
             code_root,
             ignore_patterns=request.code_ignore or None,
             extra_files=extra_files,
-            on_progress=on_upload_progress,
+            on_progress=_on_upload,
         )
 
         command_str = f"bash {_RUNNER_FILENAME}"

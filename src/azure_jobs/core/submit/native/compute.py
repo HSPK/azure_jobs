@@ -53,7 +53,7 @@ def _resolve_compute(request: SubmitRequest) -> str:
 def _build_resources(
     request: SubmitRequest,
     compute_id: str = "",
-    on_status: Any = None,
+    on_log: Any = None,
 ) -> dict[str, Any] | None:
     """Build the ``resources`` dict for Singularity targets.
 
@@ -69,8 +69,8 @@ def _build_resources(
     from azure_jobs.core.sku import resolve_instance_type
 
     sku = request.sku
-    if on_status:
-        on_status("sku", f"Resolving SKU {sku}…")
+    if on_log:
+        on_log(f"Resolving SKU {sku}\u2026")
 
     instance_names = resolve_instance_type(
         sku,

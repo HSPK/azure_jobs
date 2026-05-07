@@ -272,8 +272,8 @@ class TestSubmitMocked:
 
         steps = []
 
-        def on_status(step, detail):
-            steps.append(step)
+        def on_event(ev):
+            steps.append(ev.kind)
 
         with patch("azure_jobs.core.submit._get_rest_client") as mock_factory:
             mock_client = mock_factory.return_value
@@ -282,7 +282,7 @@ class TestSubmitMocked:
             }
             mock_client.blob.upload_code.return_value = "code-id"
             mock_client.jobs.create_or_update.return_value = mock_returned
-            submit(request, on_status=on_status)
+            submit(request, on_event=on_event)
 
         assert "auth" in steps
         assert "submit" in steps
