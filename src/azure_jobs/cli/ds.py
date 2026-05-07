@@ -31,8 +31,11 @@ def ds_list(ws_name: str | None) -> None:
         return
 
     table = Table(
-        show_header=True, header_style="bold", pad_edge=True,
-        title="[bold]Datastores[/bold]", title_style="",
+        show_header=True,
+        header_style="bold",
+        pad_edge=True,
+        title="[bold]Datastores[/bold]",
+        title_style="",
     )
     table.add_column("Name", style="cyan bold")
     table.add_column("Type")
@@ -47,7 +50,9 @@ def ds_list(ws_name: str | None) -> None:
         is_default = "✓" if props.get("isDefault") else ""
 
         account = props.get("accountName", "") or "—"
-        container = props.get("containerName", "") or props.get("fileSystemName", "") or "—"
+        container = (
+            props.get("containerName", "") or props.get("fileSystemName", "") or "—"
+        )
 
         table.add_row(name, ds_type, account, container, is_default)
 
@@ -71,7 +76,8 @@ def ds_show(name: str, ws_name: str | None) -> None:
     client = create_rest_client(ws_name=ws_name)
 
     with console.status(
-        f"[bold cyan]Fetching '{name}'…[/bold cyan]", spinner="dots",
+        f"[bold cyan]Fetching '{name}'…[/bold cyan]",
+        spinner="dots",
     ):
         ds = client.resources.get_datastore(name)
 
@@ -99,5 +105,12 @@ def ds_show(name: str, ws_name: str | None) -> None:
     grid.add_row("Modified", sys_data.get("lastModifiedAt", "") or "—")
 
     console.print()
-    console.print(Panel(grid, title=f"[bold]Datastore: {name}[/bold]", border_style="cyan", expand=False))
+    console.print(
+        Panel(
+            grid,
+            title=f"[bold]Datastore: {name}[/bold]",
+            border_style="cyan",
+            expand=False,
+        )
+    )
     console.print()

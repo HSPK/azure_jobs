@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import subprocess
 
-import click
-
 from . import main
 
 
@@ -17,10 +15,11 @@ def auth_group() -> None:
 @auth_group.command(name="status")
 def auth_status() -> None:
     """Show current Azure login status, subscription, and credential health."""
-    from azure_jobs.core.config import az_json
-    from azure_jobs.utils.ui import console
     from rich.panel import Panel
     from rich.table import Table
+
+    from azure_jobs.core.config import az_json
+    from azure_jobs.utils.ui import console
 
     rows: list[tuple[str, str]] = []
 
@@ -41,6 +40,7 @@ def auth_status() -> None:
     sdk_ok = False
     try:
         from azure.identity import AzureCliCredential
+
         cred = AzureCliCredential()
         token = cred.get_token("https://management.azure.com/.default")
         if token and token.token:
@@ -53,11 +53,14 @@ def auth_status() -> None:
         try:
             import azure.identity  # noqa: F401
         except ImportError:
-            rows.append(("Credential", "[yellow]⚠ azure-identity not installed[/yellow]"))
+            rows.append(
+                ("Credential", "[yellow]⚠ azure-identity not installed[/yellow]")
+            )
 
     # ── 3. aj workspace config ──
     try:
         from azure_jobs.core.config import read_config
+
         cfg = read_config()
         ws = cfg.get("workspace", {})
         if ws and ws.get("workspace_name"):
@@ -76,7 +79,9 @@ def auth_status() -> None:
         grid.add_row(key, val)
 
     console.print()
-    console.print(Panel(grid, title="[bold]Azure Auth[/bold]", border_style="cyan", expand=False))
+    console.print(
+        Panel(grid, title="[bold]Azure Auth[/bold]", border_style="cyan", expand=False)
+    )
     console.print()
 
 
@@ -88,6 +93,7 @@ def auth_login() -> None:
     console.print("[info]ℹ[/info] Opening Azure login…")
     try:
         from azure_jobs.core.config import find_az
+
         subprocess.run([find_az(), "login"], check=False)
     except FileNotFoundError:
         console.print("[error]✗[/error] Azure CLI not installed")
@@ -102,6 +108,7 @@ def auth_logout() -> None:
 
     try:
         from azure_jobs.core.config import find_az
+
         result = subprocess.run(
             [find_az(), "logout"],
             capture_output=True,

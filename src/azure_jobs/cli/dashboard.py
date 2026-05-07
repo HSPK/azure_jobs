@@ -9,11 +9,16 @@ from azure_jobs.cli import main
 
 @main.command(name="dash")
 @click.option(
-    "-n", "--last", default=100, show_default=True,
+    "-n",
+    "--last",
+    default=100,
+    show_default=True,
     help="Number of recent jobs to show",
 )
 @click.option(
-    "--page-size", default=None, type=int,
+    "--page-size",
+    default=None,
+    type=int,
     help="Jobs per page (default: 30, configurable in aj_config.json)",
 )
 def dashboard(last: int, page_size: int | None) -> None:
@@ -26,10 +31,11 @@ def dashboard(last: int, page_size: int | None) -> None:
     app = AjDashboard(last=last, page_size=page_size)
     app.run(mouse=False)
 
-    # Force-exit if background Azure SDK threads are still blocking.
-    # Textual @work threads use run_in_executor which can't be interrupted
-    # while blocked on HTTP calls.  Without this, the process hangs.
-    alive = [t for t in threading.enumerate() if t is not threading.main_thread() and t.is_alive()]
+    alive = [
+        t
+        for t in threading.enumerate()
+        if t is not threading.main_thread() and t.is_alive()
+    ]
     if alive:
         os._exit(0)
 

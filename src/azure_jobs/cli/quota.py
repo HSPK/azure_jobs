@@ -14,7 +14,13 @@ def quota_group() -> None:
 
 @quota_group.command(name="list")
 @click.option("--aml", "backend", flag_value="aml", help="Show AML workspace quotas")
-@click.option("--sing", "backend", flag_value="sing", default=True, help="Show Singularity VC quotas (default)")
+@click.option(
+    "--sing",
+    "backend",
+    flag_value="sing",
+    default=True,
+    help="Show Singularity VC quotas (default)",
+)
 @click.option("--all", "show_all", is_flag=True, help="Include zero-quota families")
 @click.option("-t", "--template", default=None, help="Read VC config from template")
 def quota_list(backend: str, show_all: bool, template: str | None) -> None:
@@ -32,6 +38,7 @@ def quota_list(backend: str, show_all: bool, template: str | None) -> None:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _fmt_used_limit(used: int | None, limit: int) -> str:
     """Format a ``used/limit`` cell with color coding like amlt."""
@@ -57,9 +64,13 @@ def _parse_compute_nodes(props: dict) -> tuple[int, int, int]:
 
 
 def _fmt_nodes(
-    idle: int, busy: int, max_nodes: int,
+    idle: int,
+    busy: int,
+    max_nodes: int,
     low_priority: bool,
-    w_idle: int = 1, w_busy: int = 1, w_total: int = 1,
+    w_idle: int = 1,
+    w_busy: int = 1,
+    w_total: int = 1,
 ) -> str:
     """Format the Nodes cell with alignment and conditional dimming."""
     if max_nodes == 0:
@@ -70,7 +81,9 @@ def _fmt_nodes(
     if idle == 0 and busy == 0:
         return f"[dim]{i_s} idle {b_s} busy /{t_s}[/dim]"
     free_col = "red" if low_priority else "green"
-    idle_part = f"[{free_col}]{i_s}[/{free_col}] idle" if idle > 0 else f"[dim]{i_s} idle[/dim]"
+    idle_part = (
+        f"[{free_col}]{i_s}[/{free_col}] idle" if idle > 0 else f"[dim]{i_s} idle[/dim]"
+    )
     busy_part = f"[cyan]{b_s}[/cyan] busy" if busy > 0 else f"[dim]{b_s} busy[/dim]"
     return f"{idle_part} {busy_part} [dim]/{t_s}[/dim]"
 
@@ -78,6 +91,7 @@ def _fmt_nodes(
 # ---------------------------------------------------------------------------
 # Singularity quotas
 # ---------------------------------------------------------------------------
+
 
 def _discover_vcs(template: str | None, arm_client: object | None = None) -> list:
     """Discover VCs: from explicit template or via Resource Graph."""
@@ -94,11 +108,15 @@ def _discover_vcs(template: str | None, arm_client: object | None = None) -> lis
             t = conf.get("target", {})
             if t.get("name") and t.get("service", "aml") == "sing":
                 ws = get_workspace_config()
-                return [VCInfo(
-                    name=t["name"],
-                    resource_group=t.get("resource_group") or ws.get("resource_group", ""),
-                    subscription_id=t.get("subscription_id") or ws.get("subscription_id", ""),
-                )]
+                return [
+                    VCInfo(
+                        name=t["name"],
+                        resource_group=t.get("resource_group")
+                        or ws.get("resource_group", ""),
+                        subscription_id=t.get("subscription_id")
+                        or ws.get("subscription_id", ""),
+                    )
+                ]
 
     # Discover all VCs via Azure Resource Graph
     return discover_virtual_clusters(arm_client=arm_client)
@@ -106,11 +124,11 @@ def _discover_vcs(template: str | None, arm_client: object | None = None) -> lis
 
 def _show_sing_quotas(show_all: bool, template: str | None) -> None:
     """Discover all VCs and display their quotas grouped by VC."""
+    from rich.table import Table
+
     from azure_jobs.core.rest_client import AzureARMClient
     from azure_jobs.core.sku import SLA_TIERS, fetch_vc_quotas
-    from azure_jobs.utils.ui import console, error, warning
-
-    from rich.table import Table
+    from azure_jobs.utils.ui import console, error
 
     # Single ARM client reused for discovery + all quota fetches
     arm = AzureARMClient()
@@ -123,7 +141,9 @@ def _show_sing_quotas(show_all: bool, template: str | None) -> None:
 
     if not vcs:
         error("No Singularity virtual clusters found")
-        console.print("  Make sure you are logged in (`az login`) and have access to VCs")
+        console.print(
+            "  Make sure you are logged in (`az login`) and have access to VCs"
+        )
         raise SystemExit(1)
 
     # Fetch quotas for each VC with (x/N) progress
@@ -163,7 +183,9 @@ def _show_sing_quotas(show_all: bool, template: str | None) -> None:
     table.add_column("Series", style="bold cyan", no_wrap=True)
     table.add_column("Accelerator", no_wrap=True)
     for tier in active_tiers:
-        color = {"Premium": "green", "Standard": "yellow", "Basic": "bright_red"}.get(tier, "white")
+        color = {"Premium": "green", "Standard": "yellow", "Basic": "bright_red"}.get(
+            tier, "white"
+        )
         table.add_column(f"[{color}]{tier}[/{color}]", justify="right", no_wrap=True)
     if has_quota_limit:
         table.add_column("[cyan]Quota[/cyan]", justify="right", no_wrap=True)
@@ -204,6 +226,7 @@ def _show_sing_quotas(show_all: bool, template: str | None) -> None:
             table.add_section()
 
     from azure_jobs.utils.ui import print_table
+
     print_table(table)
 
 
@@ -273,17 +296,18 @@ def _portal_compute_url(sub: str, rg: str, ws: str, cluster: str) -> str:
 
 def _show_aml_quotas(show_all: bool) -> None:
     """Display AML compute clusters across all discovered workspaces."""
-    from azure_jobs.core.rest_client import AzureARMClient
-    from azure_jobs.utils.ui import console, error, warning
-
     from rich.table import Table
     from rich.text import Text
+
+    from azure_jobs.core.rest_client import AzureARMClient
+    from azure_jobs.utils.ui import console, error, warning
 
     arm = AzureARMClient()
 
     # Discover all AML workspaces
     with console.status(
-        "[bold cyan]Discovering AML workspaces…[/bold cyan]", spinner="dots",
+        "[bold cyan]Discovering AML workspaces…[/bold cyan]",
+        spinner="dots",
     ):
         try:
             workspaces = arm.list_ml_workspaces()
@@ -293,7 +317,9 @@ def _show_aml_quotas(show_all: bool) -> None:
 
     if not workspaces:
         error("No AML workspaces found")
-        console.print("  Make sure you are logged in (`az login`) and have access to workspaces")
+        console.print(
+            "  Make sure you are logged in (`az login`) and have access to workspaces"
+        )
         raise SystemExit(1)
 
     # Fetch computes for each workspace with (x/N) progress
@@ -306,10 +332,13 @@ def _show_aml_quotas(show_all: bool) -> None:
         ):
             try:
                 raw = arm.list_workspace_computes(
-                    ws["subscriptionId"], ws["resourceGroup"], ws_name,
+                    ws["subscriptionId"],
+                    ws["resourceGroup"],
+                    ws_name,
                 )
                 clusters = [
-                    c for c in raw
+                    c
+                    for c in raw
                     if c.get("properties", {}).get("computeType") == "AmlCompute"
                 ]
                 if clusters or show_all:
@@ -378,11 +407,20 @@ def _show_aml_quotas(show_all: bool) -> None:
         location = c.get("location", "") or ""
 
         idle, busy, max_nodes = _parse_compute_nodes(props)
-        nodes_s = _fmt_nodes(idle, busy, max_nodes, vm_pri == "LowPriority",
-                             max_idle_w, max_busy_w, max_total_w)
+        nodes_s = _fmt_nodes(
+            idle,
+            busy,
+            max_nodes,
+            vm_pri == "LowPriority",
+            max_idle_w,
+            max_busy_w,
+            max_total_w,
+        )
 
         sku = _vm_sku_label(vm_size)
-        sku_s = f"[bold]{sku}[/bold]" if sku and sku != "CPU" else (sku or "[dim]—[/dim]")
+        sku_s = (
+            f"[bold]{sku}[/bold]" if sku and sku != "CPU" else (sku or "[dim]—[/dim]")
+        )
 
         pri_s = {
             "LowPriority": "[yellow]Low[/yellow]",
@@ -392,15 +430,19 @@ def _show_aml_quotas(show_all: bool) -> None:
         portal = _portal_compute_url(sub, rg, ws_name, name)
         portal_text = Text("portal ↗", style=f"dim link {portal}")
 
-        table.add_row(ws_label, name, vm_size, sku_s, nodes_s, pri_s, location, portal_text)
+        table.add_row(
+            ws_label, name, vm_size, sku_s, nodes_s, pri_s, location, portal_text
+        )
 
     from azure_jobs.utils.ui import print_table
+
     print_table(table)
 
 
 # ---------------------------------------------------------------------------
 # Shortcut
 # ---------------------------------------------------------------------------
+
 
 @main.command(name="ql", hidden=True)
 @click.option("--aml", "backend", flag_value="aml")

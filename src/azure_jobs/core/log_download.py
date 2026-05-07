@@ -42,9 +42,9 @@ def list_log_files(
     """
     log_urls = _get_log_urls(job_name, rest_client, workspace)
     paths = [
-        p for p in log_urls
-        if p.endswith((".txt", ".log", ".out", ".err"))
-        or "/std_log" in p
+        p
+        for p in log_urls
+        if p.endswith((".txt", ".log", ".out", ".err")) or "/std_log" in p
     ]
     paths.sort(key=lambda p: (p.rsplit("/", 1)[0] if "/" in p else "", p))
     return paths
@@ -121,6 +121,7 @@ def _get_log_urls(
     """Get ``{log_path: signed_url}`` dict from REST API."""
     if rest_client is None:
         from azure_jobs.core.rest_client import create_rest_client
+
         rest_client = create_rest_client(workspace)
     return rest_client.jobs.get_run_log_urls(job_name)
 
