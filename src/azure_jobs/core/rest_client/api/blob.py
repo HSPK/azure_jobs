@@ -183,7 +183,6 @@ class BlobAPI:
         extra_files: dict[str, str | bytes] | None = None,
         on_progress: Any = None,
     ) -> str:
-        print(code_dir)
         """Upload code files to workspace blob store and register as code asset.
 
         Args:
