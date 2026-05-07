@@ -6,21 +6,32 @@ module level so the module loads instantly and is easy to unit-test.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
+from rich.errors import MarkupError
+from rich.markup import escape, render
 from rich.text import Text
 from textual.widgets.option_list import Option
 
 from azure_jobs.utils.ui import icon_style
 
+if TYPE_CHECKING:
+    from textual.app import App
+    from textual.widget import Widget
+
 # ---- TUI-specific constants ------------------------------------------------
 
 STATUS_CYCLE = ["", "Running", "Completed", "Failed", "Canceled"]
+# Statuses that mean the job is no longer producing logs / can't be cancelled.
+TERMINAL_STATUSES = frozenset({"Completed", "Failed", "Canceled"})
 
 KW = 14
 LEFT_WIDTH = 38
 NAME_MAX = LEFT_WIDTH - 8
 PAGE_SIZE = 50
+# Hard cap on total jobs auto-prefetched across server pages, to bound
+# the auto-prefetch loop triggered by narrow filters.
+FETCH_LIMIT = 500
 
 
 def get_page_size() -> int:
@@ -45,6 +56,45 @@ def trunc(s: str, maxlen: int = NAME_MAX) -> str:
         return s
     half = (maxlen - 3) // 2
     return s[:half] + "..." + s[-(maxlen - 3 - half) :]
+
+
+# ---- safe markup rendering boundary ----------------------------------------
+#
+# Every widget update path that takes a markup string ultimately goes
+# through ``rich.markup.render``. If user-supplied data (job names, error
+# strings, log content, REST exception messages) reaches such a string
+# unescaped, a stray ``[...]`` sequence raises :class:`MarkupError` and
+# crashes the worker / blocks the UI. These two helpers form the single
+# universal boundary: callers stay markup-friendly, but a parse failure
+# falls back to plain text instead of propagating.
+
+
+def safe_markup(markup: str) -> Text:
+    """Render *markup* via Rich, falling back to plain text on parse error."""
+    try:
+        return render(markup)
+    except MarkupError:
+        return Text(markup)
+
+
+def safe_set(widget: "Widget | None", markup: str) -> None:
+    """Update a Static-like widget with *markup*, never raising MarkupError."""
+    if widget is None:
+        return
+    try:
+        widget.update(safe_markup(markup))
+    except Exception:
+        pass
+
+
+def safe_notify(
+    app: "App", markup: str, *, severity: str = "information", timeout: float = 5
+) -> None:
+    """Notify with markup, escaping if it would otherwise raise MarkupError."""
+    try:
+        app.notify(markup, severity=severity, timeout=timeout)
+    except MarkupError:
+        app.notify(escape(markup), severity=severity, timeout=timeout)
 
 
 def make_option(job: dict[str, Any]) -> Option:
@@ -89,13 +139,13 @@ def info_block(job: dict[str, Any]) -> str:
         short = short_portal_url(url, rich_link=False)
         if not short.startswith("http"):
             short = f"https://{short}"
+        # Escape — URLs containing ``]`` would otherwise be parsed as
+        # markup close tags and crash Rich.
+        from rich.markup import escape as _escape
+
         lines.append("")
-        lines.append(f"  [dim]→[/dim] [cyan underline]{short}[/cyan underline]")
+        lines.append(
+            f"  [dim]→[/dim] [cyan underline]{_escape(short)}[/cyan underline]"
+        )
 
     return "\n".join(lines)
-
-
-def fmt_dur(secs: int) -> str:
-    from azure_jobs.utils.time import format_duration
-
-    return format_duration(secs)

@@ -66,9 +66,9 @@ async def _load_jobs(app, pilot=None):
     app.workers.cancel_all()
     if pilot:
         await pilot.pause()
-    app._on_jobs_loaded([dict(j) for j in _JOBS])
-    if app._filtered:
-        app._show_job_info(app._filtered[0])
+    app.jobs.fetcher.load([dict(j) for j in _JOBS])
+    if app.jobs.state.filtered:
+        app.jobs.view.show_info(app.jobs.state.filtered[0])
 
 
 @pytest.mark.asyncio
@@ -130,13 +130,13 @@ async def test_view_toggle(_dash) -> None:
     async with _dash.run_test(size=(120, 30)) as pilot:
         await _load_jobs(_dash, pilot)
         await pilot.pause()
-        assert _dash._view_mode == "info"
+        assert _dash.logs.state.view_mode == "info"
         _dash.action_show_logs()
         await pilot.pause()
-        assert _dash._view_mode == "logs"
+        assert _dash.logs.state.view_mode == "logs"
         _dash.action_show_info()
         await pilot.pause()
-        assert _dash._view_mode == "info"
+        assert _dash.logs.state.view_mode == "info"
 
 
 @pytest.mark.asyncio
@@ -146,15 +146,15 @@ async def test_status_picker(_dash) -> None:
         await _load_jobs(_dash, pilot)
         await pilot.pause()
         # Simulate picker result directly
-        _dash._on_status_picked("Failed")
+        _dash.jobs.filters.apply_status("Failed")
         await pilot.pause()
-        assert _dash._status_filter == "Failed"
+        assert _dash.jobs.state.status_filter == "Failed"
         ol = _dash.query_one("#job-list")
         assert ol.option_count == 1
         # Clear
-        _dash._on_status_picked("")
+        _dash.jobs.filters.apply_status("")
         await pilot.pause()
-        assert _dash._status_filter == ""
+        assert _dash.jobs.state.status_filter == ""
         assert ol.option_count == 3
 
 
@@ -176,7 +176,7 @@ async def test_escape_opens_help(_dash) -> None:
         await pilot.pause()
         _dash.action_show_help()
         await pilot.pause()
-        from azure_jobs.tui.modals import HelpScreen
+        from azure_jobs.tui.components import HelpScreen
 
         screens = [s for s in _dash.screen_stack if isinstance(s, HelpScreen)]
         assert len(screens) == 1
@@ -195,26 +195,26 @@ async def test_workspace_picker(_dash) -> None:
     async with _dash.run_test(size=(120, 30)) as pilot:
         await _load_jobs(_dash, pilot)
         await pilot.pause()
-        _dash._subscription_id = "sub-123"
-        _dash._workspaces = [
+        _dash.workspace.state.subscription_id = "sub-123"
+        _dash.workspace.state.available = [
             {"name": "ws-a", "resource_group": "rg-1"},
             {"name": "ws-b", "resource_group": "rg-2"},
         ]
-        _dash._workspace = AJWorkspace(
+        _dash.workspace.state.current = AJWorkspace(
             subscription_id="sub-123",
             resource_group="rg-1",
             workspace_name="ws-a",
         )
         _dash.action_pick_workspace()
         await pilot.pause()
-        from azure_jobs.tui.modals import PickerModal
+        from azure_jobs.tui.components import PickerModal
 
         screens = [s for s in _dash.screen_stack if isinstance(s, PickerModal)]
         assert len(screens) == 1
         # Escape cancels
         await pilot.press("escape")
         await pilot.pause()
-        assert _dash._workspace.workspace_name == "ws-a"  # unchanged
+        assert _dash.workspace.state.current.workspace_name == "ws-a"  # unchanged
 
 
 @pytest.mark.asyncio
@@ -223,16 +223,17 @@ async def test_switch_workspace(_dash) -> None:
     async with _dash.run_test(size=(120, 30)) as pilot:
         await _load_jobs(_dash, pilot)
         await pilot.pause()
-        _dash._subscription_id = "sub-123"
-        _dash._workspaces = [
+        _dash.workspace.state.subscription_id = "sub-123"
+        _dash.workspace.state.available = [
             {"name": "ws-a", "resource_group": "rg-1", "location": "eastus"},
             {"name": "ws-b", "resource_group": "rg-2", "location": "westus"},
         ]
-        _dash._switch_workspace(1)
+        _dash.workspace.switch(1)
         await pilot.pause()
-        assert _dash._workspace.workspace_name == "ws-b"
-        assert _dash._workspace.resource_group == "rg-2"
-        assert _dash._workspace.subscription_id == "sub-123"
+        cur = _dash.workspace.state.current
+        assert cur.workspace_name == "ws-b"
+        assert cur.resource_group == "rg-2"
+        assert cur.subscription_id == "sub-123"
 
 
 def test_make_option_display_name() -> None:
@@ -278,8 +279,8 @@ async def test_info_shows_full_name(_dash) -> None:
     async with _dash.run_test(size=(120, 30)) as pilot:
         _dash.workers.cancel_all()
         await pilot.pause()
-        _dash._on_jobs_loaded(jobs)
-        _dash._show_job_info(jobs[0])
+        _dash.jobs.fetcher.load(jobs)
+        _dash.jobs.view.show_info(jobs[0])
         text = _dash.query_one("#info-content").content
         assert long_name in text
 
@@ -290,13 +291,13 @@ async def test_page_loaded_appends(_dash) -> None:
     async with _dash.run_test(size=(120, 30)) as pilot:
         _dash.workers.cancel_all()
         await pilot.pause()
-        _dash._on_jobs_loaded([dict(_JOBS[0])])
-        assert len(_dash._all_jobs) == 1
+        _dash.jobs.fetcher.load([dict(_JOBS[0])])
+        assert len(_dash.jobs.state.all_jobs) == 1
         # Simulate a new batch arriving — merges into current page
-        _dash._on_batch_arrived([dict(_JOBS[1])], False)
-        assert len(_dash._all_jobs) == 2
-        assert len(_dash._pages) == 1  # merged into same page
-        assert _dash._current_page == 0
+        _dash.jobs.fetcher.merge_batch([dict(_JOBS[1])], False)
+        assert len(_dash.jobs.state.all_jobs) == 2
+        assert len(_dash.jobs.state.pages) == 1  # merged into same page
+        assert _dash.jobs.state.current_page == 0
         assert _dash.query_one("#job-list").option_count == 2
 
 
@@ -363,7 +364,7 @@ async def test_cancel_shows_modal(_dash) -> None:
         await pilot.pause()
         _dash.action_cancel_job()
         await pilot.pause()
-        from azure_jobs.tui.modals import ConfirmCancel
+        from azure_jobs.tui.components import ConfirmCancel
 
         screens = [s for s in _dash.screen_stack if isinstance(s, ConfirmCancel)]
         assert len(screens) == 1
@@ -381,14 +382,14 @@ async def test_search_filters_by_keyword(_dash) -> None:
         await _load_jobs(_dash, pilot)
         await pilot.pause()
         # Set search query directly (Input captures keypresses)
-        _dash._search_query = "bert"
-        _dash._show_current_page()
+        _dash.jobs.state.search_query = "bert"
+        _dash.jobs.view.refresh()
         await pilot.pause()
         ol = _dash.query_one("#job-list")
         assert ol.option_count == 1  # only eval-bert
         # Clear search
-        _dash._search_query = ""
-        _dash._show_current_page()
+        _dash.jobs.state.search_query = ""
+        _dash.jobs.view.refresh()
         await pilot.pause()
         assert ol.option_count == 3
 
@@ -399,13 +400,13 @@ async def test_experiment_filter(_dash) -> None:
     async with _dash.run_test(size=(120, 30)) as pilot:
         await _load_jobs(_dash, pilot)
         await pilot.pause()
-        _dash._experiment_filter = "cv"
-        _dash._show_current_page()
+        _dash.jobs.state.experiment_filter = "cv"
+        _dash.jobs.view.refresh()
         await pilot.pause()
         ol = _dash.query_one("#job-list")
         assert ol.option_count == 1  # only train-vision (cv)
-        _dash._experiment_filter = ""
-        _dash._show_current_page()
+        _dash.jobs.state.experiment_filter = ""
+        _dash.jobs.view.refresh()
         await pilot.pause()
         assert ol.option_count == 3
 
@@ -417,13 +418,13 @@ async def test_combined_filters(_dash) -> None:
         await _load_jobs(_dash, pilot)
         await pilot.pause()
         # Filter by experiment=nlp → 2 jobs
-        _dash._experiment_filter = "nlp"
-        _dash._show_current_page()
+        _dash.jobs.state.experiment_filter = "nlp"
+        _dash.jobs.view.refresh()
         await pilot.pause()
         assert _dash.query_one("#job-list").option_count == 2
         # Add status=Failed → 1 job
-        _dash._status_filter = "Failed"
-        _dash._show_current_page()
+        _dash.jobs.state.status_filter = "Failed"
+        _dash.jobs.view.refresh()
         await pilot.pause()
         assert _dash.query_one("#job-list").option_count == 1
 
@@ -452,7 +453,7 @@ async def test_status_picker_modal(_dash) -> None:
         await pilot.pause()
         _dash.action_pick_status()
         await pilot.pause()
-        from azure_jobs.tui.modals import PickerModal
+        from azure_jobs.tui.components import PickerModal
 
         screens = [s for s in _dash.screen_stack if isinstance(s, PickerModal)]
         assert len(screens) == 1
@@ -469,12 +470,12 @@ async def test_experiment_picker(_dash) -> None:
     async with _dash.run_test(size=(120, 30)) as pilot:
         await _load_jobs(_dash, pilot)
         await pilot.pause()
-        _dash._on_experiment_picked("cv")
+        _dash.jobs.filters.apply_experiment("cv")
         await pilot.pause()
-        assert _dash._experiment_filter == "cv"
+        assert _dash.jobs.state.experiment_filter == "cv"
         ol = _dash.query_one("#job-list")
         assert ol.option_count == 1  # only train-vision (cv)
-        _dash._on_experiment_picked("")
+        _dash.jobs.filters.apply_experiment("")
         await pilot.pause()
         assert ol.option_count == 3
 
@@ -485,16 +486,16 @@ async def test_clear_filters(_dash) -> None:
     async with _dash.run_test(size=(120, 30)) as pilot:
         await _load_jobs(_dash, pilot)
         await pilot.pause()
-        _dash._status_filter = "Running"
-        _dash._experiment_filter = "nlp"
-        _dash._search_query = "train"
-        _dash._show_current_page()
+        _dash.jobs.state.status_filter = "Running"
+        _dash.jobs.state.experiment_filter = "nlp"
+        _dash.jobs.state.search_query = "train"
+        _dash.jobs.view.refresh()
         await pilot.pause()
         _dash.action_clear_filters()
         await pilot.pause()
-        assert _dash._status_filter == ""
-        assert _dash._experiment_filter == ""
-        assert _dash._search_query == ""
+        assert _dash.jobs.state.status_filter == ""
+        assert _dash.jobs.state.experiment_filter == ""
+        assert _dash.jobs.state.search_query == ""
         assert _dash.query_one("#job-list").option_count == 3
 
 
@@ -517,7 +518,7 @@ async def test_search_bar_toggle(_dash) -> None:
 
 def test_picker_modal_instantiation() -> None:
     """_PickerModal can be instantiated with items and current value."""
-    from azure_jobs.tui.modals import PickerModal
+    from azure_jobs.tui.components import PickerModal
 
     items = [("", "All"), ("Running", "Running"), ("Failed", "Failed")]
     modal = PickerModal("Test", items, current="")
@@ -527,7 +528,7 @@ def test_picker_modal_instantiation() -> None:
 
 @pytest.mark.asyncio
 async def test_log_line_numbers(_dash) -> None:
-    """_append_log_line adds numbered lines to RichLog."""
+    """_write_log_line adds numbered lines to RichLog."""
     async with _dash.run_test(size=(120, 30)) as pilot:
         await _load_jobs(_dash, pilot)
         await pilot.pause()
@@ -535,11 +536,11 @@ async def test_log_line_numbers(_dash) -> None:
         await pilot.pause()
         lw = _dash.query_one("#log-content")
         lw.clear()
-        _dash._log_line_count = 0
-        _dash._append_log_line("hello world")
-        _dash._append_log_line("second line")
+        _dash.logs.state.line_count = 0
+        _dash.logs.write_line("hello world")
+        _dash.logs.write_line("second line")
         await pilot.pause()
-        assert _dash._log_line_count == 2
+        assert _dash.logs.state.line_count == 2
 
 
 @pytest.mark.asyncio
@@ -548,13 +549,13 @@ async def test_auto_scroll_toggle(_dash) -> None:
     async with _dash.run_test(size=(120, 30)) as pilot:
         await _load_jobs(_dash, pilot)
         await pilot.pause()
-        assert _dash._auto_scroll is True
+        assert _dash.logs.state.auto_scroll is True
         _dash.action_toggle_scroll()
         await pilot.pause()
-        assert _dash._auto_scroll is False
+        assert _dash.logs.state.auto_scroll is False
         _dash.action_toggle_scroll()
         await pilot.pause()
-        assert _dash._auto_scroll is True
+        assert _dash.logs.state.auto_scroll is True
 
 
 @pytest.mark.asyncio
@@ -563,45 +564,46 @@ async def test_log_reset_on_job_switch(_dash) -> None:
     async with _dash.run_test(size=(120, 30)) as pilot:
         await _load_jobs(_dash, pilot)
         await pilot.pause()
-        _dash._log_line_count = 42
-        _dash._logs_job = ""
+        _dash.logs.state.line_count = 42
+        _dash.logs.state.job = ""
         _dash.action_show_logs()
         await pilot.pause()
-        assert _dash._log_line_count == 0
+        assert _dash.logs.state.line_count == 0
 
 
 @pytest.mark.asyncio
-async def test_tab_title_shows_scroll_state(_dash) -> None:
-    """Tab title reflects auto-scroll indicator when in logs mode."""
+async def test_log_header_shows_scroll_state(_dash) -> None:
+    """Right-pane border subtitle reflects auto-scroll indicator in logs mode."""
     async with _dash.run_test(size=(120, 30)) as pilot:
         await _load_jobs(_dash, pilot)
         await pilot.pause()
         _dash.action_show_logs()
         await pilot.pause()
         rp = _dash.query_one("#right-pane")
-        title = str(rp.border_title)
-        assert "▶" in title  # auto-scroll ON
-        _dash._auto_scroll = False
-        _dash._update_tab_title()
+        text = str(rp.border_subtitle)
+        assert "▶" in text  # auto-scroll ON
+        _dash.logs.state.auto_scroll = False
+        _dash.logs._update_header()
         await pilot.pause()
-        title = str(rp.border_title)
-        assert "⏸" in title  # auto-scroll OFF
+        text = str(rp.border_subtitle)
+        assert "⏸" in text  # auto-scroll OFF
 
 
 @pytest.mark.asyncio
 async def test_log_viewer_has_vim_bindings(_dash) -> None:
-    """_LogViewer widget supports j/k/G/g vim keys."""
-    from azure_jobs.tui.log_viewer import LogViewer
+    """LogViewer supports j/k line scroll and g/G jump."""
+    from azure_jobs.tui.components import LogViewer
 
     async with _dash.run_test(size=(120, 30)) as pilot:
         await _load_jobs(_dash, pilot)
         await pilot.pause()
         lv = _dash.query_one("#log-content", LogViewer)
         binding_keys = {b.key for b in lv.BINDINGS}
+        # vim navigation: j/k scroll line, g/G jump
         assert "j" in binding_keys
         assert "k" in binding_keys
-        assert "G" in binding_keys
         assert "g" in binding_keys
+        assert "G" in binding_keys
 
 
 @pytest.mark.asyncio
@@ -640,20 +642,20 @@ async def test_error_lines_inline(_dash) -> None:
         await pilot.pause()
         lw = _dash.query_one("#log-content")
         lw.clear()
-        _dash._log_line_count = 0
-        _dash._append_log_line("normal output")
-        _dash._append_log_error("something failed\ndetails here")
+        _dash.logs.state.line_count = 0
+        _dash.logs.write_line("normal output")
+        _dash.logs.append_error("something failed\ndetails here")
         await pilot.pause()
         # 1 normal + 2 error = 3 total lines
-        assert _dash._log_line_count == 3
+        assert _dash.logs.state.line_count == 3
 
 
 @pytest.mark.asyncio
-async def test_log_viewer_wrap_enabled(_dash) -> None:
-    """Log viewer has wrap=True for long lines."""
-    from azure_jobs.tui.log_viewer import LogViewer
+async def test_log_viewer_wrap_disabled(_dash) -> None:
+    """Log viewer has wrap=False (line numbers conflict with wrapping)."""
+    from azure_jobs.tui.components import LogViewer
 
     async with _dash.run_test(size=(120, 30)) as pilot:
         await pilot.pause()
         lv = _dash.query_one("#log-content", LogViewer)
-        assert lv.wrap is True
+        assert lv.wrap is False

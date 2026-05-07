@@ -1,9 +1,15 @@
-"""Modal screens for the TUI dashboard."""
+"""Modal screens for the TUI dashboard.
+
+Layout/border styling lives in ``dashboard.tcss`` (selectors
+``ModalScreen`` and ``ModalScreen > Vertical``); modal classes here only
+set their own width/height tweaks.
+"""
 
 from __future__ import annotations
 
 from typing import Any
 
+from rich.markup import escape
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
@@ -14,34 +20,10 @@ from textual.widgets.option_list import Option
 
 
 class ConfirmCancel(ModalScreen[bool]):
-    """Modal dialog asking the user to confirm job cancellation.
-
-    Keyboard-first, styled to match :class:`PickerModal` and
-    :class:`HelpScreen` for a consistent design language.
-    """
+    """Modal dialog asking the user to confirm job cancellation."""
 
     CSS = """
-    ConfirmCancel {
-        align: center middle;
-    }
-    #confirm-box {
-        width: 56;
-        height: auto;
-        border: round #3465a4;
-        background: $surface;
-        padding: 1 2;
-    }
-    #confirm-title {
-        width: 100%;
-        margin-bottom: 1;
-    }
-    #confirm-msg {
-        width: 100%;
-        margin-bottom: 1;
-    }
-    #confirm-hint {
-        width: 100%;
-    }
+    ConfirmCancel > Vertical { width: 56; }
     """
 
     BINDINGS = [
@@ -56,16 +38,14 @@ class ConfirmCancel(ModalScreen[bool]):
         self._job_display = job_display
 
     def compose(self) -> ComposeResult:
-        with Vertical(id="confirm-box"):
-            yield Static("[bold]⚠  Cancel Job[/bold]", id="confirm-title")
+        with Vertical():
+            yield Static("[bold]⚠  Cancel Job[/bold]")
             yield Static(
-                f"Cancel [bold cyan]{self._job_display}[/bold cyan]?",
-                id="confirm-msg",
+                f"\nCancel [bold cyan]{escape(self._job_display)}[/bold cyan]?\n"
             )
             yield Static(
                 "  [bold]y[/bold]/[bold]Enter[/bold] confirm   "
                 "[bold]n[/bold]/[bold]Esc[/bold] dismiss",
-                id="confirm-hint",
             )
 
     def action_confirm(self) -> None:
@@ -75,28 +55,28 @@ class ConfirmCancel(ModalScreen[bool]):
         self.dismiss(False)
 
 
-class PickerModal(ModalScreen[str]):
-    """Lightweight keyboard-first picker: arrow keys + Enter, or 1-9 for quick select."""
+class PickerModal(ModalScreen["str | None"]):
+    """Keyboard-first picker.
+
+    Returns the selected value (string), or ``None`` if the user
+    cancelled (Esc). Callers must handle ``None`` explicitly.
+
+    Number keys 1–9 select the corresponding row. Arrow keys + Enter
+    work the standard way.
+    """
 
     CSS = """
-    PickerModal {
-        align: center middle;
+    PickerModal > Vertical {
+        width: auto;
+        min-width: 50;
+        max-width: 90%;
+        max-height: 80%;
     }
-    #picker-box {
-        width: 40;
+    PickerModal #picker-list {
+        width: auto;
+        min-width: 48;
         height: auto;
-        max-height: 18;
-        border: round #3465a4;
-        background: $surface;
-        padding: 1 2;
-    }
-    #picker-title {
-        width: 100%;
-        margin-bottom: 1;
-    }
-    #picker-list {
-        height: auto;
-        max-height: 12;
+        max-height: 24;
         border: none;
         padding: 0;
         scrollbar-size: 1 1;
@@ -105,15 +85,7 @@ class PickerModal(ModalScreen[str]):
 
     BINDINGS = [
         Binding("escape", "cancel_picker", "Cancel", show=False),
-        Binding("1", "pick_1", show=False),
-        Binding("2", "pick_2", show=False),
-        Binding("3", "pick_3", show=False),
-        Binding("4", "pick_4", show=False),
-        Binding("5", "pick_5", show=False),
-        Binding("6", "pick_6", show=False),
-        Binding("7", "pick_7", show=False),
-        Binding("8", "pick_8", show=False),
-        Binding("9", "pick_9", show=False),
+        *[Binding(str(i), f"pick({i - 1})", show=False) for i in range(1, 10)],
     ]
 
     def __init__(
@@ -130,8 +102,8 @@ class PickerModal(ModalScreen[str]):
         self._current = current
 
     def compose(self) -> ComposeResult:
-        with Vertical(id="picker-box"):
-            yield Static(f"[bold]{self._title}[/bold]", id="picker-title")
+        with Vertical():
+            yield Static(f"[bold]{self._title}[/bold]\n")
             yield OptionList(id="picker-list")
 
     def on_mount(self) -> None:
@@ -147,49 +119,26 @@ class PickerModal(ModalScreen[str]):
         ol.focus()
 
     def on_option_list_option_selected(
-        self, event: OptionList.OptionSelected,
+        self,
+        event: OptionList.OptionSelected,
     ) -> None:
         self.dismiss(event.option.id or "")
 
-    def _pick(self, n: int) -> None:
+    def action_pick(self, n: int) -> None:
         if 0 <= n < len(self._items):
             self.dismiss(self._items[n][0])
 
-    def action_pick_1(self) -> None: self._pick(0)
-    def action_pick_2(self) -> None: self._pick(1)
-    def action_pick_3(self) -> None: self._pick(2)
-    def action_pick_4(self) -> None: self._pick(3)
-    def action_pick_5(self) -> None: self._pick(4)
-    def action_pick_6(self) -> None: self._pick(5)
-    def action_pick_7(self) -> None: self._pick(6)
-    def action_pick_8(self) -> None: self._pick(7)
-    def action_pick_9(self) -> None: self._pick(8)
-
     def action_cancel_picker(self) -> None:
-        self.dismiss(self._current)
+        self.dismiss(None)
 
 
 class HelpScreen(ModalScreen[None]):
     """Help / keybinding reference overlay triggered by ESC."""
 
     CSS = """
-    HelpScreen {
-        align: center middle;
-    }
-    #help-box {
+    HelpScreen > Vertical {
         width: 52;
-        height: auto;
         max-height: 28;
-        border: round #3465a4;
-        background: $surface;
-        padding: 1 2;
-    }
-    #help-title {
-        width: 100%;
-        margin-bottom: 1;
-    }
-    #help-body {
-        width: 100%;
     }
     """
 
@@ -199,31 +148,36 @@ class HelpScreen(ModalScreen[None]):
     ]
 
     def compose(self) -> ComposeResult:
-        with Vertical(id="help-box"):
-            yield Static("[bold]⌨  Keyboard Shortcuts[/bold]", id="help-title")
-            yield Static(self._help_text(), id="help-body")
+        with Vertical():
+            yield Static("[bold]⌨  Keyboard Shortcuts[/bold]\n")
+            yield Static(self._help_text())
 
     @staticmethod
     def _help_text() -> str:
         lines = [
-            "  [bold cyan]Navigation[/bold cyan]",
-            "    [bold]j[/bold]           Focus job list",
-            "    [bold]l[/bold]           Focus logs",
-            "    [bold]←  →[/bold]        Previous / next page",
+            "  [bold cyan]Jobs list[/bold cyan]",
             "    [bold]↑  ↓[/bold]        Move selection",
+            "    [bold]←  →[/bold]        Previous / next page",
+            "    [bold]i[/bold]           Show info panel",
+            "    [bold]l[/bold]           Show logs (live tail)",
             "",
             "  [bold cyan]Actions[/bold cyan]",
             "    [bold]r[/bold]           Refresh",
-            "    [bold]s[/bold]           Filter by status",
+            "    [bold]f[/bold]           Filter by status",
             "    [bold]e[/bold]           Filter by experiment",
             "    [bold]w[/bold]           Switch workspace",
             "    [bold]c[/bold]           Cancel selected job",
             "    [bold]/[/bold]           Search",
             "",
-            "  [bold cyan]Views[/bold cyan]",
-            "    [bold]i[/bold]           Show info panel",
-            "    [bold]L[/bold]           Stream logs (live tail)",
+            "  [bold cyan]Logs view[/bold cyan]",
+            "    [bold]h j k l[/bold]    Scroll left / down / up / right",
+            "    [bold]g  G[/bold]        Jump top / bottom",
+            "    [bold]^d ^u[/bold]       Page down / up",
+            "    [bold]i[/bold]           Back to info",
+            "    [bold]L[/bold]           Stop live tail",
+            "    [bold]s[/bold]           Toggle auto-scroll",
             "    [bold]o[/bold]           Pick log file",
+            "    [bold]^s[/bold]          Save buffer to ~/aj-logs/",
             "",
             "  [bold cyan]General[/bold cyan]",
             "    [bold]Esc[/bold]         This help screen",

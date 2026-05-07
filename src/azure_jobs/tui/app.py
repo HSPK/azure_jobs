@@ -1,15 +1,13 @@
 """Interactive TUI dashboard for Azure Jobs.
 
-Data: REST API direct calls → cloud-only, paginated.
-Mouse disabled — keyboard-only for low-latency server usage.
+:class:`AjDashboard` is the *root context*. It owns three controllers
+(:class:`JobsController`, :class:`LogsController`,
+:class:`WorkspaceController`) — each pairs a state dataclass with its
+behaviour. The App itself contains no flat state.
 
-Layout
-------
-Left column  top: bordered OptionList (jobs) with status/experiment filter (f)
-             and keyword search (/).
-             bottom: bordered workspace panel (always visible, w to switch).
-Right pane   bordered panel; border-title shows tab indicator (Info/Logs),
-             border-subtitle shows job name + status.
+The App body holds: ``compose`` / ``on_mount``, Textual event handlers,
+action handlers (one-line delegations to controllers) and a couple of
+cross-cutting actions (help, quit, focus).
 """
 
 from __future__ import annotations
@@ -17,38 +15,25 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-log = logging.getLogger(__name__)
-
-from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical, VerticalScroll
-from textual.widgets import (
-    Footer,
-    Input,
-    OptionList,
-    Static,
+from textual.containers import Horizontal, Vertical
+from textual.widgets import Footer, Input, OptionList, Static
+
+from azure_jobs.tui.components import HelpScreen, InfoScroll, LogViewer
+from azure_jobs.tui.controllers import (
+    JobsController,
+    LogsController,
+    WorkspaceController,
 )
-from textual.worker import get_current_worker
+from azure_jobs.tui.helpers import get_page_size, kv
+from azure_jobs.tui.state import JobsState, LogsState, Widgets, WorkspaceState
 
-from azure_jobs.core.config import AJWorkspace
-from azure_jobs.tui.helpers import (
-    STATUS_CYCLE,
-    get_page_size,
-    icon_style,
-    info_block,
-    kv,
-    make_option,
-)
-from azure_jobs.tui.log_viewer import LogViewer
-from azure_jobs.tui.modals import ConfirmCancel, HelpScreen, PickerModal
-from azure_jobs.tui.workspace import WorkspaceMixin
-
-# ---- app --------------------------------------------------------------------
+log = logging.getLogger(__name__)
 
 
-class AjDashboard(WorkspaceMixin, App):
-    """Azure Jobs interactive dashboard."""
+class AjDashboard(App):
+    """Azure Jobs interactive dashboard (root context)."""
 
     TITLE = "aj dashboard"
     MOUSE_SUPPORT = False
@@ -58,11 +43,11 @@ class AjDashboard(WorkspaceMixin, App):
         Binding("q", "quit", "Quit"),
         Binding("r", "refresh", "Refresh"),
         Binding("c", "cancel_job", "Cancel"),
-        Binding("l", "focus_logs", "Logs"),
-        Binding("L", "stream_logs", "Stream", show=False),
+        Binding("l", "show_logs", "Logs"),
+        Binding("L", "stream_logs", "Stop", show=False),
         Binding("i", "show_info", "Info"),
-        Binding("j", "focus_jobs", "Jobs"),
         Binding("s", "toggle_scroll", "Scroll", show=False),
+        Binding("ctrl+s", "save_logs", "Save", show=False),
         Binding("w", "pick_workspace", "Workspace"),
         Binding("f", "pick_status", "Status"),
         Binding("e", "pick_experiment", "Experiment"),
@@ -72,51 +57,31 @@ class AjDashboard(WorkspaceMixin, App):
         Binding("escape", "show_help", "Help"),
         Binding("right", "next_page", "Next"),
         Binding("left", "prev_page", "Prev"),
+        # Vim-style scrolling for the info pane (active in Info view only;
+        # the LogViewer owns the same keys when Logs is focused).
+        Binding("h", "info_scroll('left')", show=False),
+        Binding("j", "info_scroll('down')", show=False),
+        Binding("k", "info_scroll('up')", show=False),
+        Binding("g", "info_scroll('home')", show=False),
+        Binding("G", "info_scroll('end')", show=False),
+        Binding("ctrl+d", "info_scroll('page_down')", show=False),
+        Binding("ctrl+u", "info_scroll('page_up')", show=False),
+        Binding("ctrl+f", "info_scroll('page_down')", show=False),
+        Binding("ctrl+b", "info_scroll('page_up')", show=False),
     ]
     ENABLE_COMMAND_PALETTE = True
-
-    def action_quit(self) -> None:
-        self.workers.cancel_all()
-        self.exit()
 
     def __init__(
         self, last: int = 100, page_size: int | None = None, **kwargs: Any
     ) -> None:
         super().__init__(**kwargs)
-        self._page_size: int = page_size if page_size is not None else get_page_size()
-        # Job data
-        self._all_jobs: list[dict[str, Any]] = []
-        self._job_idx: dict[str, int] = {}
-        self._filtered: list[dict[str, Any]] = []
-        self._workspace: AJWorkspace | None = None
-        self._workspaces: list[dict[str, str]] = []
-        self._subscription_id: str = ""
-        self._selected_idx: int = -1
-        self._rest_client: Any = None
-        # Filters
-        self._status_filter: str = ""
-        self._experiment_filter: str = ""
-        self._search_query: str = ""
-        # View state
-        self._view_mode: str = "info"
-        self._auto_scroll: bool = True
-        # Pagination
-        self._pages: list[list[dict[str, Any]]] = []
-        self._current_page: int = 0
-        self._next_link: str | None = None
-        self._has_more: bool = True
-        self._fetching: bool = False
-        # Log state
-        self._logs_job: str = ""
-        self._logs_files: list[str] = []
-        self._logs_current_file: str = ""
-        self._log_line_count: int = 0
-        self._log_streaming: bool = False
-        self._log_streamer: Any = None
-        # Cached widget refs (populated on_mount)
-        self._w_log: LogViewer | None = None
-        self._w_info: Static | None = None
-        self._w_jobs: OptionList | None = None
+        # Widget bag (filled in on_mount).
+        self.widgets = Widgets()
+        # Controllers — each owns its state dataclass.
+        ps = page_size if page_size is not None else get_page_size()
+        self.jobs = JobsController(self, JobsState(page_size=ps))
+        self.logs = LogsController(self, LogsState())
+        self.workspace = WorkspaceController(self, WorkspaceState())
 
     # ---- compose / mount ----------------------------------------------------
 
@@ -130,720 +95,33 @@ class AjDashboard(WorkspaceMixin, App):
                 with Vertical(id="ws-pane"):
                     yield Static("", id="ws-current")
             with Vertical(id="right-pane"):
-                with VerticalScroll(id="info-scroll"):
+                with InfoScroll(id="info-scroll"):
                     yield Static(id="info-content")
                 yield LogViewer(
                     id="log-content",
                     highlight=True,
                     markup=True,
-                    wrap=True,
+                    wrap=False,
                     auto_scroll=True,
                     classes="hidden",
                 )
         yield Footer()
 
     def on_mount(self) -> None:
-        # Cache frequently accessed widgets
-        self._w_log = self.query_one("#log-content", LogViewer)
-        self._w_info = self.query_one("#info-content", Static)
-        self._w_jobs = self.query_one("#job-list", OptionList)
+        self.widgets.log = self.query_one("#log-content", LogViewer)
+        self.widgets.info = self.query_one("#info-content", Static)
+        self.widgets.jobs = self.query_one("#job-list", OptionList)
         self.query_one("#ws-pane").border_title = "Workspace"
-        self._update_titles()
-        self._update_tab_title()
-        self._w_info.update(kv([], hint="Loading jobs…"))
-        self._init_fetch()
-
-    # ---- data ---------------------------------------------------------------
-
-    def _update_loading(self, msg: str) -> None:
-        if self._w_info:
-            self._w_info.update(kv([], hint=msg))
-
-    @work(thread=True, exclusive=True, group="fetch")
-    def _init_fetch(self) -> None:
-        """Authenticate, create REST client, fetch first page."""
-        worker = get_current_worker()
-
-        self.call_from_thread(self._update_loading, "Reading workspace config…")
-        ws = self._ensure_workspace()
-        if ws is None:
-            self.call_from_thread(
-                self.notify,
-                "No workspace configured – press w",
-                severity="warning",
-            )
-            self.call_from_thread(
-                self._update_loading,
-                "No workspace configured. Press [bold]w[/bold] to select.",
-            )
-            return
-        if worker.is_cancelled:
-            return
-
-        self.call_from_thread(self._update_ws_label)
-        self.call_from_thread(self._update_loading, "Authenticating…")
-
-        from azure_jobs.core.rest_client import AzureMLClient
-
-        try:
-            self._rest_client = AzureMLClient(
-                subscription_id=ws.subscription_id or self._subscription_id,
-                resource_group=ws.resource_group,
-                workspace_name=ws.workspace_name,
-            )
-        except Exception as exc:
-            if not worker.is_cancelled:
-                self.call_from_thread(
-                    self._update_loading,
-                    f"[red]Error:[/red] {str(exc)[:100]}",
-                )
-            return
-        if worker.is_cancelled:
-            return
-
-        self.call_from_thread(
-            self._update_loading,
-            f"Fetching jobs from [bold]{ws.workspace_name}[/bold]…",
-        )
-        self._pages.clear()
-        self._current_page = 0
-        self._next_link = None
-        self._has_more = True
-        self._fill_page(worker, is_first=True)
-
-    def _fill_page(self, worker: Any, *, is_first: bool = False) -> None:
-        """Fetch server batches until current display page is full."""
-        if self._rest_client is None or not self._has_more:
-            return
-        page_jobs = self._pages[-1] if self._pages else []
-        needed = self._page_size - len(page_jobs)
-
-        while needed > 0:
-            try:
-                jobs, nxt = self._rest_client.jobs.list_page(
-                    next_link=self._next_link,
-                    top=self._page_size,
-                )
-            except Exception as exc:
-                self._has_more = False
-                if not worker.is_cancelled:
-                    self.call_from_thread(
-                        self._update_loading,
-                        f"[red]Error:[/red] {str(exc)[:100]}",
-                    )
-                return
-
-            if worker.is_cancelled:
-                return
-            self._next_link = nxt
-            if not nxt:
-                self._has_more = False
-            if not jobs:
-                if is_first and not self._pages:
-                    self.call_from_thread(
-                        self._update_loading,
-                        "No jobs found in this workspace.",
-                    )
-                return
-
-            self.call_from_thread(self._on_batch_arrived, jobs, is_first)
-            is_first = False
-            needed -= len(jobs)
-            if not self._has_more:
-                break
-
-    @work(thread=True, exclusive=True, group="fetch-more")
-    def _fetch_next_page(self) -> None:
-        worker = get_current_worker()
-        self._pages.append([])
-        self._current_page = len(self._pages) - 1
-        try:
-            self._fill_page(worker, is_first=True)
-        finally:
-            self._fetching = False
-
-    def _on_batch_arrived(self, batch: list[dict[str, Any]], is_first: bool) -> None:
-        if not self._pages:
-            self._pages.append([])
-            self._current_page = 0
-
-        cur = self._pages[self._current_page]
-        room = self._page_size - len(cur)
-        take, overflow = batch[:room], batch[room:]
-
-        cur.extend(take)
-        base = len(self._all_jobs)
-        self._all_jobs.extend(take)
-        for offset, j in enumerate(take):
-            self._job_idx[j.get("name", "")] = base + offset
-
-        prev_name = ""
-        if 0 <= self._selected_idx < len(self._filtered):
-            prev_name = self._filtered[self._selected_idx].get("name", "")
-        self._show_current_page(restore_name=prev_name)
-
-        if overflow:
-            self._pages.append(list(overflow))
-            base = len(self._all_jobs)
-            self._all_jobs.extend(overflow)
-            for offset, j in enumerate(overflow):
-                self._job_idx[j.get("name", "")] = base + offset
-
-    def _on_jobs_loaded(self, jobs: list[dict[str, Any]]) -> None:
-        """Full replace (used by tests and refresh)."""
-        ps = self._page_size
-        self._pages = (
-            [jobs[i : i + ps] for i in range(0, len(jobs), ps)] if jobs else [[]]
-        )
-        self._all_jobs = list(jobs)
-        self._job_idx = {j.get("name", ""): i for i, j in enumerate(self._all_jobs)}
-        self._current_page = 0
-        self._has_more = False
-        self._show_current_page()
-
-    def _current_page_jobs(self) -> list[dict[str, Any]]:
-        if not self._pages or self._current_page >= len(self._pages):
-            return []
-        return self._pages[self._current_page]
-
-    def _show_current_page(self, restore_name: str = "") -> None:
-        """Display the current page in the OptionList."""
-        page_jobs = self._current_page_jobs()
-        sf, ef = self._status_filter, self._experiment_filter
-        sq = self._search_query.lower() if self._search_query else ""
-
-        if sf or ef or sq:
-            filtered: list[dict[str, Any]] = []
-            for j in page_jobs:
-                if sf and j.get("status") != sf:
-                    continue
-                if ef and j.get("experiment") != ef:
-                    continue
-                if sq:
-                    haystack = f"{j.get('display_name', '')} {j.get('name', '')} {j.get('experiment', '')} {j.get('tags', '')}".lower()
-                    if sq not in haystack:
-                        continue
-                filtered.append(j)
-            self._filtered = filtered
-        else:
-            self._filtered = list(page_jobs)
-
-        ol = self._w_jobs
-        if ol is None:
-            return
-        ol.clear_options()
-        for j in self._filtered:
-            ol.add_option(make_option(j))
-
-        self._update_titles()
-
-        target_idx = 0
-        if restore_name:
-            for i, j in enumerate(self._filtered):
-                if j.get("name") == restore_name:
-                    target_idx = i
-                    break
-
-        if self._filtered:
-            ol.highlighted = target_idx
-            self._selected_idx = target_idx
-            self._show_job_info(self._filtered[target_idx])
-        else:
-            self._selected_idx = -1
-            if self._w_info:
-                self._w_info.update(kv([], hint="No matching jobs."))
-            self._update_tab_title()
-            self._update_job_subtitle(None)
-
-    def _update_titles(self) -> None:
-        total_pages = len(self._pages)
-        current = self._current_page + 1
-        page_label = f"Page {current}/{total_pages}"
-        if self._has_more:
-            page_label += "+"
-        shown = len(self._filtered)
-        parts = [page_label, f"({shown} jobs)"]
-        if self._status_filter:
-            parts.append(f"▸ {self._status_filter}")
-        if self._experiment_filter:
-            parts.append(f"▸ {self._experiment_filter}")
-        if self._search_query:
-            parts.append(f'"{self._search_query}"')
-        self.query_one("#jobs-pane").border_title = "  ".join(parts)
-
-    def _update_tab_title(self) -> None:
-        rp = self.query_one("#right-pane")
-        if self._view_mode == "logs":
-            if self._log_streaming:
-                rp.border_title = (
-                    "  Info  [bold reverse] Logs [/bold reverse]"
-                    "  [bold green]● LIVE[/bold green]  "
-                )
-            else:
-                scroll_icon = "▶" if self._auto_scroll else "⏸"
-                rp.border_title = (
-                    f"  Info  [bold reverse] Logs [/bold reverse]"
-                    f"  [dim]{scroll_icon}[/dim]  "
-                )
-        else:
-            rp.border_title = "  [bold reverse] Info [/bold reverse]  Logs  "
-
-    def _update_job_subtitle(self, job: dict[str, Any] | None = None) -> None:
-        rp = self.query_one("#right-pane")
-        if job is None:
-            rp.border_subtitle = ""
-            return
-        icon, sty = icon_style(job.get("status", ""))
-        status = job.get("status", "?")
-        display = job.get("display_name") or job.get("name", "")
-        max_name = max(20, (rp.size.width or 60) - 20)
-        if len(display) > max_name:
-            display = display[: max_name - 1] + "…"
-        rp.border_subtitle = f"{display}  [{sty}]{icon} {status}[/{sty}]"
-
-    # ---- job list events ----------------------------------------------------
-
-    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
-        idx = event.option_index
-        if 0 <= idx < len(self._filtered):
-            self._selected_idx = idx
-            if self._w_info:
-                self._w_info.update(kv([("", "")], hint="Refreshing..."))
-            self._fetch_single(self._filtered[idx])
-
-    def on_option_list_option_highlighted(
-        self, event: OptionList.OptionHighlighted
-    ) -> None:
-        if event.option_list.id != "job-list":
-            return
-        idx = event.option_index
-        if 0 <= idx < len(self._filtered):
-            self._selected_idx = idx
-            job = self._filtered[idx]
-            self._show_job_info(job)
-            self._reset_logs_state()
-            if job.get("status") == "Failed" and not job.get("error"):
-                self._fetch_single(job)
-
-    def _reset_logs_state(self) -> None:
-        """Reset log state when switching jobs."""
-        if self._log_streaming:
-            self._stop_streaming()
-        self._logs_job = ""
-        self._logs_files = []
-        self._logs_current_file = ""
-
-    def action_next_page(self) -> None:
-        if self._current_page + 1 < len(self._pages):
-            self._current_page += 1
-            self._show_current_page()
-        elif self._has_more and not self._fetching:
-            self._fetching = True
-            self.notify("Loading next page…", timeout=2)
-            self._fetch_next_page()
-
-    def action_prev_page(self) -> None:
-        if self._current_page > 0:
-            self._current_page -= 1
-            self._show_current_page()
-
-    # ---- right pane: info ---------------------------------------------------
-
-    def _show_job_info(self, job: dict[str, Any]) -> None:
-        self._update_job_subtitle(job)
-        self._update_tab_title()
-        if self._w_info:
-            self._w_info.update(info_block(job))
-
-    @work(thread=True, exclusive=True, group="status")
-    def _fetch_single(self, job: dict[str, Any]) -> None:
-        if self._rest_client is None:
-            self.call_from_thread(
-                self.notify,
-                "Workspace not configured",
-                severity="warning",
-            )
-            return
-        name = job.get("name", "")
-        try:
-            updated = self._rest_client.jobs.get(name)
-        except Exception as exc:
-            self.call_from_thread(self.notify, str(exc)[:80], severity="error")
-            return
-        if not get_current_worker().is_cancelled:
-            self.call_from_thread(self._on_single_fetched, name, updated)
-
-    def _on_single_fetched(self, name: str, updated: dict[str, Any]) -> None:
-        # O(1) update in _all_jobs
-        idx = self._job_idx.get(name)
-        if idx is not None and idx < len(self._all_jobs):
-            self._all_jobs[idx] = updated
-        # Update page cache
-        for page in self._pages:
-            for i, j in enumerate(page):
-                if j.get("name") == name:
-                    page[i] = updated
-                    break
-        # Update filtered + OptionList entry
-        ol = self._w_jobs
-        if ol:
-            for i, j in enumerate(self._filtered):
-                if j.get("name") == name:
-                    self._filtered[i] = updated
-                    ol.replace_option_prompt_at_index(i, make_option(updated).prompt)
-                    break
-        if 0 <= self._selected_idx < len(self._filtered):
-            if self._filtered[self._selected_idx].get("name") == name:
-                self._show_job_info(updated)
-
-    # ---- right pane: logs ---------------------------------------------------
-
-    _NO_LOG_STATUSES = ("Queued", "NotStarted", "Provisioning", "Preparing")
-
-    def _switch_to_logs_view(self) -> None:
-        """Switch UI to logs mode (shared by multiple actions)."""
-        self._view_mode = "logs"
-        self.query_one("#info-scroll").add_class("hidden")
-        lw = self._w_log
-        if lw:
-            lw.remove_class("hidden")
-            lw.focus()
-        self._update_tab_title()
-
-    def action_show_logs(self) -> None:
-        self._switch_to_logs_view()
-        if not (0 <= self._selected_idx < len(self._filtered)):
-            return
-        job = self._filtered[self._selected_idx]
-        name = job.get("name", "")
-        if name == self._logs_job:
-            return  # Already showing this job's logs
-        self._logs_job = name
-        self._logs_files = []
-        self._logs_current_file = ""
-        self._log_line_count = 0
-        self._log_streaming = False
-        lw = self._w_log
-        if not lw:
-            return
-        lw.clear()
-        status = job.get("status", "")
-        if status in self._NO_LOG_STATUSES:
-            icon, sty = icon_style(status)
-            lw.write(
-                f"[{sty}]{icon} {status}[/{sty}]  — Logs not available yet.\n\n"
-                f"[dim]Job is {status.lower()}. Press [bold]L[/bold] when running.[/dim]"
-            )
-            return
-        lw.write("[dim]Loading log files…[/dim]")
-        self._fetch_log_list(name)
-
-    def action_pick_log_file(self) -> None:
-        """Open log file picker (o key)."""
-        if not self._logs_files or not self._logs_job:
-            self.notify("No log files available", severity="warning", timeout=2)
-            return
-        items = [(p, p) for p in self._logs_files]
-        picker = PickerModal("Log Files", items, current=self._logs_current_file)
-        self.push_screen(picker, self._on_log_file_picked)
-
-    def _on_log_file_picked(self, chosen: str) -> None:
-        if not chosen or chosen == self._logs_current_file:
-            return
-        self._logs_current_file = chosen
-        self._log_line_count = 0
-        lw = self._w_log
-        if lw:
-            lw.clear()
-            lw.write(f"[dim]Downloading {chosen}…[/dim]")
-        self._download_log_file(self._logs_job, chosen)
-
-    def action_show_info(self) -> None:
-        self._view_mode = "info"
-        if self._w_log:
-            self._w_log.add_class("hidden")
-        self.query_one("#info-scroll").remove_class("hidden")
-        self._update_tab_title()
-        if self._w_jobs:
-            self._w_jobs.focus()
-
-    def action_toggle_scroll(self) -> None:
-        self._auto_scroll = not self._auto_scroll
-        self._update_tab_title()
-        self.notify(f"Auto-scroll {'ON' if self._auto_scroll else 'OFF'}", timeout=2)
-
-    def _log_status(self, msg: str) -> None:
-        lw = self._w_log
-        if lw:
-            lw.clear()
-            lw.write(msg)
-
-    def _append_log_line(self, line: str) -> None:
-        """Append a single numbered log line."""
-        lw = self._w_log
-        if not lw:
-            return
-        self._log_line_count += 1
-        lw.write(
-            f"[dim]{self._log_line_count:>5}[/dim] [dim]│[/dim] {line}",
-            scroll_end=self._auto_scroll,
-        )
-
-    def _append_log_lines(self, text: str) -> None:
-        """Batch-append multiple lines efficiently."""
-        for line in text.split("\n"):
-            self._append_log_line(line)
-
-    def _append_log_error(self, error: str) -> None:
-        lw = self._w_log
-        if not lw:
-            return
-        for raw_line in error.splitlines():
-            self._log_line_count += 1
-            lw.write(
-                f"[red]{self._log_line_count:>5}[/red] [dim]│[/dim] [bold red]{raw_line}[/bold red]",
-                scroll_end=self._auto_scroll,
-            )
-
-    def _show_log_content(self, content: str, error_msg: str) -> None:
-        """Render downloaded log content."""
-        self._log_streaming = False
-        lw = self._w_log
-        if not lw:
-            return
-        lw.clear()
-        self._log_line_count = 0
-        if content:
-            self._append_log_lines(content)
-            file_hint = (
-                f"  [dim italic]{self._logs_current_file}[/dim italic]"
-                if self._logs_current_file
-                else ""
-            )
-            lw.write(
-                f"\n[dim]── End ({self._log_line_count} lines) ──[/dim]{file_hint}"
-                f"\n[dim]Press [bold]o[/bold] to switch files, [bold]L[/bold] to stream[/dim]",
-                scroll_end=self._auto_scroll,
-            )
-        if error_msg:
-            self._append_log_error(error_msg)
-        if not content and not error_msg:
-            lw.write("[dim]No logs available for this job.[/dim]")
-
-    @work(thread=True, exclusive=True, group="logs")
-    def _fetch_log_list(self, azure_name: str) -> None:
-        """Fetch log file list, then auto-pick or show picker."""
-        worker = get_current_worker()
-
-        from azure_jobs.core.log_download import list_log_files
-
-        try:
-            files = list_log_files(azure_name, rest_client=self._rest_client)
-        except Exception as exc:
-            if not worker.is_cancelled:
-                self.call_from_thread(
-                    self._log_status,
-                    f"[bold red]Error:[/bold red] {exc!s:.200}",
-                )
-            return
-
-        if worker.is_cancelled or self._logs_job != azure_name:
-            return
-
-        self._logs_files = files
-
-        if not files:
-            self.call_from_thread(
-                self._log_status,
-                "[dim]No log files found for this job.[/dim]",
-            )
-            return
-
-        if len(files) == 1:
-            self._logs_current_file = files[0]
-            self.call_from_thread(
-                self._log_status,
-                f"[dim]Downloading {files[0]}…[/dim]",
-            )
-            self._do_download_log(azure_name, files[0], worker)
-        else:
-            # Multiple files — show picker
-            def _show_picker() -> None:
-                if self._logs_job != azure_name:
-                    return
-                items = [(p, p) for p in files]
-                picker = PickerModal("Log Files", items)
-                self.push_screen(picker, self._on_log_file_picked)
-
-            self.call_from_thread(_show_picker)
-
-    @work(thread=True, exclusive=True, group="logs")
-    def _download_log_file(self, azure_name: str, log_path: str) -> None:
-        worker = get_current_worker()
-        self._do_download_log(azure_name, log_path, worker)
-
-    def _do_download_log(self, azure_name: str, log_path: str, worker: Any) -> None:
-        from azure_jobs.core.log_download import download_single_log
-
-        content, error_msg = download_single_log(
-            azure_name,
-            log_path,
-            rest_client=self._rest_client,
-        )
-        if worker.is_cancelled or self._logs_job != azure_name:
-            return
-        self.call_from_thread(self._show_log_content, content, error_msg)
-
-    # ---- streaming logs -----------------------------------------------------
-
-    def action_stream_logs(self) -> None:
-        """Start/stop streaming (L key)."""
-        if self._log_streaming:
-            self._stop_streaming()
-            return
-
-        self._switch_to_logs_view()
-
-        if not (0 <= self._selected_idx < len(self._filtered)):
-            return
-
-        job = self._filtered[self._selected_idx]
-        name = job.get("name", "")
-        status = job.get("status", "")
-
-        if status in self._NO_LOG_STATUSES:
-            self.notify("Job not started yet", severity="warning", timeout=2)
-            return
-
-        log_path = self._logs_current_file
-        if not log_path and self._logs_files:
-            log_path = self._logs_files[0]
-
-        if name != self._logs_job:
-            self._logs_job = name
-            self._logs_files = []
-            self._logs_current_file = ""
-
-        self._log_line_count = 0
-        if self._w_log:
-            self._w_log.clear()
-            self._w_log.write("[dim]Starting stream…[/dim]")
-        self._start_streaming(name, log_path)
-
-    def _stop_streaming(self) -> None:
-        self._log_streaming = False
-        if self._log_streamer:
-            try:
-                self._log_streamer.close()
-            except Exception:
-                pass
-            self._log_streamer = None
-        self.notify("Stream stopped", timeout=2)
-        self._update_tab_title()
-
-    @work(thread=True, exclusive=True, group="stream")
-    def _start_streaming(self, azure_name: str, log_path: str) -> None:
-        """Stream log content with poll + Range incremental reads."""
-        import time
-
-        from azure_jobs.core.log_download import get_log_content_uri, list_log_files
-        from azure_jobs.core.log_stream import DEFAULT_POLL_INTERVAL, LogStreamer
-
-        worker = get_current_worker()
-
-        # Resolve log file if needed
-        if not log_path:
-            try:
-                files = list_log_files(azure_name, rest_client=self._rest_client)
-                self._logs_files = files
-                if not files:
-                    self.call_from_thread(
-                        self._log_status, "[dim]No log files found.[/dim]"
-                    )
-                    return
-                log_path = files[0]
-            except Exception as exc:
-                self.call_from_thread(
-                    self._log_status,
-                    f"[bold red]Error:[/bold red] {exc!s:.200}",
-                )
-                return
-
-        if worker.is_cancelled or self._logs_job != azure_name:
-            return
-        self._logs_current_file = log_path
-
-        # Get signed URL
-        try:
-            content_uri = get_log_content_uri(
-                azure_name,
-                log_path,
-                rest_client=self._rest_client,
-            )
-        except Exception as exc:
-            self.call_from_thread(
-                self._log_status,
-                f"[bold red]Error:[/bold red] {exc!s:.200}",
-            )
-            return
-
-        if not content_uri:
-            self.call_from_thread(
-                self._log_status, f"[dim]No content URI for {log_path}[/dim]"
-            )
-            return
-        if worker.is_cancelled or self._logs_job != azure_name:
-            return
-
-        # Create streamer
-        streamer = LogStreamer(content_uri)
-        self._log_streamer = streamer
-        self._log_streaming = True
-
-        initial = streamer.read_all()
-        if worker.is_cancelled or self._logs_job != azure_name:
-            streamer.close()
-            return
-
-        def _show_initial(text: str = initial) -> None:
-            self._log_line_count = 0
-            lw = self._w_log
-            if not lw:
-                return
-            lw.clear()
-            lw.write(
-                f"[bold green]● STREAMING[/bold green] [dim]{log_path}[/dim]"
-                f"  [dim](L to stop)[/dim]\n",
-            )
-            if text:
-                self._append_log_lines(text)
-
-        self.call_from_thread(_show_initial)
-        self.call_from_thread(self._update_tab_title)
-
-        # Poll loop
-        while self._log_streaming and not worker.is_cancelled:
-            if self._logs_job != azure_name:
-                break
-            time.sleep(DEFAULT_POLL_INTERVAL)
-            if worker.is_cancelled or not self._log_streaming:
-                break
-            new_text = streamer.poll()
-            if new_text and self._logs_job == azure_name:
-
-                def _append(t: str = new_text) -> None:
-                    self._append_log_lines(t)
-
-                self.call_from_thread(_append)
-
-        # Cleanup
-        streamer.close()
-        self._log_streamer = None
-        if self._log_streaming:
-            self._log_streaming = False
-            self.call_from_thread(self._update_tab_title)
-
-    # ---- actions ------------------------------------------------------------
+        self.jobs.view.update_titles()
+        self.logs.update_tab_title()
+        self.widgets.info.update(kv([], hint="Loading jobs…"))
+        self.jobs.fetcher.init_fetch()
+
+    # ---- cross-cutting actions ---------------------------------------------
+
+    def action_quit(self) -> None:
+        self.workers.cancel_all()
+        self.exit()
 
     def action_show_help(self) -> None:
         search_bar = self.query_one("#search-bar")
@@ -852,210 +130,104 @@ class AjDashboard(WorkspaceMixin, App):
             inp = self.query_one("#search-input", Input)
             if inp.value:
                 inp.value = ""
-                self._search_query = ""
-                self._show_current_page()
-            if self._w_jobs:
-                self._w_jobs.focus()
+                self.jobs.state.search_query = ""
+                self.jobs.view.refresh()
+            if self.widgets.jobs:
+                self.widgets.jobs.focus()
             return
         self.push_screen(HelpScreen())
 
     def action_dismiss(self) -> None:
         self.action_show_help()
 
-    def action_focus_jobs(self) -> None:
-        if self._w_jobs:
-            self._w_jobs.focus()
-
-    def action_focus_logs(self) -> None:
-        if self._view_mode != "logs":
-            self.action_show_logs()
-        elif self._w_log:
-            self._w_log.focus()
+    # ---- action delegations -------------------------------------------------
 
     def action_refresh(self) -> None:
-        self.notify("Refreshing…")
-        self._do_incremental_refresh()
-
-    @work(thread=True, exclusive=True, group="fetch")
-    def _do_incremental_refresh(self) -> None:
-        worker = get_current_worker()
-        if self._rest_client is None:
-            self.call_from_thread(
-                self.notify,
-                "No workspace configured",
-                severity="warning",
-            )
-            return
-        if worker.is_cancelled:
-            return
-
-        existing = {j["name"] for j in self._all_jobs}
-        new_jobs: list[dict[str, Any]] = []
-        updated = 0
-        try:
-            jobs, _ = self._rest_client.jobs.list_page()
-            for d in jobs:
-                if worker.is_cancelled:
-                    return
-                if d["name"] in existing:
-                    idx = self._job_idx.get(d["name"])
-                    if idx is not None and idx < len(self._all_jobs):
-                        if self._all_jobs[idx].get("status") != d.get("status"):
-                            self._all_jobs[idx].update(d)
-                            updated += 1
-                else:
-                    new_jobs.append(d)
-        except Exception:
-            log.debug("Failed to parse refreshed job data", exc_info=True)
-
-        if worker.is_cancelled:
-            return
-
-        if new_jobs or updated:
-            self.call_from_thread(self._on_refresh_done, new_jobs, updated)
-        else:
-            self.call_from_thread(self.notify, "No new jobs")
-
-    def _on_refresh_done(self, new_jobs: list[dict[str, Any]], updated: int) -> None:
-        if new_jobs:
-            self._all_jobs = new_jobs + self._all_jobs
-        self._job_idx = {j.get("name", ""): i for i, j in enumerate(self._all_jobs)}
-        ps = self._page_size
-        all_j = self._all_jobs
-        self._pages = (
-            [all_j[i : i + ps] for i in range(0, len(all_j), ps)] if all_j else [[]]
-        )
-        prev_name = ""
-        if 0 <= self._selected_idx < len(self._filtered):
-            prev_name = self._filtered[self._selected_idx].get("name", "")
-        self._show_current_page(restore_name=prev_name)
-        parts = []
-        if new_jobs:
-            parts.append(f"+{len(new_jobs)} new")
-        if updated:
-            parts.append(f"{updated} updated")
-        self.notify(", ".join(parts))
-
-    def _set_filter(self, status: str) -> None:
-        self._status_filter = status
-        self._show_current_page()
-
-    # ---- search / filter pickers --------------------------------------------
-
-    def action_search(self) -> None:
-        search_bar = self.query_one("#search-bar")
-        if search_bar.has_class("hidden"):
-            search_bar.remove_class("hidden")
-            inp = self.query_one("#search-input", Input)
-            inp.value = self._search_query
-            inp.focus()
-        else:
-            search_bar.add_class("hidden")
-            if self._w_jobs:
-                self._w_jobs.focus()
-
-    def on_input_changed(self, event: Input.Changed) -> None:
-        if event.input.id == "search-input":
-            self._search_query = event.value
-            self._show_current_page()
-
-    def on_input_submitted(self, event: Input.Submitted) -> None:
-        if event.input.id == "search-input":
-            self.query_one("#search-bar").add_class("hidden")
-            if self._w_jobs:
-                self._w_jobs.focus()
-
-    def action_pick_status(self) -> None:
-        items: list[tuple[str, str]] = [("", "All")]
-        for s in STATUS_CYCLE[1:]:
-            icon, sty = icon_style(s)
-            items.append((s, f"[{sty}]{icon} {s}[/{sty}]"))
-        self.push_screen(
-            PickerModal("Status", items, current=self._status_filter),
-            self._on_status_picked,
-        )
-
-    def _on_status_picked(self, value: str) -> None:
-        if value != self._status_filter:
-            self._status_filter = value
-            self._show_current_page()
-            self.notify(f"Status: {value or 'All'}")
-
-    def action_pick_experiment(self) -> None:
-        experiments = sorted(
-            {j.get("experiment", "") for j in self._all_jobs if j.get("experiment")}
-        )
-        if not experiments:
-            self.notify("No experiments to filter")
-            return
-        items: list[tuple[str, str]] = [("", "All")]
-        items.extend((exp, exp) for exp in experiments)
-        self.push_screen(
-            PickerModal("Experiment", items, current=self._experiment_filter),
-            self._on_experiment_picked,
-        )
-
-    def _on_experiment_picked(self, value: str) -> None:
-        if value != self._experiment_filter:
-            self._experiment_filter = value
-            self._show_current_page()
-            self.notify(f"Experiment: {value or 'All'}")
-
-    def action_clear_filters(self) -> None:
-        changed = bool(
-            self._status_filter or self._experiment_filter or self._search_query
-        )
-        self._status_filter = ""
-        self._experiment_filter = ""
-        self._search_query = ""
-        search_bar = self.query_one("#search-bar")
-        if not search_bar.has_class("hidden"):
-            self.query_one("#search-input", Input).value = ""
-            search_bar.add_class("hidden")
-        if changed:
-            self._show_current_page()
-        self.notify("Filters cleared")
-        if self._w_jobs:
-            self._w_jobs.focus()
+        self.jobs.fetcher.action_refresh()
 
     def action_cancel_job(self) -> None:
-        if 0 <= self._selected_idx < len(self._filtered):
-            job = self._filtered[self._selected_idx]
-            display = job.get("display_name") or job.get("name", "?")
-            self.push_screen(ConfirmCancel(display), self._on_cancel_confirmed)
+        self.jobs.cancel.action_cancel()
 
-    def _on_cancel_confirmed(self, confirmed: bool) -> None:
-        if not confirmed:
-            return
-        if 0 <= self._selected_idx < len(self._filtered):
-            job = self._filtered[self._selected_idx]
-            if self._w_info:
-                self._w_info.update(kv([("", "")], hint="Cancelling…"))
-            self._do_cancel(job)
+    def action_show_logs(self) -> None:
+        self.logs.show()
 
-    @work(thread=True, exclusive=True, group="cancel")
-    def _do_cancel(self, job: dict[str, Any]) -> None:
-        if self._rest_client is None:
-            self.call_from_thread(
-                self.notify,
-                "Workspace not configured",
-                severity="warning",
-            )
+    def action_stream_logs(self) -> None:
+        self.logs.toggle_stream()
+
+    def action_show_info(self) -> None:
+        self.logs.show_info()
+
+    def action_toggle_scroll(self) -> None:
+        self.logs.toggle_scroll()
+
+    def action_save_logs(self) -> None:
+        self.logs.save_to_file()
+
+    def action_pick_workspace(self) -> None:
+        self.workspace.pick()
+
+    def action_pick_status(self) -> None:
+        self.jobs.filters.action_pick_status()
+
+    def action_pick_experiment(self) -> None:
+        self.jobs.filters.action_pick_experiment()
+
+    def action_clear_filters(self) -> None:
+        self.jobs.filters.action_clear()
+
+    def action_search(self) -> None:
+        self.jobs.filters.action_search()
+
+    def action_pick_log_file(self) -> None:
+        self.logs.pick_file()
+
+    def action_next_page(self) -> None:
+        self.jobs.view.action_next_page()
+
+    def action_prev_page(self) -> None:
+        self.jobs.view.action_prev_page()
+
+    def action_info_scroll(self, direction: str) -> None:
+        """Scroll the info pane via a vim-style key.
+
+        Only active when the right pane is in Info mode — in Logs mode the
+        :class:`LogViewer` is focused and owns these bindings directly.
+        Returns silently if the search bar has focus so typing isn't eaten.
+        """
+        if self.logs.state.view_mode != "info":
             return
-        name = job.get("name", "")
-        display = job.get("display_name") or name
+        focused = self.focused
+        if focused is not None and focused.id == "search-input":
+            return
         try:
-            cur = self._rest_client.jobs.get(name)
-            st = cur.get("status", "")
-            if st in ("Completed", "Failed", "Canceled"):
-                self.call_from_thread(self.notify, f"{display}: already {st}")
-                return
-            self._rest_client.jobs.cancel(name)
-            final_job = self._rest_client.jobs.get(name)
-            final = final_job.get("status", "?")
-        except Exception as exc:
-            self.call_from_thread(self.notify, str(exc)[:80], severity="error")
+            scroller = self.query_one("#info-scroll", InfoScroll)
+        except Exception:
             return
-        if not get_current_worker().is_cancelled:
-            self.call_from_thread(self.notify, f"{display}: {final}")
-            self.call_from_thread(lambda: self._fetch_single(job))
+        action = {
+            "left": scroller.action_scroll_left,
+            "right": scroller.action_scroll_right,
+            "down": scroller.action_scroll_down,
+            "up": scroller.action_scroll_up,
+            "home": scroller.action_jump_home,
+            "end": scroller.action_jump_end,
+            "page_down": scroller.action_page_down,
+            "page_up": scroller.action_page_up,
+        }.get(direction)
+        if action is not None:
+            action()
+
+    # ---- Textual event handlers --------------------------------------------
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        self.jobs.filters.on_input_changed(event)
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        self.jobs.filters.on_input_submitted(event)
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        self.jobs.view.on_option_selected(event)
+
+    def on_option_list_option_highlighted(
+        self, event: OptionList.OptionHighlighted
+    ) -> None:
+        self.jobs.view.on_option_highlighted(event)

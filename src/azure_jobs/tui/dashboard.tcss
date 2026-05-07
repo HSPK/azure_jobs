@@ -4,6 +4,17 @@ Screen {
 
 .hidden { display: none; }
 
+/* ── modal screens (shared frame) ── */
+ModalScreen {
+    align: center middle;
+}
+ModalScreen > Vertical {
+    height: auto;
+    border: round #3465a4;
+    background: $surface;
+    padding: 1 2;
+}
+
 /* ── left column ── */
 #left-col {
     width: 38;
@@ -72,5 +83,5 @@ Screen {
 }
 #log-content {
     height: 1fr;
-    padding: 1 2;
+    padding: 0 2;
 }
