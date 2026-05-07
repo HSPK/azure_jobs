@@ -9,7 +9,6 @@ dist/
 wheels/
 test.ipynb
 test.sh
-scripts/
 *.egg-info
 
 # Auto-generated version file
