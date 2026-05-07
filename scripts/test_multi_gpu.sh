@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
 # Smoke test: multi-GPU NCCL + DDP via torchrun.
 #
-# Single-node:   torchrun --standalone --nproc_per_node=$AJ_PROCESSES ...
-# Multi-node :   torchrun --nnodes=$AJ_NODES --node_rank=$NODE_RANK \
-#                         --master_addr=$MASTER_ADDR --master_port=$MASTER_PORT ...
+# Reads the standard torchrun env vars (all optional; sensible defaults
+# for single-node):
+#   NNODES           — node count                  (default: 1)
+#   NPROC_PER_NODE   — GPUs per node               (default: nvidia-smi count)
+#   NODE_RANK        — this node's index           (default: 0)
+#   MASTER_ADDR      — rendezvous host             (default: 127.0.0.1)
+#   MASTER_PORT      — rendezvous port             (default: 29500)
 #
 # Submit with:
 #   aj run -t <template> -n 1 -p 8 bash scripts/test_multi_gpu.sh
@@ -13,44 +17,34 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-NODES="${AJ_NODES:-1}"
-# Default to all visible GPUs if AJ_PROCESSES is unset / zero.
-if [[ -z "${AJ_PROCESSES:-}" || "${AJ_PROCESSES}" == "0" ]]; then
-    PROCS="$(nvidia-smi -L | wc -l)"
-else
-    PROCS="${AJ_PROCESSES}"
-fi
+: "${NNODES:=1}"
+: "${NPROC_PER_NODE:=$(nvidia-smi -L | wc -l)}"
+: "${NODE_RANK:=0}"
+: "${MASTER_ADDR:=127.0.0.1}"
+: "${MASTER_PORT:=29500}"
 
 echo "=== nvidia-smi ==="
 nvidia-smi || { echo "[FAIL] nvidia-smi missing"; exit 1; }
 echo
 
-echo "=== AJ env ==="
-echo "AJ_NODES=$NODES  AJ_PROCESSES=$PROCS"
-echo "MASTER_ADDR=${MASTER_ADDR:-<unset>}  MASTER_PORT=${MASTER_PORT:-<unset>}"
-echo "NODE_RANK=${NODE_RANK:-<unset>}      RANK=${RANK:-<unset>}"
+echo "=== distributed env ==="
+echo "NNODES=$NNODES  NPROC_PER_NODE=$NPROC_PER_NODE  NODE_RANK=$NODE_RANK"
+echo "MASTER_ADDR=$MASTER_ADDR  MASTER_PORT=$MASTER_PORT"
 echo
 
-if [[ "$NODES" -gt 1 ]]; then
-    : "${MASTER_ADDR:?MASTER_ADDR must be set for multi-node}"
-    : "${MASTER_PORT:?MASTER_PORT must be set for multi-node}"
-    : "${NODE_RANK:?NODE_RANK must be set for multi-node}"
-    echo "=== torchrun multi-node (nnodes=$NODES, nproc_per_node=$PROCS) ==="
-    torchrun \
-        --nnodes="$NODES" \
-        --nproc_per_node="$PROCS" \
-        --node_rank="$NODE_RANK" \
-        --master_addr="$MASTER_ADDR" \
-        --master_port="$MASTER_PORT" \
-        "$SCRIPT_DIR/_ddp_smoke.py"
-else
-    echo "=== torchrun --standalone --nproc_per_node=$PROCS ==="
-    torchrun \
-        --standalone \
-        --nnodes=1 \
-        --nproc_per_node="$PROCS" \
-        "$SCRIPT_DIR/_ddp_smoke.py"
-fi
+echo "=== install torch ==="
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/_install_torch.sh"
+echo
+
+echo "=== torchrun ==="
+torchrun \
+    --nnodes="$NNODES" \
+    --nproc_per_node="$NPROC_PER_NODE" \
+    --node_rank="$NODE_RANK" \
+    --master_addr="$MASTER_ADDR" \
+    --master_port="$MASTER_PORT" \
+    "$SCRIPT_DIR/_ddp_smoke.py"
 
 echo
 echo "=== MULTI-GPU SMOKE TEST PASSED ==="

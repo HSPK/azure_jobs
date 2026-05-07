@@ -16,6 +16,11 @@ echo "=== AJ env ==="
 echo "AJ_NODES=${AJ_NODES:-<unset>}  AJ_PROCESSES=${AJ_PROCESSES:-<unset>}"
 echo
 
+echo "=== install torch ==="
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/_install_torch.sh"
+echo
+
 echo "=== torchrun --standalone --nproc_per_node=1 ==="
 torchrun \
     --standalone \
