@@ -56,9 +56,15 @@ else
 fi
 echo
 
+# Some images export an empty GIT_SSH / GIT_SSH_COMMAND, which makes git
+# try to exec "" and fail with "cannot run : No such file or directory".
+# Force both to a real ssh invocation (env wins over -c core.sshCommand).
+unset GIT_SSH
+export GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes"
+
 echo "=== git ls-remote $REPO HEAD ==="
-if git -c core.sshCommand="ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes" \
-       ls-remote "$REPO" HEAD; then
+echo "GIT_SSH_COMMAND=$GIT_SSH_COMMAND"
+if git ls-remote "$REPO" HEAD; then
     ok "git over SSH works against $REPO"
 else
     fail "git ls-remote failed against $REPO"
