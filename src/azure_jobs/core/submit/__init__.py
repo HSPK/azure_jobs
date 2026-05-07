@@ -25,7 +25,6 @@ from .amlt import (
 from .config import build_submit_request, render_amlt_config
 from .models import StorageMount, SubmitRequest, SubmitResult
 from .native import (
-    _INTERNAL_ENV_KEYS,
     _SING_DUMMY_IMAGE,
     CheckResult,
     _build_environment,
@@ -63,7 +62,6 @@ __all__ = [
     "submit_via_volcano",
     "submit_via_native",
     # Internal — exposed for tests that mock at this path
-    "_INTERNAL_ENV_KEYS",
     "_SING_DUMMY_IMAGE",
     "_build_environment",
     "_build_identity",

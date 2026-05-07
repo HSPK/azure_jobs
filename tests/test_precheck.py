@@ -111,7 +111,7 @@ def _sing_request(sku="1x80G8-A100-NvLink", sla="Premium"):
         nodes=1,
         service="sing",
         sla_tier=sla,
-        env_vars={"_sku_raw": sku},
+        sku=sku,
         vc_subscription_id="sub",
         vc_resource_group="rg",
     )
@@ -245,7 +245,7 @@ def test_check_singularity_drops_nvlink_for_vc(cache_home: Path, monkeypatch) ->
     res = check_singularity(req, arm_client=arm)
     assert res.severity == "warn"
     assert res.adjusted_sku == "1x80G8-A100"
-    assert req.env_vars["_sku_raw"] == "1x80G8-A100"
+    assert req.sku == "1x80G8-A100"
 
 
 def test_check_singularity_adds_nvlink_for_vc(cache_home: Path, monkeypatch) -> None:
@@ -265,7 +265,7 @@ def test_check_singularity_adds_nvlink_for_vc(cache_home: Path, monkeypatch) -> 
     res = check_singularity(req, arm_client=arm)
     assert res.severity == "warn"
     assert res.adjusted_sku == "1x80G8-A100-NvLink"
-    assert req.env_vars["_sku_raw"] == "1x80G8-A100-NvLink"
+    assert req.sku == "1x80G8-A100-NvLink"
 
 
 def test_check_singularity_no_alt_when_both_fail(cache_home: Path, monkeypatch) -> None:
@@ -285,7 +285,7 @@ def test_check_singularity_no_alt_when_both_fail(cache_home: Path, monkeypatch) 
     req = _sing_request(sku="1x80G8-A100")
     res = check_singularity(req, arm_client=arm)
     assert res.severity == "error"
-    assert req.env_vars["_sku_raw"] == "1x80G8-A100"
+    assert req.sku == "1x80G8-A100"
 
 
 # ---------------------------------------------------------------------------

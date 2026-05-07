@@ -6,7 +6,6 @@ from unittest.mock import MagicMock, patch
 
 from azure_jobs.core.config import AJWorkspace
 from azure_jobs.core.submit import (
-    _INTERNAL_ENV_KEYS,
     _SING_DUMMY_IMAGE,
     StorageMount,
     SubmitRequest,
@@ -370,7 +369,7 @@ class TestBuildResources:
             nodes=2,
             sla_tier="Premium",
             priority="high",
-            env_vars={"_sku_raw": "2xG1"},
+            sku="2xG1",
         )
         res = _build_resources(r)
         assert "AISuperComputer" in res["properties"]
@@ -394,7 +393,7 @@ class TestBuildResources:
             subscription_id="s",
             resource_group="r",
             image="amlt-sing/acpt-torch2.7.1-py3.10-cuda12.6-ubuntu22.04",
-            env_vars={"_sku_raw": "1xC1"},
+            sku="1xC1",
         )
         res = _build_resources(r)
         aisc = res["properties"]["AISuperComputer"]
@@ -409,7 +408,7 @@ class TestBuildResources:
             subscription_id="s",
             resource_group="r",
             image="pytorch:2.0",
-            env_vars={"_sku_raw": "1xC1"},
+            sku="1xC1",
         )
         res = _build_resources(r)
         aisc = res["properties"]["AISuperComputer"]
@@ -424,7 +423,7 @@ class TestBuildResources:
             service="sing",
             subscription_id="s",
             resource_group="r",
-            env_vars={"_sku_raw": "2xC1"},
+            sku="2xC1",
         )
         res = _build_resources(r)
         aisc = res["properties"]["AISuperComputer"]
@@ -449,7 +448,7 @@ class TestBuildRequestSingularity:
         assert r.service == "sing"
         assert r.vc_subscription_id == "vc-sub"
         assert r.vc_resource_group == "vc-rg"
-        assert r.env_vars.get("_sku_raw") == "2xC1"
+        assert r.sku == "2xC1"
 
     def test_aml_config_no_sku_internal_key(self):
         conf = {
@@ -668,8 +667,9 @@ class TestBuildStorageMounts:
 
 
 class TestInternalEnvKeys:
-    def test_sku_raw_stripped(self):
-        assert "_sku_raw" in _INTERNAL_ENV_KEYS
+    def test_no_internal_env_keys_leaked(self):
+        """All keys in env_vars should be passed through to the job verbatim."""
+        from azure_jobs.core.submit.native.submit import _build_env_vars
 
-    def test_azure_keys_not_stripped(self):
-        assert "_AZUREML_SINGULARITY_JOB_UAI" not in _INTERNAL_ENV_KEYS
+        r = SubmitRequest(name="j", env_vars={"FOO": "bar"}, shm_size="")
+        assert _build_env_vars(r, {}) == {"FOO": "bar"}

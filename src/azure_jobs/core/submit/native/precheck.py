@@ -232,7 +232,7 @@ def check_singularity(
       - The selected SLA tier has ``limit == 0``.
 
     Auto-adjustments (``severity="warn"`` and ``adjusted_sku`` set, the
-    request's ``_sku_raw`` env var is mutated so the actual submission uses
+    request's ``sku`` field is mutated so the actual submission uses
     the new value):
       - When the requested SKU has/lacks ``-NvLink`` and the VC only carries
         the opposite variant of the same GPU family, the suffix is toggled.
@@ -251,7 +251,7 @@ def check_singularity(
     sub = request.vc_subscription_id or request.subscription_id
     rg = request.vc_resource_group or request.resource_group
     vc = request.compute
-    sku_raw = request.env_vars.get("_sku_raw", "") or "C1"
+    sku_raw = request.sku or "C1"
     sla = (request.sla_tier or "Premium").strip().title()
 
     raw = _cached_vc_quotas_raw(arm_client, sub, rg, vc, refresh=refresh)
@@ -298,7 +298,7 @@ def check_singularity(
             )
             if alt_severity != "error":
                 # Mutate request so the actual submission uses the adjusted SKU
-                request.env_vars["_sku_raw"] = alt
+                request.sku = alt
                 detail = [
                     f"Original '{sku_raw}' failed: {msg}.",
                     f"Adjusted '{alt}' fits: {alt_msg}.",

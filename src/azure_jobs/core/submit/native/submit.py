@@ -25,8 +25,6 @@ from .storage import _build_storage_mounts
 
 log = logging.getLogger(__name__)
 
-_INTERNAL_ENV_KEYS = {"_sku_raw"}
-
 _SING_DEFAULT_ENV = {
     "SUDO": "sudo",
     "AZCOPY_AUTO_LOGIN_TYPE": "MSI",
@@ -50,9 +48,7 @@ def _build_env_vars(
     request: SubmitRequest, dataref_env: dict[str, str]
 ) -> dict[str, str]:
     """Build the environment variables dict for the job."""
-    env_vars = {
-        k: v for k, v in request.env_vars.items() if k not in _INTERNAL_ENV_KEYS
-    }
+    env_vars = dict(request.env_vars)
     if request.shm_size:
         env_vars.setdefault("SHM_SIZE", request.shm_size)
     if request.service == "sing":

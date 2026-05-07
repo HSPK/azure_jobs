@@ -217,8 +217,6 @@ def build_submit_request(
     # Environment variables (with Singularity support)
     env_extra = dict(submit_args.get("env", {}))
     container_args = dict(submit_args.get("container_args", {}))
-    if service == "sing":
-        env_extra["_sku_raw"] = job.sku if job else ""
 
     # Workspace resolution (local workspace vs. target workspace)
     if service == "aml":

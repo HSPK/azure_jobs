@@ -15,7 +15,6 @@ from .environment import _SING_DUMMY_IMAGE, _build_environment
 from .precheck import CheckResult, check_aml_compute, check_singularity, precheck
 from .storage import _build_storage_mounts
 from .submit import (
-    _INTERNAL_ENV_KEYS,
     _extract_error_message,
     _get_rest_client,
     submit,
@@ -29,7 +28,11 @@ def submit_via_native(
     on_upload_progress: Callable[[int, int, int, str], None] | None = None,
 ) -> SubmitResult:
     """Submit via the native AJ REST backend."""
-    return submit(
+    # Look up ``submit`` via the package so tests can patch
+    # ``azure_jobs.core.submit.submit`` to mock the whole submission.
+    import azure_jobs.core.submit as _pkg
+
+    return _pkg.submit(
         request,
         on_status=on_status,
         on_upload_progress=on_upload_progress,
@@ -43,7 +46,6 @@ __all__ = [
     "CheckResult",
     "check_aml_compute",
     "check_singularity",
-    "_INTERNAL_ENV_KEYS",
     "_SING_DUMMY_IMAGE",
     "_build_environment",
     "_build_identity",
