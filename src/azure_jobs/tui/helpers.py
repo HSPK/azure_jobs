@@ -13,6 +13,7 @@ from rich.markup import escape, render
 from rich.text import Text
 from textual.widgets.option_list import Option
 
+from azure_jobs.utils.text import trunc as _trunc
 from azure_jobs.utils.ui import icon_style
 
 if TYPE_CHECKING:
@@ -52,10 +53,7 @@ def get_page_size() -> int:
 
 def trunc(s: str, maxlen: int = NAME_MAX) -> str:
     """Truncate with ellipsis in the middle if too long."""
-    if len(s) <= maxlen:
-        return s
-    half = (maxlen - 3) // 2
-    return s[:half] + "..." + s[-(maxlen - 3 - half) :]
+    return _trunc(s, maxlen)
 
 
 # ---- safe markup rendering boundary ----------------------------------------
