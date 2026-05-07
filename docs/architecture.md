@@ -34,7 +34,6 @@ The codebase is organized into four packages under `src/azure_jobs/`:
 - `const.py` — path constants derived from `AJ_HOME` environment variable
 - `record.py` — `SubmitRecord` dataclass and JSONL logging
 - `log_download.py` — job log download via Run History API
-- `distributed.py` — multi-node preamble generation (MPI rank mapping, NCCL tuning)
 - `sku.py` — Singularity SKU/instance type resolution
 - `client.py` — shared utilities: log line filtering, JSON error extraction
 - `auth.py` — credential health checks

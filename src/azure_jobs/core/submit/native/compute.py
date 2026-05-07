@@ -5,8 +5,8 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
+from ..models import SubmitRequest
 from .environment import _SING_IMAGE_PREFIX
-from .models import SubmitRequest
 
 if TYPE_CHECKING:
     from azure_jobs.core.rest_client import AzureMLClient

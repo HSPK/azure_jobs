@@ -16,6 +16,9 @@ from typing import Any
 
 import requests as _requests
 
+# Boilerplate prefixes to strip from log output.
+_SKIP_LOG_PREFIXES = ("RunId:", "Web View:", "Execution Summary", "=====")
+
 # Prefix priority for auto-pick (first match wins)
 _LOG_PRIORITY = [
     "user_logs/std_log",
@@ -138,7 +141,20 @@ def get_log_content_uri(
     return log_urls.get(log_path, "")
 
 
+def filter_log_lines(raw: str) -> list[str]:
+    """Strip Azure ML boilerplate lines and trim leading/trailing blanks."""
+    lines = [
+        ln
+        for ln in raw.split("\n")
+        if not any(ln.startswith(p) for p in _SKIP_LOG_PREFIXES)
+    ]
+    while lines and not lines[0].strip():
+        lines.pop(0)
+    while lines and not lines[-1].strip():
+        lines.pop()
+    return lines
+
+
 def _filter_content(raw: str) -> str:
     """Strip boilerplate lines from log content."""
-    from azure_jobs.core.client import filter_log_lines
     return "\n".join(filter_log_lines(raw))

@@ -8,7 +8,7 @@ import pytest
 
 from azure_jobs.core.submit import precheck
 from azure_jobs.core.submit.models import SubmitRequest
-from azure_jobs.core.submit.precheck import (
+from azure_jobs.core.submit.native.precheck import (
     _cached_aml_compute,
     _cached_vc_quotas_raw,
     _instance_to_series,
@@ -213,7 +213,7 @@ def test_check_singularity_quota_tight(cache_home: Path, monkeypatch) -> None:
 # NvLink auto-adjustment
 # ---------------------------------------------------------------------------
 
-from azure_jobs.core.submit.precheck import _toggle_nvlink
+from azure_jobs.core.submit.native.precheck import _toggle_nvlink
 
 
 def test_toggle_nvlink_strip() -> None:

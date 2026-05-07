@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import logging
 import os
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from azure_jobs.core.rest_client import AzureMLClient
 
+from ...errors import extract_json_error as _extract_error_message
+from ..models import SubmitRequest, SubmitResult
 from .command import _RUNNER_FILENAME, _generate_runner_script
 from .compute import (
     _build_distribution,
@@ -18,7 +21,6 @@ from .compute import (
     _resolve_sing_identity,
 )
 from .environment import _build_environment
-from .models import SubmitRequest, SubmitResult
 from .storage import _build_storage_mounts
 
 log = logging.getLogger(__name__)
@@ -31,24 +33,6 @@ _SING_DEFAULT_ENV = {
     "JOB_EXECUTION_MODE": "Basic",
     "AZUREML_COMPUTE_USE_COMMON_RUNTIME": "false",
 }
-
-
-def _extract_error_message(exc: Exception) -> str:
-    """Extract a concise error message from an Azure REST exception."""
-    import json
-
-    msg = str(exc)
-    if "{" in msg:
-        try:
-            s, e = msg.index("{"), msg.rindex("}") + 1
-            err = json.loads(msg[s:e])
-            return err.get("error", {}).get("message", msg).strip()
-        except (ValueError, json.JSONDecodeError):
-            pass
-    first = msg.split("\n")[0].strip()
-    if first.startswith("(") and ") " in first:
-        return first.split(") ", 1)[1]
-    return first
 
 
 def _get_rest_client(request: SubmitRequest) -> AzureMLClient:
@@ -98,8 +82,6 @@ def _collect_ssh_files(code_dir: str) -> dict[str, bytes]:
     If ``~/.ssh`` doesn't exist either, return a placeholder so the
     ``.ssh`` directory is always created on the remote.
     """
-    from pathlib import Path
-
     code_path = Path(code_dir).resolve()
     if (code_path / ".ssh").is_dir():
         return {}
