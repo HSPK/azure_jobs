@@ -132,6 +132,7 @@ request = build_submit_request(
     user_command="train.py", user_args=(),
     workspace=get_workspace_config(),
     template_name="gpu", nodes=2, processes=8,
+    code_dir="/path/to/project",  # defaults to os.getcwd()
 )
 result = submit_via_native(request)
 print(result.status, result.portal_url)

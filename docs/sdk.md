@@ -23,7 +23,7 @@ from azure_jobs import (
 | `Template.from_conf_path(path)` | Load a YAML template (resolving its `base` chain) into a `Template` |
 | `Template.from_dict(conf)` | Build a `Template` from an already-merged dict |
 | `get_workspace_config()` | Read `~/.azure_jobs/config.toml` → `AJWorkspace` |
-| `build_submit_request(template, *, name, sid, sku, user_command, user_args, workspace, ...)` | Translate `Template` + CLI-equivalent params → `SubmitRequest` |
+| `build_submit_request(template, *, name, sid, sku, user_command, user_args, workspace, code_dir=None, ...)` | Translate `Template` + CLI-equivalent params → `SubmitRequest`. `code_dir` defaults to `os.getcwd()` and is the local directory backends upload from. |
 | `SubmitRequest` | Backend-agnostic, normalized job spec |
 | `submit_via_native(request, on_event=...)` | Submit to AML / Singularity via REST |
 | `submit_via_volcano(request, on_event=...)` | Submit to a Volcano cluster via `kubectl` |
@@ -56,6 +56,7 @@ request = build_submit_request(
     nodes=2,
     processes=8,           # GPUs per node
     processes_per_node=1,  # launcher procs per node
+    code_dir="/path/to/project",  # files to upload; defaults to os.getcwd()
 )
 
 def on_event(ev):
