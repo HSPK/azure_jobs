@@ -47,6 +47,7 @@ class LogsStream(Controller[LogsState]):
         st = self.state
         st.streaming = False
         st.loading = False
+        self.app.logs.view._set_loading_overlay(False)
         if st.streamer:
             try:
                 st.streamer.close()
@@ -258,6 +259,7 @@ class LogsStream(Controller[LogsState]):
         if not widget:
             return
         widget.clear()
+        self.app.logs.view._set_loading_overlay(False)
         if text:
             buffer.append_lines(text)
         self.app.logs.update_header()

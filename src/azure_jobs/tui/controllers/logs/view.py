@@ -12,6 +12,17 @@ from azure_jobs.tui.state import LogsState
 class LogsView(Controller[LogsState]):
     """Owns the right-pane Info/Logs toggle, header, and log file picker."""
 
+    def _set_loading_overlay(self, on: bool) -> None:
+        """Show/hide the centered spinner overlaid on the log pane."""
+        try:
+            ind = self.app.query_one("#log-loading")
+        except Exception:
+            return
+        if on:
+            ind.remove_class("hidden")
+        else:
+            ind.add_class("hidden")
+
     # ---- view switching -----------------------------------------------------
 
     def switch_to_view(self) -> None:
@@ -98,6 +109,7 @@ class LogsView(Controller[LogsState]):
         st.line_count = 0
         if app.widgets.log:
             app.widgets.log.clear()
+        self._set_loading_overlay(False)
         status = job.get("status", "")
         if status in NO_LOG_STATUSES:
             icon, sty = icon_style(status)
@@ -108,11 +120,10 @@ class LogsView(Controller[LogsState]):
             st.loading = False
             self.update_header()
             return
-        # Surface an immediate loading hint — the worker may take 0.5–2s to
-        # resolve the file list + signed URL + initial tail bytes.
+        # Show a centered spinner while the worker resolves the file list,
+        # signed URL, and initial tail bytes (typically 0.5–2s).
         st.loading = True
-        if app.widgets.log:
-            app.widgets.log.write("[dim]Loading log…[/dim]")
+        self._set_loading_overlay(True)
         self.update_header()
         app.logs.stream.start_streaming(name, st.current_file)
 
@@ -178,7 +189,7 @@ class LogsView(Controller[LogsState]):
         snap.line_count = 0
         if app.widgets.log:
             app.widgets.log.clear()
-            app.widgets.log.write("[dim]Loading log…[/dim]")
+        self._set_loading_overlay(True)
         st.loading = True
         self.update_header()
         app.logs.stream.start_streaming(st.job, chosen)

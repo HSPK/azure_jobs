@@ -73,6 +73,7 @@ ModalScreen > Vertical {
     border-title-style: bold;
     border-subtitle-color: $text-muted;
     border-subtitle-style: italic;
+    layers: base overlay;
 }
 #info-scroll {
     height: 1fr;
@@ -84,4 +85,14 @@ ModalScreen > Vertical {
 #log-content {
     height: 1fr;
     padding: 0 2;
+}
+#log-loading {
+    layer: overlay;
+    width: 100%;
+    height: 100%;
+    align: center middle;
+    background: transparent;
+}
+#log-loading.hidden {
+    display: none;
 }

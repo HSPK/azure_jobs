@@ -31,10 +31,6 @@ def dashboard(last: int, page_size: int | None) -> None:
     try:
         app.run(mouse=False)
     finally:
-        # Bypass atexit: ThreadPoolExecutor._python_exit joins worker
-        # threads (REST polls, log streams) and can hang for several
-        # seconds after the TUI returns. The TUI owns no state worth
-        # flushing on exit, so just terminate.
         os._exit(0)
 
 

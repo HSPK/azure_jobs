@@ -18,7 +18,7 @@ from typing import Any
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
-from textual.widgets import Footer, Input, OptionList, Static
+from textual.widgets import Footer, Input, LoadingIndicator, OptionList, Static
 
 from azure_jobs.tui.components import HelpScreen, InfoScroll, LogViewer
 from azure_jobs.tui.controllers import (
@@ -105,6 +105,7 @@ class AjDashboard(App):
                     auto_scroll=True,
                     classes="hidden",
                 )
+                yield LoadingIndicator(id="log-loading", classes="hidden")
         yield Footer()
 
     def on_mount(self) -> None:

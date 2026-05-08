@@ -74,6 +74,7 @@ class LogsBuffer(Controller[LogsState]):
         if self.app.widgets.log:
             self.app.widgets.log.clear()
             self.app.widgets.log.write(msg)
+        self.app.logs.view._set_loading_overlay(False)
         # Any status surface clears the spinner so the header returns to
         # an idle/error state instead of a stale "loading…" badge.
         self.state.loading = False
