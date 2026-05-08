@@ -14,15 +14,22 @@ class _LazyGroup(click.Group):
         # run.py
         "run": ".run",
         # templates.py
-        "template": ".templates", "tl": ".templates",
-        "pull": ".templates", "push": ".templates",
+        "template": ".templates",
+        "tl": ".templates",
+        "pull": ".templates",
+        "push": ".templates",
         # jobs.py
-        "job": ".jobs", "list": ".jobs",
-        "js": ".jobs", "jl": ".jobs", "jc": ".jobs", "jlogs": ".jobs",
+        "job": ".jobs",
+        "list": ".jobs",
+        "js": ".jobs",
+        "jl": ".jobs",
+        "jc": ".jobs",
+        "jlogs": ".jobs",
         # images.py
         "image": ".images",
         # dashboard.py
-        "dash": ".dashboard", "d": ".dashboard",
+        "dash": ".dashboard",
+        "d": ".dashboard",
         # config.py
         "config": ".config",
         # auth.py
@@ -32,7 +39,8 @@ class _LazyGroup(click.Group):
         # experiment.py
         "exp": ".experiment",
         # quota.py
-        "quota": ".quota", "ql": ".quota",
+        "quota": ".quota",
+        "ql": ".quota",
         # env.py
         "env": ".env",
         # ds.py
@@ -41,6 +49,8 @@ class _LazyGroup(click.Group):
         "sku": ".sku",
         # init.py
         "init": ".init",
+        # code.py
+        "code": ".code",
     }
 
     def list_commands(self, ctx: click.Context) -> list[str]:
@@ -48,7 +58,9 @@ class _LazyGroup(click.Group):
         self._load_all()
         return super().list_commands(ctx)
 
-    def get_command(self, ctx: click.Context, cmd_name: str) -> click.BaseCommand | None:
+    def get_command(
+        self, ctx: click.Context, cmd_name: str
+    ) -> click.BaseCommand | None:
         # Already loaded?
         cmd = super().get_command(ctx, cmd_name)
         if cmd is not None:
@@ -57,12 +69,14 @@ class _LazyGroup(click.Group):
         if mod_path is None:
             return None
         import importlib
+
         importlib.import_module(mod_path, package=__name__)
         return super().get_command(ctx, cmd_name)
 
     def _load_all(self) -> None:
         """Import every command module (for help/list_commands)."""
         import importlib
+
         for mod_path in set(self._CMD_TO_MODULE.values()):
             importlib.import_module(mod_path, package=__name__)
 
