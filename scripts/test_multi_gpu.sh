@@ -22,10 +22,7 @@ echo "=== install torch ==="
 source "$SCRIPT_DIR/_install_torch.sh"
 echo
 
-: "${NNODES:=1}"
-: "${NPROC_PER_NODE:=$(nvidia-smi -L | wc -l)}"
 : "${NODE_RANK:=0}"
-: "${RANK:=0}"
 : "${MASTER_ADDR:=127.0.0.1}"
 : "${MASTER_PORT:=29500}"
 
@@ -34,14 +31,14 @@ nvidia-smi || { echo "[FAIL] nvidia-smi missing"; exit 1; }
 echo
 
 echo "=== distributed env ==="
-echo "NNODES=$NNODES  NPROC_PER_NODE=$NPROC_PER_NODE  NODE_RANK=$NODE_RANK"
-echo "RANK=$RANK MASTER_ADDR=$MASTER_ADDR  MASTER_PORT=$MASTER_PORT"
+echo "NNODES=$AJ_NODES  NPROC_PER_NODE=$AJ_GPUS_PER_NODE  NODE_RANK=$NODE_RANK"
+echo "MASTER_ADDR=$MASTER_ADDR  MASTER_PORT=$MASTER_PORT"
 echo
 
 echo "=== torchrun ==="
 torchrun \
-    --nnodes="$NNODES" \
-    --nproc_per_node="$NPROC_PER_NODE" \
+    --nnodes="$AJ_NODES" \
+    --nproc_per_node="$AJ_GPUS_PER_NODE" \
     --node_rank="$NODE_RANK" \
     --master_addr="$MASTER_ADDR" \
     --master_port="$MASTER_PORT" \
