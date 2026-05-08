@@ -27,6 +27,35 @@ aj run -t gpu train.py           # submit using the "gpu" template
 
 `.py` scripts run via `uv run`, `.sh` via `bash`. Drop a `.codeignore` (or `.amltignore`) at the project root to exclude paths from the upload.
 
+## Templates
+
+Templates live under `.azure_jobs/template/` as YAML files. There's no `aj template create` — bring them in one of three ways:
+
+1. **`aj init`** — scaffolds `.azure_jobs/` and (optionally) pulls a starter template repo.
+2. **`aj template pull <user>/<repo>`** — clone a shared template repo into `.azure_jobs/`.
+3. **Hand-author** — drop a YAML file into `.azure_jobs/template/`.
+
+Minimal leaf template (`.azure_jobs/template/gpu.yaml`):
+
+```yaml
+base: [account.default, storage.default, environment.aml]
+config:
+  target:
+    name: my-cluster
+  jobs:
+    - name: train
+      sku: "{nodes}xA100-80GB"
+```
+
+`base` chains other YAML files in `.azure_jobs/` (dotted name → `.azure_jobs/<dir>/<name>.yaml`); `{nodes}` / `{processes}` are substituted from CLI flags. Inheritance, merge rules, and SKU formats are documented in [docs/configuration.md](docs/configuration.md).
+
+```bash
+aj template list                # see what's available
+aj template show <name>         # resolved config (after inheritance)
+aj template validate            # sanity check
+aj template push -m "msg"       # commit + push back upstream
+```
+
 ## `aj run`
 
 ```bash

@@ -73,8 +73,6 @@ Exported into every job:
 | `AJ_PROCESSES_PER_NODE` | `--ppn` value |
 | `AJ_SUBMIT_TIMESTAMP_UTC` | submission time |
 
-Passed via `environmentVariables` (native) / container `env` (volcano) / `submit_args.env` (amlt). They never appear in the runner script body, so the uploaded code asset stays content-addressable.
-
 ## CLI overrides
 
 Flags override the merged template; positional args forward to the user command:

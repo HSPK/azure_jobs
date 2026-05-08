@@ -75,10 +75,10 @@ def config_experiment(name: str | None) -> None:
 @config_group.command(name="show")
 def config_show() -> None:
     """Show all configuration."""
+    import json
+
     from azure_jobs.core.config import read_config
     from azure_jobs.utils.ui import console
-
-    import json
 
     cfg = read_config().to_dict()
     if cfg:
