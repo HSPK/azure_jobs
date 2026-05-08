@@ -24,7 +24,6 @@ from azure_jobs.cli import main
 def dashboard(last: int, page_size: int | None) -> None:
     """Interactive job dashboard (lazydocker-style TUI)."""
     import os
-    import threading
 
     from azure_jobs.tui.app import AjDashboard
 
@@ -32,18 +31,11 @@ def dashboard(last: int, page_size: int | None) -> None:
     try:
         app.run(mouse=False)
     finally:
-        # Background workers (REST polls, log streams, uploads) run on
-        # non-daemon executor threads. If any are still alive when we
-        # leave ``app.run`` (clean quit *or* KeyboardInterrupt), the
-        # interpreter's atexit will block on ``thread.join`` and only
-        # break on a second Ctrl+C, leaking a traceback. Skip that.
-        alive = [
-            t
-            for t in threading.enumerate()
-            if t is not threading.main_thread() and t.is_alive()
-        ]
-        if alive:
-            os._exit(0)
+        # Bypass atexit: ThreadPoolExecutor._python_exit joins worker
+        # threads (REST polls, log streams) and can hang for several
+        # seconds after the TUI returns. The TUI owns no state worth
+        # flushing on exit, so just terminate.
+        os._exit(0)
 
 
 @main.command(name="d", hidden=True)
