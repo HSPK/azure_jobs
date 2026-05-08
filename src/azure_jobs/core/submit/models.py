@@ -8,8 +8,6 @@ from typing import Any
 
 @dataclass
 class StorageMount:
-    """Configuration for a single storage mount."""
-
     storage_account_name: str
     container_name: str
     mount_dir: str = ""  # defaults to /mnt/{mount_name} if empty
@@ -17,51 +15,36 @@ class StorageMount:
 
 @dataclass
 class SubmitRequest:
-    """Everything needed to submit a job to Azure ML.
+    """Normalized job spec consumed by every submission backend."""
 
-    This is the normalized request object used by all submission backends.
-    It can be converted to AMLT config, REST payload, or other formats as needed.
-    """
-
-    # ─── Job Identity ─────────────────────────────────────────────────────
     name: str
     sid: str = ""
     description: str = ""
     template_name: str = ""
     experiment_name: str = "aj"
 
-    # ─── Compute ──────────────────────────────────────────────────────────
     compute: str = ""
     sku: str = ""
     nodes: int = 1
-    # GPUs per node (resource description, drives SKU + AJ_PROCESSES env).
-    # Equals the template's ``processes`` field / CLI ``-p`` value.
+    # GPUs per node; drives SKU + AJ_PROCESSES env. CLI ``-p``.
     gpus_per_node: int = 1
-    # Launcher processes per node (e.g. torch.distributed.launch ``--nproc-per-node``).
-    # Independent of ``gpus_per_node`` and defaults to 1; user controls it via ``--ppn``.
+    # Launcher procs per node (e.g. torchrun --nproc-per-node). CLI ``--ppn``.
     processes_per_node: int = 1
 
-    # ─── Environment ──────────────────────────────────────────────────────
     image: str = ""
     image_registry: str | None = None
 
-    # ─── Code ─────────────────────────────────────────────────────────────
-    # Local directory backends actually upload (defaults to cwd in
-    # ``build_submit_request``). Always a real filesystem path.
+    # Real on-disk path backends upload from (defaults to cwd).
     code_dir: str = "."
     code_ignore: list[str] = field(default_factory=list)
-    # AMLT-only: literal value of the template's ``code.local_dir`` field.
-    # May contain amlt path tokens like ``$CONFIG_DIR``; not resolved here.
+    # AMLT-only literal of ``code.local_dir`` (may contain ``$CONFIG_DIR``).
     amlt_code_dir: str = "."
 
-    # ─── Commands ───────────────────────────────────────────────────
     setup_commands: list[str] = field(default_factory=list)
     command: list[str] = field(default_factory=list)
 
-    # ─── Storage ────────────────────────────────────────────────────
     storage: dict[str, StorageMount] = field(default_factory=dict)
 
-    # ─── Job Configuration ────────────────────────────────────────────
     identity: str = "managed"
     sla_tier: str = "Premium"
     priority: str = "high"
@@ -69,42 +52,29 @@ class SubmitRequest:
     container_args: dict[str, Any] = field(default_factory=dict)
     shm_size: str = "2048g"
 
-    # ─── Environment Variables ─────────────────────────────────────────
     env_vars: dict[str, str] = field(default_factory=dict)
 
-    # ─── Azure Workspace ──────────────────────────────────────────────────
     subscription_id: str = ""
     resource_group: str = ""
     workspace_name: str = ""
 
-    # ─── Service Type ─────────────────────────────────────────────────────
     service: str = "aml"
 
     # Backend-specific target metadata (e.g. Volcano namespace/queue/rdma).
-    # Opaque to non-target backends; consumers cast/lookup as needed.
     target_extra: dict[str, Any] = field(default_factory=dict)
 
-    # ─── Singularity-Specific (when service == "sing") ────────────────────
+    # Singularity-only (service == "sing").
     vc_subscription_id: str = ""
     vc_resource_group: str = ""
     group_policy: str = ""
 
     def to_dict(self) -> dict[str, Any]:
-        """Convert request to a fully JSON-serializable dictionary.
-
-        ``dataclasses.asdict`` recursively converts nested dataclasses
-        (e.g. ``StorageMount`` values inside ``storage``) into plain dicts,
-        unlike a shallow ``vars(self)`` which would leave them as objects
-        and break ``json.dumps``.
-        """
+        # asdict recurses into nested dataclasses (StorageMount) so the
+        # result is JSON-serializable; vars() would not.
         return asdict(self)
 
     def get_amlt_config(self) -> dict[str, Any]:
-        """Get this request as AMLT-compatible config dict.
-
-        Returns:
-            Dict with AMLT schema structure (jobs, target, environment, etc.).
-        """
+        """Render this request as an AMLT-compatible config dict."""
         config: dict[str, Any] = {
             "jobs": [
                 {
@@ -168,26 +138,23 @@ class SubmitRequest:
 
 @dataclass
 class SubmitResult:
-    job_name: str  # our display name
-    azure_name: str = ""  # Azure-assigned job name (may differ for Singularity)
-    status: str = ""  # "submitted" or "failed"
+    job_name: str
+    azure_name: str = ""  # Azure-assigned name (may differ from job_name for Sing)
+    status: str = ""  # "submitted" | "failed"
     portal_url: str = ""
     error: str = ""
-    # Free-form backend output (e.g. ``kubectl create`` stdout for Volcano).
-    note: str = ""
+    note: str = ""  # free-form backend output (e.g. kubectl stdout)
 
 
 @dataclass
 class SubmitEvent:
     """Progress event emitted by submission backends.
 
-    ``kind`` values:
-      - status milestones: ``auth``/``environment``/``storage``/``command``/
-        ``identity``/``code``/``submit``/``done``/``error`` — ``detail`` is
-        a human-readable hint.
-      - ``upload`` — per-file progress; ``completed``/``total``/
-        ``skipped``/``current`` are populated.
-      - ``log`` — informational line printable above any progress UI.
+    ``kind``:
+      - milestones: ``auth``/``environment``/``storage``/``command``/
+        ``identity``/``code``/``submit``/``done``/``error`` — ``detail`` is text.
+      - ``upload`` — per-file progress (``completed``/``total``/``skipped``/``current``).
+      - ``log`` — info line printable above any progress UI.
     """
 
     kind: str

@@ -1,21 +1,4 @@
-"""Azure Jobs — fast CLI **and** Python SDK for Azure ML job submission.
-
-The CLI lives under :mod:`azure_jobs.cli`. For programmatic use, the most
-common entry points are re-exported here::
-
-    from azure_jobs import (
-        Template,
-        SubmitRequest,
-        SubmitResult,
-        SubmitEvent,
-        build_submit_request,
-        submit_via_native,
-        submit_via_volcano,
-        submit_via_amlt,
-    )
-
-See ``docs/sdk.md`` for a worked example.
-"""
+"""Azure Jobs — fast CLI **and** Python SDK for Azure ML job submission."""
 
 try:
     from azure_jobs._version import __version__

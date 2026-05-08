@@ -98,14 +98,9 @@ def build_submit_request(
 ) -> SubmitRequest:
     """Build a SubmitRequest from a template + submission parameters.
 
-    Combines template config with the user command and AJ-injected env
-    vars (``AJ_NAME``, ``AJ_ID``, ``AJ_NODES``, ``AJ_PROCESSES``, ...)
-    into a normalized request usable by every backend.
-
-    ``processes`` is GPUs per node (drives SKU resolution and
-    ``AJ_PROCESSES = nodes * processes``); ``processes_per_node`` is the
-    launcher process count (e.g. ``torchrun --nproc-per-node``) and is
-    independent of GPU count.
+    ``processes`` is GPUs per node (drives SKU + ``AJ_PROCESSES = nodes *
+    processes``); ``processes_per_node`` is the launcher process count
+    (e.g. ``torchrun --nproc-per-node``) and is independent of GPU count.
     """
     target = template.target
     env = template.environment
@@ -129,16 +124,14 @@ def build_submit_request(
 
     service = target.service
 
-    # All AJ_* values flow through env_vars (not the runner script) so
-    # per-submission churn (sid, timestamp, name) doesn't break the
-    # content-addressed code-asset hash that native uses for blob dedup.
+    # AJ_* travel via env_vars (not the runner script) so per-submission
+    # churn doesn't break native's content-addressed code-asset hash.
     aj_envs: dict[str, str] = {
         "AJ_NAME": name,
         "AJ_ID": sid,
         "AJ_TEMPLATE": template_name,
         "AJ_SUBMIT_TIMESTAMP_UTC": datetime.now(timezone.utc).isoformat(),
         "AJ_NODES": str(nodes),
-        # Total GPUs across all nodes; convenient for distributed launchers.
         "AJ_PROCESSES": str(processes * nodes),
         "AJ_GPUS_PER_NODE": str(processes),
         "AJ_PROCESSES_PER_NODE": str(processes_per_node),
@@ -149,7 +142,7 @@ def build_submit_request(
         "export PATH=$HOME/.local/bin:$PATH",
     ]
 
-    # Volcano distributed env (fallback when amlt-style vars aren't set)
+    # Volcano distributed env fallback (when amlt-style vars aren't set).
     if service == "volcano":
         cmd_list.extend(
             [
@@ -186,14 +179,12 @@ def build_submit_request(
     cmd_list.append(cmd)
     command_list = cmd_list
 
-    # ``amlt_code_dir`` keeps the template's literal value (may contain
-    # ``$CONFIG_DIR`` etc.) for amlt rendering. Backends that actually
-    # walk files use ``code_dir`` — defaulting to cwd.
+    # amlt rendering keeps the template's literal value (may include
+    # ``$CONFIG_DIR``); backends upload from ``resolved_code_dir``.
     amlt_code_dir = code.local_dir
     resolved_code_dir = code_dir if code_dir is not None else os.getcwd()
 
-    # Template ``code.ignore`` then ``.codeignore`` / ``.amltignore``,
-    # de-duplicated while preserving order.
+    # Template ignore patterns + .codeignore/.amltignore, dedup, order-preserved.
     file_ignore = read_ignore_file(resolved_code_dir)
     seen: set[str] = set()
     code_ignore: list[str] = []
@@ -206,7 +197,7 @@ def build_submit_request(
     env_extra.update(aj_envs)
     container_args = dict(submit_args.get("container_args", {}))
 
-    # Workspace resolution: AML target may override; others use local workspace.
+    # AML target may override sub/rg; others use local workspace.
     if service == "aml":
         sub_id = target.subscription_id or workspace.subscription_id
         rg = target.resource_group or workspace.resource_group
@@ -215,7 +206,7 @@ def build_submit_request(
         rg = workspace.resource_group
     ws_name = target.workspace_name or workspace.workspace_name
 
-    # Volcano needs k8s scheduling fields that mean nothing to AML.
+    # Volcano-only k8s scheduling fields.
     target_extra: dict[str, Any] = {}
     if service == "volcano":
         target_extra = {
