@@ -16,7 +16,7 @@ from urllib.parse import urlparse
 
 import requests
 
-from azure_jobs.utils.fs import walk_code
+from azure_jobs.utils.fs import CodeFile, compute_code_hash, walk_code
 
 from ..auth import (
     API_VERSION,
@@ -176,14 +176,14 @@ class BlobAPI:
         """
         # Index files by path on disk + bytes for synthetic ones.
         # Streaming Path-based upload keeps peak memory low.
-        on_disk, in_memory = self._index_files(code_dir, ignore_patterns, extra_files)
-        code_hash = self._compute_hash(on_disk, in_memory)
+        files, in_memory = self._index_files(code_dir, ignore_patterns, extra_files)
+        code_hash = compute_code_hash(files, in_memory)
 
         storage = self._ensure_default_storage()
         creds = self._resolve_credentials(storage.arm_id)
 
         self._upload_all(
-            on_disk=on_disk,
+            on_disk={cf.rel: cf.path for cf in files},
             in_memory=in_memory,
             code_hash=code_hash,
             storage=storage,
@@ -197,41 +197,16 @@ class BlobAPI:
         code_dir: str,
         ignore_patterns: list[str] | None,
         extra_files: dict[str, str | bytes] | None,
-    ) -> tuple[dict[str, Path], dict[str, bytes]]:
-        """Walk *code_dir* and split into on-disk paths and in-memory blobs."""
-        on_disk: dict[str, Path] = {
-            cf.rel: cf.path for cf in walk_code(code_dir, ignore_patterns)
-        }
+    ) -> tuple[list[CodeFile], dict[str, bytes]]:
+        """Walk *code_dir* and split into on-disk files and in-memory blobs."""
+        files = walk_code(code_dir, ignore_patterns)
         in_memory: dict[str, bytes] = {}
         if extra_files:
             for name, content in extra_files.items():
                 in_memory[name] = (
                     content.encode() if isinstance(content, str) else content
                 )
-        return on_disk, in_memory
-
-    @staticmethod
-    def _compute_hash(
-        on_disk: dict[str, Path],
-        in_memory: dict[str, bytes],
-    ) -> str:
-        """Deterministic 16-char hash over sorted ``(path, content)`` for dedup.
-
-        Disk files are streamed in 64KiB chunks to avoid double-buffering.
-        """
-        hasher = hashlib.sha256()
-        all_paths = sorted({*on_disk, *in_memory})
-        for rel in all_paths:
-            hasher.update(rel.encode())
-            if rel in on_disk:
-                file_hash = hashlib.sha256()
-                with on_disk[rel].open("rb") as fh:
-                    for chunk in iter(lambda: fh.read(65536), b""):
-                        file_hash.update(chunk)
-                hasher.update(file_hash.digest())
-            else:
-                hasher.update(hashlib.sha256(in_memory[rel]).digest())
-        return hasher.hexdigest()[:16]
+        return files, in_memory
 
     def _upload_all(
         self,

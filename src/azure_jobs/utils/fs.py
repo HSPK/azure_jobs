@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -160,3 +161,35 @@ def walk_code(
                 size = 0
             out.append(CodeFile(rel=rel, path=abs_path, size=size))
     return out
+
+
+def compute_code_hash(
+    files: Iterable[CodeFile],
+    extras: dict[str, bytes] | None = None,
+    *,
+    length: int = 16,
+) -> str:
+    """Deterministic content hash for a code upload.
+
+    Combines each entry's relative path with the SHA-256 of its content,
+    sorted by path. Disk files are streamed in 64 KiB chunks. ``extras``
+    are in-memory blobs (used by the native backend to inject the
+    runner script) and are mixed in identically.
+
+    Returns the first ``length`` hex chars of the outer SHA-256 — the
+    same digest the native backend uses for blob-storage dedup.
+    """
+    on_disk = {cf.rel: cf.path for cf in files}
+    extras = extras or {}
+    hasher = hashlib.sha256()
+    for rel in sorted({*on_disk, *extras}):
+        hasher.update(rel.encode())
+        if rel in on_disk:
+            file_hash = hashlib.sha256()
+            with on_disk[rel].open("rb") as fh:
+                for chunk in iter(lambda: fh.read(65536), b""):
+                    file_hash.update(chunk)
+            hasher.update(file_hash.digest())
+        else:
+            hasher.update(hashlib.sha256(extras[rel]).digest())
+    return hasher.hexdigest()[:length]
