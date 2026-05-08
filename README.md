@@ -92,11 +92,10 @@ torchrun \
 
 ## `aj dash`
 
-Interactive TUI dashboard for browsing and managing cloud jobs — lazydocker-style. A jobs table with paged results, an inline detail panel, and a pop-up log viewer that can either show the captured log or live-stream stdout from a running job.
+Interactive TUI dashboard for browsing and managing cloud jobs.
 
 ```bash
-aj dash               # show recent 100 jobs
-aj dash -n 500        # widen the window
+aj dash
 ```
 
 | Key | Action |
@@ -105,7 +104,6 @@ aj dash -n 500        # widen the window
 | `←` `→` | Prev / next page |
 | `enter` / `i` | Job detail panel |
 | `l` | Open logs (auto-streams if the job is running) |
-| `L` | Stop streaming |
 | `o` | Pick a different log file |
 | `c` | Cancel the selected job |
 | `r` | Refresh |
@@ -115,13 +113,39 @@ aj dash -n 500        # widen the window
 | `esc` | Help overlay |
 | `q` | Quit |
 
-Workspace switching is live — pick a different one with `w` and the table reloads against it.
+## Use as a Python SDK
+
+The same engine the CLI uses is exposed at the package root, so you can build and submit jobs from your own scripts:
+
+```python
+from azure_jobs import (
+    Template,
+    build_submit_request,
+    submit_via_native,   # also: submit_via_volcano, submit_via_amlt
+)
+from azure_jobs.core.conf import read_conf
+from azure_jobs.core.config import get_workspace_config
+
+template = Template.from_dict(read_conf(".azure_jobs/template/gpu.yaml"))
+request = build_submit_request(
+    template,
+    name="my-job", sid="abc123", sku="2xA100-80GB",
+    user_command="train.py", user_args=(),
+    workspace=get_workspace_config(),
+    template_name="gpu", nodes=2, processes=8,
+)
+result = submit_via_native(request)
+print(result.status, result.portal_url)
+```
+
+See [docs/sdk.md](docs/sdk.md) for the full surface and a `submit_and_record` example.
 
 ## Documentation
 
 | Document | Contents |
 |----------|----------|
 | [Commands](docs/commands.md) | `aj job`, `aj template`, `aj quota`, `aj sku`, `aj dash`, ... |
+| [SDK](docs/sdk.md) | Programmatic submission API |
 | [Architecture](docs/architecture.md) | Module layout, submission flow, backends |
 | [Configuration](docs/configuration.md) | Templates, inheritance, merge rules, SKU formats |
 | [REST API](docs/rest-api.md) | REST client design, endpoints, job body shape |
