@@ -862,9 +862,9 @@ class TestRunCommand:
         assert result.exit_code == 0
         sub_file = list(aj_env["dryrun_home"].glob("*.yaml"))[0]
         sub = yaml.safe_load(sub_file.read_text())
-        cmds = sub["jobs"][0]["command"]
-        assert any("AJ_NODES=2" in c for c in cmds)
-        assert any("AJ_PROCESSES=8" in c for c in cmds)  # 4 * 2
+        env = sub["jobs"][0]["submit_args"]["env"]
+        assert env["AJ_NODES"] == "2"
+        assert env["AJ_PROCESSES"] == "8"  # 4 * 2
 
     def test_ignores_extra_nodes_processes(self, aj_env):
         conf = {

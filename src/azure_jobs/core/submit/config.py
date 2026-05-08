@@ -18,11 +18,7 @@ if TYPE_CHECKING:
 
 
 def _escape_amlt_dollars(value: Any) -> Any:
-    """Recursively escape '$' in config values for AMLT consumption.
-
-    - Preserves existing '$$'
-    - Preserves '$CONFIG_DIR' for AMLT path resolution
-    """
+    """Recursively escape ``$`` for AMLT (preserves ``$$`` and ``$CONFIG_DIR``)."""
     if isinstance(value, dict):
         return {k: _escape_amlt_dollars(v) for k, v in value.items()}
     if isinstance(value, list):
@@ -37,18 +33,7 @@ def _escape_amlt_dollars(value: Any) -> Any:
 
 
 def render_amlt_config(request: SubmitRequest) -> dict[str, Any]:
-    """Render output config dict from a SubmitRequest for display and saving.
-
-    Reconstructs a displayable/saveable amlt config dict from the normalized
-    SubmitRequest object.
-
-    Args:
-        request: Normalized submission request.
-
-    Returns:
-        Rendered config dict suitable for display, saving to file, or backend routing.
-    """
-    # Reconstruct config dict from request fields
+    """Reconstruct an amlt-style config dict from a SubmitRequest for display/save."""
     output_conf = {
         "description": request.description,
         "jobs": [
@@ -109,37 +94,17 @@ def build_submit_request(
     processes: int = 1,
     processes_per_node: int = 1,
 ) -> SubmitRequest:
-    """Build a SubmitRequest from template and submission parameters.
+    """Build a SubmitRequest from a template + submission parameters.
 
-    Converts template config, workspace, and job parameters into a normalized
-    SubmitRequest object for any submission backend (AML, Singularity, etc.).
+    Combines template config with the user command and AJ-injected env
+    vars (``AJ_NAME``, ``AJ_ID``, ``AJ_NODES``, ``AJ_PROCESSES``, ...)
+    into a normalized request usable by every backend.
 
-    Also constructs the complete command list by combining template commands
-    with user command and environment exports.
-
-    Args:
-        template: Template (target, jobs, environment, etc.).
-        name: Job display name and description.
-        sid: Session/submission ID (used in env exports and tracking).
-        sku: Resolved SKU string.
-        user_command: User's command or script to run.
-        user_args: Arguments for the user command.
-        workspace: Workspace config as ``AJWorkspace`` dataclass.
-        template_name: Name of the template (for AJ_TEMPLATE export).
-        experiment: Experiment name.
-        nodes: Override for node count (takes precedence over job config).
-        processes: GPUs per node (template ``processes`` / CLI ``-p``).
-            Drives SKU resolution and the ``AJ_PROCESSES`` env (= ``nodes * processes``).
-        processes_per_node: Launcher processes per node
-            (e.g. ``torchrun --nproc-per-node``). Independent of ``processes``,
-            defaults to 1, and is exposed via ``AJ_PROCESSES_PER_NODE``.
-
-    Returns:
-        SubmitRequest ready for submission to any backend.
+    ``processes`` is GPUs per node (drives SKU resolution and
+    ``AJ_PROCESSES = nodes * processes``); ``processes_per_node`` is the
+    launcher process count (e.g. ``torchrun --nproc-per-node``) and is
+    independent of GPU count.
     """
-    # ─────────────────────────────────────────────────────────────────────
-    # Extract config sections for request building
-    # ─────────────────────────────────────────────────────────────────────
     target = template.target
     env = template.environment
     job = template.jobs[0] if template.jobs else None
@@ -147,7 +112,6 @@ def build_submit_request(
     code = template.code
     submit_args = job.submit_args if job else {}
 
-    # Convert storage dict to StorageMount objects
     from .models import StorageMount
 
     storage = {}
@@ -163,23 +127,27 @@ def build_submit_request(
 
     service = target.service
 
-    # Assemble command list with env exports + template commands + user command
+    # All AJ_* values flow through env_vars (not the runner script) so
+    # per-submission churn (sid, timestamp, name) doesn't break the
+    # content-addressed code-asset hash that native uses for blob dedup.
+    aj_envs: dict[str, str] = {
+        "AJ_NAME": name,
+        "AJ_ID": sid,
+        "AJ_TEMPLATE": template_name,
+        "AJ_SUBMIT_TIMESTAMP_UTC": datetime.now(timezone.utc).isoformat(),
+        "AJ_NODES": str(nodes),
+        # Total GPUs across all nodes; convenient for distributed launchers.
+        "AJ_PROCESSES": str(processes * nodes),
+        "AJ_GPUS_PER_NODE": str(processes),
+        "AJ_PROCESSES_PER_NODE": str(processes_per_node),
+    }
+
     cmd_list: list[str] = [
-        # SSH setup (works for both aj and amlt)
         "[ -f /tmp/.aj_ssh_env ] && source /tmp/.aj_ssh_env",
-        f"export AJ_NODES={nodes}",
-        # AJ_PROCESSES = total GPUs (gpus_per_node * nodes), useful for distributed launchers.
-        f"export AJ_PROCESSES={processes * nodes}",
-        f"export AJ_GPUS_PER_NODE={processes}",
-        f"export AJ_PROCESSES_PER_NODE={processes_per_node}",
-        f"export AJ_NAME={name}",
-        f"export AJ_ID={sid}",
-        f"export AJ_TEMPLATE={template_name}",
-        f"export AJ_SUBMIT_TIMESTAMP_UTC={datetime.now(timezone.utc).isoformat()}",
         "export PATH=$HOME/.local/bin:$PATH",
     ]
 
-    # Volcano distributed env (fallback if not already set by amlt)
+    # Volcano distributed env (fallback when amlt-style vars aren't set)
     if service == "volcano":
         cmd_list.extend(
             [
@@ -193,7 +161,7 @@ def build_submit_request(
             ]
         )
 
-    # Add template-specified commands
+    # Template commands then user command
     conf_commands = job.command if job else []
     if isinstance(conf_commands, str):
         conf_commands = [conf_commands]
@@ -201,14 +169,12 @@ def build_submit_request(
         conf_commands = []
     cmd_list.extend(conf_commands)
 
-    # Add user command
     if Path(user_command).is_file():
         if user_command.endswith(".sh"):
             cmd = f"bash {user_command} {' '.join(user_args)}".strip()
         elif user_command.endswith(".py"):
             cmd = f"uv run {user_command} {' '.join(user_args)}".strip()
         else:
-            # Unsupported script type - raise ValueError to be handled by caller
             raise ValueError(
                 f"Unsupported script type: {user_command}. Only .sh and .py are supported."
             )
@@ -218,16 +184,11 @@ def build_submit_request(
     cmd_list.append(cmd)
     command_list = cmd_list
 
-    # ─────────────────────────────────────────────────────────────────────
-    # Resolve computed fields (code_dir, workspace, etc.)
-    # ─────────────────────────────────────────────────────────────────────
-    # Keep AMLT convention path tokens (e.g. $CONFIG_DIR) as-is.
+    # Keep AMLT path tokens (e.g. $CONFIG_DIR) intact.
     code_dir = code.local_dir
 
-    # Merge ignore patterns: template ``code.ignore`` first, then any
-    # patterns from ``.codeignore`` / ``.amltignore`` discovered next to
-    # the resolved code directory. Duplicates are removed while preserving
-    # order so the final list is stable across runs.
+    # Template ``code.ignore`` then ``.codeignore`` / ``.amltignore``,
+    # de-duplicated while preserving order.
     file_ignore = read_ignore_file(code_dir)
     seen: set[str] = set()
     code_ignore: list[str] = []
@@ -236,11 +197,11 @@ def build_submit_request(
             seen.add(pat)
             code_ignore.append(pat)
 
-    # Environment variables (with Singularity support)
     env_extra = dict(submit_args.get("env", {}))
+    env_extra.update(aj_envs)
     container_args = dict(submit_args.get("container_args", {}))
 
-    # Workspace resolution (local workspace vs. target workspace)
+    # Workspace resolution: AML target may override; others use local workspace.
     if service == "aml":
         sub_id = target.subscription_id or workspace.subscription_id
         rg = target.resource_group or workspace.resource_group
@@ -249,8 +210,7 @@ def build_submit_request(
         rg = workspace.resource_group
     ws_name = target.workspace_name or workspace.workspace_name
 
-    # Backend-specific target metadata. Volcano needs k8s scheduling fields
-    # (namespace/queue/context/rdma/...) that mean nothing to AML.
+    # Volcano needs k8s scheduling fields that mean nothing to AML.
     target_extra: dict[str, Any] = {}
     if service == "volcano":
         target_extra = {
@@ -265,9 +225,6 @@ def build_submit_request(
             "labels": dict(target.labels),
         }
 
-    # ─────────────────────────────────────────────────────────────────────
-    # Build and return SubmitRequest
-    # ─────────────────────────────────────────────────────────────────────
     return SubmitRequest(
         name=name,
         sid=sid,
