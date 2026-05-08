@@ -90,7 +90,32 @@ torchrun \
   train.py
 ```
 
-These variables flow via the job's `environmentVariables` (native), the container `env` list (volcano), or `submit_args.env` (amlt). They are **not** baked into the runner script body, so the uploaded code asset stays content-addressable across submissions.
+## `aj dash`
+
+Interactive TUI dashboard for browsing and managing cloud jobs — lazydocker-style. A jobs table with paged results, an inline detail panel, and a pop-up log viewer that can either show the captured log or live-stream stdout from a running job.
+
+```bash
+aj dash               # show recent 100 jobs
+aj dash -n 500        # widen the window
+```
+
+| Key | Action |
+|-----|--------|
+| `↑` `↓` | Move selection |
+| `←` `→` | Prev / next page |
+| `enter` / `i` | Job detail panel |
+| `l` | Open logs (auto-streams if the job is running) |
+| `L` | Stop streaming |
+| `o` | Pick a different log file |
+| `c` | Cancel the selected job |
+| `r` | Refresh |
+| `f` / `e` / `w` | Filter by status / experiment / workspace |
+| `/` | Search |
+| `F` | Clear all filters |
+| `esc` | Help overlay |
+| `q` | Quit |
+
+Workspace switching is live — pick a different one with `w` and the table reloads against it.
 
 ## Documentation
 
