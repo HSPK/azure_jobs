@@ -26,11 +26,13 @@ def config_timezone(tz: str | None) -> None:
 
     if tz is None:
         from azure_jobs.utils.time import get_display_tz_name
+
         console.print(f"[bold]{get_display_tz_name()}[/bold]")
         return
 
     # Validate the timezone name
     from azure_jobs.utils.time import resolve_tz
+
     try:
         resolve_tz(tz)
     except Exception:
@@ -59,7 +61,9 @@ def config_experiment(name: str | None) -> None:
         if exp:
             console.print(f"[bold]{exp}[/bold]")
         else:
-            console.print("[dim]No experiment set. Run [bold]aj config experiment <name>[/bold] or submit a job.[/dim]")
+            console.print(
+                "[dim]No experiment set. Run [bold]aj config experiment <name>[/bold] or submit a job.[/dim]"
+            )
         return
 
     cfg = read_config()
@@ -75,6 +79,7 @@ def config_show() -> None:
     from azure_jobs.utils.ui import console
 
     import json
+
     cfg = read_config()
     if cfg:
         console.print_json(json.dumps(cfg, indent=2))

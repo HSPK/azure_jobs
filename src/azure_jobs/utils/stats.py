@@ -11,8 +11,12 @@ from typing import Any
 
 STATUS_TERMINAL = {"Completed", "Failed", "Canceled", "CancelRequested"}
 STATUS_RUNNING = {
-    "Running", "Starting", "Preparing",
-    "Provisioning", "Finalizing", "NotStarted",
+    "Running",
+    "Starting",
+    "Preparing",
+    "Provisioning",
+    "Finalizing",
+    "NotStarted",
 }
 STATUS_QUEUED = {"Queued"}
 
@@ -38,9 +42,16 @@ def fmt_gpu_hours(secs: int) -> str:
 
 def _new_bucket() -> dict[str, Any]:
     return {
-        "total": 0, "completed": 0, "failed": 0, "canceled": 0,
-        "active": 0, "queued": 0, "gpu_secs": 0, "queue": [],
-        "latest_status": "", "latest_created": "",
+        "total": 0,
+        "completed": 0,
+        "failed": 0,
+        "canceled": 0,
+        "active": 0,
+        "queued": 0,
+        "gpu_secs": 0,
+        "queue": [],
+        "latest_status": "",
+        "latest_created": "",
     }
 
 
@@ -94,12 +105,17 @@ def render_experiment_table(
     from rich.table import Table
 
     sorted_exps = sorted(
-        exp_stats.items(), key=lambda x: x[1]["gpu_secs"], reverse=True,
+        exp_stats.items(),
+        key=lambda x: x[1]["gpu_secs"],
+        reverse=True,
     )
 
     tbl = Table(
-        title=title, box=ROUNDED, title_style="bold",
-        header_style="bold", pad_edge=True,
+        title=title,
+        box=ROUNDED,
+        title_style="bold",
+        header_style="bold",
+        pad_edge=True,
     )
     tbl.add_column("Experiment", style="cyan")
     tbl.add_column("Jobs", justify="right")
@@ -115,9 +131,13 @@ def render_experiment_table(
         exp_rate = f"{es['completed'] / dec * 100:.0f}%" if dec else "—"
         exp_gpu = fmt_gpu_hours(es["gpu_secs"]) if es["gpu_secs"] else "—"
         tbl.add_row(
-            exp_name, str(es["total"]),
-            str(es["active"]), str(es["queued"]),
-            str(es["completed"]), str(es["failed"]),
-            exp_rate, exp_gpu,
+            exp_name,
+            str(es["total"]),
+            str(es["active"]),
+            str(es["queued"]),
+            str(es["completed"]),
+            str(es["failed"]),
+            exp_rate,
+            exp_gpu,
         )
     return tbl

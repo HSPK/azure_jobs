@@ -15,8 +15,6 @@ def job_group() -> None:
     """View and manage Azure ML jobs."""
 
 
-
-
 @job_group.command(name="list")
 @click.option(
     "-n",
@@ -147,8 +145,6 @@ def job_show(name: str, ws_name: str | None) -> None:
     _fetch_and_show_job(name, ws_name=ws_name)
 
 
-
-
 @job_group.command(name="status")
 @click.argument("job_id")
 def job_status(job_id: str) -> None:
@@ -259,8 +255,6 @@ def job_logs(job_id: str) -> None:
 
     if not content and not error_msg:
         console.print("[dim]No logs available for this job.[/dim]")
-
-
 
 
 def _fetch_jobs_for_stats(
@@ -771,8 +765,6 @@ def job_stats(
         print_table(tbl3)
 
 
-
-
 def _show_local_records(
     last: int,
     template: str | None,
@@ -808,8 +800,6 @@ def list_local(last: int, template: str | None, status: str | None) -> None:
     _show_local_records(last, template, status)
 
 
-
-
 def _resolve_job_id(job_id: str) -> str:
     """Resolve a short aj ID to the Azure job name via record.jsonl."""
     records = read_records()
@@ -817,8 +807,6 @@ def _resolve_job_id(job_id: str) -> str:
         if r.get("id") == job_id:
             return r.get("azure_name") or job_id
     return job_id
-
-
 
 
 @main.command(name="js", hidden=True)

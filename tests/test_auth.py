@@ -120,7 +120,9 @@ class TestAuthStatus:
                 return_value={},
             ),
         ):
-            mock_cred_cls.return_value.get_token.side_effect = Exception("token expired")
+            mock_cred_cls.return_value.get_token.side_effect = Exception(
+                "token expired"
+            )
             result = runner.invoke(main, ["auth", "status"])
 
         assert result.exit_code == 0

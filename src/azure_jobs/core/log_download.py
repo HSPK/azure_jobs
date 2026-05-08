@@ -102,8 +102,6 @@ def download_job_logs(
         return "", str(exc)[:500]
 
 
-
-
 def _get_log_urls(
     job_name: str,
     rest_client: Any | None = None,

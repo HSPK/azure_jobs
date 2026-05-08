@@ -71,7 +71,9 @@ def should_ignore(
 ) -> bool:
     """Return ``True`` if *fp* should be excluded from a code upload.
 
-    For walking a tree prefer :func:`walk_code` which prunes up front.
+    Combines the built-in defaults (:data:`DEFAULT_IGNORE_DIRS`,
+    ``.azure_jobs/`` metadata) with user *patterns*. For walking a tree
+    prefer :func:`walk_code` which prunes ignored subtrees up front.
     """
     rel = fp.relative_to(root).as_posix()
     if _is_default_excluded(rel):

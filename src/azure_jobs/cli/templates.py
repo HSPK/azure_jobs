@@ -241,8 +241,6 @@ def template_diff() -> None:
         )
 
 
-
-
 @main.command(name="tl", hidden=True)
 def _alias_tl() -> None:
     """Shortcut for ``aj template list``."""

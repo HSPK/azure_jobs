@@ -6,7 +6,12 @@ from unittest.mock import patch
 
 import pytest
 
-from azure_jobs.core.sku import SkuSpec, _match_family, _FAMILY_MAP, resolve_instance_type
+from azure_jobs.core.sku import (
+    SkuSpec,
+    _match_family,
+    _FAMILY_MAP,
+    resolve_instance_type,
+)
 
 
 class TestSkuSpecParse:
@@ -100,7 +105,9 @@ class TestResolveInstanceType:
         mock_fetch.return_value = ["Eadsv5", "NC_A100_v4"]
         result = resolve_instance_type(
             "1xC1",
-            vc_subscription_id="sub", vc_resource_group="rg", vc_name="vc",
+            vc_subscription_id="sub",
+            vc_resource_group="rg",
+            vc_name="vc",
         )
         assert len(result) == 1
         assert "ads_v5" in result[0]  # E16ads_v5
@@ -110,7 +117,9 @@ class TestResolveInstanceType:
         mock_fetch.return_value = ["NDAMv4", "NDv4"]
         result = resolve_instance_type(
             "1x80G8-A100-NvLink",
-            vc_subscription_id="sub", vc_resource_group="rg", vc_name="vc",
+            vc_subscription_id="sub",
+            vc_resource_group="rg",
+            vc_name="vc",
         )
         assert result[0] == "ND96amrs_A100_v4"
 
@@ -119,7 +128,9 @@ class TestResolveInstanceType:
         mock_fetch.return_value = ["Eadsv5"]  # Only CPU available
         result = resolve_instance_type(
             "1x80G8-H100",
-            vc_subscription_id="sub", vc_resource_group="rg", vc_name="vc",
+            vc_subscription_id="sub",
+            vc_resource_group="rg",
+            vc_name="vc",
         )
         assert result == []
 

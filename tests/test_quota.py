@@ -8,7 +8,12 @@ import pytest
 from click.testing import CliRunner
 
 from azure_jobs.cli import main
-from azure_jobs.cli.quota import _fmt_nodes, _parse_compute_nodes, _portal_compute_url, _vm_sku_label
+from azure_jobs.cli.quota import (
+    _fmt_nodes,
+    _parse_compute_nodes,
+    _portal_compute_url,
+    _vm_sku_label,
+)
 from azure_jobs.core.sku import (
     SLA_TIERS,
     SeriesQuota,
@@ -135,9 +140,24 @@ _MOCK_VC_RESPONSE = {
             "quotas": {
                 "eastus": {
                     "limits": [
-                        {"id": "ND_A100_v4", "slaTier": "Premium", "limit": 64, "used": 32},
-                        {"id": "ND_A100_v4", "slaTier": "Standard", "limit": 32, "used": 10},
-                        {"id": "ND_H100_v5", "slaTier": "Premium", "limit": 16, "used": 0},
+                        {
+                            "id": "ND_A100_v4",
+                            "slaTier": "Premium",
+                            "limit": 64,
+                            "used": 32,
+                        },
+                        {
+                            "id": "ND_A100_v4",
+                            "slaTier": "Standard",
+                            "limit": 32,
+                            "used": 10,
+                        },
+                        {
+                            "id": "ND_H100_v5",
+                            "slaTier": "Premium",
+                            "limit": 16,
+                            "used": 0,
+                        },
                     ]
                 },
                 "westus": {
@@ -158,13 +178,17 @@ class TestFetchVcQuotas:
         return client
 
     def test_merges_both_sources(self):
-        results = fetch_vc_quotas("sub", "rg", "myvc", arm_client=self._make_client(_MOCK_VC_RESPONSE))
+        results = fetch_vc_quotas(
+            "sub", "rg", "myvc", arm_client=self._make_client(_MOCK_VC_RESPONSE)
+        )
         series_names = [s.series for s in results]
         assert "ND_A100_v4" in series_names
         assert "ND_H100_v5" in series_names
 
     def test_sla_tiers_populated(self):
-        results = fetch_vc_quotas("sub", "rg", "myvc", arm_client=self._make_client(_MOCK_VC_RESPONSE))
+        results = fetch_vc_quotas(
+            "sub", "rg", "myvc", arm_client=self._make_client(_MOCK_VC_RESPONSE)
+        )
         a100 = next(s for s in results if s.series == "ND_A100_v4")
         assert "Premium" in a100.tiers
         assert a100.tiers["Premium"].limit == 64
@@ -174,12 +198,20 @@ class TestFetchVcQuotas:
         assert a100.overall.limit == 128
 
     def test_excludes_zero_by_default(self):
-        results = fetch_vc_quotas("sub", "rg", "myvc", arm_client=self._make_client(_MOCK_VC_RESPONSE))
+        results = fetch_vc_quotas(
+            "sub", "rg", "myvc", arm_client=self._make_client(_MOCK_VC_RESPONSE)
+        )
         series_names = [s.series for s in results]
         assert "NoProd" not in series_names
 
     def test_include_zero(self):
-        results = fetch_vc_quotas("sub", "rg", "myvc", include_zero=True, arm_client=self._make_client(_MOCK_VC_RESPONSE))
+        results = fetch_vc_quotas(
+            "sub",
+            "rg",
+            "myvc",
+            include_zero=True,
+            arm_client=self._make_client(_MOCK_VC_RESPONSE),
+        )
         series_names = [s.series for s in results]
         assert "NoProd" in series_names
 
@@ -189,7 +221,9 @@ class TestFetchVcQuotas:
         assert fetch_vc_quotas("sub", "rg", "myvc", arm_client=client) == []
 
     def test_empty_on_missing_keys(self):
-        assert fetch_vc_quotas("sub", "rg", "myvc", arm_client=self._make_client({})) == []
+        assert (
+            fetch_vc_quotas("sub", "rg", "myvc", arm_client=self._make_client({})) == []
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -258,9 +292,12 @@ class TestQuotaListCli:
         assert "No Singularity" in result.output
 
     @patch("azure_jobs.core.sku.fetch_vc_quotas", return_value=[])
-    @patch("azure_jobs.cli.quota._discover_vcs", return_value=[
-        VCInfo(name="myvc", resource_group="rg", subscription_id="s"),
-    ])
+    @patch(
+        "azure_jobs.cli.quota._discover_vcs",
+        return_value=[
+            VCInfo(name="myvc", resource_group="rg", subscription_id="s"),
+        ],
+    )
     def test_sing_vc_with_no_quotas(self, mock_disc, mock_fetch):
         result = self.runner.invoke(main, ["quota", "list"])
         assert result.exit_code == 0
@@ -352,7 +389,7 @@ class TestAmlHelpers:
     def test_fmt_nodes_busy_highlighted(self):
         s = _fmt_nodes(0, 4, 8, low_priority=False)
         assert "cyan" in s  # busy highlighted
-        assert "dim" in s   # idle dimmed
+        assert "dim" in s  # idle dimmed
 
     def test_fmt_nodes_max_zero(self):
         assert _fmt_nodes(0, 0, 0, low_priority=False) == "[dim]0/0[/dim]"

@@ -35,8 +35,6 @@ def quota_list(backend: str, show_all: bool, template: str | None) -> None:
         _show_sing_quotas(show_all, template=template)
 
 
-
-
 def _fmt_used_limit(used: int | None, limit: int) -> str:
     """Format a ``used/limit`` cell with color coding like amlt."""
     if limit == 0:
@@ -83,8 +81,6 @@ def _fmt_nodes(
     )
     busy_part = f"[cyan]{b_s}[/cyan] busy" if busy > 0 else f"[dim]{b_s} busy[/dim]"
     return f"{idle_part} {busy_part} [dim]/{t_s}[/dim]"
-
-
 
 
 def _discover_vcs(template: str | None, arm_client: object | None = None) -> list:
@@ -222,7 +218,6 @@ def _show_sing_quotas(show_all: bool, template: str | None) -> None:
     from azure_jobs.utils.ui import print_table
 
     print_table(table)
-
 
 
 # VM size → (accelerator, gpu_count, gpu_memory_gb) for common AML instance types
@@ -428,8 +423,6 @@ def _show_aml_quotas(show_all: bool) -> None:
     from azure_jobs.utils.ui import print_table
 
     print_table(table)
-
-
 
 
 @main.command(name="ql", hidden=True)

@@ -43,10 +43,13 @@ class TestReadConfInheritance:
         write_yaml(base_fp, {"config": {"from_base": True, "shared": "base"}})
 
         child_fp = aj_home / "child.yaml"
-        write_yaml(child_fp, {
-            "base": "base",
-            "config": {"from_child": True, "shared": "child"},
-        })
+        write_yaml(
+            child_fp,
+            {
+                "base": "base",
+                "config": {"from_child": True, "shared": "child"},
+            },
+        )
         result = read_conf(child_fp)
         assert result == {"from_base": True, "from_child": True, "shared": "child"}
 
@@ -55,25 +58,37 @@ class TestReadConfInheritance:
         write_yaml(aj_home / "b.yaml", {"config": {"source": "b", "only_b": 2}})
 
         child_fp = aj_home / "child.yaml"
-        write_yaml(child_fp, {
-            "base": ["a", "b"],
-            "config": {"source": "child"},
-        })
+        write_yaml(
+            child_fp,
+            {
+                "base": ["a", "b"],
+                "config": {"source": "child"},
+            },
+        )
         result = read_conf(child_fp)
         assert result["source"] == "child"
         assert result["only_a"] == 1
         assert result["only_b"] == 2
 
     def test_chained_inheritance(self, aj_home):
-        write_yaml(aj_home / "grandparent.yaml", {"config": {"level": "grandparent", "gp_only": True}})
-        write_yaml(aj_home / "parent.yaml", {
-            "base": "grandparent",
-            "config": {"level": "parent", "parent_only": True},
-        })
-        write_yaml(aj_home / "child.yaml", {
-            "base": "parent",
-            "config": {"level": "child"},
-        })
+        write_yaml(
+            aj_home / "grandparent.yaml",
+            {"config": {"level": "grandparent", "gp_only": True}},
+        )
+        write_yaml(
+            aj_home / "parent.yaml",
+            {
+                "base": "grandparent",
+                "config": {"level": "parent", "parent_only": True},
+            },
+        )
+        write_yaml(
+            aj_home / "child.yaml",
+            {
+                "base": "parent",
+                "config": {"level": "child"},
+            },
+        )
         result = read_conf(aj_home / "child.yaml")
         assert result == {"level": "child", "gp_only": True, "parent_only": True}
 
@@ -83,23 +98,34 @@ class TestReadConfInheritance:
         write_yaml(subdir / "gpu.yaml", {"config": {"gpu": True}})
 
         child_fp = aj_home / "child.yaml"
-        write_yaml(child_fp, {
-            "base": "envs.gpu",
-            "config": {"name": "my_job"},
-        })
+        write_yaml(
+            child_fp,
+            {
+                "base": "envs.gpu",
+                "config": {"name": "my_job"},
+            },
+        )
         result = read_conf(child_fp)
         assert result == {"gpu": True, "name": "my_job"}
 
     def test_base_merges_deeply(self, aj_home):
-        write_yaml(aj_home / "base.yaml", {
-            "config": {"jobs": [{"name": "default", "sku": "small"}]},
-        })
-        write_yaml(aj_home / "child.yaml", {
-            "base": "base",
-            "config": {"jobs": [{"command": ["echo hi"]}]},
-        })
+        write_yaml(
+            aj_home / "base.yaml",
+            {
+                "config": {"jobs": [{"name": "default", "sku": "small"}]},
+            },
+        )
+        write_yaml(
+            aj_home / "child.yaml",
+            {
+                "base": "base",
+                "config": {"jobs": [{"command": ["echo hi"]}]},
+            },
+        )
         result = read_conf(aj_home / "child.yaml")
-        assert result["jobs"] == [{"name": "default", "sku": "small", "command": ["echo hi"]}]
+        assert result["jobs"] == [
+            {"name": "default", "sku": "small", "command": ["echo hi"]}
+        ]
 
 
 class TestReadConfCircularInheritance:

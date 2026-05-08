@@ -129,8 +129,6 @@ def sku_list(template: str | None, show_all: bool) -> None:
     print_table(table)
 
 
-
-
 def _fmt_quota(tq: object) -> str:
     """Format a used/limit quota cell."""
     limit = getattr(tq, "limit", 0)
