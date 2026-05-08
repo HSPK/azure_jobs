@@ -117,9 +117,6 @@ class SkuSpec:
         return spec
 
 
-# ---------------------------------------------------------------------------
-# Known Singularity instance families → instance type templates
-# ---------------------------------------------------------------------------
 # Each family maps to a dict of { gpu_count: instance_name } or for CPU
 # families a list of instance names sorted small→large.
 #
@@ -272,9 +269,6 @@ _FAMILY_MAP: dict[str, dict[str, Any]] = {
     },
 }
 
-# ---------------------------------------------------------------------------
-# API series ID → (gpu_model, gpu_memory_gb) lookup
-# ---------------------------------------------------------------------------
 # The Azure VC quota API returns series IDs like "ND_A100_v4" which differ
 # from the internal _FAMILY_MAP keys (e.g. "NDAMv4").  This table maps the
 # *API-format* IDs so that accelerator and memory columns are populated.

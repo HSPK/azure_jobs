@@ -70,13 +70,11 @@ def _build_tags(tag_strings: list[str]) -> dict[str, str | None]:
 
 
 def _collect_ssh_files(code_dir: str) -> dict[str, bytes]:
-    """Collect .ssh files to upload with the code.
+    """Collect ``.ssh`` files to ship with the code upload.
 
-    If ``code_dir`` already contains a ``.ssh`` directory, skip (it will be
-    uploaded as part of the normal code tree).  Otherwise, read key files
-    from ``~/.ssh`` and return them keyed as ``.ssh/<filename>``.
-    If ``~/.ssh`` doesn't exist either, return a placeholder so the
-    ``.ssh`` directory is always created on the remote.
+    Prefer ``code_dir/.ssh`` if present; otherwise pull a whitelist from
+    ``~/.ssh``. Always returns at least a ``.ssh/.keep`` placeholder so the
+    directory exists on the remote.
     """
     code_path = Path(code_dir).resolve()
     if (code_path / ".ssh").is_dir():
@@ -106,16 +104,8 @@ def submit(
 ) -> SubmitResult:
     """Submit a job to Azure ML via REST API.
 
-    Args:
-        request: Complete submission specification.
-        on_event: Optional structured callback receiving :class:`SubmitEvent`
-            records for each lifecycle step (``auth`` → ``environment`` →
-            ``storage`` → ``command`` → ``code`` → ``submit`` → ``done``),
-            per-file upload progress (``upload``), and informational lines
-            (``log``) printable above any progress UI.
-
-    Returns:
-        SubmitResult with job name and status.
+    ``on_event`` receives :class:`SubmitEvent` records for each lifecycle
+    step, per-file upload progress, and informational log lines.
     """
     emit = on_event or (lambda _ev: None)
 
@@ -135,7 +125,7 @@ def submit(
 
     try:
         _status("auth", "Authenticating…")
-        # Late import for mockability — tests patch azure_jobs.core.submit._get_rest_client
+        # Late import so tests can patch _get_rest_client.
         import azure_jobs.core.submit as _pkg
 
         client = _pkg._get_rest_client(request)
@@ -152,20 +142,18 @@ def submit(
         resources = _build_resources(request, compute_id=compute, on_log=_status)
         env_vars = _build_env_vars(request, dataref_env)
 
-        # Singularity identity: resolve UAI client_id for storage auth
         identity_client_id = ""
         if request.service == "sing":
             _status("identity", "Resolving Singularity identity…")
             identity_client_id = _resolve_sing_identity(request, client) or ""
 
-        # Generate runner script and inject into code upload
         runner_script = generate_runner_script(request, identity_client_id)
 
         extra_files: dict[str, str | bytes] = {RUNNER_FILENAME: runner_script}
 
         code_root = os.getcwd()
 
-        # Include .ssh keys — use local .ssh/ if present, otherwise ~/.ssh/
+        # Use code_dir/.ssh if present, else fall back to ~/.ssh.
         extra_files.update(_collect_ssh_files(code_root))
 
         _status("code", "Uploading code…")
@@ -183,7 +171,6 @@ def submit(
 
         _status("submit", f"Submitting to {request.compute}…")
 
-        # Build the REST job body
         job_body: dict[str, Any] = {
             "properties": {
                 "jobType": "Command",
@@ -198,11 +185,10 @@ def submit(
 
         job_props = job_body["properties"]
 
-        # Code reference
         if code_id:
             job_props["codeId"] = code_id
 
-        # Environment — either registered ID or inline image
+        # environmentId is either a registered asset id or an inline image ref.
         if env_id:
             job_props["environmentId"] = env_id
         else:
@@ -211,37 +197,30 @@ def submit(
                 image = f"{request.image_registry}/{image}"
             job_props["environmentId"] = image
 
-        # Distribution
         if distribution:
             job_props["distribution"] = distribution
 
-        # Identity
         if identity:
             job_props["identity"] = identity
 
-        # Resources (instance count + Singularity-specific)
         res: dict[str, Any] = {"instanceCount": request.nodes}
         if resources:
             res["properties"] = resources.get("properties", {})
         job_props["resources"] = res
 
-        # Outputs (storage mounts)
         if outputs:
             job_props["outputs"] = outputs
 
-        # Tags and properties
         if tags:
             job_props["tags"] = tags
         if properties:
             job_props["properties"] = properties
 
-        # SHM size
         if request.shm_size:
             job_props["resources"]["shmSize"] = request.shm_size
 
         returned_job = client.jobs.create_or_update(request.name, job_body)
 
-        # Extract portal URL from response
         portal_url = ""
         ret_props = returned_job.get("properties") or {}
         services = ret_props.get("services") or {}

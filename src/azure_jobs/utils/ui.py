@@ -1,8 +1,6 @@
 """Rich console output for the aj CLI.
 
-Provides beautiful, informative terminal output: panels, tables,
-spinners, and styled messages.  Imported lazily by cli commands
-so that `aj --help` stays fast.
+Imported lazily by CLI commands so ``aj --help`` stays fast.
 """
 
 from __future__ import annotations
@@ -44,24 +42,13 @@ def print_table(table: Table) -> None:
     console.print()
 
 
-# ---------------------------------------------------------------------------
-# Submission preview
-# ---------------------------------------------------------------------------
-
-
 def show_submission_preview(
     request: SubmitRequest,
     *,
     submission_file: str,
     dry_run: bool = False,
 ) -> None:
-    """Display a rich panel summarising the job before submission.
-
-    Args:
-        request: SubmitRequest with job details (name, sku, nodes, processes, sid, template_name, command).
-        submission_file: Path to submission config file.
-        dry_run: Whether this is a dry run.
-    """
+    """Display a rich panel summarising the job before submission."""
     total_processes = request.nodes * request.processes_per_node
     final_cmd = request.command[-1] if request.command else ""
     storage_count = len(request.storage)
@@ -140,11 +127,6 @@ def show_submission_preview(
     console.print()
 
 
-# ---------------------------------------------------------------------------
-# Template list
-# ---------------------------------------------------------------------------
-
-
 def show_template_table(
     templates: list[dict[str, Any]],
     *,
@@ -179,10 +161,6 @@ def show_template_table(
 
     print_table(table)
 
-
-# ---------------------------------------------------------------------------
-# Job records list
-# ---------------------------------------------------------------------------
 
 _STATUS_STYLE = {
     "success": "green",
@@ -237,7 +215,6 @@ def show_jobs_table(records: list[dict[str, Any]]) -> None:
         when = time_ago(r.get("created_at", ""))
         note = r.get("note", "")
         if note:
-            # Extract just the main error message (first meaningful line)
             first_line = note.split("\n")[0].strip()
             if first_line.startswith("(") and ") " in first_line:
                 first_line = first_line.split(") ", 1)[1]
@@ -255,11 +232,6 @@ def show_jobs_table(records: list[dict[str, Any]]) -> None:
         )
 
     print_table(table)
-
-
-# ---------------------------------------------------------------------------
-# Messages
-# ---------------------------------------------------------------------------
 
 
 def success(msg: str) -> None:
@@ -281,10 +253,6 @@ def error(msg: str) -> None:
 def dim(msg: str) -> None:
     console.print(f"[dim]{msg}[/dim]")
 
-
-# ---------------------------------------------------------------------------
-# Job status display
-# ---------------------------------------------------------------------------
 
 AZ_ICON: dict[str, str] = {
     "Completed": "✓",
@@ -312,8 +280,6 @@ AZ_STYLE: dict[str, str] = {
     "Provisioning": "bold yellow",
     "Finalizing": "bold cyan",
 }
-
-# backward-compat aliases — kept for show_job_status above
 
 
 def icon_style(status: str) -> tuple[str, str]:
@@ -381,11 +347,6 @@ def show_job_status(job_status: Any) -> None:
     console.print()
 
 
-# ---------------------------------------------------------------------------
-# Cloud job tables & detail panels
-# ---------------------------------------------------------------------------
-
-
 def _trunc(s: str, maxlen: int = 30) -> str:
     """Truncate with ellipsis in the middle."""
     if len(s) <= maxlen:
@@ -394,7 +355,6 @@ def _trunc(s: str, maxlen: int = 30) -> str:
     return s[:half] + "…" + s[-(maxlen - half - 1) :]
 
 
-# Public alias for use outside this module.
 truncate_middle = _trunc
 
 
@@ -463,13 +423,11 @@ def build_job_info_lines(
     def _hdr(title: str) -> str:
         return f"  [bold cyan]{'─' * 3} {title} {'─' * (header_width - len(title))}[/bold cyan]"
 
-    # Status badge
     status = job.get("status", "Unknown")
     display = job.get("display_name") or job.get("name", "")
     name = job.get("name", "")
     lines.append(f"  {status_badge(status)}")
 
-    # Error
     error_msg = job.get("error", "")
     if error_msg:
         lines.append("")
@@ -479,7 +437,6 @@ def build_job_info_lines(
         for err_line in error_msg.splitlines():
             lines.append(f"  [red]{_esc(err_line)}[/red]")
 
-    # Overview
     lines.append("")
     lines.append(_hdr("Overview"))
     lines.append(_kv("Display Name", f"[bold]{_esc(display)}[/bold]"))
@@ -490,7 +447,6 @@ def build_job_info_lines(
     if job.get("type"):
         lines.append(_kv("Type", _esc(str(job["type"]))))
 
-    # Compute
     has_compute = job.get("compute") or job.get("environment") or job.get("command")
     if has_compute:
         lines.append("")
@@ -516,7 +472,6 @@ def build_job_info_lines(
                 cmd = cmd[: cmd_max - 3] + "…"
             lines.append(_kv("Command", f"[dim]{_esc(cmd)}[/dim]"))
 
-    # Timing
     timing: list[str] = []
     for label, key in [
         ("Created", "created"),
@@ -539,7 +494,6 @@ def build_job_info_lines(
         lines.append(_hdr("Timing"))
         lines.extend(timing)
 
-    # Meta
     meta: list[str] = []
     if job.get("created_by"):
         meta.append(_kv("User", _esc(str(job["created_by"]))))
@@ -555,7 +509,6 @@ def build_job_info_lines(
         lines.append(_hdr("Meta"))
         lines.extend(meta)
 
-    # Portal link
     if portal_link and job.get("portal_url"):
         url = job["portal_url"]
         short = short_portal_url(url, rich_link=False)

@@ -10,19 +10,15 @@ from typing import Iterable
 
 from azure_jobs.utils.ignore import IgnoreMatcher
 
-# Built-in directory names always excluded from code uploads. Kept as a
-# plain frozenset (not gitignore patterns) so the matcher can stay on the
-# fast path even when the user supplies no negation rules.
+# Built-in directory names always excluded from code uploads.
 DEFAULT_IGNORE_DIRS: frozenset[str] = frozenset(
     {"__pycache__", ".git", ".venv", "node_modules"}
 )
 
-# Filenames searched (in priority order) for additional ignore patterns
-# located alongside a code directory.
+# Searched in priority order; the first existing file wins.
 IGNORE_FILES: tuple[str, ...] = (".codeignore", ".amltignore")
 
-# Internal submission metadata directory; only its ``scripts/`` child is
-# meaningful to the running job.
+# .azure_jobs/ metadata: only its scripts/ child ships with the upload.
 _AJ_META = ".azure_jobs"
 _AJ_META_KEEP = "scripts"
 
@@ -30,9 +26,8 @@ _AJ_META_KEEP = "scripts"
 def read_ignore_file(code_dir: str | Path) -> list[str]:
     """Load ignore patterns from ``.codeignore`` / ``.amltignore``.
 
-    Lines are stripped; blank lines and ``#`` comments are skipped. Only the
-    first existing file in :data:`IGNORE_FILES` is read so users can override
-    an inherited ``.amltignore`` with a local ``.codeignore``.
+    Only the first existing file in :data:`IGNORE_FILES` is read so a
+    local ``.codeignore`` overrides an inherited ``.amltignore``.
     """
     base = Path(code_dir).resolve() if code_dir else Path.cwd()
     if not base.is_dir():
@@ -56,10 +51,11 @@ def read_ignore_file(code_dir: str | Path) -> list[str]:
 
 
 def _is_default_excluded(rel: str) -> bool:
-    """Apply built-in defaults: standard junk dirs + ``.azure_jobs/``
-    metadata except its ``scripts/`` child. The bare ``.azure_jobs``
-    directory itself is *not* excluded so the walker descends into it
-    to find ``scripts/``."""
+    """Apply the built-in defaults.
+
+    ``.azure_jobs/`` is descended into only to reach its ``scripts/`` child;
+    everything else under it is dropped.
+    """
     parts = rel.split("/")
     if any(c in DEFAULT_IGNORE_DIRS for c in parts):
         return True
@@ -75,9 +71,7 @@ def should_ignore(
 ) -> bool:
     """Return ``True`` if *fp* should be excluded from a code upload.
 
-    Combines the built-in defaults (:data:`DEFAULT_IGNORE_DIRS`,
-    ``.azure_jobs/`` metadata) with user *patterns*. For walking a tree
-    prefer :func:`walk_code` which prunes ignored subtrees up front.
+    For walking a tree prefer :func:`walk_code` which prunes up front.
     """
     rel = fp.relative_to(root).as_posix()
     if _is_default_excluded(rel):
@@ -89,11 +83,7 @@ def should_ignore(
 
 @dataclass(frozen=True)
 class CodeFile:
-    """One file selected for upload.
-
-    ``rel`` uses forward slashes regardless of platform so it is suitable
-    for tar archives, blob keys, and JSON manifests.
-    """
+    """One file selected for upload. ``rel`` is forward-slash on all platforms."""
 
     rel: str
     path: Path
@@ -106,17 +96,9 @@ def walk_code(
 ) -> list[CodeFile]:
     """Walk *code_dir* and return the files selected for upload.
 
-    Honors the built-in defaults (:data:`DEFAULT_IGNORE_DIRS`,
-    ``.azure_jobs/`` metadata except ``scripts/``) plus user-supplied
-    gitignore-style *patterns*. See
-    :class:`azure_jobs.utils.ignore.IgnoreMatcher` for the supported
-    syntax (``*``, ``**``, ``?``, ``[...]``, anchoring, ``dir/``,
-    ``!`` negation).
-
-    Excluded subtrees are pruned from the walk so large ignored
-    directories cost no I/O. Pruning is suppressed for any subtree that
-    a ``!`` negation could reach into. Results are sorted for
-    deterministic ordering.
+    Honors the built-in defaults plus gitignore-style *patterns*. Excluded
+    subtrees are pruned (skipped without I/O) unless a ``!`` negation could
+    re-include something underneath. Results are sorted for determinism.
     """
     base = Path(code_dir).resolve()
     if not base.is_dir():
@@ -128,10 +110,7 @@ def walk_code(
         rel_root = os.path.relpath(root, base)
         rel_root = "" if rel_root == "." else rel_root.replace(os.sep, "/")
 
-        # Prune directories. Built-in junk dirs are always pruned;
-        # ``.azure_jobs`` is descended into only at the root so the
-        # ``scripts/`` child is reachable. User-pattern pruning is
-        # gated by ``prune_safe_for`` to honor negation rules.
+        # Prune ignored dirs up front; user-pattern pruning honors negation.
         kept: list[str] = []
         for d in sorted(dirs):
             if d in DEFAULT_IGNORE_DIRS:
@@ -171,13 +150,9 @@ def compute_code_hash(
 ) -> str:
     """Deterministic content hash for a code upload.
 
-    Combines each entry's relative path with the SHA-256 of its content,
-    sorted by path. Disk files are streamed in 64 KiB chunks. ``extras``
-    are in-memory blobs (used by the native backend to inject the
-    runner script) and are mixed in identically.
-
-    Returns the first ``length`` hex chars of the outer SHA-256 — the
-    same digest the native backend uses for blob-storage dedup.
+    sha256 over each entry's rel path + sha256(content), sorted by path.
+    Disk files stream in 64 KiB chunks; ``extras`` are in-memory blobs
+    (e.g. native's runner script). Returns the first ``length`` hex chars.
     """
     on_disk = {cf.rel: cf.path for cf in files}
     extras = extras or {}

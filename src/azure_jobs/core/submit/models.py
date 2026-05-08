@@ -163,8 +163,6 @@ class SubmitRequest:
 
 @dataclass
 class SubmitResult:
-    """Result of a job submission."""
-
     job_name: str  # our display name
     azure_name: str = ""  # Azure-assigned job name (may differ for Singularity)
     status: str = ""  # "submitted" or "failed"
@@ -176,28 +174,19 @@ class SubmitResult:
 
 @dataclass
 class SubmitEvent:
-    """Structured progress event emitted by submission backends.
+    """Progress event emitted by submission backends.
 
-    Backends call ``on_event(SubmitEvent(...))`` at each stage so the
-    caller (CLI / TUI) can render a single, uniform progress UI without
-    knowing backend details.
-
-    Event ``kind`` taxonomy:
-
-    * ``"auth"``, ``"environment"``, ``"storage"``, ``"command"``,
-      ``"identity"``, ``"submit"`` — status milestones; ``detail`` carries
-      a human-readable hint.
-    * ``"code"`` — emitted once when code upload starts (status hint).
-    * ``"upload"`` — fine-grained per-file progress;
-      ``completed``/``total``/``skipped``/``current`` are populated.
-    * ``"done"`` — terminal success milestone.
-    * ``"error"`` — terminal failure milestone (also returned via
-      :class:`SubmitResult.error`).
+    ``kind`` values:
+      - status milestones: ``auth``/``environment``/``storage``/``command``/
+        ``identity``/``code``/``submit``/``done``/``error`` — ``detail`` is
+        a human-readable hint.
+      - ``upload`` — per-file progress; ``completed``/``total``/
+        ``skipped``/``current`` are populated.
+      - ``log`` — informational line printable above any progress UI.
     """
 
     kind: str
     detail: str = ""
-    # Per-file progress, populated only when ``kind == "upload"``.
     completed: int = 0
     total: int = 0
     skipped: int = 0

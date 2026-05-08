@@ -241,9 +241,6 @@ def template_diff() -> None:
         )
 
 
-# ---------------------------------------------------------------------------
-# Top-level aliases (backward compat / convenience)
-# ---------------------------------------------------------------------------
 
 
 @main.command(name="tl", hidden=True)

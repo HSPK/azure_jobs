@@ -129,9 +129,6 @@ def sku_list(template: str | None, show_all: bool) -> None:
     print_table(table)
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 
 def _fmt_quota(tq: object) -> str:

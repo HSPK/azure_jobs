@@ -35,9 +35,6 @@ def quota_list(backend: str, show_all: bool, template: str | None) -> None:
         _show_sing_quotas(show_all, template=template)
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 
 def _fmt_used_limit(used: int | None, limit: int) -> str:
@@ -88,9 +85,6 @@ def _fmt_nodes(
     return f"{idle_part} {busy_part} [dim]/{t_s}[/dim]"
 
 
-# ---------------------------------------------------------------------------
-# Singularity quotas
-# ---------------------------------------------------------------------------
 
 
 def _discover_vcs(template: str | None, arm_client: object | None = None) -> list:
@@ -230,9 +224,6 @@ def _show_sing_quotas(show_all: bool, template: str | None) -> None:
     print_table(table)
 
 
-# ---------------------------------------------------------------------------
-# AML quotas
-# ---------------------------------------------------------------------------
 
 # VM size → (accelerator, gpu_count, gpu_memory_gb) for common AML instance types
 _AML_VM_GPU: dict[str, tuple[str, int, int]] = {
@@ -439,9 +430,6 @@ def _show_aml_quotas(show_all: bool) -> None:
     print_table(table)
 
 
-# ---------------------------------------------------------------------------
-# Shortcut
-# ---------------------------------------------------------------------------
 
 
 @main.command(name="ql", hidden=True)

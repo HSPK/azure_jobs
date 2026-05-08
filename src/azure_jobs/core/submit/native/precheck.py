@@ -22,15 +22,13 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-# Quotas/computes change rarely → cache for 24h by default.
+# Quotas/computes change rarely → cache for 24h.
 _QUOTA_TTL = 24 * 3600
 _COMPUTE_TTL = 24 * 3600
 
 
 @dataclass
 class CheckResult:
-    """Outcome of a pre-flight check."""
-
     severity: str = "ok"  # "ok" | "warn" | "error"
     title: str = ""
     detail: list[str] = field(default_factory=list)
@@ -39,11 +37,6 @@ class CheckResult:
     @property
     def ok(self) -> bool:
         return self.severity != "error"
-
-
-# ---------------------------------------------------------------------------
-# Cached lookups
-# ---------------------------------------------------------------------------
 
 
 def _cached_vc_quotas_raw(
@@ -93,11 +86,6 @@ def _cached_aml_compute(
     return data
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
 def _instance_to_series(instance: str) -> str | None:
     """Reverse-map an instance type name to its ``_FAMILY_MAP`` series id."""
     from azure_jobs.core.sku import _FAMILY_MAP
@@ -140,17 +128,11 @@ def _build_quotas_from_raw(raw: dict[str, Any]) -> list[Any]:
     return list(series_map.values())
 
 
-# ---------------------------------------------------------------------------
-# Singularity check
-# ---------------------------------------------------------------------------
-
-
 def _toggle_nvlink(sku_raw: str) -> str | None:
-    """Return ``sku_raw`` with the trailing ``-NvLink`` flipped, or ``None``.
+    """Return ``sku_raw`` with the trailing ``-NvLink`` toggled, or ``None``.
 
-    Only meaningful for GPU shorthands like ``1x80G8-A100`` or
-    ``1x80G8-A100-NvLink``.  Returns ``None`` for SKUs that don't look like a
-    GPU shorthand (CPU shorthands, direct instance type names).
+    Returns ``None`` for non-GPU shorthands (the suffix only makes sense for
+    GPU SKUs).
     """
     s = sku_raw.strip()
     if not s:
@@ -158,7 +140,6 @@ def _toggle_nvlink(sku_raw: str) -> str | None:
     suffix = "-NvLink"
     if s.lower().endswith(suffix.lower()):
         return s[: -len(suffix)]
-    # Only add the suffix to GPU shorthands — parse via SkuSpec to be sure.
     try:
         from azure_jobs.core.sku import SkuSpec
 
@@ -182,9 +163,8 @@ def _evaluate_sku(
 ) -> tuple[str, str, Any, Any]:
     """Resolve a candidate SKU and report fit on the VC.
 
-    Returns ``(severity, message, instance, tier)``. ``severity`` is one of
-    ``"ok"`` / ``"warn"`` / ``"error"``. ``instance`` and ``tier`` may be
-    ``None`` when resolution itself failed.
+    Returns ``(severity, message, instance, tier)``. ``instance`` and
+    ``tier`` may be ``None`` when resolution itself failed.
     """
     from azure_jobs.core.sku import resolve_instance_type
 
@@ -226,19 +206,9 @@ def check_singularity(
 ) -> CheckResult:
     """Validate SKU shorthand resolves to a quota'd instance on the VC.
 
-    Failures (returned with ``severity="error"``):
-      - SKU resolves to no instance type at all.
-      - VC has no quota for the resolved instance's series.
-      - The selected SLA tier has ``limit == 0``.
-
-    Auto-adjustments (``severity="warn"`` and ``adjusted_sku`` set, the
-    request's ``sku`` field is mutated so the actual submission uses
-    the new value):
-      - When the requested SKU has/lacks ``-NvLink`` and the VC only carries
-        the opposite variant of the same GPU family, the suffix is toggled.
-
-    Other warnings (``severity="warn"``, ``ok == True``): quota exists but
-    cannot satisfy the requested node count, or quotas could not be fetched.
+    On hard failure caused by an ``-NvLink`` mismatch, auto-toggles the
+    suffix and mutates ``request.sku`` so the actual submission uses the
+    adjusted value (returned with ``severity="warn"``).
     """
     if request.service != "sing":
         return CheckResult()
@@ -297,7 +267,6 @@ def check_singularity(
                 series_to_quota=series_to_quota,
             )
             if alt_severity != "error":
-                # Mutate request so the actual submission uses the adjusted SKU
                 request.sku = alt
                 detail = [
                     f"Original '{sku_raw}' failed: {msg}.",
@@ -315,7 +284,6 @@ def check_singularity(
                 )
 
     if severity == "error":
-        # Build the detailed error from the original attempt
         if chosen is None:
             return CheckResult(
                 severity="error",
@@ -363,11 +331,6 @@ def check_singularity(
         )
 
     return CheckResult(title=f"SKU OK: {sku_raw} → {msg}")
-
-
-# ---------------------------------------------------------------------------
-# AML check
-# ---------------------------------------------------------------------------
 
 
 def check_aml_compute(
@@ -429,11 +392,6 @@ def check_aml_compute(
         title=f"AML compute OK: {name}",
         detail=detail,
     )
-
-
-# ---------------------------------------------------------------------------
-# Public entry point
-# ---------------------------------------------------------------------------
 
 
 def precheck(

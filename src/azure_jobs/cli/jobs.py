@@ -15,9 +15,6 @@ def job_group() -> None:
     """View and manage Azure ML jobs."""
 
 
-# ---------------------------------------------------------------------------
-# Cloud job commands
-# ---------------------------------------------------------------------------
 
 
 @job_group.command(name="list")
@@ -150,9 +147,6 @@ def job_show(name: str, ws_name: str | None) -> None:
     _fetch_and_show_job(name, ws_name=ws_name)
 
 
-# ---------------------------------------------------------------------------
-# Existing commands (status, cancel, logs)
-# ---------------------------------------------------------------------------
 
 
 @job_group.command(name="status")
@@ -267,9 +261,6 @@ def job_logs(job_id: str) -> None:
         console.print("[dim]No logs available for this job.[/dim]")
 
 
-# ---------------------------------------------------------------------------
-# Job statistics
-# ---------------------------------------------------------------------------
 
 
 def _fetch_jobs_for_stats(
@@ -780,9 +771,6 @@ def job_stats(
         print_table(tbl3)
 
 
-# ---------------------------------------------------------------------------
-# Local records (accessible via ``aj list``)
-# ---------------------------------------------------------------------------
 
 
 def _show_local_records(
@@ -820,9 +808,6 @@ def list_local(last: int, template: str | None, status: str | None) -> None:
     _show_local_records(last, template, status)
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 
 def _resolve_job_id(job_id: str) -> str:
@@ -834,9 +819,6 @@ def _resolve_job_id(job_id: str) -> str:
     return job_id
 
 
-# ---------------------------------------------------------------------------
-# Top-level shortcuts
-# ---------------------------------------------------------------------------
 
 
 @main.command(name="js", hidden=True)

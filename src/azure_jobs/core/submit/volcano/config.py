@@ -41,51 +41,37 @@ class VolcanoConfig:
     namespace: str = ""
     queue: str = "default"
     context: str = ""  # kubectl context (empty = current)
-
-    # Compute
     nodes: int = 1
     gpus_per_node: int = C.DEFAULT_GPUS_PER_NODE
     cpus_per_node: int = C.DEFAULT_CPUS_PER_NODE
     memory: str = C.DEFAULT_MEMORY
     processes_per_node: int = 1
-
-    # Container
     image: str = ""
     command: list[str] = field(default_factory=list)
     setup_commands: list[str] = field(default_factory=list)
     env_vars: dict[str, str] = field(default_factory=dict)
-
-    # Networking
     rdma: bool = True
     shm_size: str = C.DEFAULT_SHM_SIZE
-
-    # Labels / metadata
     priority_class: str = ""
     labels: dict[str, str] = field(default_factory=dict)
-
-    # Code upload
     code_dir: str = ""
     code_ignore: list[str] = field(default_factory=list)
-
     # PVC mount (from AMLT_PERSISTENT_VOLUME_*)
     pvc_name: str = ""
     pvc_mount_dir: str = ""
 
 
 def build_volcano_config_from_request(request: SubmitRequest) -> VolcanoConfig:
-    """Translate a normalized :class:`SubmitRequest` into a VolcanoConfig.
+    """Translate a :class:`SubmitRequest` into a VolcanoConfig.
 
-    Volcano-specific fields (namespace, queue, rdma, ...) come from
-    ``request.target_extra``, which ``build_submit_request`` populates
-    from the template's ``target`` section. PVC info is read from the
-    AMLT-convention env vars (``AMLT_PERSISTENT_VOLUME_*``).
+    Volcano-specific fields come from ``request.target_extra``; PVC info
+    is read from the AMLT-convention ``AMLT_PERSISTENT_VOLUME_*`` env vars.
     """
     extra = request.target_extra or {}
     container_args = request.container_args or {}
     env_vars = dict(request.env_vars)
 
-    # Code dir is always the current working directory (same as native).
-    # ``request.code_dir`` is amlt-only and is intentionally ignored here.
+    # ``request.code_dir`` is amlt-only; volcano always uploads cwd.
     code_dir = os.getcwd()
 
     pvc_name = env_vars.get("AMLT_PERSISTENT_VOLUME_NAME", "")
@@ -128,20 +114,16 @@ def build_volcano_job(cfg: VolcanoConfig) -> dict[str, Any]:
     job_name = cfg.name.lower().replace("_", "-")[: C.JOB_NAME_MAX_LEN]
     app_label = job_name
 
-    # Code directory on PVC
     code_path = (
         f"{cfg.pvc_mount_dir}/{C.CODE_UPLOAD_PREFIX}/{cfg.name}"
         if cfg.pvc_name and cfg.pvc_mount_dir
         else ""
     )
 
-    # Build the shell script that each node runs
     script_lines: list[str] = []
     if code_path:
-        # Materialize the (shared, immutable) code asset into a private,
-        # pod-local working directory backed by an ``emptyDir`` volume.
-        # Keeps runtime writes off the PVC and matches AzureML's
-        # ``/mnt/azureml/.../wd`` model.
+        # Copy the shared PVC code asset into a pod-local emptyDir so
+        # runtime writes don't hit shared storage.
         run_wd = f"{C.WORKDIR_MOUNT_PATH}/{cfg.name}/wd"
         script_lines.extend(
             [
@@ -157,7 +139,6 @@ def build_volcano_job(cfg: VolcanoConfig) -> dict[str, Any]:
     script_lines.extend(cfg.command)
     script = "\n".join(script_lines)
 
-    # Resource requests
     resources: dict[str, Any] = {
         "requests": {
             "cpu": str(cfg.cpus_per_node),
@@ -175,10 +156,8 @@ def build_volcano_job(cfg: VolcanoConfig) -> dict[str, Any]:
         resources["requests"][C.RDMA_RESOURCE_KEY] = C.RDMA_RESOURCE_VALUE
         resources["limits"][C.RDMA_RESOURCE_KEY] = C.RDMA_RESOURCE_VALUE
 
-    # Environment variables
     env_list = [{"name": k, "value": str(v)} for k, v in cfg.env_vars.items()]
 
-    # Tolerations for GPU/RDMA nodes
     tolerations = []
     if cfg.gpus_per_node > 0:
         tolerations.append(
@@ -197,7 +176,6 @@ def build_volcano_job(cfg: VolcanoConfig) -> dict[str, Any]:
             }
         )
 
-    # Volumes and mounts
     volumes: list[dict[str, Any]] = [
         {
             "name": C.SHM_VOLUME_NAME,
@@ -213,7 +191,6 @@ def build_volcano_job(cfg: VolcanoConfig) -> dict[str, Any]:
         {"name": C.WORKDIR_VOLUME_NAME, "mountPath": C.WORKDIR_MOUNT_PATH},
     ]
 
-    # Add PVC mount if configured
     if cfg.pvc_name and cfg.pvc_mount_dir:
         volumes.append(
             {
@@ -228,7 +205,6 @@ def build_volcano_job(cfg: VolcanoConfig) -> dict[str, Any]:
             }
         )
 
-    # Pod spec (shared between master and workers)
     def _make_pod_spec(role: str) -> dict[str, Any]:
         container: dict[str, Any] = {
             "name": role,
@@ -253,7 +229,7 @@ def build_volcano_job(cfg: VolcanoConfig) -> dict[str, Any]:
             "containers": [container],
         }
 
-        # Pod anti-affinity for multi-node: one pod per physical host
+        # Multi-node: one pod per physical host.
         if cfg.nodes > 1:
             pod_spec["affinity"] = {
                 "podAntiAffinity": {
@@ -270,7 +246,7 @@ def build_volcano_job(cfg: VolcanoConfig) -> dict[str, Any]:
 
         return pod_spec
 
-    # Build tasks — all nodes run the same command, differentiated by VC_* env vars
+    # All tasks run the same script; VC_* env vars differentiate roles.
     tasks: list[dict[str, Any]] = []
     tasks.append(
         {
@@ -298,10 +274,9 @@ def build_volcano_job(cfg: VolcanoConfig) -> dict[str, Any]:
             }
         )
 
-    # Resolve namespace: explicit > kubectl context > "default"
+    # Namespace: explicit > kubectl context > "default".
     namespace = cfg.namespace or _kubectl_namespace(cfg.context)
 
-    # Volcano Job spec
     job_spec: dict[str, Any] = {
         "apiVersion": C.VOLCANO_API_VERSION,
         "kind": "Job",
