@@ -12,6 +12,7 @@ from azure_jobs import (
     submit_via_native,
     submit_via_volcano,
     submit_via_amlt,
+    get_workspace_config,
 )
 ```
 
@@ -19,7 +20,9 @@ from azure_jobs import (
 
 | Symbol | Purpose |
 |--------|---------|
-| `Template` | Parsed template (load with `Template.from_dict(read_conf(path))`) |
+| `Template.from_conf_path(path)` | Load a YAML template (resolving its `base` chain) into a `Template` |
+| `Template.from_dict(conf)` | Build a `Template` from an already-merged dict |
+| `get_workspace_config()` | Read `~/.azure_jobs/config.toml` → `AJWorkspace` |
 | `build_submit_request(template, *, name, sid, sku, user_command, user_args, workspace, ...)` | Translate `Template` + CLI-equivalent params → `SubmitRequest` |
 | `SubmitRequest` | Backend-agnostic, normalized job spec |
 | `submit_via_native(request, on_event=...)` | Submit to AML / Singularity via REST |
@@ -36,11 +39,10 @@ from azure_jobs import (
     Template,
     build_submit_request,
     submit_via_native,
+    get_workspace_config,
 )
-from azure_jobs.core.conf import read_conf
-from azure_jobs.core.config import AJWorkspace, get_workspace_config
 
-template = Template.from_dict(read_conf(".azure_jobs/template/gpu.yaml"))
+template = Template.from_conf_path(".azure_jobs/template/gpu.yaml")
 
 request = build_submit_request(
     template,

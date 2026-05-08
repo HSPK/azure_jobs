@@ -122,11 +122,10 @@ from azure_jobs import (
     Template,
     build_submit_request,
     submit_via_native,   # also: submit_via_volcano, submit_via_amlt
+    get_workspace_config,
 )
-from azure_jobs.core.conf import read_conf
-from azure_jobs.core.config import get_workspace_config
 
-template = Template.from_dict(read_conf(".azure_jobs/template/gpu.yaml"))
+template = Template.from_conf_path(".azure_jobs/template/gpu.yaml")
 request = build_submit_request(
     template,
     name="my-job", sid="abc123", sku="2xA100-80GB",

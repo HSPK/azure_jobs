@@ -22,6 +22,7 @@ try:
 except ImportError:  # editable install without build
     __version__ = "0.0.0.dev0"
 
+from azure_jobs.core.config import get_workspace_config
 from azure_jobs.core.submit import (
     StorageMount,
     SubmitEvent,
@@ -51,4 +52,5 @@ __all__ = [
     "submit_via_native",
     "submit_via_volcano",
     "submit_via_amlt",
+    "get_workspace_config",
 ]

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from .dataclass_utils import dataclass_from_dict
@@ -92,3 +93,10 @@ class Template:
     @classmethod
     def from_dict(cls, conf: dict[str, Any]) -> Template:
         return dataclass_from_dict(cls, conf)
+
+    @classmethod
+    def from_conf_path(cls, fp: Path | str) -> Template:
+        """Load a YAML template file (resolving its ``base`` chain) into a ``Template``."""
+        from .conf import read_conf
+
+        return cls.from_dict(read_conf(fp))
