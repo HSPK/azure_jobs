@@ -1,134 +1,67 @@
-# aj vs amlt Feature Comparison
+# aj vs amlt
 
-This document compares **aj** (Azure Jobs) with **amlt** (Amulet), the two CLI tools for submitting and managing Azure ML jobs.
+A quick map of where each tool fits. `aj` (this project) and `amlt` (Microsoft's Amulet) both submit Azure ML jobs but optimize for different workflows.
 
 ## Philosophy
 
 | | aj | amlt |
 |---|---|---|
-| **Approach** | Minimal, pure REST API | Full-featured, Azure ML SDK |
-| **Dependencies** | click + pyyaml only | Heavy SDK + many extras |
-| **Startup time** | ~30ms (lazy imports) | ~2s |
-| **Config style** | Template-based inheritance | Single YAML with imports |
+| Approach | Pure REST, no Azure SDK | Full Azure ML Python SDK |
+| Runtime deps | `click` + `pyyaml` + `rich` + `textual` + `azure-identity` + `requests` | Azure ML SDK + many extras |
+| `--help` startup | ~160 ms | ~2 s |
+| Backends | native (REST) / amlt / volcano | AzureML / Singularity |
+| Config | Template inheritance via `base` chain | Single YAML with `imports` |
 
-## Command Coverage
+## What aj has, amlt doesn't
 
-### aj has, amlt doesn't
+| Command | Notes |
+|---------|-------|
+| `aj job stats` | GPU-hours and success rate, grouped by experiment/compute/user/workspace |
+| `aj quota list` / `--aml` | VC quotas and AML cluster availability in one table |
+| `aj sku list` / `aj sku check` | Browse SKUs by VC; pre-flight validate against a template |
+| `aj code stats` | Preview the next upload — count, size, hash, top-N largest files |
+| `aj dash` | Interactive TUI dashboard |
+| `aj image list` | Singularity curated base images |
+| `aj env list/show`, `aj ds list/show` | Browse environments and datastores |
+| Volcano backend | Kubernetes Volcano cluster submission via `kubectl` |
+| Auto SKU adjustment | `aj run` will toggle `-NvLink` when the VC only has the opposite variant |
+| Content-addressed upload dedup | Re-submits skip the upload entirely on identical inputs |
 
-| Command | Description |
-|---------|-------------|
-| `aj job stats` | GPU Hours stats by experiment/compute/user |
-| `aj quota list` | View Singularity VC and AML cluster quotas |
-| `aj sku list` | Browse available SKU instance types |
-| `aj dash` | Interactive TUI dashboard with keyboard nav |
-| `aj image list` | Browse Singularity curated base images |
-| `aj ds list/show` | Browse workspace datastores |
-| `aj env list/show` | Browse registered environments |
+## What amlt has, aj doesn't
 
-### amlt has, aj doesn't
+**High priority**
 
-#### High Priority Gaps
+| Feature | amlt | Note |
+|---------|------|------|
+| SSH into job | `amlt ssh` | Essential for live debug |
+| Download results | `amlt results download` | aj has logs only |
+| Follow logs live | `amlt logs -f` | aj's `job logs` is one-shot |
+| Rerun experiment | `amlt rerun` | aj re-runs from the template |
 
-| Feature | amlt command | Notes |
-|---------|-------------|-------|
-| SSH into running job | `amlt ssh` | Essential for debugging |
-| Download results | `amlt results download` | Most commonly needed |
-| List/view results | `amlt results list/view` | Browse job outputs |
-| Follow logs in real-time | `amlt logs -f` | aj has `job logs` but no streaming |
-| Rerun experiment | `amlt rerun` | Avoids re-configuring |
+**Medium**
 
-#### Medium Priority Gaps
+| Feature | amlt | Note |
+|---------|------|------|
+| Conda / pip declaration | `conda_file` / `pip` in YAML | aj uses setup commands |
+| Dockerfile build | `docker.build` | aj uses pre-built images |
+| YAML variable substitution | `$VAR` + `env_defaults` | aj uses Python format strings only |
+| Hyperparameter search | `--search` | grid / random / bayesian |
+| Storage CLI | `amlt storage upload/download/rm` | direct blob ops |
+| Metrics extraction | `amlt metrics` | pull and tabulate |
+| Pause / Resume | `amlt pause/resume` | aj only cancel |
+| Interactive debug | `amlt debug` | tmux session |
 
-| Feature | amlt command | Notes |
-|---------|-------------|-------|
-| Conda/pip declaration | YAML `conda_file` / `pip` | aj uses setup commands instead |
-| Dockerfile build | `docker.build` in config | aj uses pre-built images only |
-| YAML variable substitution | `$VAR` + `env_defaults` | No equivalent in aj |
-| Hyperdrive search | `--search` flag | Grid/random/bayesian |
-| Code management | `amlt code view/clone/list` | Browse uploaded code snapshots |
-| Storage operations | `amlt storage upload/download/rm` | Direct blob management |
-| Metrics extraction | `amlt metrics` | Tabulate job metrics with expressions |
-| Pause/Resume jobs | `amlt pause/resume` | Job lifecycle control |
-| Interactive debug | `amlt debug` | tmux-based debug session |
+**Low**
 
-#### Low Priority Gaps
-
-| Feature | amlt command | Notes |
-|---------|-------------|-------|
+| Feature | amlt | Note |
+|---------|------|------|
 | Shell completion | `amlt completion` | bash/zsh/fish |
-| Multi-job parallel submit | Thread pool | aj submits one job at a time |
-| Job tagging | `amlt tag` | Organize jobs with labels |
-| Move jobs | `amlt move` | Between experiments |
-| Node power management | `amlt power` | Restart/drain nodes |
-| Code size validation | Built-in limits | Warn on large uploads |
+| Parallel multi-job submit | thread pool | aj submits one at a time |
+| Move jobs between experiments | `amlt move` | |
+| Node power management | `amlt power` | restart/drain |
 
-## Run Command Comparison
+## When to pick which
 
-### Configuration
+**Use `aj` when** you want fast startup, minimal deps, template inheritance, the volcano backend, quota/SKU browsing, GPU-hours stats, or the TUI dashboard.
 
-| Feature | aj | amlt |
-|---------|:--:|:----:|
-| Template inheritance | ✅ `base` chain | ✅ `imports` directive |
-| Environment variables | ✅ export in commands | ✅ `env_defaults` + `$VAR` |
-| Docker image | ✅ | ✅ |
-| Conda environment | ❌ | ✅ |
-| Pip requirements | ❌ | ✅ |
-| Dockerfile build | ❌ | ✅ |
-| Multi-job config | ✅ jobs list | ✅ jobs list + search |
-| SKU override | ✅ template placeholders | ✅ `--sku` flag |
-| Dry run | ✅ `-d` | ❌ (`--dump` only) |
-| Local execution | ✅ `-L` | ✅ local target |
-
-### Code Upload
-
-| Feature | aj | amlt |
-|---------|:--:|:----:|
-| Individual file upload | ✅ | ❌ (zip) |
-| Content-addressed dedup | ✅ SHA hash | ✅ checksum |
-| HEAD-before-upload skip | ✅ | ❌ |
-| Git info tracking | ✅ | ✅ |
-| Custom ignore patterns | ✅ `code.ignore` | ✅ `.amltignore` |
-| SSH key injection | ✅ auto ~/.ssh | ❌ |
-
-### Distributed Training
-
-| Feature | aj | amlt |
-|---------|:--:|:----:|
-| PyTorch DDP env vars | ✅ auto | ✅ auto |
-| MPI rank detection | ✅ OMPI vars | ✅ native |
-| NCCL tuning | ✅ | ✅ |
-| Rank-0 setup barrier | ✅ 600s timeout | ✅ |
-| Master address resolution | ✅ auto | ✅ auto |
-
-## Job Management Comparison
-
-| Feature | aj | amlt |
-|---------|:--:|:----:|
-| List jobs | ✅ `job list` | ✅ `list` |
-| Show job details | ✅ `job show` | ✅ `show` |
-| Cancel job | ✅ `job cancel` | ✅ `cancel` |
-| View logs | ✅ `job logs` | ✅ `logs` |
-| Follow logs | ❌ | ✅ `-f` |
-| Job statistics | ✅ `job stats` | ❌ |
-| Download results | ❌ | ✅ `results` |
-| SSH into job | ❌ | ✅ `ssh` |
-| Rerun | ❌ | ✅ `rerun` |
-| Pause/Resume | ❌ | ✅ |
-| Move between experiments | ❌ | ✅ `move` |
-
-## When to Use Which
-
-**Choose aj if you:**
-- Want fast startup and minimal dependencies
-- Prefer template-based workflows with inheritance
-- Need quota monitoring, SKU browsing, or GPU Hours stats
-- Want an interactive TUI dashboard
-- Run primarily on Singularity clusters
-
-**Choose amlt if you:**
-- Need SSH into running jobs for debugging
-- Want to download results directly from CLI
-- Require conda/pip/Dockerfile environment builds
-- Use hyperdrive for hyperparameter search
-- Need comprehensive job lifecycle (pause/resume/rerun)
-- Work with storage management and metrics extraction
+**Use `amlt` when** you need SSH, live log following, results download, conda/pip/Dockerfile builds, hyperparameter search, or pause/resume — and don't mind the SDK weight. (`aj run --amlt` is a shim that hands off to amlt while keeping `aj`'s template layer.)

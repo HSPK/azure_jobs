@@ -1,91 +1,99 @@
 # Configuration
 
-Azure Jobs uses two types of configuration: a tool config file and YAML job templates.
+`aj` configures jobs via YAML templates with a small, predictable inheritance + merge model.
 
-## aj_config.json
+## Files
 
-Located at `.azure_jobs/aj_config.json`. Stores three things:
+```
+.azure_jobs/
+├── aj_config.json       # workspace creds, defaults (repo_id, experiment, ...)
+├── record.jsonl         # append-only submission history
+├── scripts/             # ships with the upload (e.g. distributed preamble)
+└── template/            # user templates
+    ├── account/         # subscription + identity
+    ├── storage/         # blob mounts (default.yaml bundles common ones)
+    ├── environment/     # service type + image + setup
+    │   ├── base.yaml      # shared job defaults (priority, sla_tier, ...)
+    │   ├── aml.yaml       # service: aml
+    │   └── sing.yaml      # service: sing (Singularity)
+    └── <job>.yaml       # leaf templates, composed from the above
+```
 
-**Defaults** — the template, nodes, and processes to use when not specified on the command line. Updated automatically each time you run a job (last-used template becomes the new default).
+A typical leaf inherits four bases: `base` (code/ignore rules) + `account.<name>` + `storage.default` + `environment.aml` (or `sing`). Cluster-specific overrides — `target.name`, `sku`, default node count — live in the leaf.
 
-**Repository** — the Git URL for `aj pull`. Saved after the first pull so subsequent pulls don't need the URL again.
+`.codeignore` (or `.amltignore`) at the project root excludes paths from the upload. Built-ins are always excluded: `__pycache__`, `.git`, `.venv`, `node_modules`, and all of `.azure_jobs/` except `scripts/`.
 
-**Workspace** — Azure subscription, resource group, and workspace name. Can be set interactively via `aj ws set` or prompted on first use.
+## Template structure
 
-## Templates
+Each YAML has two top-level keys:
 
-Templates live in `.azure_jobs/template/` as YAML files. Each template has two top-level keys:
+```yaml
+base: [account.drl, storage.default, environment.aml]
+config:
+  target:
+    name: my-cluster
+  jobs:
+    - name: train
+      sku: "{nodes}xV100-32GB"
+      command:
+        - python {{cmd}}
+```
 
-- **`base`** — optional. A template name (or list of names) to inherit from.
-- **`config`** — the actual job configuration.
+`base` is a name (or list of names). Names without a dot resolve next to the current file; dotted names (`storage.default`) resolve to `.azure_jobs/<dir>/<name>.yaml`. Cycles are detected and raise.
 
-### Directory Structure
+## Merge rules
 
-Templates are organized by concern under `.azure_jobs/`:
+Bases are merged left-to-right, then the child's `config` is merged on top:
 
-- **`template/`** — user-facing job profiles. Each file selects an account, storage, and environment, then adds cluster-specific config (target name, SKU, defaults).
-- **`account/`** — Azure identity and subscription.
-- **`storage/`** — blob mount definitions. `default.yaml` bundles all common mounts.
-- **`environment/`** — service type and runtime. `aml.yaml` (Azure ML) and `sing.yaml` (Singularity) define the Docker image, setup scripts, and service config. `base.yaml` holds shared job defaults.
-- **`scripts/`** — shell scripts referenced by environment setup.
+| Type | Behavior |
+|------|----------|
+| Dict | Merge recursively (keys union, overlapping keys recurse) |
+| List of dicts | Merge by index (item 0 with item 0, item 1 with item 1, ...) |
+| List of scalars | Concatenate |
+| Scalar | Last value wins (deep-copied) |
 
-A typical template inherits four bases: `base` (code/ignore rules), `account.drl` (identity), `storage.default` (mounts), and `environment.aml` or `environment.sing` (runtime). Cluster-specific settings like `target.name` and `_extra` defaults live directly in the template.
+## SKU formats
 
-### Inheritance
+`jobs[i].sku` accepts two shapes; both honor `-n` / `-p` from the CLI.
 
-A template can extend one or more bases. The config from all bases is merged together, then the child's config is merged on top. Chains can be arbitrarily deep (grandparent → parent → child).
+**String template** — `{nodes}` and `{processes}` are substituted:
 
-Base names are resolved as follows:
-- Plain name like `gpu` → looks for `gpu.yaml` in the same directory as the current template
-- Dotted name like `envs.gpu` → looks for `.azure_jobs/envs/gpu.yaml`
+```yaml
+sku: "{nodes}xV100-32GB"     # 4 nodes -> "4xV100-32GB"
+```
 
-Circular inheritance is detected and raises an error.
+**Range dict** — pick a SKU based on node count. Keys are exact (`"1"`), ranges (`"2-4"`), or open-ended (`"8+"`):
 
-### Merge Rules
+```yaml
+sku:
+  "1":   "1xA100-80GB"
+  "2-4": "{nodes}xA100-80GB"
+  "8+":  "8xA100-80GB-NvLink"
+```
 
-When configs are merged (base first, child last):
+## Runtime environment variables
 
-- **Dicts** merge recursively — keys from both sides are kept, overlapping keys merge deeper
-- **Lists of dicts** merge by position — the first item merges with the first item, second with second, etc.
-- **Lists of scalars** concatenate
-- **Scalars** — last value wins
+`aj` exports these into the job (read them in your script):
 
-### _extra Section
-
-The `_extra` key inside `config` holds default resource values:
-
-- `nodes` — default node count (overridable with `-n`)
-- `processes` — default process count (overridable with `-p`)
-
-This key is consumed by `aj` and stripped before submission.
-
-### SKU Templates
-
-The `sku` field in a job supports two formats:
-
-**String template** — placeholders `{nodes}` and `{processes}` are substituted at submit time.
-
-**Range dict** — keys define node ranges, values are the SKU to use. Supports exact match (`"1"`), ranges (`"2-4"`), and open-ended (`"8+"`).
-
-## Override Priority
-
-When determining template, nodes, and processes, the priority is:
-
-1. CLI flags (`-t`, `-n`, `-p`) — highest
-2. Template `_extra` values
-3. `aj_config.json` defaults
-4. Fallback: 1 node, 1 process
-
-## Environment Variables
-
-These are exported into the job command environment:
-
-| Variable | Value |
-|----------|-------|
-| `AJ_NODES` | Number of nodes |
-| `AJ_PROCESSES` | Total processes (nodes × processes per node) |
-| `AJ_NAME` | Job name |
-| `AJ_ID` | Submission ID (8-char hex) |
+| Variable | Meaning |
+|----------|---------|
+| `AJ_NAME` | Job display name |
+| `AJ_ID` | Short submission ID (also in `record.jsonl`) |
 | `AJ_TEMPLATE` | Template name used |
-| `AJ_SUBMIT_TIMESTAMP_UTC` | ISO 8601 submission time |
-| `AJ_HOME` | Path to `.azure_jobs` directory (for customizing the root) |
+| `AJ_NODES` | Number of nodes |
+| `AJ_GPUS_PER_NODE` | `-p` value (drives SKU) |
+| `AJ_PROCESSES` | `AJ_NODES × AJ_GPUS_PER_NODE` |
+| `AJ_PROCESSES_PER_NODE` | `--ppn` value (launcher procs/node) |
+| `AJ_SUBMIT_TIMESTAMP_UTC` | Submission timestamp |
+
+These flow through Azure ML's `environmentVariables` (native), the container `env` list (volcano), or `submit_args.env` (amlt). They never appear in the runner script body, so the uploaded code asset stays content-addressable across submissions.
+
+## CLI overrides
+
+Anything passed on the CLI overrides the merged template:
+
+```bash
+aj run -t gpu -n 4 -p 8 --ppn 1 train.py arg1 arg2
+```
+
+`arg1 arg2` is forwarded verbatim to the user command.

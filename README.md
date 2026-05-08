@@ -1,115 +1,129 @@
 # Azure Jobs
 
-A fast, lightweight CLI for submitting and managing Azure ML jobs via pure REST APIs. Uses YAML template inheritance, sensible defaults, and rich terminal output. Supports both Azure ML compute clusters and Singularity virtual clusters.
+A fast, lightweight CLI for submitting and managing Azure ML jobs through pure REST APIs — no `azure-ai-ml` SDK and no `amlt` runtime required.
+
+`aj` adds a template inheritance layer on top of three submission backends:
+
+- **native** — direct Azure ML REST (default for AML / Singularity).
+- **amlt** — delegates to the `amlt` CLI for compatibility.
+- **volcano** — submits to a Kubernetes Volcano cluster via `kubectl`.
 
 ## Install
 
-    pipx install azure_jobs
-
-For development:
-
-    uv pip install -e .
-
-## Quick Start
-
 ```bash
-aj init                               # set up .azure_jobs/, workspace, experiment (interactive)
-aj template pull user/templates       # clone shared templates
-aj template list                      # show available templates
-aj run -t gpu python train.py         # submit a job
-aj job list                           # monitor jobs
-aj job logs <id>                      # view logs
+pipx install azure_jobs
 ```
 
-## Commands
+Requires `az login`. For the volcano backend you also need `kubectl` configured against your cluster.
 
-### Job Submission
+## Quickstart
 
-    aj run -t gpu python train.py       # submit using "gpu" template
-    aj run python train.py              # re-use last template
-    aj run -d python train.py           # dry run — inspect config without submitting
-    aj run -L python train.py           # run locally for testing
+```bash
+mkdir my-project && cd my-project
+aj init                          # scaffold .azure_jobs/, register workspace
+aj pull <user>/<repo>            # (optional) clone shared templates
+aj run -t gpu train.py           # submit using the "gpu" template
+```
+
+`.py` scripts run via `uv run`, `.sh` via `bash`. Drop a `.codeignore` (or `.amltignore`) at the project root to exclude paths from the upload.
+
+### amlt compatibility
+
+```bash
+aj init amlt                     # scaffold amlt config
+aj run --amlt -t gpu train.py    # submit via amlt instead of REST
+```
+
+## Common commands
+
+### Submit
+
+```bash
+aj run -t gpu train.py           # submit via REST
+aj run train.py                  # reuse last template
+aj run -d train.py               # dry run — print the config, don't submit
+aj run -L train.py               # run locally
+aj run -n 4 -p 8 train.py        # 4 nodes × 8 GPUs/node
+aj code stats -t gpu             # what would be uploaded? (count, size, hash)
+```
 
 | Flag | Purpose |
 |------|---------|
 | `-t` | Template name |
 | `-n` | Number of nodes |
-| `-p` | Processes per node |
+| `-p` | GPUs per node (drives SKU + `AJ_PROCESSES`) |
+| `--ppn` | Launcher processes per node (e.g. `torchrun --nproc-per-node`) |
 | `-d` | Dry run |
 | `-y` | Skip confirmation |
 | `-L` | Run locally |
+| `--amlt` | Submit via amlt |
 
-### Job Management
+### Manage jobs
 
-    aj job list                         # list recent cloud jobs
-    aj job list -s Running              # filter by status
-    aj job show <id>                    # show job details
-    aj job cancel <id>                  # cancel a running job
-    aj job logs <id>                    # download and display logs
-    aj job stats                        # aggregate stats over recent jobs
-    aj list                             # show local submission history
+```bash
+aj job list                      # recent cloud jobs
+aj job list -s Running           # filter by status
+aj job show <id>                 # detail panel
+aj job cancel <id>
+aj job logs <id>                 # download + display logs
+aj job stats                     # GPU-hours, success rate, by experiment/compute/user
+aj list                          # local submission history (record.jsonl)
+aj dash                          # interactive TUI
+```
 
 ### Templates
 
-    aj template list                    # list available templates
-    aj template show <name>             # display resolved config after inheritance
-    aj template validate                # check all templates for errors
-    aj template diff                    # show local edits vs remote
-    aj template pull <repo>             # clone template repository
-    aj template push -m "msg"           # commit and push local changes
+```bash
+aj template list                 # available templates
+aj template show <name>          # resolved config (after inheritance)
+aj template validate             # check all templates
+aj template diff                 # local edits vs upstream
+aj template pull <repo>          # clone a template repo
+aj template push -m "msg"        # commit + push
+```
 
-### Workspace & Auth
+### Workspace, quota, SKUs
 
-    aj ws list                          # list workspaces in subscription
-    aj ws set                           # set active workspace (interactive picker)
-    aj auth status                      # show login and credential status
-    aj auth login                       # delegate to az login
+```bash
+aj ws list / set                 # workspaces in subscription
+aj auth status / login           # credential health, az login
+aj quota list                    # Singularity VC quota
+aj quota list --aml              # AML cluster quota
+aj sku list                      # SKUs by VC
+aj sku check -t <template>       # pre-flight: SKU/quota/compute
+aj env list / show <name>        # registered environments
+aj ds list / show <name>         # datastores
+aj image list                    # Singularity curated images
+aj exp list                      # experiments (aggregated from jobs)
+```
 
-### Resources
+### Config
 
-    aj env list                         # list registered environments
-    aj env show <name>                  # show environment versions and images
-    aj ds list                          # list datastores
-    aj ds show <name>                   # show datastore details
-    aj quota list                       # show Singularity VC quota and availability
-    aj quota list --aml                 # show AML compute cluster availability
-    aj exp list                         # list experiments (aggregated from jobs)
-    aj image list                       # list Singularity curated base images
-    aj sku list                         # list Singularity SKUs and quota by VC
-    aj sku check -t <template>          # pre-flight: SKU/quota/compute validation
+```bash
+aj config show
+aj config timezone Asia/Shanghai
+aj config experiment <name>
+```
 
-### Setup
+## How submission works
 
-    aj init                             # initialise .azure_jobs/, workspace, experiment
-    aj init amlt                        # additionally configure amlt integration
+1. Resolve the template, walk the `base` inheritance chain, merge configs.
+2. Apply CLI overrides (`-n` / `-p` / `--ppn`).
+3. Build a normalized `SubmitRequest`.
+4. Backend dispatch:
+   - **native** — register environment (SHA-deduped) → upload code (content-addressed) → `PUT /jobs/{name}` via ARM REST.
+   - **volcano** — render Volcano Job YAML → upload code to a PVC via `kubectl exec` + tar → `kubectl create`.
+   - **amlt** — write a submission YAML and shell out to `amlt run`.
+5. Append a `SubmitRecord` to `record.jsonl` and print the portal URL.
 
-### Other
-
-    aj config show                      # print all configuration
-    aj config timezone Asia/Shanghai    # set display timezone
-    aj config experiment <name>         # set default experiment name
-    aj dash                             # open interactive TUI dashboard
-
-## How It Works
-
-1. **Templates** define reusable job configs as YAML with optional base inheritance
-2. **`aj run`** loads a template, resolves the inheritance chain, merges configs, and applies CLI overrides
-3. **Code upload** — zips your code, uploads to workspace blob storage, and registers a code asset
-4. **Environment** — registers Docker images as Azure ML environment versions (with SHA-based dedup)
-5. **Submission** — builds a REST job body and submits via `PUT /jobs/{name}` to Azure Resource Manager
-6. **Tracking** — records each submission locally to `record.jsonl` and prints the portal URL
-
-No dependency on `amlt` or the `azure-ai-ml` SDK. All Azure interactions use lightweight REST APIs with `AzureCliCredential`.
+Code uploads are content-addressed: identical (template + command + code) yields the same hash, so re-runs reuse the prior asset and skip the upload entirely.
 
 ## Documentation
 
 | Document | Contents |
 |----------|----------|
-| [Architecture](docs/architecture.md) | Module layout, data flow, design decisions |
-| [Configuration](docs/configuration.md) | Templates, inheritance, merge rules, environment variables |
-| [REST API](docs/rest-api.md) | REST client design, endpoints, authentication |
-| [Roadmap](docs/roadmap.md) | Planned features and milestones |
-
-## Testing
-
-    uv run pytest
+| [Architecture](docs/architecture.md) | Module layout, submission flow, backends |
+| [Configuration](docs/configuration.md) | Templates, inheritance, merge rules, SKU formats |
+| [REST API](docs/rest-api.md) | REST client design, endpoints, job body shape |
+| [Comparison](docs/comparison.md) | aj vs amlt feature matrix |
+| [Roadmap](docs/roadmap.md) | Planned features |
