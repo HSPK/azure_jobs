@@ -29,15 +29,21 @@ def dashboard(last: int, page_size: int | None) -> None:
     from azure_jobs.tui.app import AjDashboard
 
     app = AjDashboard(last=last, page_size=page_size)
-    app.run(mouse=False)
-
-    alive = [
-        t
-        for t in threading.enumerate()
-        if t is not threading.main_thread() and t.is_alive()
-    ]
-    if alive:
-        os._exit(0)
+    try:
+        app.run(mouse=False)
+    finally:
+        # Background workers (REST polls, log streams, uploads) run on
+        # non-daemon executor threads. If any are still alive when we
+        # leave ``app.run`` (clean quit *or* KeyboardInterrupt), the
+        # interpreter's atexit will block on ``thread.join`` and only
+        # break on a second Ctrl+C, leaking a traceback. Skip that.
+        alive = [
+            t
+            for t in threading.enumerate()
+            if t is not threading.main_thread() and t.is_alive()
+        ]
+        if alive:
+            os._exit(0)
 
 
 @main.command(name="d", hidden=True)
