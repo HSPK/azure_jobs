@@ -40,7 +40,7 @@ def config_timezone(tz: str | None) -> None:
         raise SystemExit(1)
 
     cfg = read_config()
-    cfg["timezone"] = tz
+    cfg.timezone = tz
     write_config(cfg)
     console.print(f"[success]✓[/success] Timezone set to [bold]{tz}[/bold]")
 
@@ -67,7 +67,7 @@ def config_experiment(name: str | None) -> None:
         return
 
     cfg = read_config()
-    cfg["experiment"] = name.strip()
+    cfg.experiment = name.strip()
     write_config(cfg)
     console.print(f"[success]✓[/success] Experiment set to [bold]{name.strip()}[/bold]")
 
@@ -80,7 +80,7 @@ def config_show() -> None:
 
     import json
 
-    cfg = read_config()
+    cfg = read_config().to_dict()
     if cfg:
         console.print_json(json.dumps(cfg, indent=2))
     else:

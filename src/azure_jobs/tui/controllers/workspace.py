@@ -13,7 +13,6 @@ from azure_jobs.core.config import (
 )
 from azure_jobs.tui.components import PickerModal
 from azure_jobs.tui.controllers.base import Controller
-from azure_jobs.tui.helpers import kv
 from azure_jobs.tui.state import WorkspaceState
 
 

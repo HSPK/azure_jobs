@@ -26,7 +26,7 @@ from azure_jobs.tui.controllers import (
     LogsController,
     WorkspaceController,
 )
-from azure_jobs.tui.helpers import get_page_size, kv
+from azure_jobs.tui.helpers import get_page_size
 from azure_jobs.tui.state import JobsState, LogsState, Widgets, WorkspaceState
 
 log = logging.getLogger(__name__)
