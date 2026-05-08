@@ -106,6 +106,9 @@ class AjDashboard(App):
                     classes="hidden",
                 )
                 yield LoadingIndicator(id="log-loading", classes="hidden")
+                with Vertical(id="info-loading", classes="hidden"):
+                    yield LoadingIndicator(id="info-loading-spinner")
+                    yield Static("", id="info-loading-label")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -115,7 +118,7 @@ class AjDashboard(App):
         self.query_one("#ws-pane").border_title = "Workspace"
         self.jobs.view.update_titles()
         self.logs.update_tab_title()
-        self.widgets.info.update(kv([], hint="Loading jobs…"))
+        self.jobs.fetcher.show_info_loading("Loading jobs…")
         self.jobs.fetcher.init_fetch()
 
     # ---- cross-cutting actions ---------------------------------------------

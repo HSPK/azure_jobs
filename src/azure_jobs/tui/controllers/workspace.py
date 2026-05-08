@@ -134,8 +134,7 @@ class WorkspaceController(Controller[WorkspaceState]):
 
         self.update_label()
         app.jobs.view.update_titles()
-        if app.widgets.info:
-            app.widgets.info.update(kv([], hint="Loading jobs…"))
+        app.jobs.fetcher.show_info_loading("Loading jobs…")
         app.jobs.fetcher.init_fetch()
         app.query_one("#job-list", OptionList).focus()
         from rich.markup import escape

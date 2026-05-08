@@ -104,10 +104,12 @@ class JobsView(Controller[JobsState]):
                 ol.highlighted = target_idx
             st.selected_idx = target_idx
             self.show_info(st.filtered[target_idx])
+            self.app.jobs.fetcher.hide_info_loading()
         else:
             st.selected_idx = -1
             if self.app.widgets.info:
                 self.app.widgets.info.update(kv([], hint="No matching jobs."))
+            self.app.jobs.fetcher.hide_info_loading()
             self.app.logs.update_tab_title()
             self._update_subtitle(None)
 

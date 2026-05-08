@@ -96,3 +96,25 @@ ModalScreen > Vertical {
 #log-loading.hidden {
     display: none;
 }
+#info-loading {
+    layer: overlay;
+    width: 100%;
+    height: 100%;
+    align: center middle;
+    background: transparent;
+}
+#info-loading.hidden {
+    display: none;
+}
+#info-loading-spinner {
+    width: auto;
+    height: 1;
+    color: #729fcf;
+}
+#info-loading-label {
+    width: auto;
+    height: 1;
+    margin-top: 1;
+    color: $text-muted;
+    text-style: italic;
+}

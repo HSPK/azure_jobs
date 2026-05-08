@@ -66,7 +66,27 @@ class JobsFetcher(Controller[JobsState]):
 
     def _show_loading(self, msg: str) -> None:
         """Render *msg* (already markup-safe or escaped) into the info panel."""
+        self.hide_info_loading()
         self.render_info(msg)
+
+    def show_info_loading(self, label: str) -> None:
+        """Show the centered spinner + *label* overlay over the info pane."""
+        from textual.widgets import Static
+
+        try:
+            ind = self.app.query_one("#info-loading")
+            lbl = self.app.query_one("#info-loading-label", Static)
+        except Exception:
+            return
+        lbl.update(label)
+        ind.remove_class("hidden")
+
+    def hide_info_loading(self) -> None:
+        try:
+            ind = self.app.query_one("#info-loading")
+        except Exception:
+            return
+        ind.add_class("hidden")
 
     def _create_rest_client(self, ws: AJWorkspace) -> bool:
         try:
@@ -125,7 +145,7 @@ class JobsFetcher(Controller[JobsState]):
         if not self._is_active(worker, st, seq):
             return
         app.call_from_thread(
-            self._show_loading, f"Reading {escape(ws.workspace_name)}…"
+            self.show_info_loading, f"Reading {escape(ws.workspace_name)}…"
         )
         self._fetch_one_page(seq, status=LoadStatus.LOADING_INITIAL)
 

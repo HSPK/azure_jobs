@@ -113,9 +113,11 @@ async def test_empty(tmp_path: Path) -> None:
         app = AjDashboard(last=10)
         async with app.run_test(size=(120, 30)):
             content = app.query_one("#info-content").content
+            label = str(app.query_one("#info-loading-label").render())
+            haystack = f"{content} {label}"
             # With no workspace, shows a stage message
             assert any(
-                s in content
+                s in haystack
                 for s in (
                     "No matching",
                     "Loading",
