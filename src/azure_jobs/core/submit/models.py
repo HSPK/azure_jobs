@@ -46,8 +46,13 @@ class SubmitRequest:
     image_registry: str | None = None
 
     # ─── Code ─────────────────────────────────────────────────────────────
+    # Local directory backends actually upload (defaults to cwd in
+    # ``build_submit_request``). Always a real filesystem path.
     code_dir: str = "."
     code_ignore: list[str] = field(default_factory=list)
+    # AMLT-only: literal value of the template's ``code.local_dir`` field.
+    # May contain amlt path tokens like ``$CONFIG_DIR``; not resolved here.
+    amlt_code_dir: str = "."
 
     # ─── Commands ───────────────────────────────────────────────────
     setup_commands: list[str] = field(default_factory=list)
@@ -135,10 +140,10 @@ class SubmitRequest:
             if self.setup_commands:
                 config["environment"]["setup"] = self.setup_commands
 
-        if self.code_dir or self.code_ignore:
+        if self.amlt_code_dir or self.code_ignore:
             config["code"] = {}
-            if self.code_dir != ".":
-                config["code"]["local_dir"] = self.code_dir
+            if self.amlt_code_dir != ".":
+                config["code"]["local_dir"] = self.amlt_code_dir
             if self.code_ignore:
                 config["code"]["ignore"] = self.code_ignore
 

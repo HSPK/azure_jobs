@@ -71,8 +71,9 @@ def build_volcano_config_from_request(request: SubmitRequest) -> VolcanoConfig:
     container_args = request.container_args or {}
     env_vars = dict(request.env_vars)
 
-    # ``request.code_dir`` is amlt-only; volcano always uploads cwd.
-    code_dir = os.getcwd()
+    # Backends always upload from ``request.code_dir`` (resolved to cwd
+    # by ``build_submit_request`` unless the caller overrides it).
+    code_dir = request.code_dir or os.getcwd()
 
     pvc_name = env_vars.get("AMLT_PERSISTENT_VOLUME_NAME", "")
     pvc_mount_dir = env_vars.get("AMLT_PERSISTENT_VOLUME_MOUNT_DIR", "")

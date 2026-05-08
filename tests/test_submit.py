@@ -138,7 +138,7 @@ class TestBuildRequestFromConfig:
         }
         ws = AJWorkspace(subscription_id="s", resource_group="r", workspace_name="w")
         r = _make_request(conf, name="j", workspace=ws)
-        assert r.code_dir == "$CONFIG_DIR/../../"
+        assert r.amlt_code_dir == "$CONFIG_DIR/../../"
 
     def test_env_vars_from_submit_args(self):
         conf = {
@@ -187,7 +187,7 @@ class TestRenderAmltConfig:
             description="run $HOME",
             command=["echo $HOME"],
             env_vars={"PATH_APPEND": "$HOME/.local/bin"},
-            code_dir="$CONFIG_DIR/project",
+            amlt_code_dir="$CONFIG_DIR/project",
         )
 
         conf = render_amlt_config(request)

@@ -151,7 +151,7 @@ def submit(
 
         extra_files: dict[str, str | bytes] = {RUNNER_FILENAME: runner_script}
 
-        code_root = os.getcwd()
+        code_root = request.code_dir or os.getcwd()
 
         # Use code_dir/.ssh if present, else fall back to ~/.ssh.
         extra_files.update(_collect_ssh_files(code_root))

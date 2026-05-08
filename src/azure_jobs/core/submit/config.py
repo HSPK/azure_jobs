@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import asdict
 from datetime import datetime, timezone
@@ -66,10 +67,10 @@ def render_amlt_config(request: SubmitRequest) -> dict[str, Any]:
         if request.setup_commands:
             output_conf["environment"]["setup"] = request.setup_commands
 
-    if request.code_dir or request.code_ignore:
+    if request.amlt_code_dir or request.code_ignore:
         output_conf["code"] = {}
-        if request.code_dir != ".":
-            output_conf["code"]["local_dir"] = request.code_dir
+        if request.amlt_code_dir != ".":
+            output_conf["code"]["local_dir"] = request.amlt_code_dir
         if request.code_ignore:
             output_conf["code"]["ignore"] = request.code_ignore
 
@@ -93,6 +94,7 @@ def build_submit_request(
     nodes: int,
     processes: int = 1,
     processes_per_node: int = 1,
+    code_dir: str | None = None,
 ) -> SubmitRequest:
     """Build a SubmitRequest from a template + submission parameters.
 
@@ -184,12 +186,15 @@ def build_submit_request(
     cmd_list.append(cmd)
     command_list = cmd_list
 
-    # Keep AMLT path tokens (e.g. $CONFIG_DIR) intact.
-    code_dir = code.local_dir
+    # ``amlt_code_dir`` keeps the template's literal value (may contain
+    # ``$CONFIG_DIR`` etc.) for amlt rendering. Backends that actually
+    # walk files use ``code_dir`` — defaulting to cwd.
+    amlt_code_dir = code.local_dir
+    resolved_code_dir = code_dir if code_dir is not None else os.getcwd()
 
     # Template ``code.ignore`` then ``.codeignore`` / ``.amltignore``,
     # de-duplicated while preserving order.
-    file_ignore = read_ignore_file(code_dir)
+    file_ignore = read_ignore_file(resolved_code_dir)
     seen: set[str] = set()
     code_ignore: list[str] = []
     for pat in list(code.ignore) + file_ignore:
@@ -237,7 +242,8 @@ def build_submit_request(
         processes_per_node=processes_per_node,
         image=env.image,
         image_registry=env.registry or None,
-        code_dir=code_dir,
+        code_dir=resolved_code_dir,
+        amlt_code_dir=amlt_code_dir,
         code_ignore=code_ignore,
         setup_commands=env.setup,
         command=command_list,
