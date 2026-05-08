@@ -1,8 +1,8 @@
 # Azure Jobs
 
-A fast, lightweight CLI for submitting and managing Azure ML jobs through pure REST APIs — no `azure-ai-ml` SDK and no `amlt` runtime required.
+A fast, lightweight CLI for submitting Azure ML jobs through pure REST APIs — no `azure-ai-ml` SDK and no `amlt` runtime required.
 
-`aj` adds a template inheritance layer on top of three submission backends:
+`aj run` adds a template inheritance layer on top of three submission backends:
 
 - **native** — direct Azure ML REST (default for AML / Singularity).
 - **amlt** — delegates to the `amlt` CLI for compatibility.
@@ -14,7 +14,7 @@ A fast, lightweight CLI for submitting and managing Azure ML jobs through pure R
 pipx install azure_jobs
 ```
 
-Requires `az login`. For the volcano backend you also need `kubectl` configured against your cluster.
+Requires `az login`. The volcano backend additionally needs `kubectl` configured against your cluster.
 
 ## Quickstart
 
@@ -27,24 +27,15 @@ aj run -t gpu train.py           # submit using the "gpu" template
 
 `.py` scripts run via `uv run`, `.sh` via `bash`. Drop a `.codeignore` (or `.amltignore`) at the project root to exclude paths from the upload.
 
-### amlt compatibility
-
-```bash
-aj init amlt                     # scaffold amlt config
-aj run --amlt -t gpu train.py    # submit via amlt instead of REST
-```
-
-## Common commands
-
-### Submit
+## `aj run`
 
 ```bash
 aj run -t gpu train.py           # submit via REST
 aj run train.py                  # reuse last template
-aj run -d train.py               # dry run — print the config, don't submit
+aj run -t gpu -n 4 -p 8 train.py # 4 nodes × 8 GPUs/node
+aj run -d train.py               # dry run — print config, don't submit
 aj run -L train.py               # run locally
-aj run -n 4 -p 8 train.py        # 4 nodes × 8 GPUs/node
-aj code stats -t gpu             # what would be uploaded? (count, size, hash)
+aj run --amlt -t gpu train.py    # submit via amlt instead
 ```
 
 | Flag | Purpose |
@@ -58,70 +49,54 @@ aj code stats -t gpu             # what would be uploaded? (count, size, hash)
 | `-L` | Run locally |
 | `--amlt` | Submit via amlt |
 
-### Manage jobs
+Positional args after the script are forwarded verbatim to your command.
 
-```bash
-aj job list                      # recent cloud jobs
-aj job list -s Running           # filter by status
-aj job show <id>                 # detail panel
-aj job cancel <id>
-aj job logs <id>                 # download + display logs
-aj job stats                     # GPU-hours, success rate, by experiment/compute/user
-aj list                          # local submission history (record.jsonl)
-aj dash                          # interactive TUI
-```
+### How it works
 
-### Templates
-
-```bash
-aj template list                 # available templates
-aj template show <name>          # resolved config (after inheritance)
-aj template validate             # check all templates
-aj template diff                 # local edits vs upstream
-aj template pull <repo>          # clone a template repo
-aj template push -m "msg"        # commit + push
-```
-
-### Workspace, quota, SKUs
-
-```bash
-aj ws list / set                 # workspaces in subscription
-aj auth status / login           # credential health, az login
-aj quota list                    # Singularity VC quota
-aj quota list --aml              # AML cluster quota
-aj sku list                      # SKUs by VC
-aj sku check -t <template>       # pre-flight: SKU/quota/compute
-aj env list / show <name>        # registered environments
-aj ds list / show <name>         # datastores
-aj image list                    # Singularity curated images
-aj exp list                      # experiments (aggregated from jobs)
-```
-
-### Config
-
-```bash
-aj config show
-aj config timezone Asia/Shanghai
-aj config experiment <name>
-```
-
-## How submission works
-
-1. Resolve the template, walk the `base` inheritance chain, merge configs.
+1. Resolve the template, walk the `base` chain, merge configs.
 2. Apply CLI overrides (`-n` / `-p` / `--ppn`).
 3. Build a normalized `SubmitRequest`.
-4. Backend dispatch:
-   - **native** — register environment (SHA-deduped) → upload code (content-addressed) → `PUT /jobs/{name}` via ARM REST.
+4. Dispatch by backend:
+   - **native** — register environment (SHA-deduped) → upload code (content-addressed) → `PUT /jobs/{name}`.
    - **volcano** — render Volcano Job YAML → upload code to a PVC via `kubectl exec` + tar → `kubectl create`.
    - **amlt** — write a submission YAML and shell out to `amlt run`.
 5. Append a `SubmitRecord` to `record.jsonl` and print the portal URL.
 
-Code uploads are content-addressed: identical (template + command + code) yields the same hash, so re-runs reuse the prior asset and skip the upload entirely.
+Code uploads are content-addressed: identical (template + command + code) → identical hash → re-runs reuse the prior asset.
+
+## `AJ_*` environment variables
+
+Exported into every job. Read them in your training script.
+
+| Variable | Meaning |
+|----------|---------|
+| `AJ_NAME` | Job display name |
+| `AJ_ID` | Submission ID (matches `record.jsonl`) |
+| `AJ_TEMPLATE` | Template name used |
+| `AJ_NODES` | Number of nodes |
+| `AJ_GPUS_PER_NODE` | `-p` value |
+| `AJ_PROCESSES` | `AJ_NODES × AJ_GPUS_PER_NODE` |
+| `AJ_PROCESSES_PER_NODE` | `--ppn` value |
+| `AJ_SUBMIT_TIMESTAMP_UTC` | Submission timestamp |
+
+Example — `torchrun` with whatever the user requested:
+
+```bash
+torchrun \
+  --nnodes=$AJ_NODES \
+  --nproc_per_node=$AJ_GPUS_PER_NODE \
+  --node_rank=$RANK \
+  --master_addr=$MASTER_ADDR \
+  train.py
+```
+
+These variables flow via the job's `environmentVariables` (native), the container `env` list (volcano), or `submit_args.env` (amlt). They are **not** baked into the runner script body, so the uploaded code asset stays content-addressable across submissions.
 
 ## Documentation
 
 | Document | Contents |
 |----------|----------|
+| [Commands](docs/commands.md) | `aj job`, `aj template`, `aj quota`, `aj sku`, `aj dash`, ... |
 | [Architecture](docs/architecture.md) | Module layout, submission flow, backends |
 | [Configuration](docs/configuration.md) | Templates, inheritance, merge rules, SKU formats |
 | [REST API](docs/rest-api.md) | REST client design, endpoints, job body shape |
