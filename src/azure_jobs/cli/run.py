@@ -9,7 +9,6 @@ import yaml
 
 from azure_jobs.cli import main
 from azure_jobs.core import const
-from azure_jobs.core.conf import read_conf
 from azure_jobs.core.config import (
     AJWorkspace,
     ensure_experiment,
@@ -113,10 +112,7 @@ def run(
             f"Template {template} does not exist at {template_fp}"
         )
 
-    tmpl_dict = read_conf(template_fp)
-    if not tmpl_dict:
-        raise click.ClickException(f"Empty configuration file: {template_fp}")
-    tmpl = Template.from_dict(tmpl_dict)
+    tmpl = Template.from_conf_path(template_fp)
     if not tmpl.jobs:
         raise click.ClickException("Template missing 'jobs' section")
 

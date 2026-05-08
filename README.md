@@ -29,10 +29,9 @@ aj run -t gpu train.py           # submit using the "gpu" template
 
 ## Templates
 
-Templates live under `.azure_jobs/template/` as YAML files. There's no `aj template create` — bring them in one of three ways:
-
+Templates live under `.azure_jobs/template/` as YAML files.
 1. **`aj init`** — scaffolds `.azure_jobs/` and (optionally) pulls a starter template repo.
-2. **`aj template pull <user>/<repo>`** — clone a shared template repo into `.azure_jobs/`.
+2. **`aj pull <user>/<repo>`** — clone a shared template repo into `.azure_jobs/`.
 3. **Hand-author** — drop a YAML file into `.azure_jobs/template/`.
 
 Minimal leaf template (`.azure_jobs/template/gpu.yaml`):
