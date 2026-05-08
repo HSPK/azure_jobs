@@ -136,9 +136,22 @@ def build_volcano_job(cfg: VolcanoConfig) -> dict[str, Any]:
     )
 
     # Build the shell script that each node runs
-    script_lines = []
+    script_lines: list[str] = []
     if code_path:
-        script_lines.append(f"cd {code_path}")
+        # Materialize the (shared, immutable) code asset into a private,
+        # pod-local working directory backed by an ``emptyDir`` volume.
+        # Keeps runtime writes off the PVC and matches AzureML's
+        # ``/mnt/azureml/.../wd`` model.
+        run_wd = f"{C.WORKDIR_MOUNT_PATH}/{cfg.name}/wd"
+        script_lines.extend(
+            [
+                f'AJ_WORKDIR="{run_wd}"',
+                'mkdir -p "$AJ_WORKDIR"',
+                f'cp -a {code_path}/. "$AJ_WORKDIR"/',
+                'cd "$AJ_WORKDIR"',
+                "export AJ_WORKDIR",
+            ]
+        )
     if cfg.setup_commands:
         script_lines.extend(cfg.setup_commands)
     script_lines.extend(cfg.command)
@@ -190,9 +203,14 @@ def build_volcano_job(cfg: VolcanoConfig) -> dict[str, Any]:
             "name": C.SHM_VOLUME_NAME,
             "emptyDir": {"medium": "Memory", "sizeLimit": cfg.shm_size},
         },
+        {
+            "name": C.WORKDIR_VOLUME_NAME,
+            "emptyDir": {"sizeLimit": C.WORKDIR_VOLUME_SIZE},
+        },
     ]
     volume_mounts: list[dict[str, Any]] = [
         {"name": C.SHM_VOLUME_NAME, "mountPath": C.SHM_MOUNT_PATH},
+        {"name": C.WORKDIR_VOLUME_NAME, "mountPath": C.WORKDIR_MOUNT_PATH},
     ]
 
     # Add PVC mount if configured

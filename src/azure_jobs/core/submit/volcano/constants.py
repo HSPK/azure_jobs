@@ -59,6 +59,15 @@ DEFAULT_SHM_SIZE = "100Gi"
 # Layout on the PVC: ``<pvc_mount_dir>/<CODE_UPLOAD_PREFIX>/<job_name>/``
 CODE_UPLOAD_PREFIX = "aj_code"
 
+# At runtime each pod copies the uploaded code asset into a private,
+# pod-local working directory backed by an ``emptyDir`` volume mounted
+# at ``WORKDIR_MOUNT_PATH``. The actual cwd is
+# ``<WORKDIR_MOUNT_PATH>/<job_name>/wd``. This mirrors AzureML's
+# ``/mnt/azureml/.../wd`` pattern and keeps writes off the PVC.
+WORKDIR_VOLUME_NAME = "aj-workdir"
+WORKDIR_MOUNT_PATH = "/mnt/aj-workdir"
+WORKDIR_VOLUME_SIZE = "50Gi"
+
 # Uploader pod
 UPLOAD_POD_IMAGE = "busybox:latest"
 UPLOAD_POD_NAME_PREFIX = "aj-upload-"
