@@ -1064,7 +1064,8 @@ class TestRunErrorPaths:
         runner = CliRunner()
         result = runner.invoke(main, ["run", "-d", "echo"])
         assert result.exit_code != 0
-        assert "Empty configuration" in result.output
+        # Empty YAML resolves to a Template with no jobs.
+        assert "jobs" in result.output
 
     def test_submit_failure_surfaces_error(self, aj_env):
         """When submission fails, error should be shown to user."""
