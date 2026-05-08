@@ -12,7 +12,7 @@ if TYPE_CHECKING:
 
 from ...errors import extract_json_error as _extract_error_message
 from ..models import SubmitEvent, SubmitRequest, SubmitResult
-from .command import _RUNNER_FILENAME, _generate_runner_script
+from .command import RUNNER_FILENAME, generate_runner_script
 from .compute import (
     _build_distribution,
     _build_identity,
@@ -159,9 +159,9 @@ def submit(
             identity_client_id = _resolve_sing_identity(request, client) or ""
 
         # Generate runner script and inject into code upload
-        runner_script = _generate_runner_script(request, identity_client_id)
+        runner_script = generate_runner_script(request, identity_client_id)
 
-        extra_files: dict[str, str | bytes] = {_RUNNER_FILENAME: runner_script}
+        extra_files: dict[str, str | bytes] = {RUNNER_FILENAME: runner_script}
 
         code_root = os.getcwd()
 
@@ -176,7 +176,7 @@ def submit(
             on_progress=_on_upload,
         )
 
-        command_str = f"bash {_RUNNER_FILENAME}"
+        command_str = f"bash {RUNNER_FILENAME}"
 
         tags = _build_tags(request.tags)
         properties = dict(poc_props) if poc_props else {}

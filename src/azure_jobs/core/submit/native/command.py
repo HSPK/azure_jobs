@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from ..models import SubmitRequest
 
-_RUNNER_FILENAME = "aj_runner.sh"
+RUNNER_FILENAME = "aj_runner.sh"
 
 
-def _generate_runner_script(
+def generate_runner_script(
     request: SubmitRequest,
     identity_client_id: str = "",
 ) -> str:
