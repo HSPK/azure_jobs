@@ -43,7 +43,7 @@ def _build_storage_mounts(
         )
 
         # Short-form URI — the long ARM-style azureml:// is rejected by Singularity
-        uri = f"azureml://datastores/{ds_name}/paths/{request.name}/"
+        uri = f"azureml://datastores/{ds_name}/paths/"
 
         outputs[mount_name] = {
             "jobOutputType": "uri_folder",
