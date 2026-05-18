@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import logging
+
+from rich.markup import escape
 from textual.widgets import OptionList, Static
 from textual.worker import get_current_worker
 
@@ -13,7 +16,10 @@ from azure_jobs.core.config import (
 )
 from azure_jobs.tui.components import PickerModal
 from azure_jobs.tui.controllers.base import Controller
+from azure_jobs.tui.helpers import safe_close
 from azure_jobs.tui.state import WorkspaceState
+
+log = logging.getLogger(__name__)
 
 
 class WorkspaceController(Controller[WorkspaceState]):
@@ -126,7 +132,11 @@ class WorkspaceController(Controller[WorkspaceState]):
             resource_group=ws["resource_group"],
             workspace_name=ws["name"],
         )
+        old_client = st.rest_client
         st.rest_client = None
+        # close() shuts down a requests.Session; no network I/O, safe on
+        # the UI thread.
+        safe_close(old_client)
 
         # Reset jobs state for the new workspace and start initial fetch.
         app.jobs.reset()
@@ -136,6 +146,4 @@ class WorkspaceController(Controller[WorkspaceState]):
         app.jobs.fetcher.show_info_loading("Loading jobs…")
         app.jobs.fetcher.init_fetch()
         app.query_one("#job-list", OptionList).focus()
-        from rich.markup import escape
-
         app.notify(f"Switched to {escape(ws['name'])}")

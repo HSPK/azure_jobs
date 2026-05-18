@@ -90,6 +90,16 @@ def safe_set(widget: "Widget | None", markup: str) -> None:
         log.debug("safe_set update failed: %s", exc, exc_info=True)
 
 
+def safe_close(obj: Any, method: str = "close") -> None:
+    """Call obj.<method>() if it exists, silently ignoring errors."""
+    fn = getattr(obj, method, None)
+    if callable(fn):
+        try:
+            fn()
+        except Exception:
+            pass
+
+
 def safe_notify(
     app: "App", markup: str, *, severity: str = "information", timeout: float = 5
 ) -> None:

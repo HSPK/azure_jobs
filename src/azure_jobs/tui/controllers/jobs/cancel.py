@@ -9,7 +9,8 @@ from textual.worker import get_current_worker
 
 from azure_jobs.tui.components import ConfirmCancel
 from azure_jobs.tui.controllers.base import Controller
-from azure_jobs.tui.helpers import TERMINAL_STATUSES, kv
+from azure_jobs.tui.controllers.jobs._shared import short_error
+from azure_jobs.tui.helpers import TERMINAL_STATUSES, kv, safe_notify
 from azure_jobs.tui.state import JobsState
 
 
@@ -31,35 +32,45 @@ class JobsCancel(Controller[JobsState]):
             job = st.filtered[st.selected_idx]
             if self.app.widgets.info:
                 self.app.widgets.info.update(kv([("", "")], hint="Cancelling…"))
+            seq = self.state.session_seq
             self.app.run_worker(
-                lambda: self._do_cancel(job),
+                lambda: self._do_cancel(job, seq),
                 thread=True,
                 exclusive=True,
                 group="cancel",
             )
 
-    def _do_cancel(self, job: dict[str, Any]) -> None:
+    def _do_cancel(self, job: dict[str, Any], seq: int) -> None:
         app = self.app
         rest = app.workspace.state.rest_client
+        safe_display = escape(job.get("display_name") or job.get("name", "?"))
+        if self.state.session_seq != seq:
+            return
         if rest is None:
             app.call_from_thread(
-                app.notify, "Workspace not configured", severity="warning"
+                safe_notify, app, "Workspace not configured", severity="warning"
             )
             return
+        worker = get_current_worker()
         name = job.get("name", "")
-        display = job.get("display_name") or name
         try:
             cur = rest.jobs.get(name)
-            st = cur.get("status", "")
-            if st in TERMINAL_STATUSES:
-                app.call_from_thread(app.notify, f"{escape(display)}: already {st}")
+            status = cur.get("status", "")
+            if status in TERMINAL_STATUSES:
+                if not worker.is_cancelled and self.state.session_seq == seq:
+                    app.call_from_thread(
+                        safe_notify, app, f"{safe_display}: already {escape(status)}"
+                    )
                 return
             rest.jobs.cancel(name)
             final_job = rest.jobs.get(name)
-            final = final_job.get("status", "?")
+            final = escape(final_job.get("status", "?"))
         except Exception as exc:
-            app.call_from_thread(app.notify, escape(str(exc)[:80]), severity="error")
+            if not worker.is_cancelled and self.state.session_seq == seq:
+                app.call_from_thread(
+                    safe_notify, app, short_error(exc, limit=80), severity="error"
+                )
             return
-        if not get_current_worker().is_cancelled:
-            app.call_from_thread(app.notify, f"{escape(display)}: {final}")
+        if not worker.is_cancelled and self.state.session_seq == seq:
+            app.call_from_thread(safe_notify, app, f"{safe_display}: {final}")
             app.call_from_thread(app.jobs.fetcher.fetch_single, job)

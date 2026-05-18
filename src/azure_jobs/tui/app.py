@@ -26,7 +26,7 @@ from azure_jobs.tui.controllers import (
     LogsController,
     WorkspaceController,
 )
-from azure_jobs.tui.helpers import get_page_size
+from azure_jobs.tui.helpers import get_page_size, safe_close
 from azure_jobs.tui.state import JobsState, LogsState, Widgets, WorkspaceState
 
 log = logging.getLogger(__name__)
@@ -53,7 +53,7 @@ class AjDashboard(App):
         Binding("F", "clear_filters", "Clear", show=False),
         Binding("slash", "search", "Search"),
         Binding("o", "pick_log_file", "Files", show=False),
-        Binding("escape", "show_help", "Help"),
+        Binding("escape", "escape", "Help"),
         Binding("right", "next_page", "Next"),
         Binding("left", "prev_page", "Prev"),
         # Vim-style scrolling for the info pane (active in Info view only;
@@ -134,25 +134,26 @@ class AjDashboard(App):
     # ---- cross-cutting actions ---------------------------------------------
 
     def action_quit(self) -> None:
+        safe_close(self.logs.stream, "stop_streaming")
+        rest = self.workspace.state.rest_client
+        self.workspace.state.rest_client = None
+        safe_close(rest)
         self.workers.cancel_all()
         self.exit()
 
-    def action_show_help(self) -> None:
-        search_bar = self.query_one("#search-bar")
-        if not search_bar.has_class("hidden"):
-            search_bar.add_class("hidden")
-            inp = self.query_one("#search-input", Input)
-            if inp.value:
-                inp.value = ""
-                self.jobs.state.search_query = ""
-                self.jobs.view.refresh()
-            if self.widgets.jobs:
-                self.widgets.jobs.focus()
+    def action_escape(self) -> None:
+        # Esc first closes the search bar (and clears the query) if it's
+        # open; otherwise it opens the help screen.
+        if self.jobs.filters.close_search_bar(clear=True):
+            self.jobs.view.refresh()
             return
         self.push_screen(HelpScreen())
 
     def action_dismiss(self) -> None:
-        self.action_show_help()
+        # Textual's modal-dismiss convention. Some screen stacks route
+        # Esc here instead of to the named binding; keep parity with
+        # ``action_escape`` so the behaviour is identical either way.
+        self.action_escape()
 
     # ---- action delegations -------------------------------------------------
 

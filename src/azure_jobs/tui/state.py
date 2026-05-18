@@ -104,20 +104,12 @@ class JobsState:
 
         Derived from :attr:`load_status` so there's exactly one source of
         truth (previously a separate boolean had to be kept in sync).
-        Settable for backward-compat — silently ignored.
         """
         return self.load_status in (
             LoadStatus.LOADING_INITIAL,
             LoadStatus.LOADING_PAGE,
             LoadStatus.REFRESHING,
         )
-
-    @fetching.setter
-    def fetching(self, _value: bool) -> None:  # back-compat no-op
-        # Intentionally a no-op: callers should mutate ``load_status``.
-        # The setter only exists so legacy ``st.fetching = False`` lines
-        # don't raise AttributeError during the gradual migration.
-        return
 
 
 @dataclass
@@ -158,7 +150,7 @@ class LogsState:
     current_file: str = ""
     line_count: int = 0
     streaming: bool = False
-    # True between ``_begin_stream`` and the first byte arriving from the
+    # True between ``begin_stream`` and the first byte arriving from the
     # streamer. Drives a "● loading…" header badge so the user knows the
     # press of ``l`` was registered while the network resolves.
     loading: bool = False
@@ -174,8 +166,11 @@ class LogsState:
     head_offset: int = 0
     total_size: int = 0
     backfilling: bool = False
-    # Per-job cache of file-selection + recent lines. Survives job
-    # switching so the user returns to where they left off.
+    # Per-job cache. ``current_file`` survives job switches so the user
+    # returns to the same file selection; ``buffer`` is live during a
+    # session (powering ``Ctrl+S`` save and backfill prepend) but is
+    # cleared by :meth:`LogsView.begin_stream` on every (re)start of the
+    # tail. Dict insertion order doubles as an LRU (CPython 3.7+).
     snapshots: dict[str, JobLogSnapshot] = field(default_factory=dict)
 
 

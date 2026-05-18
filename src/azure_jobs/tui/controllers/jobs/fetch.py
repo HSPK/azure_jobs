@@ -33,7 +33,7 @@ Three pieces of machinery make this safe under concurrency:
 from __future__ import annotations
 
 import logging
-from typing import Any, Callable
+from typing import Any
 
 from rich.markup import escape
 from textual.worker import get_current_worker
@@ -93,19 +93,13 @@ class JobsFetcher(Controller[JobsState]):
             self.app.workspace.state.rest_client = create_rest_client(ws)
             return True
         except Exception as exc:
-            safe = escape(f"{exc!s:.80}")
-            self.notify(f"Auth failed: {safe}", severity="error")
-            self._show_loading(f"[red]Auth failed:[/red] {safe}")
-            self._set_status(LoadStatus.ERROR, error=safe)
+            err = short_error(exc, limit=80)  # markup-safe
+            self.notify(f"Auth failed: {err}", severity="error")
+            self._show_loading(f"[red]Auth failed:[/red] {err}")
+            self._set_status(LoadStatus.ERROR, error=err)
             return False
 
     # ---- worker plumbing ----------------------------------------------------
-
-    def _spawn(
-        self, fn: Callable[[], None], *, group: str, exclusive: bool = True
-    ) -> None:
-        """Backward-compat wrapper around :meth:`Controller.spawn`."""
-        self.spawn(fn, group=group, exclusive=exclusive)
 
     @staticmethod
     def _is_active(worker: Any, st: JobsState, seq: int) -> bool:
@@ -123,7 +117,7 @@ class JobsFetcher(Controller[JobsState]):
         self._set_status(LoadStatus.LOADING_INITIAL)
         # Group `fetch_init` is exclusive within itself but does not block
         # `fetch_page` workers — ``session_seq`` already protects state.
-        self._spawn(lambda: self._do_init_fetch(seq), group="fetch_init")
+        self.spawn(lambda: self._do_init_fetch(seq), group="fetch_init")
 
     def _do_init_fetch(self, seq: int) -> None:
         app = self.app
@@ -160,7 +154,7 @@ class JobsFetcher(Controller[JobsState]):
         self._set_status(LoadStatus.LOADING_PAGE)
         # Separate group so a manual right-arrow press never cancels an
         # in-flight initial load.
-        self._spawn(
+        self.spawn(
             lambda: self._fetch_one_page(seq, status=LoadStatus.LOADING_PAGE),
             group="fetch_page",
         )
@@ -211,12 +205,14 @@ class JobsFetcher(Controller[JobsState]):
 
     # ---- batch merge --------------------------------------------------------
 
-    def merge_batch(self, batch: list[dict[str, Any]], _legacy: Any = None) -> None:
+    def merge_batch(self, batch: list[dict[str, Any]]) -> None:
         """Append *batch* to ``all_jobs`` (dedup by name) and refresh view.
 
-        The second positional arg is accepted only for backward
-        compatibility with the previous ``(batch, is_first)`` signature
-        used by tests; it is ignored.
+        Internal: callers are expected to have validated ``session_seq``
+        already. Direct invocations from tests bypass that check (they
+        don't bump the seq), which is fine; production callers go
+        through :meth:`_on_page_fetched` / :meth:`_on_refresh_done`,
+        which gate on seq.
         """
         st = self.state
         for j in batch:
@@ -256,7 +252,7 @@ class JobsFetcher(Controller[JobsState]):
 
     def fetch_single(self, job: dict[str, Any]) -> None:
         seq = self.state.session_seq
-        self._spawn(
+        self.spawn(
             lambda: self._do_fetch_single(job, seq),
             group="single",
             exclusive=False,
@@ -300,7 +296,7 @@ class JobsFetcher(Controller[JobsState]):
         seq = self.state.session_seq
         self._set_status(LoadStatus.REFRESHING)
         safe_notify(self.app, "Refreshing…", timeout=2)
-        self._spawn(lambda: self._do_incremental_refresh(seq), group="refresh")
+        self.spawn(lambda: self._do_incremental_refresh(seq), group="refresh")
 
     def _do_incremental_refresh(self, seq: int) -> None:
         app = self.app

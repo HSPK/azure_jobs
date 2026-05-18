@@ -39,9 +39,16 @@ class JobsView(Controller[JobsState]):
             if ef and j.get("experiment") != ef:
                 continue
             if sq:
+                tags = j.get("tags") or ""
+                if isinstance(tags, dict):
+                    tags_text = " ".join(f"{k}={v}" for k, v in tags.items())
+                elif isinstance(tags, (list, tuple)):
+                    tags_text = " ".join(str(t) for t in tags)
+                else:
+                    tags_text = str(tags)
                 haystack = (
                     f"{j.get('display_name', '')} {j.get('name', '')} "
-                    f"{j.get('experiment', '')} {j.get('tags', '')}"
+                    f"{j.get('experiment', '')} {tags_text}"
                 ).lower()
                 if sq not in haystack:
                     continue
@@ -103,9 +110,9 @@ class JobsView(Controller[JobsState]):
                     break
 
         if st.filtered:
+            st.selected_idx = target_idx
             if ol is not None:
                 ol.highlighted = target_idx
-            st.selected_idx = target_idx
             self.show_info(st.filtered[target_idx])
             self.app.jobs.fetcher.hide_info_loading()
         else:
@@ -205,13 +212,14 @@ class JobsView(Controller[JobsState]):
         if event.option_list.id != "job-list":
             return
         idx = event.option_index
-        if 0 <= idx < len(st.filtered):
-            st.selected_idx = idx
-            job = st.filtered[idx]
-            self.show_info(job)
-            self.app.logs.on_job_changed(job.get("name", ""))
-            if job.get("status") == "Failed" and not job.get("error"):
-                self.app.jobs.fetcher.fetch_single(job)
+        if idx == st.selected_idx or not (0 <= idx < len(st.filtered)):
+            return
+        st.selected_idx = idx
+        job = st.filtered[idx]
+        self.show_info(job)
+        self.app.logs.on_job_changed(job.get("name", ""))
+        if job.get("status") == "Failed" and not job.get("error"):
+            self.app.jobs.fetcher.fetch_single(job)
 
     # ---- pagination ---------------------------------------------------------
 

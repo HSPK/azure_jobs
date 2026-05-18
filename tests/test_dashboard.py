@@ -176,7 +176,7 @@ async def test_escape_opens_help(_dash) -> None:
     async with _dash.run_test(size=(120, 30)) as pilot:
         await _load_jobs(_dash, pilot)
         await pilot.pause()
-        _dash.action_show_help()
+        _dash.action_escape()
         await pilot.pause()
         from azure_jobs.tui.components import HelpScreen
 
@@ -296,7 +296,7 @@ async def test_page_loaded_appends(_dash) -> None:
         _dash.jobs.fetcher.load([dict(_JOBS[0])])
         assert len(_dash.jobs.state.all_jobs) == 1
         # Simulate a new batch arriving — merges into current page
-        _dash.jobs.fetcher.merge_batch([dict(_JOBS[1])], False)
+        _dash.jobs.fetcher.merge_batch([dict(_JOBS[1])])
         assert len(_dash.jobs.state.all_jobs) == 2
         assert len(_dash.jobs.state.pages) == 1  # merged into same page
         assert _dash.jobs.state.current_page == 0
@@ -585,7 +585,7 @@ async def test_log_header_shows_scroll_state(_dash) -> None:
         text = str(rp.border_subtitle)
         assert "▶" in text  # auto-scroll ON
         _dash.logs.state.auto_scroll = False
-        _dash.logs._update_header()
+        _dash.logs.update_header()
         await pilot.pause()
         text = str(rp.border_subtitle)
         assert "⏸" in text  # auto-scroll OFF

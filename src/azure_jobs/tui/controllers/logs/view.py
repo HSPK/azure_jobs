@@ -12,7 +12,7 @@ from azure_jobs.tui.state import LogsState
 class LogsView(Controller[LogsState]):
     """Owns the right-pane Info/Logs toggle, header, and log file picker."""
 
-    def _set_loading_overlay(self, on: bool) -> None:
+    def set_loading_overlay(self, on: bool) -> None:
         """Show/hide the centered spinner overlaid on the log pane."""
         try:
             ind = self.app.query_one("#log-loading")
@@ -88,18 +88,21 @@ class LogsView(Controller[LogsState]):
         name = job.get("name", "")
 
         # Same job: just flip view, preserve buffer + streaming.
+        # We do NOT auto-resume after a manual ``L`` stop here — the user
+        # explicitly stopped streaming, so respect that on plain view
+        # switches. ``toggle_stream`` is the (only) path that re-starts.
         if name == st.job:
             self.switch_to_view()
             if not st.streaming and st.line_count == 0:
-                self._begin_stream(job, name)
+                self.begin_stream(job, name)
             return
 
         # Different job: capture outgoing, load incoming snapshot.
         self.app.logs.switch_to_job(name)
         self.switch_to_view()
-        self._begin_stream(job, name)
+        self.begin_stream(job, name)
 
-    def _begin_stream(self, job: dict, name: str) -> None:
+    def begin_stream(self, job: dict, name: str) -> None:
         """Reset buffer + kick off the stream for *name*."""
         app = self.app
         st = self.state
@@ -109,7 +112,7 @@ class LogsView(Controller[LogsState]):
         st.line_count = 0
         if app.widgets.log:
             app.widgets.log.clear()
-        self._set_loading_overlay(False)
+        self.set_loading_overlay(False)
         status = job.get("status", "")
         if status in NO_LOG_STATUSES:
             icon, sty = icon_style(status)
@@ -123,7 +126,7 @@ class LogsView(Controller[LogsState]):
         # Show a centered spinner while the worker resolves the file list,
         # signed URL, and initial tail bytes (typically 0.5–2s).
         st.loading = True
-        self._set_loading_overlay(True)
+        self.set_loading_overlay(True)
         self.update_header()
         app.logs.stream.start_streaming(name, st.current_file)
 
@@ -183,13 +186,19 @@ class LogsView(Controller[LogsState]):
             app.logs.stream.stop_streaming()
         st.current_file = chosen
         st.line_count = 0
+        # Reset the byte window — the new file has its own size/offsets, and
+        # any LogViewer.backfill() that fires before _render_initial repopulates
+        # them would otherwise read from the previous file's offsets.
+        st.head_offset = 0
+        st.total_size = 0
         snap = app.logs.buffer.snapshot_for(st.job)
         snap.current_file = chosen
         snap.buffer.clear()
         snap.line_count = 0
         if app.widgets.log:
             app.widgets.log.clear()
-        self._set_loading_overlay(True)
+        self.set_loading_overlay(True)
         st.loading = True
         self.update_header()
         app.logs.stream.start_streaming(st.job, chosen)
+

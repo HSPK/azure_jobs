@@ -44,16 +44,15 @@ class LogsBuffer(Controller[LogsState]):
         """Drop oldest snapshots until under :data:`MAX_SNAPSHOTS`.
 
         Never evicts the currently-active job, even if it would otherwise
-        be the oldest entry.
+        be the oldest entry or the only entry.
         """
         snaps = self.state.snapshots
         active = self.state.job
         while len(snaps) > MAX_SNAPSHOTS:
-            # ``next(iter(snaps))`` is the oldest insertion.
             oldest = next(iter(snaps))
-            if oldest == active and len(snaps) > 1:
-                # Skip the active one by re-inserting it at the end and
-                # picking the next oldest.
+            if oldest == active and len(snaps) == 1:
+                break
+            if oldest == active:
                 snaps[active] = snaps.pop(active)
                 oldest = next(iter(snaps))
             del snaps[oldest]
@@ -77,7 +76,7 @@ class LogsBuffer(Controller[LogsState]):
         if self.app.widgets.log:
             self.app.widgets.log.clear()
             self.app.widgets.log.write(msg)
-        self.app.logs.view._set_loading_overlay(False)
+        self.app.logs.view.set_loading_overlay(False)
         # Any status surface clears the spinner so the header returns to
         # an idle/error state instead of a stale "loading…" badge.
         self.state.loading = False
@@ -225,3 +224,4 @@ class LogsBuffer(Controller[LogsState]):
             self.app.notify(f"Save failed: {escape(f'{exc!s:.80}')}", severity="error")
             return
         self.app.notify(f"Saved → {escape(str(fp))}", timeout=4)
+
