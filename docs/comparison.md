@@ -5,7 +5,7 @@ Both submit Azure ML jobs; different trade-offs.
 | | aj | amlt |
 |---|---|---|
 | Approach | Pure REST | Azure ML SDK |
-| `--help` startup | ~160 ms | ~2 s |
+| `--help` startup | ~150 ms | ~350 ms (top-level), ~600 ms (subcommands) |
 | Backends | native / amlt / volcano | AzureML / Singularity |
 | Config | template inheritance via `base` | YAML with `imports` |
 

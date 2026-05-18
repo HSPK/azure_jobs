@@ -1,0 +1,30 @@
+# yaml-language-server: $schema=file:///home/hangxing/projects/azure_jobs/.vscode/amlt-config.schema.json
+# ^ Update with: amlt schema add <file>  |  VS Code: Run Task > amlt
+# Amulet config file. Docs: https://amulet-docs.azurewebsites.net/config_file.html
+# Fill in all <placeholder> values before submitting.
+description: <describe your experiment>
+
+target:
+  service: aml  # run "amlt target list aml" to see available targets
+  name: <target-name>
+
+# REQUIRED: Docker environment
+environment:
+  image: pytorch/pytorch:2.6.0-cuda12.4-cudnn9-devel
+  setup:
+    - pip install -r requirements.txt  # OPTIONAL
+
+# OPTIONAL: Source code to upload. $CONFIG_DIR = directory of this file.
+code:
+  local_dir: $CONFIG_DIR/src
+
+# REQUIRED: Jobs to run. SKU examples: G1 (1 GPU), G4 (4 GPUs), G8-V100 (8 V100s)
+# Commands run from the uploaded code directory (code.local_dir).
+# Write outputs to $AMLT_OUTPUT_DIR for retrieval with 'amlt results'.
+# Use $$VAR to pass env vars literally ($VAR is interpolated at submission time).
+jobs:
+  - name: <job-name>
+    sku: G1
+    command:
+      - <your-command>  # e.g., python train.py --lr 0.01
+
