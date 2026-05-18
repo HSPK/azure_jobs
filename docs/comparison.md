@@ -5,9 +5,10 @@ Both submit Azure ML jobs; different trade-offs.
 | | aj | amlt |
 |---|---|---|
 | Approach | Pure REST | Azure ML SDK |
-| `--help` startup | ~150 ms | ~350 ms (top-level), ~600 ms (subcommands) |
 | Backends | native / amlt / volcano | AzureML / Singularity |
 | Config | template inheritance via `base` | YAML with `imports` |
+| Python SDK | first-class (`from azure_jobs import …`) | CLI-first |
+| Dashboard | built-in TUI (`aj dash`) | external (portal / `amlt status`) |
 
 ## aj-only
 

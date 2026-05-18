@@ -75,7 +75,7 @@ China cloud auto-detected from `*.cn` URLs (data-plane scope and blob host switc
 ## Design notes
 
 - Pure REST. Only `azure-identity` + `requests`. No `azure-ai-ml`, no `amlt` runtime.
-- Lazy imports → `aj --help` in ~150 ms.
+- Lazy imports and fine-grained progress reporting keep the CLI responsive.
 - Layered templates: `account` / `storage` / `environment` building blocks composed via `base` chains.
 - Content-addressed code + environment artifacts.
 - Append-only `record.jsonl`.
