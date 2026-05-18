@@ -57,7 +57,7 @@ def _init_aj(force: bool) -> None:
         from azure_jobs.cli.pull import _do_pull
 
         cfg = read_config()
-        repo_url = cfg.get("repo_id") or click.prompt(
+        repo_url = cfg.repo_id or click.prompt(
             "Template repo URL",
             type=str,
         )
@@ -67,7 +67,7 @@ def _init_aj(force: bool) -> None:
 
     # 2. Workspace
     ws = get_workspace_config()
-    need_ws = not ws or not ws.get("workspace_name")
+    need_ws = not ws or not ws.workspace_name
     if need_ws or (force and _confirm_step("workspace", force)):
         ws = _setup_workspace()
         if not ws:
@@ -77,17 +77,17 @@ def _init_aj(force: bool) -> None:
             return
     else:
         dim(
-            f"Workspace: {ws['workspace_name']}  "
-            f"(rg={ws['resource_group']}, sub={ws['subscription_id'][:8]}…)"
+            f"Workspace: {ws.workspace_name}  "
+            f"(rg={ws.resource_group}, sub={ws.subscription_id[:8]}…)"
         )
 
     # 3. Experiment
     cfg = read_config()
-    need_exp = not cfg.get("experiment")
+    need_exp = not cfg.experiment
     if need_exp or (force and _confirm_step("experiment", force)):
-        default = cfg.get("experiment") or _default_experiment_name()
+        default = cfg.experiment or _default_experiment_name()
         exp = click.prompt("Experiment name", default=default)
-        cfg["experiment"] = exp
+        cfg.experiment = exp
         write_config(cfg)
         info(f"Experiment set to [bold]{exp}[/bold]")
 
@@ -118,7 +118,7 @@ def init_amlt(ctx: click.Context, force: bool) -> None:
         return
 
     ws = get_workspace_config()
-    if not ws or not ws.get("workspace_name"):
+    if not ws or not ws.workspace_name:
         error("Workspace not configured. Run [bold]aj init[/bold] first.")
         return
 
@@ -165,7 +165,7 @@ def init_amlt(ctx: click.Context, force: bool) -> None:
     dim(f"Storage account: {storage_account}")
 
     # 3. Create amlt project
-    project_name = ws["workspace_name"].lower().replace(" ", "-")
+    project_name = ws.workspace_name.lower().replace(" ", "-")
     info(f"Creating amlt project [bold]{project_name}[/bold]…")
 
     result = subprocess.run(
@@ -190,12 +190,12 @@ def init_amlt(ctx: click.Context, force: bool) -> None:
     success("amlt configured ✓")
 
 
-def _print_amlt_workspace_commands(aj_ws: dict[str, str]) -> None:
+def _print_amlt_workspace_commands(aj_ws: "AJWorkspace") -> None:
     """Print amlt workspace add commands for the user to run manually."""
     from azure_jobs.core.config import detect_workspaces
     from azure_jobs.utils.ui import info
 
-    sub = aj_ws.get("subscription_id", "")
+    sub = aj_ws.subscription_id
     if not sub:
         return
 
@@ -204,8 +204,8 @@ def _print_amlt_workspace_commands(aj_ws: dict[str, str]) -> None:
     if not all_ws:
         all_ws = [
             {
-                "name": aj_ws.get("workspace_name", ""),
-                "resource_group": aj_ws.get("resource_group", ""),
+                "name": aj_ws.workspace_name,
+                "resource_group": aj_ws.resource_group,
             }
         ]
 
@@ -222,9 +222,10 @@ def _print_amlt_workspace_commands(aj_ws: dict[str, str]) -> None:
     click.echo()
 
 
-def _setup_workspace() -> dict[str, str] | None:
+def _setup_workspace() -> "AJWorkspace | None":
     """Interactive workspace setup — detect subscription, list workspaces, pick one."""
     from azure_jobs.core.config import (
+        AJWorkspace,
         detect_subscription,
         detect_workspaces,
         pick_workspace,
@@ -254,14 +255,14 @@ def _setup_workspace() -> dict[str, str] | None:
             "resource_group": click.prompt("Resource group"),
         }
 
-    ws = {
-        "subscription_id": sub["subscription_id"],
-        "resource_group": picked["resource_group"],
-        "workspace_name": picked["name"],
-    }
+    ws = AJWorkspace(
+        subscription_id=sub["subscription_id"],
+        resource_group=picked["resource_group"],
+        workspace_name=picked["name"],
+    )
 
     cfg = read_config()
-    cfg["workspace"] = ws
+    cfg.workspace = ws
     write_config(cfg)
     return ws
 
