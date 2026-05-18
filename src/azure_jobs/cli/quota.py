@@ -2,9 +2,18 @@
 
 from __future__ import annotations
 
+import logging
+import operator
+
 import click
 
 from . import main
+
+log = logging.getLogger(__name__)
+
+
+def _ws_name(ws: dict) -> str:
+    return ws.get("name", "")
 
 
 @main.group(name="quota")
@@ -118,16 +127,13 @@ def _show_sing_quotas(show_all: bool, template: str | None) -> None:
 
     from azure_jobs.core.rest_client import AzureARMClient
     from azure_jobs.core.sku import SLA_TIERS, fetch_vc_quotas
+    from azure_jobs.utils.concurrent import parallel_map
     from azure_jobs.utils.ui import console, error
 
-    # Single ARM client reused for discovery + all quota fetches
     arm = AzureARMClient()
-
-    with console.status(
-        "[bold cyan]Discovering virtual clusters…[/bold cyan]",
-        spinner="dots",
-    ):
+    with console.status("[bold cyan]Discovering virtual clusters…[/bold cyan]", spinner="dots"):
         vcs = _discover_vcs(template, arm_client=arm)
+        arm.ensure_token()
 
     if not vcs:
         error("No Singularity virtual clusters found")
@@ -136,19 +142,23 @@ def _show_sing_quotas(show_all: bool, template: str | None) -> None:
         )
         raise SystemExit(1)
 
-    # Fetch quotas for each VC with (x/N) progress
-    for idx, vc in enumerate(vcs, 1):
-        with console.status(
-            f"[bold cyan]Fetching quotas ({idx}/{len(vcs)}) {vc.name}…[/bold cyan]",
-            spinner="dots",
-        ):
-            vc.quotas = fetch_vc_quotas(
-                vc_subscription_id=vc.subscription_id,
-                vc_resource_group=vc.resource_group,
-                vc_name=vc.name,
-                include_zero=show_all,
-                arm_client=arm,
-            )
+    def _fetch_one(vc):
+        return fetch_vc_quotas(
+            vc_subscription_id=vc.subscription_id,
+            vc_resource_group=vc.resource_group,
+            vc_name=vc.name,
+            include_zero=show_all,
+            arm_client=arm,
+        )
+
+    results, failures = parallel_map(
+        vcs, _fetch_one, label="Fetching quotas", name=operator.attrgetter("name"), console=console
+    )
+    for vc, quotas in results:
+        vc.quotas = quotas
+    for vc, exc in failures:
+        log.debug("fetch_vc_quotas failed for %s", vc.name, exc_info=(type(exc), exc, exc.__traceback__))
+        vc.quotas = []
 
     # Determine which SLA tiers are active across ALL VCs
     active_tiers: list[str] = []
@@ -286,20 +296,17 @@ def _show_aml_quotas(show_all: bool) -> None:
     from rich.text import Text
 
     from azure_jobs.core.rest_client import AzureARMClient
+    from azure_jobs.utils.concurrent import parallel_map
     from azure_jobs.utils.ui import console, error, warning
 
     arm = AzureARMClient()
-
-    # Discover all AML workspaces
-    with console.status(
-        "[bold cyan]Discovering AML workspaces…[/bold cyan]",
-        spinner="dots",
-    ):
+    with console.status("[bold cyan]Discovering AML workspaces…[/bold cyan]", spinner="dots"):
         try:
             workspaces = arm.list_ml_workspaces()
         except Exception as exc:
             error(f"Could not discover workspaces: {exc}")
             raise SystemExit(1)
+        arm.ensure_token()
 
     if not workspaces:
         error("No AML workspaces found")
@@ -308,30 +315,24 @@ def _show_aml_quotas(show_all: bool) -> None:
         )
         raise SystemExit(1)
 
-    # Fetch computes for each workspace with (x/N) progress
-    ws_computes: list[tuple[dict, list]] = []
-    for idx, ws in enumerate(workspaces, 1):
-        ws_name = ws.get("name", "")
-        with console.status(
-            f"[bold cyan]Fetching computes ({idx}/{len(workspaces)}) {ws_name}…[/bold cyan]",
-            spinner="dots",
-        ):
-            try:
-                raw = arm.list_workspace_computes(
-                    ws["subscriptionId"],
-                    ws["resourceGroup"],
-                    ws_name,
-                )
-                clusters = [
-                    c
-                    for c in raw
-                    if c.get("properties", {}).get("computeType") == "AmlCompute"
-                ]
-                if clusters or show_all:
-                    ws_computes.append((ws, clusters))
-            except Exception:
-                # Skip workspaces we can't access
-                pass
+    def _fetch_one(ws: dict) -> list:
+        raw = arm.list_workspace_computes(
+            ws["subscriptionId"], ws["resourceGroup"], ws.get("name", "")
+        )
+        return [c for c in raw if c.get("properties", {}).get("computeType") == "AmlCompute"]
+
+    results, failures = parallel_map(
+        workspaces, _fetch_one,
+        label="Fetching computes",
+        name=_ws_name,
+        console=console,
+    )
+    for ws, exc in failures:
+        log.debug("list_workspace_computes failed for %s", _ws_name(ws), exc_info=(type(exc), exc, exc.__traceback__))
+    if failures:
+        warning(f"Skipped {len(failures)} workspace(s) (run with AJ_DEBUG=1 for details)")
+    ws_computes = [(ws, clusters) for ws, clusters in results if clusters or show_all]
+    ws_computes.sort(key=lambda x: _ws_name(x[0]))
 
     if not ws_computes:
         warning("No AML compute clusters found in any workspace")

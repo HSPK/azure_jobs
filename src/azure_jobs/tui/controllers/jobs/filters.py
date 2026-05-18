@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import logging
+
 from textual.widgets import Input
 
 from azure_jobs.tui.components import PickerModal
 from azure_jobs.tui.controllers.base import Controller
 from azure_jobs.tui.helpers import STATUS_CYCLE, icon_style
 from azure_jobs.tui.state import JobsState
+
+log = logging.getLogger(__name__)
 
 
 class JobsFilters(Controller[JobsState]):
@@ -45,8 +49,8 @@ class JobsFilters(Controller[JobsState]):
         if self._search_timer is not None:
             try:
                 self._search_timer.stop()
-            except Exception:
-                pass
+            except Exception as exc:
+                log.debug("search timer stop failed: %s", exc, exc_info=True)
         self._search_timer = self.app.set_timer(
             self._SEARCH_DEBOUNCE, self._do_search_refresh
         )
@@ -61,8 +65,10 @@ class JobsFilters(Controller[JobsState]):
             if self._search_timer is not None:
                 try:
                     self._search_timer.stop()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    log.debug(
+                        "search timer stop failed: %s", exc, exc_info=True
+                    )
                 self._search_timer = None
             self.app.jobs.view.refresh()
             self.app.query_one("#search-bar").add_class("hidden")

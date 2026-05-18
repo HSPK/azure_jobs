@@ -51,8 +51,8 @@ class LogsStream(Controller[LogsState]):
         if st.streamer:
             try:
                 st.streamer.close()
-            except Exception:
-                pass
+            except Exception as exc:
+                log.debug("streamer close failed: %s", exc, exc_info=True)
             st.streamer = None
         self.app.logs.update_tab_title()
         self.app.logs.update_header()

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -8,6 +9,8 @@ import click
 from azure_jobs.cli import main
 from azure_jobs.core.record import read_records
 from azure_jobs.utils.ui import show_jobs_table
+
+log = logging.getLogger(__name__)
 
 
 @main.group(name="job")
@@ -291,47 +294,48 @@ def _fetch_jobs_all_ws(
     *,
     cutoff_utc: datetime | None = None,
 ) -> list[dict[str, Any]]:
-    """Fetch jobs from all discovered workspaces."""
+    """Fetch jobs from all discovered workspaces in parallel."""
     from azure_jobs.core.rest_client import AzureARMClient, AzureMLClient
+    from azure_jobs.utils.concurrent import parallel_map
     from azure_jobs.utils.ui import console, warning
 
     arm = AzureARMClient()
-    with console.status(
-        "[bold cyan]Discovering workspaces…[/bold cyan]",
-        spinner="dots",
-    ):
+    with console.status("[bold cyan]Discovering workspaces…[/bold cyan]", spinner="dots"):
         workspaces = arm.list_ml_workspaces()
+        arm.ensure_token()
 
     if not workspaces:
         warning("No workspaces found")
         return []
 
-    all_jobs: list[dict[str, Any]] = []
-    for idx, ws in enumerate(workspaces, 1):
+    def _fetch_one(ws: dict[str, Any]) -> list[dict[str, Any]]:
         ws_name = ws.get("name", "")
-        with console.status(
-            f"[bold cyan]Fetching jobs ({idx}/{len(workspaces)}) {ws_name}…[/bold cyan]",
-            spinner="dots",
-        ):
-            try:
-                client = AzureMLClient(
-                    subscription_id=ws["subscriptionId"],
-                    resource_group=ws["resourceGroup"],
-                    workspace_name=ws_name,
-                )
-                jobs = _fetch_jobs_from_client(
-                    client,
-                    n_per_ws,
-                    cutoff_utc=cutoff_utc,
-                    label=ws_name,
-                )
-                # Tag each job with its workspace for display
-                for j in jobs:
-                    j["_workspace"] = ws_name
-                all_jobs.extend(jobs)
-            except Exception:
-                pass  # skip workspaces we can't access
-    return all_jobs
+        client = AzureMLClient(
+            subscription_id=ws["subscriptionId"],
+            resource_group=ws["resourceGroup"],
+            workspace_name=ws_name,
+        )
+        jobs = _fetch_jobs_from_client(client, n_per_ws, cutoff_utc=cutoff_utc, label=ws_name)
+        for j in jobs:
+            j["_workspace"] = ws_name
+        return jobs
+
+    results, failures = parallel_map(
+        workspaces, _fetch_one,
+        label="Fetching jobs",
+        name=lambda ws: ws.get("name", ""),
+        console=console,
+    )
+    for ws, exc in failures:
+        log.debug("Skipping workspace %s", ws.get("name", ""), exc_info=(type(exc), exc, exc.__traceback__))
+    if failures:
+        names = [ws.get("name", "") for ws, _ in failures[:3]]
+        warning(
+            f"Skipped {len(failures)} workspace(s): {', '.join(names)}"
+            + (" …" if len(failures) > 3 else "")
+            + "  (run with AJ_DEBUG=1 for details)"
+        )
+    return [j for _, jobs in results for j in jobs]
 
 
 def _fetch_jobs_from_client(

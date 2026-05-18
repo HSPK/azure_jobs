@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from datetime import datetime
 
@@ -11,6 +12,8 @@ from azure_jobs.core.const import AJ_LOGS_HOME
 from azure_jobs.tui.controllers.base import Controller
 from azure_jobs.tui.controllers.logs._shared import MAX_BUFFER_LINES, MAX_SNAPSHOTS
 from azure_jobs.tui.state import JobLogSnapshot, LogsState
+
+log = logging.getLogger(__name__)
 
 
 class LogsBuffer(Controller[LogsState]):
@@ -160,8 +163,10 @@ class LogsBuffer(Controller[LogsState]):
                 widget.scroll_home(animate=False)
             else:
                 widget.scroll_to(y=prev_y + len(new_lines), animate=False)
-        except Exception:
-            pass
+        except Exception as exc:
+            # Widget may have been replaced or dimensions not yet known.
+            # Scroll positioning is best-effort.
+            log.debug("scroll restore failed: %s", exc, exc_info=True)
 
     def _render_buffer(self, lines: list[str]) -> None:
         """Clear the widget and re-paint *lines* with fresh numbering.

@@ -6,6 +6,7 @@ module level so the module loads instantly and is easy to unit-test.
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING, Any
 
 from rich.errors import MarkupError
@@ -15,6 +16,8 @@ from textual.widgets.option_list import Option
 
 from azure_jobs.utils.text import trunc as _trunc
 from azure_jobs.utils.ui import icon_style
+
+log = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from textual.app import App
@@ -81,8 +84,10 @@ def safe_set(widget: "Widget | None", markup: str) -> None:
         return
     try:
         widget.update(safe_markup(markup))
-    except Exception:
-        pass
+    except Exception as exc:
+        # Widget may be detached, mid-mount, or destroyed during teardown.
+        # Failing to render is non-fatal; surface in debug logs only.
+        log.debug("safe_set update failed: %s", exc, exc_info=True)
 
 
 def safe_notify(

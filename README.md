@@ -73,7 +73,6 @@ aj run --amlt -t gpu train.py    # submit via amlt instead
 | `-p` | GPUs per node (drives SKU + `AJ_PROCESSES`) |
 | `--ppn` | Launcher processes per node (e.g. `torchrun --nproc-per-node`) |
 | `-d` | Dry run |
-| `-y` | Skip confirmation |
 | `-L` | Run locally |
 | `--amlt` | Submit via amlt |
 

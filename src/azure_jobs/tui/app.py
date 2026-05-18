@@ -36,7 +36,6 @@ class AjDashboard(App):
     """Azure Jobs interactive dashboard (root context)."""
 
     TITLE = "aj dashboard"
-    MOUSE_SUPPORT = False
     CSS_PATH = "dashboard.tcss"
 
     BINDINGS = [
@@ -72,9 +71,15 @@ class AjDashboard(App):
     ENABLE_COMMAND_PALETTE = True
 
     def __init__(
-        self, last: int = 100, page_size: int | None = None, **kwargs: Any
+        self,
+        last: int = 100,
+        page_size: int | None = None,
+        *,
+        mouse: bool = False,
+        **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
+        self._mouse = mouse
         # Widget bag (filled in on_mount).
         self.widgets = Widgets()
         # Controllers — each owns its state dataclass.
@@ -82,6 +87,11 @@ class AjDashboard(App):
         self.jobs = JobsController(self, JobsState(page_size=ps))
         self.logs = LogsController(self, LogsState())
         self.workspace = WorkspaceController(self, WorkspaceState())
+
+    def run(self, *args: Any, **kwargs: Any) -> Any:
+        """Run the app, defaulting ``mouse`` to the value passed to ``__init__``."""
+        kwargs.setdefault("mouse", self._mouse)
+        return super().run(*args, **kwargs)
 
     # ---- compose / mount ----------------------------------------------------
 

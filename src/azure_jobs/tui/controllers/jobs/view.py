@@ -8,6 +8,7 @@ server page. If the visible page is short and there's more on the server,
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from rich.markup import escape
@@ -16,6 +17,8 @@ from textual.widgets import OptionList
 from azure_jobs.tui.controllers.base import Controller
 from azure_jobs.tui.helpers import icon_style, info_block, kv, make_option, safe_set
 from azure_jobs.tui.state import JobsState
+
+log = logging.getLogger(__name__)
 
 
 class JobsView(Controller[JobsState]):
@@ -156,13 +159,16 @@ class JobsView(Controller[JobsState]):
             parts.append(f"[red]⚠ {err[:60]}[/red]")
         try:
             self.app.query_one("#jobs-pane").border_title = "  ".join(parts)
-        except Exception:
-            pass
+        except Exception as exc:
+            # Pane may not be mounted yet (early refresh during startup) or
+            # may have been torn down mid-refresh. Title is cosmetic.
+            log.debug("jobs-pane title update failed: %s", exc, exc_info=True)
 
     def _update_subtitle(self, job: dict[str, Any] | None = None) -> None:
         try:
             rp = self.app.query_one("#right-pane")
-        except Exception:
+        except Exception as exc:
+            log.debug("right-pane lookup failed: %s", exc, exc_info=True)
             return
         if job is None:
             rp.border_subtitle = ""

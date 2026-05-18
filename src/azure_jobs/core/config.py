@@ -8,6 +8,7 @@ Stores tool defaults (template, nodes, processes), repo_id for
 from __future__ import annotations
 
 import json
+import logging
 import shutil
 import subprocess
 from dataclasses import asdict, dataclass, field
@@ -17,6 +18,8 @@ import click
 
 from . import const
 from .dataclass_utils import dataclass_from_dict, remove_empty_values
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -185,17 +188,35 @@ def az_json(args: list[str], timeout: int = 15) -> Any | None:
     """Run an ``az`` CLI command and return parsed JSON, or *None* on failure."""
     try:
         az = find_az()
+    except FileNotFoundError as exc:
+        log.debug("az CLI not found: %s", exc)
+        return None
+    try:
         result = subprocess.run(
             [az, *args, "--output", "json"],
             capture_output=True,
             text=True,
             timeout=timeout,
         )
-        if result.returncode == 0:
-            return json.loads(result.stdout)
-    except (FileNotFoundError, subprocess.TimeoutExpired, json.JSONDecodeError):
-        pass
-    return None
+    except subprocess.TimeoutExpired as exc:
+        log.debug("az %s timed out after %ss: %s", " ".join(args), timeout, exc)
+        return None
+    except OSError as exc:
+        log.debug("az %s failed to spawn: %s", " ".join(args), exc)
+        return None
+    if result.returncode != 0:
+        log.debug(
+            "az %s exited %d: %s",
+            " ".join(args),
+            result.returncode,
+            (result.stderr or "").strip()[:200],
+        )
+        return None
+    try:
+        return json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        log.debug("az %s returned non-JSON: %s", " ".join(args), exc)
+        return None
 
 
 def detect_subscription() -> dict[str, str] | None:
