@@ -57,7 +57,7 @@ def resolve_short_id(job_id: str) -> str:
 
 
 def fetch_jobs(
-    client: Any,
+    client: "AzureMLClient",
     n: int,
     *,
     cutoff_utc: datetime | None = None,

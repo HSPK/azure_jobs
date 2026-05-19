@@ -100,7 +100,7 @@ class TestResolveInstanceType:
         result = resolve_instance_type("2xStandard_ND40rs_v2")
         assert result == ["Standard_ND40rs_v2"]
 
-    @patch("azure_jobs.core.sku._fetch_vc_families")
+    @patch("azure_jobs.core.sku.discovery._fetch_vc_families")
     def test_cpu_resolution_with_vc(self, mock_fetch):
         mock_fetch.return_value = ["Eadsv5", "NC_A100_v4"]
         result = resolve_instance_type(
@@ -112,7 +112,7 @@ class TestResolveInstanceType:
         assert len(result) == 1
         assert "ads_v5" in result[0]  # E16ads_v5
 
-    @patch("azure_jobs.core.sku._fetch_vc_families")
+    @patch("azure_jobs.core.sku.discovery._fetch_vc_families")
     def test_gpu_a100_80g_nvlink(self, mock_fetch):
         mock_fetch.return_value = ["NDAMv4", "NDv4"]
         result = resolve_instance_type(
@@ -123,7 +123,7 @@ class TestResolveInstanceType:
         )
         assert result[0] == "ND96amrs_A100_v4"
 
-    @patch("azure_jobs.core.sku._fetch_vc_families")
+    @patch("azure_jobs.core.sku.discovery._fetch_vc_families")
     def test_no_match_returns_empty(self, mock_fetch):
         mock_fetch.return_value = ["Eadsv5"]  # Only CPU available
         result = resolve_instance_type(
