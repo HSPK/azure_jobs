@@ -82,7 +82,8 @@ def template_show(name: str) -> None:
 @click.argument("name", type=str, required=False, default=None)
 def template_validate(name: str | None) -> None:
     """Validate template config (all templates if no name given)."""
-    from azure_jobs.core.template import ConfigError, read_conf
+    from azure_jobs.core.template import validate_template
+    from azure_jobs.utils.ui import error as ui_error
 
     if not const.AJ_TEMPLATE_HOME.exists():
         raise click.ClickException(f"No templates found in {const.AJ_TEMPLATE_HOME}")
@@ -98,53 +99,17 @@ def template_validate(name: str | None) -> None:
 
     errors: list[tuple[str, str]] = []
     ok_count = 0
-
     for tp in targets:
-        tname = tp.stem
-        try:
-            raw = yaml.safe_load(tp.read_text()) or {}
-            conf = read_conf(tp)
-        except (ConfigError, FileNotFoundError) as exc:
-            errors.append((tname, f"inheritance error: {exc}"))
-            continue
-
-        # Templates without a base key are building blocks, not submittable
-        if "base" not in raw:
-            ok_count += 1
-            continue
-
-        # Check required structure for submittable templates
-        issues: list[str] = []
-        if "jobs" not in conf:
-            issues.append("missing 'jobs' key")
-        elif not isinstance(conf["jobs"], list) or len(conf["jobs"]) == 0:
-            issues.append("'jobs' must be a non-empty list")
-        elif "sku" not in conf["jobs"][0]:
-            issues.append("first job missing 'sku' key")
-
-        if "target" not in conf:
-            issues.append("missing 'target' key")
-        elif not isinstance(conf.get("target"), dict):
-            issues.append("'target' must be a dict")
-        else:
-            if "service" not in conf["target"]:
-                issues.append("target missing 'service'")
-            if "name" not in conf["target"]:
-                issues.append("target missing 'name'")
-
+        issues = validate_template(tp)
         if issues:
-            errors.append((tname, "; ".join(issues)))
+            errors.append((tp.stem, "; ".join(issues)))
         else:
             ok_count += 1
 
-    # Report results
     if ok_count > 0:
         success(f"{ok_count} template(s) valid")
     for tname, msg in errors:
-        from azure_jobs.utils.ui import error as ui_error
-
         ui_error(f"{tname}: {msg}")
-
     if errors:
         raise SystemExit(1)
 
