@@ -30,11 +30,94 @@ class TestPullCommand:
         mock_run.assert_called_once()
         assert "https://example.com/repo.git" in mock_run.call_args[0][0]
 
-    def test_pull_skips_if_home_exists(self, aj_env):
+    def test_pull_succeeds_when_home_exists(self, aj_env):
+        """Pull is an incremental sync — existing AJ_HOME is OK."""
         runner = CliRunner()
-        result = runner.invoke(main, ["pull", "https://example.com/repo.git"])
+        with patch("azure_jobs.cli.pull.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            result = runner.invoke(
+                main, ["pull", "https://example.com/repo.git"]
+            )
         assert result.exit_code == 0
-        assert "already exists" in result.output
+        assert "synced" in result.output.lower()
+
+    def test_pull_preserves_local_only_files(self, aj_env):
+        """``pull -f`` must not delete aj_config.json / record.jsonl."""
+        config_text = aj_env["config_fp"].read_text()
+        aj_env["record_fp"].write_text('{"sid":"keep_me"}\n')
+        record_before = aj_env["record_fp"].read_text()
+
+        runner = CliRunner()
+        with patch("azure_jobs.cli.pull.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            result = runner.invoke(
+                main, ["pull", "-f", "https://example.com/repo.git"]
+            )
+        assert result.exit_code == 0
+        # Local-only files survive
+        assert aj_env["config_fp"].exists()
+        assert aj_env["config_fp"].read_text() == config_text
+        assert aj_env["record_fp"].exists()
+        assert aj_env["record_fp"].read_text() == record_before
+
+    def test_pull_does_not_modify_config(self, aj_env):
+        """Pull must never write back to aj_config.json."""
+        original = aj_env["config_fp"].read_text()
+        runner = CliRunner()
+        with patch("azure_jobs.cli.pull.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            runner.invoke(main, ["pull", "-f", "https://example.com/repo.git"])
+        assert aj_env["config_fp"].read_text() == original
+
+    def test_pull_force_cleanup_scoped_to_remote_dirs(self, aj_env, tmp_path):
+        """``pull -f`` only deletes files in directories the remote populated.
+
+        Guards against a footgun where AJ_HOME is mistakenly pointed at a
+        directory holding unrelated files: those files must NOT be touched
+        by force-cleanup.
+        """
+        # Pre-create a sibling directory the remote will *not* touch
+        unrelated = aj_env["aj_home"] / "scripts"
+        unrelated.mkdir()
+        unrelated_file = unrelated / "keep_me.sh"
+        unrelated_file.write_text("echo hi")
+
+        # Pre-populate template/ with a stale template
+        stale = aj_env["template_home"] / "stale.yaml"
+        stale.write_text("base: null\n")
+
+        # Build a fake remote with one template/foo.yaml
+        remote = tmp_path / "remote"
+        (remote / "template").mkdir(parents=True)
+        (remote / "template" / "foo.yaml").write_text("base: null\n")
+
+        runner = CliRunner()
+        real_run = subprocess.run
+
+        def _fake_run(cmd, **kwargs):
+            # Simulate git clone by copying the fake remote to the dest path
+            if cmd[:2] == ["git", "clone"]:
+                dest = cmd[-1]
+                import shutil as _sh
+
+                _sh.copytree(remote, dest, dirs_exist_ok=True)
+                return subprocess.CompletedProcess(
+                    args=cmd, returncode=0, stdout="", stderr=""
+                )
+            return real_run(cmd, **kwargs)
+
+        with patch("azure_jobs.cli.pull.subprocess.run", side_effect=_fake_run):
+            result = runner.invoke(
+                main, ["pull", "-f", "https://example.com/repo.git"]
+            )
+        assert result.exit_code == 0
+        # Remote dir populated → stale.yaml inside template/ is removed
+        assert not stale.exists()
+        # foo.yaml from remote is in place
+        assert (aj_env["template_home"] / "foo.yaml").exists()
+        # Unrelated scripts/ is untouched
+        assert unrelated_file.exists()
+        assert unrelated_file.read_text() == "echo hi"
 
     def test_pull_shorthand_expands_to_ssh(self, aj_env):
         runner = CliRunner()

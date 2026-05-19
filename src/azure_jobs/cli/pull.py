@@ -4,11 +4,13 @@ import os
 import shutil
 import stat
 import subprocess
+import tempfile
+from pathlib import Path
 
 import click
 
 from azure_jobs.core import const
-from azure_jobs.core.config import read_config, write_config
+from azure_jobs.core.config import read_config
 from azure_jobs.utils.ui import (
     console,
     get_output_mode,
@@ -30,8 +32,15 @@ def resolve_repo_url(repo_id: str) -> str:
     return repo_id
 
 
-# Files that are local-only and should not be pushed to the remote repo
-_LOCAL_ONLY = {"aj_config.json", "submission", "record.jsonl"}
+# Paths that hold local-only state and must never be touched by pull/push.
+# ``aj_config.json`` and ``record.jsonl`` are user/machine state;
+# ``submission/`` and ``logs/`` are generated artifacts.
+_LOCAL_ONLY = {"aj_config.json", "record.jsonl", "submission", "logs"}
+
+
+def _is_local_only(rel: Path) -> bool:
+    """Return True if *rel* points inside a local-only path."""
+    return any(part in _LOCAL_ONLY for part in rel.parts)
 
 
 def _rm_readonly(func, path, _exc_info):  # noqa: ANN001
@@ -41,68 +50,104 @@ def _rm_readonly(func, path, _exc_info):  # noqa: ANN001
 
 
 def _do_pull(repo_id: str | None, force: bool) -> None:
-    """Core pull logic shared by template pull and top-level alias."""
+    """Sync template files from a git remote into ``AJ_HOME``.
+
+    Pull is an *incremental sync* — it never touches local-only paths
+    (``aj_config.json``, ``record.jsonl``, ``submission/``, ``logs/``)
+    and never writes back to the config file. Pass *repo_id* explicitly
+    each time, or pre-populate ``aj_config.json`` once.
+
+    Without ``--force``: copies/overwrites every remote file into
+    ``AJ_HOME``, leaves extra local files alone.
+
+    With ``--force``: additionally removes local files (outside
+    ``_LOCAL_ONLY``) that are absent from the remote — useful when a
+    template was renamed or deleted upstream.
+    """
     config = read_config()
     if repo_id is None or not repo_id:
         repo_id = config.repo_id
     if not repo_id:
         raise click.ClickException("Repository ID must be provided")
     repo_id = resolve_repo_url(repo_id)
-    config.repo_id = repo_id
-
-    if const.AJ_HOME.exists() and not force:
-        if get_output_mode() != "json":
-            warning(f"AJ home {const.AJ_HOME} already exists. Use -f to force.")
-        show_command_result(
-            "template.pull",
-            status="noop",
-            message=f"AJ home {const.AJ_HOME} already exists. Use -f to force.",
-            repo_id=repo_id,
-        )
-        return
-    if const.AJ_HOME.exists() and force:
-        if get_output_mode() != "json":
-            info(f"Removing existing {const.AJ_HOME}")
-        shutil.rmtree(const.AJ_HOME, onerror=_rm_readonly)
 
     const.AJ_HOME.mkdir(parents=True, exist_ok=True)
-    try:
-        with console.status(
-            f"[bold cyan]Cloning {repo_id}…[/bold cyan]", spinner="dots"
-        ):
-            subprocess.run(
-                ["git", "clone", repo_id, str(const.AJ_HOME)],
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-    except subprocess.CalledProcessError as exc:
-        raise click.ClickException(
-            f"Failed to clone {repo_id}: {exc.stderr.strip()}"
-        ) from exc
 
-    # Remove .git — keep .azure_jobs as a plain directory
-    git_fp = const.AJ_HOME / ".git"
-    if git_fp.exists() and git_fp.is_dir():
-        shutil.rmtree(git_fp, onerror=_rm_readonly)
+    with tempfile.TemporaryDirectory() as tmp:
+        try:
+            with console.status(
+                f"[bold cyan]Cloning {repo_id}…[/bold cyan]", spinner="dots"
+            ):
+                subprocess.run(
+                    ["git", "clone", "--depth=1", repo_id, tmp],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+        except subprocess.CalledProcessError as exc:
+            raise click.ClickException(
+                f"Failed to clone {repo_id}: {exc.stderr.strip()}"
+            ) from exc
 
-    const.AJ_CONFIG.parent.mkdir(parents=True, exist_ok=True)
-    write_config(config)
+        tmp_path = Path(tmp)
+        remote_files: set[Path] = set()
+        remote_dirs: set[Path] = set()
+        copied = 0
+        for src in tmp_path.rglob("*"):
+            if ".git" in src.parts:
+                continue
+            rel = src.relative_to(tmp_path)
+            if _is_local_only(rel):
+                continue
+            if src.is_dir():
+                (const.AJ_HOME / rel).mkdir(parents=True, exist_ok=True)
+                remote_dirs.add(rel)
+                continue
+            remote_files.add(rel)
+            remote_dirs.add(rel.parent)
+            dst = const.AJ_HOME / rel
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dst)
+            copied += 1
+
+    removed = 0
+    if force:
+        # Drop local files that aren't in the remote, but only inside
+        # directories the remote actually populated — this prevents
+        # ``aj pull -f`` from clobbering arbitrary files if AJ_HOME was
+        # mistakenly pointed at a non-aj directory.
+        for parent_rel in remote_dirs:
+            local_dir = const.AJ_HOME / parent_rel
+            if not local_dir.is_dir():
+                continue
+            for local in local_dir.iterdir():
+                if not local.is_file():
+                    continue
+                rel = local.relative_to(const.AJ_HOME)
+                if _is_local_only(rel):
+                    continue
+                if rel not in remote_files:
+                    local.unlink()
+                    removed += 1
+
+    detail = f"{copied} file(s) updated"
+    if removed:
+        detail += f", {removed} stale file(s) removed"
     if get_output_mode() != "json":
-        success(f"Templates cloned to {const.AJ_HOME}")
+        success(f"Templates synced from {repo_id}  [{detail}]")
     show_command_result(
         "template.pull",
         status="ok",
-        message=f"Templates cloned to {const.AJ_HOME}",
+        message=f"Templates synced from {repo_id}",
         repo_id=repo_id,
         path=str(const.AJ_HOME),
+        files_updated=copied,
+        files_removed=removed,
     )
 
 
 def _do_push(message: str | None) -> None:
     """Core push logic shared by template push and top-level alias."""
-    import tempfile
-
     if not const.AJ_HOME.exists():
         raise click.ClickException("No AJ home found. Run `aj pull` first.")
 
@@ -128,8 +173,6 @@ def _do_push(message: str | None) -> None:
             raise click.ClickException(
                 f"Failed to clone remote: {exc.stderr.strip()}"
             ) from exc
-
-        from pathlib import Path
 
         for item in Path(tmp).iterdir():
             if item.name == ".git":
