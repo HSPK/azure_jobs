@@ -60,8 +60,13 @@ def make_retry_session() -> requests.Session:
     retry = Retry(
         total=_RETRY_TOTAL,
         backoff_factor=_RETRY_BACKOFF,
+        # Bounded random jitter prevents thundering-herd when multiple
+        # parallel workers (e.g. cross-workspace fan-out, blob upload
+        # pool) hit the same ARM/storage throttle simultaneously.
+        backoff_jitter=0.3,
         status_forcelist=_RETRY_STATUS,
         allowed_methods=_RETRY_METHODS,
+        respect_retry_after_header=True,
         raise_on_status=False,
     )
     adapter = HTTPAdapter(max_retries=retry)

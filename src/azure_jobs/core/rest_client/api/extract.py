@@ -6,12 +6,51 @@ from typing import Any, TypedDict
 
 from azure_jobs.utils.time import calc_duration, calc_duration_secs, format_time
 
+# Field names that ``extract_rest_job`` always populates (even if to empty
+# string / None / 1).  Used by the post-extract assertion below to catch
+# silent drift the next time someone refactors the extractor.
+_REQUIRED_FIELDS = frozenset(
+    {
+        "name",
+        "display_name",
+        "status",
+        "compute",
+        "portal_url",
+        "start_time",
+        "end_time",
+        "duration",
+        "duration_secs",
+        "queue_time",
+        "queue_secs",
+        "experiment",
+        "type",
+        "description",
+        "tags",
+        "environment",
+        "command",
+        "created",
+        "created_utc",
+        "created_by",
+        "error",
+        "instance_type",
+        "nodes",
+        "sla_tier",
+        "processes_per_node",
+    }
+)
+
 
 class JobInfo(TypedDict, total=False):
     """Lightweight, display-oriented view of an Azure ML job.
 
-    Returned by :func:`extract_rest_job`.  ``total=False`` because callers
-    routinely use ``.get(key, default)`` and not every field is always set.
+    Returned by :func:`extract_rest_job`. ``total=False`` because every
+    consumer uses ``.get(key, default)`` to tolerate evolving Azure ML
+    REST responses; converting to a strict ``@dataclass`` is a planned
+    follow-up that touches the TUI / CLI / stats consumers.
+
+    Until then, :func:`extract_rest_job` asserts post-build that every
+    name in :data:`_REQUIRED_FIELDS` is present so renames blow up at
+    the extraction boundary instead of silently degrading consumers.
     """
 
     name: str
@@ -134,7 +173,7 @@ def extract_rest_job(raw: dict[str, Any]) -> JobInfo:
     dist = props.get("distribution", {}) or {}
     processes_per_node = dist.get("processCountPerInstance", 0) or 0
 
-    return {
+    result: JobInfo = {
         "name": name,
         "display_name": props.get("displayName", "") or "",
         "status": props.get("status", ""),
@@ -161,3 +200,8 @@ def extract_rest_job(raw: dict[str, Any]) -> JobInfo:
         "sla_tier": sla_tier,
         "processes_per_node": processes_per_node,
     }
+    # Catch silent drift early — if a future refactor drops a field,
+    # consumers shouldn't have to discover it via a missing UI cell.
+    missing = _REQUIRED_FIELDS - result.keys()
+    assert not missing, f"extract_rest_job dropped fields: {sorted(missing)}"
+    return result

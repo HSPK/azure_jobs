@@ -23,6 +23,13 @@ from .amlt import (
     submit_via_amlt,
 )
 from .config import build_submit_request, render_amlt_config
+from .dispatch import (
+    BackendEntry,
+    get_backend,
+    list_backends,
+    register_backend,
+    submit_via,
+)
 from .models import StorageMount, SubmitEvent, SubmitRequest, SubmitResult
 from .native import (
     CheckResult,
@@ -32,6 +39,7 @@ from .native import (
     submit_via_native,
 )
 from .native.submit import submit
+from .orchestrate import PreparedSubmission, orchestrate
 from .volcano import submit_via_volcano
 
 __all__ = [
@@ -40,8 +48,11 @@ __all__ = [
     "SubmitResult",
     "SubmitEvent",
     "submit",
+    "submit_via",
     "build_submit_request",
     "render_amlt_config",
+    "orchestrate",
+    "PreparedSubmission",
     "CheckResult",
     "check_aml_compute",
     "check_singularity",
@@ -52,4 +63,9 @@ __all__ = [
     "submit_via_amlt",
     "submit_via_volcano",
     "submit_via_native",
+    # Registry primitives — for backend authors
+    "BackendEntry",
+    "register_backend",
+    "get_backend",
+    "list_backends",
 ]

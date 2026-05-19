@@ -15,13 +15,17 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
 from dataclasses import dataclass, field
 from typing import Any
 
 log = logging.getLogger(__name__)
 
-# Module-level caches for avoiding redundant ARM API calls
+# Module-level caches for avoiding redundant ARM API calls.
+# Protected by ``_vc_families_lock`` because TUI workers, the SDK, and
+# ``pytest-xdist`` may invoke ``_fetch_vc_families`` concurrently.
 _vc_families_cache: dict[str, list[str]] = {}  # vc_name → families
+_vc_families_lock = threading.Lock()
 
 
 def resolve_sku(sku_template: str | dict[str, str], nodes: int, processes: int) -> str:
@@ -360,8 +364,9 @@ def _fetch_vc_families(
     Results are cached per vc_name to avoid repeated API calls.
     """
     cache_key = f"{vc_subscription_id}/{vc_name}"
-    if cache_key in _vc_families_cache:
-        return _vc_families_cache[cache_key]
+    with _vc_families_lock:
+        if cache_key in _vc_families_cache:
+            return _vc_families_cache[cache_key]
     try:
         if arm_client is None:
             from azure_jobs.core.rest_client import AzureARMClient
@@ -376,7 +381,8 @@ def _fetch_vc_families(
         managed = data.get("properties", {}).get("managed", {})
         quotas = managed.get("defaultGroupPolicyOverallQuotas", {}).get("limits", [])
         families = [q["id"] for q in quotas if q.get("limit", 0) > 0]
-        _vc_families_cache[cache_key] = families
+        with _vc_families_lock:
+            _vc_families_cache[cache_key] = families
         return families
     except Exception:
         log.debug("Failed to fetch VC families for %s", vc_name, exc_info=True)

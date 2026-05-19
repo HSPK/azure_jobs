@@ -5,7 +5,6 @@ import uuid
 from datetime import datetime, timezone
 
 import click
-import yaml
 
 from azure_jobs.cli import main
 from azure_jobs.cli.runner import submit_and_record
@@ -19,14 +18,11 @@ from azure_jobs.core.config import (
     save_defaults,
 )
 from azure_jobs.core.record import SubmissionRecord
-from azure_jobs.core.sku import resolve_sku
 from azure_jobs.core.submit import (
     amlt_available,
-    build_submit_request,
-    render_amlt_config,
+    get_backend,
+    orchestrate,
     submit_via_amlt,
-    submit_via_native,
-    submit_via_volcano,
 )
 from azure_jobs.core.template import Template
 from azure_jobs.utils.naming import resolve_name
@@ -122,10 +118,6 @@ def run(
     nodes_int = int(nodes or defaults.nodes or 1)
     processes_int = int(processes or defaults.processes or 1)
     ppn_int = int(ppn or 1)
-    try:
-        sku_resolved = resolve_sku(tmpl.jobs[0].sku, nodes_int, processes_int)
-    except ValueError as exc:
-        raise click.ClickException(str(exc))
 
     # Remember this template as the new default (only after template validation passes)
     save_defaults(template=template, nodes=nodes_int, processes=processes_int)
@@ -135,37 +127,31 @@ def run(
     )
 
     try:
-        request = build_submit_request(
+        prepared = orchestrate(
             tmpl,
-            name=name,
-            sid=sid,
-            sku=sku_resolved,
             user_command=command,
             user_args=args,
-            workspace=workspace,
             template_name=template,
+            workspace=workspace,
             experiment=experiment,
             nodes=nodes_int,
             processes=processes_int,
             processes_per_node=ppn_int,
+            sid=sid,
+            name=name,
+            dry_run=dry_run,
         )
-    except ValueError as e:
-        raise click.ClickException(str(e))
-    amlt_conf = render_amlt_config(request)
+    except ValueError as exc:
+        raise click.ClickException(str(exc))
+
+    request = prepared.request
+    submission_fp = prepared.submission_path
     final_cmd = request.command[-1] if request.command else ""
 
     if run_local:
         info(f"Running locally: {final_cmd}")
         subprocess.run(final_cmd, shell=True)
         return
-
-    if dry_run:
-        submission_fp = const.AJ_DRYRUN_HOME / f"{sid}.yaml"
-    else:
-        submission_fp = const.AJ_SUBMISSION_HOME / f"{sid}.yaml"
-    submission_fp.parent.mkdir(parents=True, exist_ok=True)
-    with open(submission_fp, "w") as f:
-        yaml.dump(amlt_conf, f, default_flow_style=False)
 
     show_submission_preview(
         request, submission_file=str(submission_fp), dry_run=dry_run
@@ -175,7 +161,6 @@ def run(
         return
 
     # ── Choose submission backend ────────────────────────────────────
-    service = tmpl.target.service
     rec = SubmissionRecord(
         request=request,
         created_at=datetime.now(timezone.utc).isoformat(),
@@ -183,7 +168,9 @@ def run(
     )
 
     if amlt and amlt_available():
-        # --amlt flag takes priority over all other backends
+        # --amlt flag forces the external amlt CLI regardless of service —
+        # its different signature (YAML path + experiment) keeps it outside
+        # the SubmitRequest-based backend registry.
         submit_and_record(
             lambda on_event: submit_via_amlt(
                 submission_fp, experiment, name=name, on_event=on_event
@@ -192,17 +179,17 @@ def run(
             name,
             backend_label="amlt",
         )
-    elif service == "volcano":
-        submit_and_record(
-            lambda on_event: submit_via_volcano(request, on_event=on_event),
-            rec,
-            name,
-            backend_label="Volcano",
-        )
-    else:
-        submit_and_record(
-            lambda on_event: submit_via_native(request, on_event=on_event),
-            rec,
-            name,
-            backend_label="Azure ML",
-        )
+        return
+
+    # Normal path: dispatch on request.service via the backend registry.
+    try:
+        entry = get_backend(request.service)
+    except KeyError as exc:
+        raise click.ClickException(str(exc))
+
+    submit_and_record(
+        lambda on_event: entry.fn(request, on_event=on_event),
+        rec,
+        name,
+        backend_label=entry.label,
+    )

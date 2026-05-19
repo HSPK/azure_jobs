@@ -10,11 +10,9 @@ from click.testing import CliRunner
 
 from azure_jobs.cli import main
 from azure_jobs.cli.pull import resolve_repo_url
-from azure_jobs.cli.run import (
-    resolve_name,
-    resolve_sku,
-)
+from azure_jobs.cli.run import resolve_name
 from azure_jobs.core.record import SubmissionRecord
+from azure_jobs.core.sku import resolve_sku
 from azure_jobs.core.submit import SubmitRequest
 
 

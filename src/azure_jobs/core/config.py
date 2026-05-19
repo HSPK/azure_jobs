@@ -17,6 +17,7 @@ import json
 import logging
 import shutil
 import subprocess
+import threading
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
@@ -97,8 +98,10 @@ class AJConfig:
         return remove_empty_values(asdict(self))
 
 
-# Module-level config cache: stores (mtime, data dict) to avoid repeated disk I/O.
+# Module-level config cache: (mtime, parsed-dict). Protected by
+# ``_config_lock`` for parallel SDK / TUI / pytest-xdist callers.
 _config_cache: tuple[float, dict[str, Any]] | None = None
+_config_lock = threading.Lock()
 
 
 def _read_config_dict() -> dict[str, Any]:
@@ -109,13 +112,16 @@ def _read_config_dict() -> dict[str, Any]:
     """
     global _config_cache
     if not const.AJ_CONFIG.exists():
-        _config_cache = None
+        with _config_lock:
+            _config_cache = None
         return {}
     mtime = const.AJ_CONFIG.stat().st_mtime
-    if _config_cache is not None and _config_cache[0] == mtime:
-        return _config_cache[1]
+    with _config_lock:
+        if _config_cache is not None and _config_cache[0] == mtime:
+            return _config_cache[1]
     data = json.loads(const.AJ_CONFIG.read_text())
-    _config_cache = (mtime, data)
+    with _config_lock:
+        _config_cache = (mtime, data)
     return data
 
 
@@ -132,7 +138,8 @@ def write_config(config: AJConfig) -> None:
     global _config_cache
     const.AJ_CONFIG.parent.mkdir(parents=True, exist_ok=True)
     const.AJ_CONFIG.write_text(json.dumps(config.to_dict(), indent=2) + "\n")
-    _config_cache = None  # invalidate cache
+    with _config_lock:
+        _config_cache = None  # invalidate cache
 
 
 # -- defaults ---------------------------------------------------------------
