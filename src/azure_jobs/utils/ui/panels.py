@@ -161,7 +161,9 @@ def show_submission_result(
     """Emit the post-submit result.
 
     JSON mode writes a structured ``{kind: "submission_result", …}``
-    envelope to stdout; Rich mode prints the existing success/dim lines.
+    envelope to stdout. Rich mode renders a green/red result panel
+    mirroring :func:`show_submission_preview` so the human gets the
+    same shape of summary they saw before the submit.
     Caller is responsible for any non-zero exit on failure — this is a
     pure presentation step.
     """
@@ -180,25 +182,66 @@ def show_submission_result(
     if get_output_mode() == "json":
         sys.stdout.write(json.dumps(payload, indent=2, default=str) + "\n")
         return
+    _render_submission_result_rich(payload, rec.request)
 
-    if rec.status == "failed":
-        from .console import error
 
-        error(f"Submission failed: {payload['note'] or payload['error']}")
-        return
+def _render_submission_result_rich(payload: dict[str, Any], request: SubmitRequest) -> None:
+    """Render the post-submit result as a Rich panel."""
+    failed = payload["status"] == "failed"
+    icon = "✗" if failed else "✓"
+    icon_style = "bold red" if failed else "bold green"
+    border_style = "red" if failed else "green"
+    title = "Submission Failed" if failed else "Submission Result"
 
-    from .console import dim, success
+    grid = Table.grid(padding=(0, 2))
+    grid.add_column(style="key", justify="right")
+    grid.add_column(style="value")
 
-    suffix = f" via {backend_label}" if backend_label else ""
-    success(f"Job [bold]{display_name}[/bold] submitted{suffix}")
+    grid.add_row(
+        "Status",
+        f"[{icon_style}]{icon} {payload['status']}[/{icon_style}]"
+        + (f"  [dim]via {payload['backend']}[/dim]" if payload["backend"] else ""),
+    )
+    grid.add_row("Job ID", f"[bold]{esc(payload['sid'])}[/bold]")
+    grid.add_row("Name", esc(payload["name"]))
     azure_name = payload["azure_name"]
-    if azure_name and azure_name != display_name:
-        dim(f"Azure ID: {azure_name}")
+    if azure_name and azure_name != payload["name"]:
+        grid.add_row("Azure ID", esc(azure_name))
+    if request.expr_name:
+        grid.add_row("Experiment", esc(request.expr_name))
+    if request.compute:
+        grid.add_row("Compute", esc(request.compute))
+    if request.sku:
+        grid.add_row("SKU", esc(request.sku))
+    if request.nodes:
+        total_processes = request.nodes * (request.processes_per_node or 1)
+        grid.add_row(
+            "Resources",
+            f"{request.nodes} node × {request.processes_per_node} proc  "
+            f"[dim](total {total_processes})[/dim]",
+        )
     if payload["portal_url"]:
-        dim(f"Portal: {short_portal_url(payload['portal_url'])}")
-    if payload["note"] and not payload["portal_url"]:
+        grid.add_row("Portal", short_portal_url(payload["portal_url"]))
+    if payload["submission_path"]:
+        grid.add_row("Config", esc(payload["submission_path"]))
+    if failed:
+        msg = payload["error"] or payload["note"]
+        if msg:
+            grid.add_row("Error", f"[red]{esc(msg)}[/red]")
+    elif payload["note"] and not payload["portal_url"]:
         # e.g. ``kubectl create`` output for Volcano
-        dim(payload["note"])
+        grid.add_row("Note", esc(payload["note"]))
+
+    console.print()
+    console.print(
+        Panel(
+            grid,
+            title=f"[bold]{title}[/bold]",
+            border_style=border_style,
+            expand=False,
+        )
+    )
+    console.print()
 
 
 def show_job_status(job_status: Any) -> None:
