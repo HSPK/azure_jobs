@@ -11,6 +11,7 @@ from azure_jobs.core.submit.models import SubmitRequest, SubmitResult
 from azure_jobs.core.submit.record import SubmissionRecord
 from azure_jobs.utils.ui import (
     set_output_mode,
+    show_dry_run_result,
     show_submission_preview,
     show_submission_result,
 )
@@ -52,28 +53,32 @@ def _make_result(name: str = "azure_jobs_abc12345", **overrides) -> SubmitResult
     return SubmitResult(**defaults)
 
 
-class TestSubmissionPreviewJson:
+class TestDryRunResultJson:
+    """``show_dry_run_result`` mirrors ``submission_result`` for ``aj run -d``."""
+
     def setup_method(self):
         set_output_mode("json")
 
     def teardown_method(self):
         set_output_mode("rich")
 
-    def test_dry_run_preview_emits_full_config(self):
+    def test_dry_run_emits_full_envelope(self):
         req = _make_request()
         out = _capture_stdout(
-            lambda: show_submission_preview(
-                req, submission_file="/tmp/abc12345.yaml", dry_run=True
-            )
+            lambda: show_dry_run_result(req, submission_file="/tmp/abc12345.yaml")
         )
         parsed = json.loads(out)
-        assert parsed["kind"] == "submission_preview"
-        assert parsed["dry_run"] is True
-        assert parsed["submission_file"] == "/tmp/abc12345.yaml"
-        assert parsed["request"]["sid"] == "abc12345"
+        assert parsed["kind"] == "submission_result"
+        assert parsed["status"] == "dry_run"
+        assert parsed["sid"] == "abc12345"
+        assert parsed["submission_path"] == "/tmp/abc12345.yaml"
+        # Request sub-object carries the same shape as a real result
         assert parsed["request"]["nodes"] == 2
         assert parsed["request"]["gpus_per_node"] == 4
-        # The rendered config must be embedded for agent inspection
+        assert parsed["request"]["compute"] == "aml-compute"
+        assert parsed["request"]["sku"] == "G1"
+        assert parsed["request"]["total_processes"] == 2
+        # Full rendered config is embedded for agent inspection
         assert "config" in parsed
         assert parsed["config"]["jobs"][0]["sku"] == "G1"
         assert parsed["config"]["target"]["service"] == "aml"
@@ -81,14 +86,30 @@ class TestSubmissionPreviewJson:
     def test_no_rich_markup_leaks(self):
         req = _make_request(tags=["env:prod", "owner:alice"])
         out = _capture_stdout(
-            lambda: show_submission_preview(
-                req, submission_file="/tmp/abc12345.yaml", dry_run=True
-            )
+            lambda: show_dry_run_result(req, submission_file="/tmp/abc12345.yaml")
         )
-        # No Rich markup should appear in JSON output
         assert "[bold" not in out
         assert "[/bold" not in out
         assert "[dim" not in out
+
+
+class TestSubmissionPreviewJsonSilent:
+    """show_submission_preview is silent in JSON mode (avoids double-envelope)."""
+
+    def setup_method(self):
+        set_output_mode("json")
+
+    def teardown_method(self):
+        set_output_mode("rich")
+
+    def test_preview_emits_nothing_in_json(self):
+        req = _make_request()
+        out = _capture_stdout(
+            lambda: show_submission_preview(
+                req, submission_file="/tmp/abc12345.yaml", dry_run=False
+            )
+        )
+        assert out == ""
 
 
 class TestSubmissionResultJson:
@@ -124,6 +145,18 @@ class TestSubmissionResultJson:
         assert parsed["portal_url"] == "https://ml.azure.com/runs/foo"
         assert parsed["backend"] == "Azure ML"
         assert parsed["error"] == ""
+        # Enriched request sub-object — agents get the same fields the
+        # Rich result panel shows.
+        req_payload = parsed["request"]
+        assert req_payload["experiment"] == "aj"
+        assert req_payload["compute"] == "aml-compute"
+        assert req_payload["sku"] == "G1"
+        assert req_payload["service"] == "aml"
+        assert req_payload["nodes"] == 2
+        assert req_payload["gpus_per_node"] == 4
+        assert req_payload["processes_per_node"] == 1
+        assert req_payload["total_processes"] == 2
+        assert req_payload["template_name"] == "demo"
 
     def test_failure_payload(self):
         req = _make_request()

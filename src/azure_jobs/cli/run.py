@@ -29,7 +29,7 @@ from azure_jobs.core.submit import (
 )
 from azure_jobs.core.template import Template
 from azure_jobs.utils.naming import resolve_name
-from azure_jobs.utils.ui import show_submission_preview
+from azure_jobs.utils.ui import show_dry_run_result, show_submission_preview
 
 __all__ = ["resolve_name"]
 
@@ -161,6 +161,7 @@ def run(
     )
 
     if dry_run:
+        show_dry_run_result(request, submission_file=str(submission_fp))
         return
 
     # ── Choose submission backend ────────────────────────────────────

@@ -34,6 +34,7 @@ from .console import (
 )
 from .panels import (
     build_job_info_lines,
+    show_dry_run_result,
     show_job_detail,
     show_job_status,
     show_submission_preview,
@@ -125,6 +126,7 @@ __all__ = [
     # Panels
     "show_submission_preview",
     "show_submission_result",
+    "show_dry_run_result",
     "show_job_status",
     "show_job_detail",
     "build_job_info_lines",

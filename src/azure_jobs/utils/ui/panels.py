@@ -136,22 +136,95 @@ def show_submission_result(
     Caller is responsible for any non-zero exit on failure — this is a
     pure presentation step.
     """
+    request = rec.request
+    total_processes = request.nodes * (request.processes_per_node or 1)
     payload = {
         "kind": "submission_result",
         "status": rec.status,
-        "sid": rec.request.sid,
+        "sid": request.sid,
         "name": display_name,
         "azure_name": rec.azure_name or result.azure_name or "",
         "portal_url": rec.portal or result.portal_url or "",
         "backend": backend_label,
-        "submission_path": rec.request.submission_path,
+        "submission_path": request.submission_path,
         "note": rec.note,
         "error": result.error or "",
+        "request": {
+            "template_name": request.template_name,
+            "experiment": request.expr_name,
+            "service": request.service,
+            "compute": request.compute,
+            "sku": request.sku,
+            "nodes": request.nodes,
+            "gpus_per_node": request.gpus_per_node,
+            "processes_per_node": request.processes_per_node,
+            "total_processes": total_processes,
+            "image": request.image,
+            "image_registry": request.image_registry,
+            "subscription_id": request.subscription_id,
+            "resource_group": request.resource_group,
+            "workspace_name": request.workspace_name,
+            "code_dir": request.code_dir,
+            "priority": request.priority,
+            "sla_tier": request.sla_tier,
+            "tags": list(request.tags),
+            "command": list(request.command),
+        },
     }
     if get_output_mode() == "json":
         sys.stdout.write(json.dumps(payload, indent=2, default=str) + "\n")
         return
-    _render_submission_result_rich(payload, rec.request)
+    _render_submission_result_rich(payload, request)
+
+
+def show_dry_run_result(request: SubmitRequest, *, submission_file: str) -> None:
+    """Emit a dry-run envelope (JSON mode only).
+
+    Mirrors :func:`show_submission_result` so agent consumers can route
+    uniformly on ``kind=submission_result`` and check ``status="dry_run"``
+    for the no-side-effect path. Rich mode is silent — the preview panel
+    already showed the human everything they need.
+    """
+    if get_output_mode() != "json":
+        return
+    from azure_jobs.core.submit import render_amlt_config
+
+    total_processes = request.nodes * (request.processes_per_node or 1)
+    payload = {
+        "kind": "submission_result",
+        "status": "dry_run",
+        "sid": request.sid,
+        "name": request.name,
+        "azure_name": "",
+        "portal_url": "",
+        "backend": "",
+        "submission_path": submission_file,
+        "note": "",
+        "error": "",
+        "request": {
+            "template_name": request.template_name,
+            "experiment": request.expr_name,
+            "service": request.service,
+            "compute": request.compute,
+            "sku": request.sku,
+            "nodes": request.nodes,
+            "gpus_per_node": request.gpus_per_node,
+            "processes_per_node": request.processes_per_node,
+            "total_processes": total_processes,
+            "image": request.image,
+            "image_registry": request.image_registry,
+            "subscription_id": request.subscription_id,
+            "resource_group": request.resource_group,
+            "workspace_name": request.workspace_name,
+            "code_dir": request.code_dir,
+            "priority": request.priority,
+            "sla_tier": request.sla_tier,
+            "tags": list(request.tags),
+            "command": list(request.command),
+        },
+        "config": render_amlt_config(request),
+    }
+    sys.stdout.write(json.dumps(payload, indent=2, default=str) + "\n")
 
 
 def _render_submission_result_rich(
