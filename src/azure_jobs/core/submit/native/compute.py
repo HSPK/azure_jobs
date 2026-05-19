@@ -33,8 +33,8 @@ def _resolve_compute(request: SubmitRequest) -> str:
     VC's own subscription/resource group when distinct from the workspace).
     """
     if request.service == "sing":
-        sub = request.vc_subscription_id or request.subscription_id
-        rg = request.vc_resource_group or request.resource_group
+        sub = request.sing.vc_subscription_id or request.subscription_id
+        rg = request.sing.vc_resource_group or request.resource_group
         return (
             f"/subscriptions/{sub}"
             f"/resourceGroups/{rg}"
@@ -74,8 +74,8 @@ def _build_resources(
 
     instance_names = resolve_instance_type(
         sku,
-        vc_subscription_id=request.vc_subscription_id or request.subscription_id,
-        vc_resource_group=request.vc_resource_group or request.resource_group,
+        vc_subscription_id=request.sing.vc_subscription_id or request.subscription_id,
+        vc_resource_group=request.sing.vc_resource_group or request.resource_group,
         vc_name=request.compute,
     )
     if instance_names:
@@ -107,8 +107,8 @@ def _build_resources(
             }
         }
     }
-    if request.group_policy:
-        res["properties"]["AISuperComputer"]["groupPolicyName"] = request.group_policy
+    if request.sing.group_policy:
+        res["properties"]["AISuperComputer"]["groupPolicyName"] = request.sing.group_policy
     return res
 
 

@@ -54,8 +54,8 @@ def _build_env_vars(
     if request.service == "sing":
         for k, v in _SING_DEFAULT_ENV.items():
             env_vars.setdefault(k, v)
-        if request.group_policy:
-            env_vars.setdefault("AML_JOB_GROUP_POLICY", request.group_policy)
+        if request.sing.group_policy:
+            env_vars.setdefault("AML_JOB_GROUP_POLICY", request.sing.group_policy)
     env_vars.update(dataref_env)
     return env_vars
 
@@ -173,7 +173,7 @@ def submit(
                 "jobType": "Command",
                 "displayName": request.name,
                 "description": request.description,
-                "experimentName": request.experiment_name,
+                "experimentName": request.expr_name,
                 "command": command_str,
                 "computeId": compute,
                 "environmentVariables": env_vars,

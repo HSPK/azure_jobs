@@ -30,7 +30,15 @@ from .dispatch import (
     register_backend,
     submit_via,
 )
-from .models import StorageMount, SubmitEvent, SubmitRequest, SubmitResult
+from .models import (
+    AmltOpts,
+    SingularityOpts,
+    StorageMount,
+    SubmitEvent,
+    SubmitRequest,
+    SubmitResult,
+    VolcanoOpts,
+)
 from .native import (
     CheckResult,
     check_aml_compute,
@@ -46,6 +54,9 @@ __all__ = [
     "SubmitRequest",
     "SubmitResult",
     "SubmitEvent",
+    "SingularityOpts",
+    "AmltOpts",
+    "VolcanoOpts",
     "submit",
     "submit_via",
     "build_submit_request",

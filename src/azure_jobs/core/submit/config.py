@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any
 from azure_jobs.utils.fs import read_ignore_file
 
 from ..config import AJWorkspace
-from .models import StorageMount, SubmitRequest
+from .models import AmltOpts, SingularityOpts, StorageMount, SubmitRequest, VolcanoOpts
 
 if TYPE_CHECKING:
     from ..template import Template
@@ -78,10 +78,10 @@ def render_amlt_config(request: SubmitRequest) -> dict[str, Any]:
         if request.setup_commands:
             output_conf["environment"]["setup"] = request.setup_commands
 
-    if request.amlt_code_dir or request.code_ignore:
+    if request.amlt.code_dir != "." or request.code_ignore:
         output_conf["code"] = {}
-        if request.amlt_code_dir != ".":
-            output_conf["code"]["local_dir"] = request.amlt_code_dir
+        if request.amlt.code_dir != ".":
+            output_conf["code"]["local_dir"] = request.amlt.code_dir
         if request.code_ignore:
             output_conf["code"]["ignore"] = request.code_ignore
 
@@ -103,15 +103,18 @@ def build_submit_request(
     template_name: str = "unknown",
     experiment: str = "aj",
     nodes: int,
-    processes: int = 1,
+    gpus_per_node: int = 1,
     processes_per_node: int = 1,
     code_dir: str | None = None,
+    description: str = "",
 ) -> SubmitRequest:
     """Build a SubmitRequest from a template + submission parameters.
 
-    ``processes`` is GPUs per node (drives SKU + ``AJ_PROCESSES = nodes *
-    processes``); ``processes_per_node`` is the launcher process count
+    ``gpus_per_node`` drives SKU resolution and ``AJ_GPUS_PER_NODE``;
+    ``processes_per_node`` is the launcher process count
     (e.g. ``torchrun --nproc-per-node``) and is independent of GPU count.
+    ``description`` defaults to the experiment name when blank — the
+    experiment is usually the most stable human identifier for the run.
     """
     target = template.target
     env = template.environment
@@ -141,8 +144,8 @@ def build_submit_request(
         "AJ_TEMPLATE": template_name,
         "AJ_SUBMIT_TIMESTAMP_UTC": datetime.now(timezone.utc).isoformat(),
         "AJ_NODES": str(nodes),
-        "AJ_PROCESSES": str(processes * nodes),
-        "AJ_GPUS_PER_NODE": str(processes),
+        "AJ_PROCESSES": str(gpus_per_node * nodes),
+        "AJ_GPUS_PER_NODE": str(gpus_per_node),
         "AJ_PROCESSES_PER_NODE": str(processes_per_node),
     }
 
@@ -205,35 +208,40 @@ def build_submit_request(
         rg = workspace.resource_group
     ws_name = target.workspace_name or workspace.workspace_name
 
-    # Volcano-only k8s scheduling fields.
-    target_extra: dict[str, Any] = {}
+    # Backend-specific options ───────────────────────────────────────────
+    sing_opts = SingularityOpts(
+        vc_subscription_id=target.subscription_id,
+        vc_resource_group=target.resource_group,
+        group_policy=getattr(target, "group_policy_name", ""),
+    )
+    amlt_opts = AmltOpts(code_dir=amlt_code_dir)
+    volcano_opts = VolcanoOpts()
     if service == "volcano":
-        target_extra = {
-            "namespace": target.namespace,
-            "queue": target.queue,
-            "context": target.context,
-            "gpus_per_node": target.gpus_per_node,
-            "cpus_per_node": target.cpus_per_node,
-            "memory": target.memory,
-            "rdma": target.rdma,
-            "priority_class": target.priority_class,
-            "labels": dict(target.labels),
-        }
+        volcano_opts = VolcanoOpts(
+            namespace=target.namespace,
+            queue=target.queue,
+            context=target.context,
+            gpus_per_node=target.gpus_per_node,
+            cpus_per_node=target.cpus_per_node,
+            memory=target.memory,
+            rdma=target.rdma,
+            priority_class=target.priority_class,
+            labels=dict(target.labels),
+        )
 
     return SubmitRequest(
         name=name,
         sid=sid,
-        description=name,
-        experiment_name=experiment,
+        description=description or experiment,
+        expr_name=experiment,
         compute=target.name,
         sku=sku,
         nodes=nodes,
-        gpus_per_node=processes,
+        gpus_per_node=gpus_per_node,
         processes_per_node=processes_per_node,
         image=env.image,
         image_registry=env.registry or None,
         code_dir=resolved_code_dir,
-        amlt_code_dir=amlt_code_dir,
         code_ignore=code_ignore,
         setup_commands=env.setup,
         command=command_list,
@@ -250,8 +258,7 @@ def build_submit_request(
         resource_group=rg,
         workspace_name=ws_name,
         service=service,
-        target_extra=target_extra,
-        vc_subscription_id=target.subscription_id,
-        vc_resource_group=target.resource_group,
-        group_policy=getattr(target, "group_policy_name", ""),
+        sing=sing_opts,
+        amlt=amlt_opts,
+        volcano=volcano_opts,
     )

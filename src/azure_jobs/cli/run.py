@@ -53,9 +53,11 @@ __all__ = ["resolve_name"]
 @click.option("-n", "--nodes", default=None, help="Number of nodes")
 @click.option(
     "-p",
-    "--processes",
+    "--gpn",
+    "--gpus-per-node",
+    "gpus_per_node",
     default=None,
-    help="GPUs per node (drives SKU resolution and AJ_PROCESSES env)",
+    help="GPUs per node (drives SKU resolution + AJ_GPUS_PER_NODE env)",
 )
 @click.option(
     "--ppn",
@@ -80,7 +82,7 @@ def run(
     args: tuple[str, ...],
     template: str | None,
     nodes: str | None,
-    processes: str | None,
+    gpus_per_node: str | None,
     ppn: str | None,
     dry_run: bool,
     run_local: bool,
@@ -119,15 +121,15 @@ def run(
     name = resolve_name(command, sid)
 
     nodes_int = int(nodes or defaults.nodes or 1)
-    processes_int = int(processes or defaults.processes or 1)
+    gpn_int = int(gpus_per_node or defaults.processes or 1)
     ppn_int = int(ppn or 1)
     try:
-        sku_resolved = resolve_sku(tmpl.jobs[0].sku, nodes_int, processes_int)
+        sku_resolved = resolve_sku(tmpl.jobs[0].sku, nodes_int, gpn_int)
     except ValueError as exc:
         raise click.ClickException(str(exc))
 
     # Remember this template as the new default (only after template validation passes)
-    save_defaults(template=template, nodes=nodes_int, processes=processes_int)
+    save_defaults(template=template, nodes=nodes_int, processes=gpn_int)
     workspace = AJWorkspace() if (dry_run or run_local) else get_workspace_config()
     experiment = (
         get_experiment() or "aj" if (dry_run or run_local) else ensure_experiment()
@@ -145,7 +147,7 @@ def run(
             template_name=template,
             experiment=experiment,
             nodes=nodes_int,
-            processes=processes_int,
+            gpus_per_node=gpn_int,
             processes_per_node=ppn_int,
         )
     except ValueError as e:

@@ -218,8 +218,8 @@ def check_singularity(
 
         arm_client = AzureARMClient()
 
-    sub = request.vc_subscription_id or request.subscription_id
-    rg = request.vc_resource_group or request.resource_group
+    sub = request.sing.vc_subscription_id or request.subscription_id
+    rg = request.sing.vc_resource_group or request.resource_group
     vc = request.compute
     sku_raw = request.sku or "C1"
     sla = (request.sla_tier or "Premium").strip().title()

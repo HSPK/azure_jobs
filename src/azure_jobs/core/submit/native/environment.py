@@ -38,7 +38,7 @@ def _build_environment(request: SubmitRequest, client: AzureMLClient) -> str:
     import hashlib
 
     version = hashlib.sha256(image.encode()).hexdigest()[:16]
-    env_name = request.experiment_name or "aj"
+    env_name = request.expr_name or "aj"
 
     # Reuse existing environment if available
     try:

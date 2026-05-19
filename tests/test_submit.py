@@ -6,6 +6,8 @@ from unittest.mock import MagicMock, patch
 
 from azure_jobs.core.config import AJWorkspace
 from azure_jobs.core.submit import (
+    AmltOpts,
+    SingularityOpts,
     StorageMount,
     SubmitRequest,
     build_submit_request,
@@ -142,7 +144,7 @@ class TestBuildRequestFromConfig:
         }
         ws = AJWorkspace(subscription_id="s", resource_group="r", workspace_name="w")
         r = _make_request(conf, name="j", workspace=ws)
-        assert r.amlt_code_dir == "$CONFIG_DIR/../../"
+        assert r.amlt.code_dir == "$CONFIG_DIR/../../"
 
     def test_env_vars_from_submit_args(self):
         conf = {
@@ -185,7 +187,7 @@ class TestRenderAmltConfig:
             description="run $HOME",
             command=["echo $HOME"],
             env_vars={"PATH_APPEND": "$HOME/.local/bin"},
-            amlt_code_dir="$CONFIG_DIR/project",
+            amlt=AmltOpts(code_dir="$CONFIG_DIR/project"),
         )
 
         conf = render_amlt_config(request)
@@ -340,8 +342,10 @@ class TestResolveCompute:
             service="sing",
             subscription_id="ws-sub",
             resource_group="ws-rg",
-            vc_subscription_id="vc-sub",
-            vc_resource_group="vc-rg",
+            sing=SingularityOpts(
+                vc_subscription_id="vc-sub",
+                vc_resource_group="vc-rg",
+            ),
         )
         arm = _resolve_compute(r)
         assert "/subscriptions/vc-sub/" in arm
@@ -444,8 +448,8 @@ class TestBuildRequestSingularity:
         ws = AJWorkspace(subscription_id="ws-sub", resource_group="ws-rg")
         r = _make_request(conf, name="j", workspace=ws)
         assert r.service == "sing"
-        assert r.vc_subscription_id == "vc-sub"
-        assert r.vc_resource_group == "vc-rg"
+        assert r.sing.vc_subscription_id == "vc-sub"
+        assert r.sing.vc_resource_group == "vc-rg"
         assert r.sku == "2xC1"
 
     def test_aml_config_no_sku_internal_key(self):

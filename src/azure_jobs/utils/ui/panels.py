@@ -51,7 +51,7 @@ def show_submission_preview(
             ("Job ID", f"[bold]{esc(request.sid)}[/bold]"),
             ("Name", esc(request.name)),
             ("Template", esc(request.template_name or "-")),
-            ("Experiment", esc(request.experiment_name or "-")),
+            ("Experiment", esc(request.expr_name or "-")),
             ("Service", esc(request.service or "-")),
         ],
     )

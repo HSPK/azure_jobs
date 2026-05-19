@@ -64,10 +64,10 @@ class VolcanoConfig:
 def build_volcano_config_from_request(request: SubmitRequest) -> VolcanoConfig:
     """Translate a :class:`SubmitRequest` into a VolcanoConfig.
 
-    Volcano-specific fields come from ``request.target_extra``; PVC info
-    is read from the AMLT-convention ``AMLT_PERSISTENT_VOLUME_*`` env vars.
+    Volcano-specific fields come from ``request.volcano``; PVC info is
+    read from the AMLT-convention ``AMLT_PERSISTENT_VOLUME_*`` env vars.
     """
-    extra = request.target_extra or {}
+    vol = request.volcano
     container_args = request.container_args or {}
     env_vars = dict(request.env_vars)
 
@@ -80,29 +80,26 @@ def build_volcano_config_from_request(request: SubmitRequest) -> VolcanoConfig:
 
     return VolcanoConfig(
         name=request.name,
-        namespace=extra.get("namespace", ""),
-        queue=extra.get("queue", "default"),
-        context=extra.get("context", ""),
+        namespace=vol.namespace,
+        queue=vol.queue or "default",
+        context=vol.context,
         nodes=request.nodes,
-        gpus_per_node=extra.get(
-            "gpus_per_node", request.gpus_per_node or C.DEFAULT_GPUS_PER_NODE
+        gpus_per_node=(
+            vol.gpus_per_node or request.gpus_per_node or C.DEFAULT_GPUS_PER_NODE
         ),
         cpus_per_node=(
-            extra.get("cpus_per_node", 0)
-            or container_args.get("cpus", C.DEFAULT_CPUS_PER_NODE)
+            vol.cpus_per_node or container_args.get("cpus", C.DEFAULT_CPUS_PER_NODE)
         ),
-        memory=(
-            extra.get("memory", "") or container_args.get("memory", C.DEFAULT_MEMORY)
-        ),
+        memory=(vol.memory or container_args.get("memory", C.DEFAULT_MEMORY)),
         processes_per_node=request.processes_per_node,
         image=request.image,
         command=list(request.command),
         setup_commands=list(request.setup_commands),
         env_vars=env_vars,
-        rdma=extra.get("rdma", True),
+        rdma=vol.rdma,
         shm_size=container_args.get("shm_size", C.DEFAULT_SHM_SIZE),
-        priority_class=extra.get("priority_class", ""),
-        labels=dict(extra.get("labels", {})),
+        priority_class=vol.priority_class,
+        labels=dict(vol.labels),
         code_dir=code_dir,
         code_ignore=list(request.code_ignore),
         pvc_name=pvc_name,

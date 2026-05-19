@@ -105,6 +105,8 @@ def _vc_payload(series: str, sla: str, limit: int, used: int = 0):
 
 
 def _sing_request(sku="1x80G8-A100-NvLink", sla="Premium"):
+    from azure_jobs.core.submit import SingularityOpts
+
     return SubmitRequest(
         name="x",
         compute="vc1",
@@ -112,8 +114,7 @@ def _sing_request(sku="1x80G8-A100-NvLink", sla="Premium"):
         service="sing",
         sla_tier=sla,
         sku=sku,
-        vc_subscription_id="sub",
-        vc_resource_group="rg",
+        sing=SingularityOpts(vc_subscription_id="sub", vc_resource_group="rg"),
     )
 
 
