@@ -152,7 +152,7 @@ def fetch_jobs_all_workspaces(
             ws = fut_map[fut]
             try:
                 results.append(fut.result())
-            except BaseException as exc:
+            except Exception as exc:
                 if on_workspace_failure is not None:
                     on_workspace_failure(ws, exc)
                 else:

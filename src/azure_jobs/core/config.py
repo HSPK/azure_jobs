@@ -295,7 +295,7 @@ def pick_workspace(workspaces: list[dict[str, str]]) -> dict[str, str] | None:
         _echo(
             f"    {i}. {ws['name']:<20s}  {ws['resource_group']}  ({ws['location']})"
         )
-    _echo(f"    0. Enter manually")
+    _echo("    0. Enter manually")
     _echo()
     choice = _prompt_int("  Select workspace", default=1)
     if 1 <= choice <= len(workspaces):

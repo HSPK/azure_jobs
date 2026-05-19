@@ -8,7 +8,7 @@ import click
 import yaml
 
 from azure_jobs.cli import main
-from azure_jobs.cli._runner import submit_and_record
+from azure_jobs.cli.runner import submit_and_record
 from azure_jobs.core import const
 from azure_jobs.core.config import (
     AJWorkspace,

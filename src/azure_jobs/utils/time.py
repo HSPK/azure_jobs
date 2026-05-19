@@ -127,10 +127,6 @@ def parse_utc(s: str) -> datetime:
     return dt
 
 
-# Back-compat alias — public name is :func:`parse_utc` (no underscore).
-_parse_utc = parse_utc
-
-
 def calc_duration_secs(start_utc: str, end_utc: str) -> int | None:
     """Return the number of seconds between two UTC time strings, or *None*."""
     if not start_utc or not end_utc:
