@@ -15,7 +15,6 @@ return plain Python data or raise.
 from __future__ import annotations
 
 import logging
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Callable
 
@@ -131,14 +130,17 @@ def fetch_jobs_all_workspaces(
     """Fetch up to *n_per_ws* jobs from every accessible ML workspace.
 
     Discovers workspaces via ARM (unless *workspaces* is provided),
-    fetches them in parallel, tags each job with ``_workspace``, and
-    returns the merged list. Failed workspaces are silently dropped and
-    surfaced via *on_workspace_failure*.
+    fetches them in parallel via :func:`azure_jobs.utils.concurrent.parallel_each`,
+    tags each job with ``_workspace``, and returns the merged list.
+    Failed workspaces are silently dropped and surfaced via
+    *on_workspace_failure*.
 
-    Callbacks are invoked from worker threads; they must be threadsafe
-    or short-lived (a ``console.status.update`` is fine).
+    Callbacks fire from the orchestrating thread, so a Rich
+    ``console.status.update`` from a CLI caller is safe without extra
+    synchronisation.
     """
     from azure_jobs.core.az_client import AzureARMClient, AzureMLClient
+    from azure_jobs.utils.concurrent import parallel_each
 
     if workspaces is None:
         arm = AzureARMClient()
@@ -160,28 +162,30 @@ def fetch_jobs_all_workspaces(
         jobs = fetch_jobs(client, n_per_ws, cutoff_utc=cutoff_utc)
         for j in jobs:
             j["_workspace"] = ws_name
-        if on_workspace_done is not None:
-            on_workspace_done(ws_name, len(jobs))
         return jobs
 
-    results: list[list[dict[str, Any]]] = []
-    workers = min(max_workers, len(workspaces))
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        fut_map = {pool.submit(_one, ws): ws for ws in workspaces}
-        for fut in as_completed(fut_map):
-            ws = fut_map[fut]
-            try:
-                results.append(fut.result())
-            except Exception as exc:
-                if on_workspace_failure is not None:
-                    on_workspace_failure(ws, exc)
-                else:
-                    log.debug(
-                        "Skipping workspace %s",
-                        ws.get("name", ""),
-                        exc_info=(type(exc), exc, exc.__traceback__),
-                    )
-    return [j for jobs in results for j in jobs]
+    def _on_done(ws: dict[str, Any], jobs: list[dict[str, Any]], _d: int, _t: int) -> None:
+        if on_workspace_done is not None:
+            on_workspace_done(ws.get("name", ""), len(jobs))
+
+    def _on_fail(ws: dict[str, Any], exc: BaseException, _d: int, _t: int) -> None:
+        if on_workspace_failure is not None:
+            on_workspace_failure(ws, exc)
+        else:
+            log.debug(
+                "Skipping workspace %s",
+                ws.get("name", ""),
+                exc_info=(type(exc), exc, exc.__traceback__),
+            )
+
+    successes, _ = parallel_each(
+        workspaces,
+        _one,
+        on_done=_on_done,
+        on_failure=_on_fail,
+        max_workers=max_workers,
+    )
+    return [j for _ws, jobs in successes for j in jobs]
 
 
 def apply_cutoff(
