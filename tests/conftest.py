@@ -38,3 +38,24 @@ def aj_config(aj_home: Path) -> Path:
     fp = aj_home / "aj_config.json"
     fp.write_text("{}")
     return fp
+
+
+@pytest.fixture
+def aj_env(aj_home, tmp_path, monkeypatch):
+    """Set up an isolated AJ_HOME with a default template + working dir."""
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    monkeypatch.chdir(workdir)
+
+    config_fp = aj_home / "aj_config.json"
+    config_fp.write_text(json.dumps({"defaults": {"template": "default"}}, indent=2))
+
+    return {
+        "aj_home": aj_home,
+        "template_home": aj_home / "template",
+        "submission_home": aj_home / "submission",
+        "dryrun_home": aj_home / "dryrun",
+        "record_fp": aj_home / "record.jsonl",
+        "config_fp": config_fp,
+        "workdir": workdir,
+    }
