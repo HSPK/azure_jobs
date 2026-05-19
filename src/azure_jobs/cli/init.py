@@ -6,8 +6,12 @@ import shutil
 import subprocess
 
 import click
+from typing_extensions import TYPE_CHECKING
 
 from azure_jobs.cli import main
+
+if TYPE_CHECKING:
+    from azure_jobs.core.config import AJWorkspace
 
 
 def _confirm_step(name: str, force: bool) -> bool:

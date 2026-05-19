@@ -47,6 +47,7 @@ from .native import (
     submit_via_native,
 )
 from .native.orchestrate import submit
+from .record import SubmissionRecord, log_record, read_records
 from .render import render_amlt_config
 from .volcano import submit_via_volcano
 
@@ -72,6 +73,10 @@ __all__ = [
     "submit_via_amlt",
     "submit_via_volcano",
     "submit_via_native",
+    # Submission record (local jobs.jsonl)
+    "SubmissionRecord",
+    "log_record",
+    "read_records",
     # Registry primitives — for backend authors
     "BackendEntry",
     "register_backend",

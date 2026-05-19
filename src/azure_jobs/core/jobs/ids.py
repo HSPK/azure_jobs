@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from azure_jobs.core.record import read_records
+from azure_jobs.core.submit.record import read_records
 
 
 def resolve_short_id(job_id: str) -> str:

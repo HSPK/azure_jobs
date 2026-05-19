@@ -15,7 +15,7 @@ from typing import Callable
 
 import click
 
-from azure_jobs.core.record import SubmissionRecord, log_record
+from azure_jobs.core.submit import SubmissionRecord, log_record
 from azure_jobs.core.submit.models import SubmitEvent, SubmitResult
 from azure_jobs.utils.ui import (
     console,

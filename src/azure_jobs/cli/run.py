@@ -19,7 +19,7 @@ from azure_jobs.core.config import (
     save_defaults,
 )
 from azure_jobs.core.errors import AJError
-from azure_jobs.core.record import SubmissionRecord
+from azure_jobs.core.submit import SubmissionRecord
 from azure_jobs.core.sku import resolve_sku
 from azure_jobs.core.submit import (
     amlt_available,

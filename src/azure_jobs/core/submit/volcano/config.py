@@ -5,10 +5,21 @@ from __future__ import annotations
 import os
 import subprocess
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from ..models import SubmitRequest
 from . import constants as C
+
+_DISTRIBUTED_PREAMBLE = Path(__file__).parent / "distributed_preamble.sh"
+
+
+def _load_distributed_preamble(nodes: int) -> list[str]:
+    """Return the Volcano distributed-env preamble, with ``{WORLD_SIZE_DEFAULT}``
+    substituted, as individual script lines."""
+    text = _DISTRIBUTED_PREAMBLE.read_text()
+    text = text.replace("{WORLD_SIZE_DEFAULT}", str(nodes))
+    return text.splitlines()
 
 
 def _kubectl_namespace(context: str = "") -> str:
@@ -134,6 +145,10 @@ def build_volcano_job(cfg: VolcanoConfig) -> dict[str, Any]:
         )
     if cfg.setup_commands:
         script_lines.extend(cfg.setup_commands)
+    # Volcano-specific: distributed env fallback (RANK/WORLD_SIZE/MASTER_*)
+    # is set right before the user command so any setup_commands above can
+    # still override the defaults if desired.
+    script_lines.extend(_load_distributed_preamble(cfg.nodes))
     script_lines.extend(cfg.command)
     script = "\n".join(script_lines)
 

@@ -20,7 +20,7 @@ from azure_jobs.cli._progress import (
     fetch_jobs_with_progress,
 )
 from azure_jobs.core.jobs import apply_cutoff, resolve_short_id
-from azure_jobs.core.record import read_records
+from azure_jobs.core.submit import read_records
 from azure_jobs.utils.ui import show_jobs_table
 
 log = logging.getLogger(__name__)

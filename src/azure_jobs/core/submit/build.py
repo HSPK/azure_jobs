@@ -21,15 +21,6 @@ if TYPE_CHECKING:
     from ..template import Template
 
 
-_VOLCANO_PREAMBLE = Path(__file__).parent / "volcano" / "distributed_preamble.sh"
-
-
-def _load_volcano_preamble(nodes: int) -> str:
-    """Read the Volcano distributed-env preamble and substitute ``{WORLD_SIZE_DEFAULT}``."""
-    text = _VOLCANO_PREAMBLE.read_text()
-    return text.replace("{WORLD_SIZE_DEFAULT}", str(nodes))
-
-
 def build_submit_request(
     template: Template,
     *,
@@ -92,10 +83,6 @@ def build_submit_request(
         "[ -f /tmp/.aj_ssh_env ] && source /tmp/.aj_ssh_env",
         "export PATH=$HOME/.local/bin:$PATH",
     ]
-
-    # Volcano distributed env fallback (when amlt-style vars aren't set).
-    if service == "volcano":
-        cmd_list.extend(_load_volcano_preamble(nodes).splitlines())
 
     # Template commands then user command
     conf_commands = job.command if job else []

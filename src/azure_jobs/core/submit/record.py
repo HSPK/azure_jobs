@@ -3,12 +3,10 @@ from __future__ import annotations
 import json
 import shlex
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
-from . import const
-
-if TYPE_CHECKING:
-    from .submit.models import SubmitRequest
+from .. import const
+from .models import SubmitRequest
 
 
 @dataclass
