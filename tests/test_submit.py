@@ -1,4 +1,4 @@
-﻿"""Tests for core/submit.py â€” the Azure ML submission engine."""
+"""Tests for core/submit.py — the Azure ML submission engine."""
 
 from __future__ import annotations
 

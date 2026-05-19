@@ -107,10 +107,8 @@ class BackendError(AJError):
     backend dispatch failed."""
 
 
-# Tuple suitable for ``except NETWORK_LIKE_ERRORS:`` when a transient
-# lookup/discovery call against ARM is allowed to degrade silently
-# (return ``[]`` / ``None``) rather than crash the caller. Programming
-# errors (KeyError, AttributeError, …) deliberately propagate.
+# Catch tuple for transient lookups that should degrade silently (return
+# ``[]`` / ``None``) rather than crash. Programming errors propagate.
 NETWORK_LIKE_ERRORS: tuple[type[Exception], ...] = (
     requests.RequestException,
     OSError,

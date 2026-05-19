@@ -236,15 +236,9 @@ def submit(
             portal_url=portal_url,
         )
 
-    except AJError as exc:
-        # Domain errors carry their own human-readable message — surface as-is.
-        return SubmitResult(
-            job_name=request.name,
-            status="failed",
-            error=str(exc),
-        )
-    except (requests.RequestException, OSError) as exc:
-        # Network / I/O / filesystem failures — message from the exception.
+    except (AJError, requests.RequestException, OSError) as exc:
+        # Backend never crashes the caller — failures become a SubmitResult.
+        # Programming errors (NameError/AttributeError/…) deliberately propagate.
         return SubmitResult(
             job_name=request.name,
             status="failed",

@@ -1,7 +1,7 @@
-﻿"""Pre-flight validation for ``aj run``.
+"""Pre-flight validation for ``aj run``.
 
 Cheap sanity checks that catch the most common submission failures before
-hitting Azure ML â€” wrong workspace for a compute, instance type missing
+hitting Azure ML — wrong workspace for a compute, instance type missing
 from a VC's quota, SLA tier with zero limit, etc.
 
 All ARM lookups go through :mod:`azure_jobs.utils.cache` so repeated runs
@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-# Quotas/computes change rarely â†’ cache for 24h.
+# Quotas/computes change rarely → cache for 24h.
 _QUOTA_TTL = 24 * 3600
 _COMPUTE_TTL = 24 * 3600
 
@@ -237,7 +237,7 @@ def check_singularity(
         )
         return CheckResult(
             severity="warn",
-            title=f"Could not fetch quotas for VC '{vc}' â€” skipping check",
+            title=f"Could not fetch quotas for VC '{vc}' — skipping check",
             detail=[f"Resolved instance(s): {', '.join(instances) or '(none)'}"],
         )
 
@@ -279,7 +279,7 @@ def check_singularity(
                     )
                 return CheckResult(
                     severity="warn",
-                    title=(f"Auto-adjusted SKU on VC '{vc}': '{sku_raw}' â†’ '{alt}'"),
+                    title=(f"Auto-adjusted SKU on VC '{vc}': '{sku_raw}' → '{alt}'"),
                     detail=detail,
                     adjusted_sku=alt,
                 )
@@ -331,7 +331,7 @@ def check_singularity(
             ],
         )
 
-    return CheckResult(title=f"SKU OK: {sku_raw} â†’ {msg}")
+    return CheckResult(title=f"SKU OK: {sku_raw} → {msg}")
 
 
 def check_aml_compute(

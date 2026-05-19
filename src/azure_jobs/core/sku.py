@@ -1,4 +1,4 @@
-﻿"""Singularity SKU resolution.
+"""Singularity SKU resolution.
 
 Parses amlt-style SKU shorthand (e.g. ``1xC1``, ``1x80G8-A100-NvLink``) and
 resolves them to actual Singularity instance type names by querying the
@@ -8,7 +8,7 @@ Resolution strategy:
 1. Direct instance type names (e.g. ``E16ads_v5``) pass through as-is.
 2. amlt shorthand is parsed into GPU/CPU requirements.
 3. The virtual cluster quotas are queried for available instance families.
-4. A known mapping from family â†’ instance types is used to pick the best match.
+4. A known mapping from family → instance types is used to pick the best match.
 """
 
 from __future__ import annotations
@@ -23,9 +23,9 @@ from .errors import NETWORK_LIKE_ERRORS, SkuResolveError
 
 log = logging.getLogger(__name__)
 
-# Caches for ARM responses (vc_name â†’ families). Protected by a lock
+# Caches for ARM responses (vc_name → families). Protected by a lock
 # because TUI workers, the SDK, and pytest-xdist may invoke concurrently.
-_vc_families_cache: dict[str, list[str]] = {}  # vc_name â†’ families
+_vc_families_cache: dict[str, list[str]] = {}  # vc_name → families
 _vc_families_lock = threading.Lock()
 
 
@@ -77,10 +77,10 @@ class SkuSpec:
 
         Examples::
 
-            1xC1              â†’ 1 CPU
-            1x80G8-A100-NvLink â†’ 8 Ã— A100 80GB w/ NvLink
-            2x40G4-A100       â†’ 4 Ã— A100 40GB, 2 nodes
-            G1                â†’ 1 generic GPU
+            1xC1              → 1 CPU
+            1x80G8-A100-NvLink → 8 × A100 80GB w/ NvLink
+            2x40G4-A100       → 4 × A100 40GB, 2 nodes
+            G1                → 1 generic GPU
         """
         m = re.fullmatch(
             r"""
@@ -136,7 +136,7 @@ def _load_yaml(name: str) -> dict[str, Any]:
 
 _FAMILY_MAP: dict[str, dict[str, Any]] = _load_yaml("sku_families.yaml")
 
-# Series â†’ (gpu_model, gpu_memory_gb) lookup for the quota table.
+# Series → (gpu_model, gpu_memory_gb) lookup for the quota table.
 _SERIES_GPU_INFO: dict[str, tuple[str, int]] = {
     k: (v[0], int(v[1])) for k, v in _load_yaml("sku_series_gpu.yaml").items()
 }
@@ -216,7 +216,7 @@ class SeriesQuota:
 
     series: str
     tiers: dict[str, SlaTierQuota] = field(default_factory=dict)
-    # Overall (user-level) quota â€” separate from per-SLA tiers
+    # Overall (user-level) quota — separate from per-SLA tiers
     overall: SlaTierQuota | None = None
 
     def set_tier(self, sla_tier: str | None, limit: int, used: int | None) -> None:
@@ -262,7 +262,7 @@ def fetch_vc_quotas(
     """Fetch quota info for a Singularity virtual cluster.
 
     Merges both ``defaultGroupPolicyOverallQuotas`` and regioned
-    ``properties.managed.quotas`` â€” matching ``amlt target info sing``.
+    ``properties.managed.quotas`` — matching ``amlt target info sing``.
 
     Each quota item from the API has ``{id, slaTier, limit, used}``.
     """
@@ -382,7 +382,7 @@ def _match_family(spec: SkuSpec, family_id: str, family_info: dict) -> str | Non
         instances = family_info.get("instances", [])
         if not instances:
             return None
-        # num_units maps to instance size: C1 â†’ smallest, C4 â†’ mid, etc.
+        # num_units maps to instance size: C1 → smallest, C4 → mid, etc.
         # Clamp to valid range
         idx = min(spec.num_units - 1, len(instances) - 1)
         return instances[max(0, idx)]
