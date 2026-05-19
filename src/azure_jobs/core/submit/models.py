@@ -78,68 +78,6 @@ class SubmitRequest:
         # result is JSON-serializable; vars() would not.
         return asdict(self)
 
-    def get_amlt_config(self) -> dict[str, Any]:
-        """Render this request as an AMLT-compatible config dict."""
-        config: dict[str, Any] = {
-            "jobs": [
-                {
-                    "name": self.name,
-                    "description": self.description,
-                    "sku": self.sku or "auto",
-                    "command": self.command,
-                    "instance_count": self.nodes,
-                    "process_count_per_node": self.processes_per_node,
-                    "identity": self.identity,
-                    "sla_tier": self.sla_tier,
-                    "priority": self.priority,
-                    "tags": self.tags or [],
-                }
-            ]
-        }
-
-        if self.compute:
-            config["target"] = {"name": self.compute}
-            if self.vc_subscription_id:
-                config["target"]["subscription_id"] = self.vc_subscription_id
-            if self.vc_resource_group:
-                config["target"]["resource_group"] = self.vc_resource_group
-            if self.group_policy:
-                config["target"]["group_policy_name"] = self.group_policy
-
-        if self.image or self.setup_commands:
-            config["environment"] = {}
-            if self.image:
-                config["environment"]["image"] = self.image
-            if self.image_registry:
-                config["environment"]["registry"] = self.image_registry
-            if self.setup_commands:
-                config["environment"]["setup"] = self.setup_commands
-
-        if self.amlt_code_dir or self.code_ignore:
-            config["code"] = {}
-            if self.amlt_code_dir != ".":
-                config["code"]["local_dir"] = self.amlt_code_dir
-            if self.code_ignore:
-                config["code"]["ignore"] = self.code_ignore
-
-        if self.storage:
-            config["storage"] = self.storage
-
-        submit_args: dict[str, Any] = {}
-        if self.env_vars:
-            submit_args["env"] = self.env_vars
-
-        container_args = dict(self.container_args)
-        if self.shm_size and "shm_size" not in container_args:
-            container_args["shm_size"] = self.shm_size
-        if container_args:
-            submit_args["container_args"] = container_args
-
-        if submit_args:
-            config["jobs"][0]["submit_args"] = submit_args
-
-        return config
-
 
 @dataclass
 class SubmitResult:

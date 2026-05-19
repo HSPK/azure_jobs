@@ -177,12 +177,6 @@ class TestBuildRequestFromConfig:
         assert r.container_args.get("memory") == "2808Gi"
         assert r.shm_size == "1024g"
 
-        amlt_conf = r.get_amlt_config()
-        got = amlt_conf["jobs"][0]["submit_args"]["container_args"]
-        assert got["cpus"] == 104
-        assert got["memory"] == "2808Gi"
-        assert got["shm_size"] == "1024g"
-
 
 class TestRenderAmltConfig:
     def test_escapes_dollar_signs(self):
