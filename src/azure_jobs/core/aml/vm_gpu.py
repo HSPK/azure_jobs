@@ -1,6 +1,6 @@
 """Azure ML VM size → GPU info catalog.
 
-Loaded once from ``aml_vm_gpu.yaml`` next to this module — edit the YAML
+Loaded once from ``vm_gpu.yaml`` next to this module — edit the YAML
 to add new VM sizes without touching Python.
 """
 
@@ -10,7 +10,7 @@ from pathlib import Path
 
 import yaml
 
-_YAML = Path(__file__).parent / "aml_vm_gpu.yaml"
+_YAML = Path(__file__).parent / "vm_gpu.yaml"
 
 # vm_size (lower) → (accelerator, gpu_count, gpu_memory_gb)
 AML_VM_GPU: dict[str, tuple[str, int, int]] = {

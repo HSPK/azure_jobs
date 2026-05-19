@@ -212,7 +212,7 @@ def _show_sing_quotas(show_all: bool, template: str | None) -> None:
     print_table(table)
 
 
-from azure_jobs.core.aml_vm_gpu import vm_sku_label as _vm_sku_label
+from azure_jobs.core.aml import vm_sku_label as _vm_sku_label
 
 
 def _portal_compute_url(sub: str, rg: str, ws: str, cluster: str) -> str:
@@ -229,7 +229,7 @@ def _show_aml_quotas(show_all: bool) -> None:
     from rich.text import Text
 
     from azure_jobs.core.az_client import AzureARMClient
-    from azure_jobs.core.computes import fetch_aml_computes_all_workspaces
+    from azure_jobs.core.aml import fetch_aml_computes_all_workspaces
     from azure_jobs.utils.ui import console, error, warning
 
     arm = AzureARMClient()
