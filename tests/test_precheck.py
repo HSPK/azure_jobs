@@ -80,13 +80,17 @@ class FakeArm:
     def get_vc_quotas_raw(self, sub, rg, vc):
         self.vc_calls += 1
         if self.vc_data is None:
-            raise RuntimeError("no quota")
+            import requests
+
+            raise requests.ConnectionError("no quota")
         return self.vc_data
 
     def get_workspace_compute(self, sub, rg, ws, name):
         self.compute_calls += 1
         if self.raise_compute:
-            raise RuntimeError("404")
+            import requests
+
+            raise requests.ConnectionError("404")
         return self.compute_data
 
 

@@ -80,8 +80,13 @@ class JobInfo(TypedDict, total=False):
     processes_per_node: int
 
 
-def extract_error_message(err: dict | str | None) -> str:
-    """Walk nested ``innerError`` chain and return the most specific message."""
+def parse_azure_error_dict(err: dict | str | None) -> str:
+    """Walk Azure's nested ``innerError`` chain and return the most
+    specific human-readable message.
+
+    Accepts either the raw ``error`` sub-dict (with ``code``, ``message``,
+    ``innerError``) or a plain string. Returns ``""`` for ``None``/empty.
+    """
     if not err:
         return ""
     if isinstance(err, dict):
@@ -97,6 +102,10 @@ def extract_error_message(err: dict | str | None) -> str:
             return f"{code}: {msg}"
         return msg or code or str(err)
     return str(err)
+
+
+# Back-compat alias — the public name is :func:`parse_azure_error_dict`.
+extract_error_message = parse_azure_error_dict
 
 
 def trim_arm_id(arm_id: str) -> str:

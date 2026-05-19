@@ -143,20 +143,33 @@ class WorkspaceCoords:
 
 
 def raise_for_rest_error(resp: requests.Response) -> None:
-    """Raise ``HTTPError`` with parsed Azure REST error details, or return on 2xx."""
+    """Raise :class:`azure_jobs.core.errors.RestError` on 4xx/5xx, else return.
+
+    Parses Azure's ``{"error": {"code": "...", "message": "..."}}``
+    envelope when present so the raised exception carries both the
+    HTTP status code and the Azure ``error.code`` for typed handling
+    by callers (e.g. ``if exc.status_code == 404`` /
+    ``if exc.azure_code == "Throttled"``).
+    """
     if resp.status_code < 400:
         return
+    azure_code = ""
     try:
         body = resp.json()
         err = body.get("error", {}) or {}
+        azure_code = err.get("code", "") or ""
         detail = err.get("message", "") or body.get("message", "")
         inner = err.get("details", []) or []
         if inner:
             detail += " | " + str([d.get("message", "") for d in inner])
     except (ValueError, KeyError):
         detail = (resp.text or "")[:500]
-    raise requests.exceptions.HTTPError(
+    from azure_jobs.core.errors import RestError
+
+    raise RestError(
         f"{resp.status_code}: {detail}",
+        status_code=resp.status_code,
+        azure_code=azure_code,
         response=resp,
     )
 

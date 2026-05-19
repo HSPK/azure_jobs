@@ -49,13 +49,15 @@ class TestAuthStatus:
 
     def test_logged_in(self, runner: CliRunner) -> None:
         """Shows user, subscription, and workspace when logged in."""
-        ws_cfg = {
-            "workspace": {
-                "subscription_id": "sub-1",
-                "resource_group": "rg-1",
-                "workspace_name": "ws-1",
-            }
-        }
+        from azure_jobs.core.config import AJConfig, AJWorkspace
+
+        ws_cfg = AJConfig(
+            workspace=AJWorkspace(
+                subscription_id="sub-1",
+                resource_group="rg-1",
+                workspace_name="ws-1",
+            )
+        )
         mock_token = MagicMock()
         mock_token.token = "fake-token"
 
@@ -93,6 +95,8 @@ class TestAuthStatus:
 
     def test_no_workspace(self, runner: CliRunner) -> None:
         """Shows 'Not configured' when workspace not set."""
+        from azure_jobs.core.config import AJConfig
+
         mock_token = MagicMock()
         mock_token.token = "fake-token"
 
@@ -101,7 +105,7 @@ class TestAuthStatus:
             patch("azure.identity.AzureCliCredential") as mock_cred_cls,
             patch(
                 "azure_jobs.core.config.read_config",
-                return_value={},
+                return_value=AJConfig(),
             ),
         ):
             mock_cred_cls.return_value.get_token.return_value = mock_token
@@ -112,12 +116,14 @@ class TestAuthStatus:
 
     def test_sdk_credential_failure(self, runner: CliRunner) -> None:
         """Shows SDK credential error when token fetch fails."""
+        from azure_jobs.core.config import AJConfig
+
         with (
             patch("subprocess.run", return_value=_mock_az_account_show()),
             patch("azure.identity.AzureCliCredential") as mock_cred_cls,
             patch(
                 "azure_jobs.core.config.read_config",
-                return_value={},
+                return_value=AJConfig(),
             ),
         ):
             mock_cred_cls.return_value.get_token.side_effect = Exception(

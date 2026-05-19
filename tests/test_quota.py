@@ -216,8 +216,10 @@ class TestFetchVcQuotas:
         assert "NoProd" in series_names
 
     def test_empty_on_exception(self):
+        import requests
+
         client = MagicMock()
-        client.get_vc_quotas_raw.side_effect = Exception("fail")
+        client.get_vc_quotas_raw.side_effect = requests.ConnectionError("fail")
         assert fetch_vc_quotas("sub", "rg", "myvc", arm_client=client) == []
 
     def test_empty_on_missing_keys(self):
@@ -260,8 +262,10 @@ class TestDiscoverVirtualClusters:
         assert discover_virtual_clusters(arm_client=client) == []
 
     def test_handles_exception_gracefully(self):
+        import requests
+
         client = MagicMock()
-        client.list_subscriptions.side_effect = Exception("auth fail")
+        client.list_subscriptions.side_effect = requests.ConnectionError("auth fail")
         assert discover_virtual_clusters(arm_client=client) == []
 
     def test_empty_on_no_data(self):

@@ -5,6 +5,7 @@ from __future__ import annotations
 import click
 
 from azure_jobs.cli import main
+from azure_jobs.core.errors import AJError
 
 
 @main.group(name="ws")
@@ -83,8 +84,8 @@ def ws_show(name: str | None) -> None:
     if name:
         try:
             ws = resolve_workspace(name)
-        except ValueError as exc:
-            raise click.ClickException(str(exc))
+        except AJError as exc:
+            raise click.ClickException(str(exc)) from exc
     else:
         cfg = read_config()
         if not cfg.workspace.workspace_name:
@@ -121,6 +122,7 @@ def ws_set(name: str | None) -> None:
     With NAME, sets the workspace by exact name.
     """
     from azure_jobs.core.config import (
+        AJWorkspace,
         pick_workspace,
         read_config,
         write_config,
@@ -146,10 +148,10 @@ def ws_set(name: str | None) -> None:
             }
 
     cfg = read_config()
-    cfg["workspace"] = {
-        "subscription_id": sub["subscription_id"],
-        "resource_group": picked["resource_group"],
-        "workspace_name": picked["name"],
-    }
+    cfg.workspace = AJWorkspace(
+        subscription_id=sub["subscription_id"],
+        resource_group=picked["resource_group"],
+        workspace_name=picked["name"],
+    )
     write_config(cfg)
     success(f"Workspace set to [bold]{picked['name']}[/bold]")

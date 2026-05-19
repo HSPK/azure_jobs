@@ -19,7 +19,19 @@ import threading
 from dataclasses import dataclass, field
 from typing import Any
 
+import requests
+
+from .errors import AJError, SkuResolveError
+
 log = logging.getLogger(__name__)
+
+# Network-style failures we tolerate when discovering VCs / families / quotas.
+# Programming errors (KeyError, AttributeError on unexpected schema) propagate.
+_DISCOVERY_FAILURES: tuple[type[BaseException], ...] = (
+    requests.RequestException,
+    OSError,
+    AJError,
+)
 
 # Module-level caches for avoiding redundant ARM API calls.
 # Protected by ``_vc_families_lock`` because TUI workers, the SDK, and
@@ -49,11 +61,11 @@ def resolve_sku(sku_template: str | dict[str, str], nodes: int, processes: int) 
                 if int(key_str) == nodes:
                     return value.format(nodes=nodes, processes=processes)
 
-        raise ValueError(
+        raise SkuResolveError(
             f"No matching SKU template found for {nodes} nodes in {sku_template}"
         )
 
-    raise ValueError(
+    raise SkuResolveError(
         f"Unsupported SKU template type: {type(sku_template).__name__}. "
         "Only str and dict are supported."
     )
@@ -184,7 +196,7 @@ def _fetch_vc_families(
         with _vc_families_lock:
             _vc_families_cache[cache_key] = families
         return families
-    except Exception:
+    except _DISCOVERY_FAILURES:
         log.debug("Failed to fetch VC families for %s", vc_name, exc_info=True)
         return []
 
@@ -276,7 +288,7 @@ def fetch_vc_quotas(
             vc_resource_group,
             vc_name,
         )
-    except Exception:
+    except _DISCOVERY_FAILURES:
         log.debug("Failed to fetch VC quotas for %s", vc_name, exc_info=True)
         return []
 
@@ -344,7 +356,7 @@ def discover_virtual_clusters(
     if not subscription_ids:
         try:
             subscription_ids = arm_client.list_subscriptions()
-        except Exception:
+        except _DISCOVERY_FAILURES:
             log.debug("Failed to list subscriptions", exc_info=True)
             return []
         if not subscription_ids:
@@ -358,7 +370,7 @@ def discover_virtual_clusters(
     )
     try:
         rows = arm_client.resource_graph_query(query, subscription_ids)
-    except Exception:
+    except _DISCOVERY_FAILURES:
         log.debug("Resource graph query for VCs failed", exc_info=True)
         return []
 

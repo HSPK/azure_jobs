@@ -132,7 +132,8 @@ def submit_via_amlt(
         msg = "amlt run timed out"
         emit(SubmitEvent(kind="error", detail=msg))
         return SubmitResult(job_name=job_name, status="failed", error=msg)
-    except Exception as exc:  # pragma: no cover
+    except (OSError, subprocess.SubprocessError) as exc:
+        # spawn/IO failures (FileNotFoundError, PermissionError, etc.)
         msg = str(exc)
         emit(SubmitEvent(kind="error", detail=msg))
         return SubmitResult(job_name=job_name, status="failed", error=msg)

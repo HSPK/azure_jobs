@@ -62,7 +62,9 @@ def _do_pull(repo_id: str | None, force: bool) -> None:
                 text=True,
             )
     except subprocess.CalledProcessError as exc:
-        raise click.ClickException(f"Failed to clone {repo_id}: {exc.stderr.strip()}")
+        raise click.ClickException(
+            f"Failed to clone {repo_id}: {exc.stderr.strip()}"
+        ) from exc
 
     # Remove .git — keep .azure_jobs as a plain directory
     git_fp = const.AJ_HOME / ".git"
@@ -100,7 +102,9 @@ def _do_push(message: str | None) -> None:
                     text=True,
                 )
         except subprocess.CalledProcessError as exc:
-            raise click.ClickException(f"Failed to clone remote: {exc.stderr.strip()}")
+            raise click.ClickException(
+                f"Failed to clone remote: {exc.stderr.strip()}"
+            ) from exc
 
         from pathlib import Path
 
@@ -146,7 +150,7 @@ def _do_push(message: str | None) -> None:
                 text=True,
             )
         except subprocess.CalledProcessError as exc:
-            raise click.ClickException(f"Failed to commit: {exc.stderr.strip()}")
+            raise click.ClickException(f"Failed to commit: {exc.stderr.strip()}") from exc
         try:
             with console.status("[bold cyan]Pushing…[/bold cyan]", spinner="dots"):
                 subprocess.run(
@@ -156,6 +160,6 @@ def _do_push(message: str | None) -> None:
                     text=True,
                 )
         except subprocess.CalledProcessError as exc:
-            raise click.ClickException(f"Failed to push: {exc.stderr.strip()}")
+            raise click.ClickException(f"Failed to push: {exc.stderr.strip()}") from exc
 
     success("Templates pushed to remote")

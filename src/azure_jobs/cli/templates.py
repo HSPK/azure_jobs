@@ -57,7 +57,7 @@ def template_show(name: str) -> None:
     try:
         merged = read_conf(tp)
     except (ConfigError, FileNotFoundError) as exc:
-        raise click.ClickException(str(exc))
+        raise click.ClickException(str(exc)) from exc
 
     # Show inheritance chain
     raw = yaml.safe_load(tp.read_text()) or {}
@@ -211,7 +211,9 @@ def template_diff() -> None:
                     text=True,
                 )
         except subprocess.CalledProcessError as exc:
-            raise click.ClickException(f"Failed to clone remote: {exc.stderr.strip()}")
+            raise click.ClickException(
+                f"Failed to clone remote: {exc.stderr.strip()}"
+            ) from exc
 
         remote_files = _collect_files(Path(tmp))
         local_files = _collect_files(const.AJ_HOME)

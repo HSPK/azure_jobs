@@ -128,8 +128,7 @@ def job_list(
 
 def _fetch_and_show_job(job_id: str, ws_name: str | None = None) -> None:
     """Resolve *job_id*, fetch via REST, and display details."""
-    from requests.exceptions import HTTPError
-
+    from azure_jobs.core.errors import RestError
     from azure_jobs.core.rest_client import create_rest_client
     from azure_jobs.utils.ui import console, error, show_job_detail
 
@@ -139,8 +138,8 @@ def _fetch_and_show_job(job_id: str, ws_name: str | None = None) -> None:
     try:
         with console.status("[bold cyan]Fetching job…[/bold cyan]", spinner="dots"):
             job = client.jobs.get(name)
-    except HTTPError as exc:
-        if exc.response is not None and exc.response.status_code == 404:
+    except RestError as exc:
+        if exc.status_code == 404:
             error(f"Job not found: [bold]{name}[/bold]")
         else:
             error(f"Failed to fetch job: {exc}")

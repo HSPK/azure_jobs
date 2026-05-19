@@ -7,10 +7,12 @@ import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
+import requests
+
 if TYPE_CHECKING:
     from azure_jobs.core.rest_client import AzureMLClient
 
-from ...errors import extract_json_error as _extract_error_message
+from ...errors import AJError, parse_exception_message
 from ..models import SubmitEvent, SubmitRequest, SubmitResult
 from .command import RUNNER_FILENAME, generate_runner_script
 from .compute import (
@@ -234,9 +236,17 @@ def submit(
             portal_url=portal_url,
         )
 
-    except Exception as exc:
+    except AJError as exc:
+        # Domain errors carry their own human-readable message — surface as-is.
         return SubmitResult(
             job_name=request.name,
             status="failed",
-            error=_extract_error_message(exc),
+            error=str(exc),
+        )
+    except (requests.RequestException, OSError) as exc:
+        # Network / I/O / filesystem failures — message from the exception.
+        return SubmitResult(
+            job_name=request.name,
+            status="failed",
+            error=parse_exception_message(exc),
         )

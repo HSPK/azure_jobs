@@ -37,7 +37,7 @@ def _resolve_ignore_patterns(template: str | None, code_dir: Path) -> list[str]:
         try:
             merged = read_conf(tp)
         except (ConfigError, FileNotFoundError) as exc:
-            raise click.ClickException(str(exc))
+            raise click.ClickException(str(exc)) from exc
         template_ignore = list(Template.from_dict(merged).code.ignore)
 
     file_ignore = read_ignore_file(code_dir)

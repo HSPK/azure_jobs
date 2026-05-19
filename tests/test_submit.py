@@ -24,7 +24,7 @@ from azure_jobs.core.submit.native.environment import (
     _build_environment,
 )
 from azure_jobs.core.submit.native.storage import _build_storage_mounts
-from azure_jobs.core.submit.native.submit import _extract_error_message
+from azure_jobs.core.errors import parse_exception_message as _extract_error_message
 from azure_jobs.core.template import Template
 
 
@@ -238,6 +238,7 @@ class TestSubmitMocked:
         assert "portal" in result.portal_url
 
     def test_submit_auth_failure(self):
+        from azure_jobs.core.errors import AuthError
         from azure_jobs.core.submit import submit
 
         request = SubmitRequest(
@@ -249,7 +250,7 @@ class TestSubmitMocked:
 
         with patch(
             "azure_jobs.core.submit.native.submit._get_rest_client",
-            side_effect=Exception("Azure CLI not logged in"),
+            side_effect=AuthError("Azure CLI not logged in"),
         ):
             result = submit(request)
 

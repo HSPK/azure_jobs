@@ -14,6 +14,9 @@ import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+import requests
+
+from azure_jobs.core.errors import AJError
 from azure_jobs.core.submit.models import SubmitRequest
 from azure_jobs.utils.cache import cache_get, cache_set
 
@@ -21,6 +24,14 @@ if TYPE_CHECKING:
     from azure_jobs.core.rest_client import AzureARMClient
 
 log = logging.getLogger(__name__)
+
+# Network-style failures that are OK to swallow when a precheck lookup
+# fails — the precheck just degrades to a warning, not a crash.
+_LOOKUP_FAILURES: tuple[type[BaseException], ...] = (
+    requests.RequestException,
+    OSError,
+    AJError,
+)
 
 # Quotas/computes change rarely → cache for 24h.
 _QUOTA_TTL = 24 * 3600
@@ -55,7 +66,7 @@ def _cached_vc_quotas_raw(
             return cached
     try:
         data = arm_client.get_vc_quotas_raw(sub, rg, vc)
-    except Exception as exc:
+    except _LOOKUP_FAILURES as exc:
         log.debug("get_vc_quotas_raw failed: %s", exc)
         return None
     cache_set("vc_quotas", key, data)
@@ -79,7 +90,7 @@ def _cached_aml_compute(
             return cached
     try:
         data = arm_client.get_workspace_compute(sub, rg, ws, name)
-    except Exception as exc:
+    except _LOOKUP_FAILURES as exc:
         log.debug("get_workspace_compute failed: %s", exc)
         return None
     cache_set("aml_computes", key, data)
@@ -144,7 +155,7 @@ def _toggle_nvlink(sku_raw: str) -> str | None:
         from azure_jobs.core.sku import SkuSpec
 
         spec = SkuSpec.parse(s)
-    except Exception:
+    except (ValueError, TypeError):
         return None
     if spec.is_cpu or not spec.accelerators:
         return None

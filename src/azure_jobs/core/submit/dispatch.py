@@ -17,6 +17,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable
 
+from ..errors import BackendError
 from .models import SubmitEvent, SubmitRequest, SubmitResult
 
 BackendFn = Callable[..., SubmitResult]
@@ -45,15 +46,15 @@ def register_backend(service: str, fn: BackendFn, *, label: str) -> None:
 
 
 def get_backend(service: str) -> BackendEntry:
-    """Return the registered backend for *service* or raise ``KeyError``."""
+    """Return the registered backend for *service* or raise :class:`BackendError`."""
     try:
         return _BACKENDS[service]
     except KeyError:
         available = ", ".join(sorted(_BACKENDS)) or "(none registered)"
-        raise KeyError(
+        raise BackendError(
             f"No submission backend registered for service '{service}'. "
             f"Available: {available}"
-        )
+        ) from None
 
 
 def list_backends() -> list[str]:

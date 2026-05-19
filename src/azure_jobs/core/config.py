@@ -23,6 +23,7 @@ from typing import Any
 
 from . import const
 from .dataclass_utils import dataclass_from_dict, remove_empty_values
+from .errors import AuthError, WorkspaceError
 
 log = logging.getLogger(__name__)
 
@@ -420,7 +421,7 @@ def resolve_workspace(name: str | None = None) -> AJWorkspace:
     if not sub_id:
         sub = detect_subscription()
         if not sub:
-            raise ValueError("Cannot detect subscription. Run `az login` first.")
+            raise AuthError("Cannot detect subscription. Run `az login` first.")
         sub_id = sub["subscription_id"]
 
     # Try to find full details from detected workspaces
@@ -442,6 +443,6 @@ def resolve_workspace(name: str | None = None) -> AJWorkspace:
             workspace_name=name,
         )
 
-    raise ValueError(
+    raise WorkspaceError(
         f"Workspace '{name}' not found. Run `aj ws list` to see available workspaces."
     )

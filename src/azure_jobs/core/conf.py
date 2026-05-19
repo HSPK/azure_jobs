@@ -7,10 +7,9 @@ from typing import Any
 import yaml
 
 from . import const
+from .errors import ConfigError
 
-
-class ConfigError(Exception):
-    """Raised when template configuration is invalid or unresolvable."""
+__all__ = ["ConfigError", "merge_confs", "read_conf"]
 
 
 def merge_confs(*data: Any) -> Any:

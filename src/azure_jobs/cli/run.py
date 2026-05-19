@@ -18,6 +18,7 @@ from azure_jobs.core.config import (
     get_workspace_config,
     save_defaults,
 )
+from azure_jobs.core.errors import AJError
 from azure_jobs.core.record import SubmissionRecord
 from azure_jobs.core.sku import resolve_sku
 from azure_jobs.core.submit import (
@@ -125,8 +126,8 @@ def run(
     ppn_int = int(ppn or 1)
     try:
         sku_resolved = resolve_sku(tmpl.jobs[0].sku, nodes_int, gpn_int)
-    except ValueError as exc:
-        raise click.ClickException(str(exc))
+    except AJError as exc:
+        raise click.ClickException(str(exc)) from exc
 
     # Remember this template as the new default (only after template validation passes)
     save_defaults(template=template, nodes=nodes_int, processes=gpn_int)
@@ -150,8 +151,8 @@ def run(
             gpus_per_node=gpn_int,
             processes_per_node=ppn_int,
         )
-    except ValueError as e:
-        raise click.ClickException(str(e))
+    except (AJError, ValueError) as exc:
+        raise click.ClickException(str(exc)) from exc
 
     final_cmd = request.command[-1] if request.command else ""
 
@@ -202,8 +203,8 @@ def run(
     # Normal path: dispatch on request.service via the backend registry.
     try:
         entry = get_backend(request.service)
-    except KeyError as exc:
-        raise click.ClickException(str(exc))
+    except AJError as exc:
+        raise click.ClickException(str(exc)) from exc
 
     submit_and_record(
         lambda on_event: entry.fn(request, on_event=on_event),

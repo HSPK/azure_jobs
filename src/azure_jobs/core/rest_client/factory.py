@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from ..config import AJWorkspace
+from ..errors import WorkspaceError
 from .client import AzureMLClient
 
 
@@ -24,7 +25,7 @@ def create_rest_client(
     required = ("subscription_id", "resource_group", "workspace_name")
     missing = [k for k in required if not getattr(workspace, k, "")]
     if missing:
-        raise ValueError(
+        raise WorkspaceError(
             f"Workspace config incomplete — missing: {', '.join(missing)}. "
             "Run `aj ws set` to configure."
         )

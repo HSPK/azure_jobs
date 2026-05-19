@@ -58,17 +58,14 @@ def auth_status() -> None:
             )
 
     # ── 3. aj workspace config ──
-    try:
-        from azure_jobs.core.config import read_config
+    from azure_jobs.core.config import read_config
 
-        cfg = read_config()
-        ws = cfg.get("workspace", {})
-        if ws and ws.get("workspace_name"):
-            rows.append(("Workspace", ws["workspace_name"]))
-            rows.append(("Resource Group", ws.get("resource_group", "—")))
-        else:
-            rows.append(("Workspace", "[dim]Not configured[/dim]"))
-    except Exception:
+    cfg = read_config()
+    ws = cfg.workspace
+    if ws.workspace_name:
+        rows.append(("Workspace", ws.workspace_name))
+        rows.append(("Resource Group", ws.resource_group or "—"))
+    else:
         rows.append(("Workspace", "[dim]Not configured[/dim]"))
 
     # ── render ──
