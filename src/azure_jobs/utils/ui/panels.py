@@ -40,37 +40,6 @@ def show_submission_preview(
     forward.
     """
     if get_output_mode() == "json":
-        from azure_jobs.core.submit import render_amlt_config
-
-        payload = {
-            "kind": "submission_preview",
-            "dry_run": dry_run,
-            "submission_file": submission_file,
-            "request": {
-                "sid": request.sid,
-                "name": request.name,
-                "template_name": request.template_name,
-                "expr_name": request.expr_name,
-                "service": request.service,
-                "compute": request.compute,
-                "sku": request.sku,
-                "nodes": request.nodes,
-                "gpus_per_node": request.gpus_per_node,
-                "processes_per_node": request.processes_per_node,
-                "image": request.image,
-                "image_registry": request.image_registry,
-                "code_dir": request.code_dir,
-                "workspace_name": request.workspace_name,
-                "resource_group": request.resource_group,
-                "subscription_id": request.subscription_id,
-                "priority": request.priority,
-                "sla_tier": request.sla_tier,
-                "tags": list(request.tags),
-                "command": list(request.command),
-            },
-            "config": render_amlt_config(request),
-        }
-        sys.stdout.write(json.dumps(payload, indent=2, default=str) + "\n")
         return
 
     total_processes = request.nodes * request.processes_per_node
@@ -185,7 +154,9 @@ def show_submission_result(
     _render_submission_result_rich(payload, rec.request)
 
 
-def _render_submission_result_rich(payload: dict[str, Any], request: SubmitRequest) -> None:
+def _render_submission_result_rich(
+    payload: dict[str, Any], request: SubmitRequest
+) -> None:
     """Render the post-submit result as a Rich panel."""
     failed = payload["status"] == "failed"
     icon = "✗" if failed else "✓"
@@ -424,8 +395,7 @@ def show_job_detail(job: dict[str, Any]) -> None:
     """Display detailed cloud job info as a Rich panel or JSON envelope."""
     if get_output_mode() == "json":
         sys.stdout.write(
-            json.dumps({"kind": "job_detail", "job": job}, indent=2, default=str)
-            + "\n"
+            json.dumps({"kind": "job_detail", "job": job}, indent=2, default=str) + "\n"
         )
         return
 
