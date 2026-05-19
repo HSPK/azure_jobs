@@ -10,7 +10,7 @@ import requests
 
 from ..auth import LOG_PREFIXES, TIMEOUT_QUICK, TIMEOUT_STANDARD
 from ..context import RestContext
-from .extract import extract_error_message
+from .extract import parse_azure_error_dict
 
 log = logging.getLogger(__name__)
 
@@ -58,7 +58,7 @@ class RunHistoryAPI:
         if isinstance(err, dict):
             # Run History wraps the actual error one level deeper as ``error.error``.
             err = err.get("error", err)
-        return extract_error_message(err)
+        return parse_azure_error_dict(err)
 
     def get_log_urls(self, job_name: str) -> dict[str, str]:
         """Return ``{log_path: signed_url}`` for a run.

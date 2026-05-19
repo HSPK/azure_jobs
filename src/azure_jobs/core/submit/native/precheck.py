@@ -1,7 +1,7 @@
-"""Pre-flight validation for ``aj run``.
+﻿"""Pre-flight validation for ``aj run``.
 
 Cheap sanity checks that catch the most common submission failures before
-hitting Azure ML — wrong workspace for a compute, instance type missing
+hitting Azure ML â€” wrong workspace for a compute, instance type missing
 from a VC's quota, SLA tier with zero limit, etc.
 
 All ARM lookups go through :mod:`azure_jobs.utils.cache` so repeated runs
@@ -14,9 +14,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-import requests
-
-from azure_jobs.core.errors import AJError
+from azure_jobs.core.errors import NETWORK_LIKE_ERRORS
 from azure_jobs.core.submit.models import SubmitRequest
 from azure_jobs.utils.cache import cache_get, cache_set
 
@@ -25,15 +23,7 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-# Network-style failures that are OK to swallow when a precheck lookup
-# fails — the precheck just degrades to a warning, not a crash.
-_LOOKUP_FAILURES: tuple[type[BaseException], ...] = (
-    requests.RequestException,
-    OSError,
-    AJError,
-)
-
-# Quotas/computes change rarely → cache for 24h.
+# Quotas/computes change rarely â†’ cache for 24h.
 _QUOTA_TTL = 24 * 3600
 _COMPUTE_TTL = 24 * 3600
 
@@ -66,7 +56,7 @@ def _cached_vc_quotas_raw(
             return cached
     try:
         data = arm_client.get_vc_quotas_raw(sub, rg, vc)
-    except _LOOKUP_FAILURES as exc:
+    except NETWORK_LIKE_ERRORS as exc:
         log.debug("get_vc_quotas_raw failed: %s", exc)
         return None
     cache_set("vc_quotas", key, data)
@@ -90,7 +80,7 @@ def _cached_aml_compute(
             return cached
     try:
         data = arm_client.get_workspace_compute(sub, rg, ws, name)
-    except _LOOKUP_FAILURES as exc:
+    except NETWORK_LIKE_ERRORS as exc:
         log.debug("get_workspace_compute failed: %s", exc)
         return None
     cache_set("aml_computes", key, data)
@@ -247,7 +237,7 @@ def check_singularity(
         )
         return CheckResult(
             severity="warn",
-            title=f"Could not fetch quotas for VC '{vc}' — skipping check",
+            title=f"Could not fetch quotas for VC '{vc}' â€” skipping check",
             detail=[f"Resolved instance(s): {', '.join(instances) or '(none)'}"],
         )
 
@@ -289,7 +279,7 @@ def check_singularity(
                     )
                 return CheckResult(
                     severity="warn",
-                    title=(f"Auto-adjusted SKU on VC '{vc}': '{sku_raw}' → '{alt}'"),
+                    title=(f"Auto-adjusted SKU on VC '{vc}': '{sku_raw}' â†’ '{alt}'"),
                     detail=detail,
                     adjusted_sku=alt,
                 )
@@ -341,7 +331,7 @@ def check_singularity(
             ],
         )
 
-    return CheckResult(title=f"SKU OK: {sku_raw} → {msg}")
+    return CheckResult(title=f"SKU OK: {sku_raw} â†’ {msg}")
 
 
 def check_aml_compute(

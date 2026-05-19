@@ -27,6 +27,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+import requests
+
 
 class AJError(Exception):
     """Base class for every aj-domain failure.
@@ -105,18 +107,23 @@ class BackendError(AJError):
     backend dispatch failed."""
 
 
-# ────────────────────────────────────────────────────────────────────────
-# Error message extraction helpers
-# ────────────────────────────────────────────────────────────────────────
+# Tuple suitable for ``except NETWORK_LIKE_ERRORS:`` when a transient
+# lookup/discovery call against ARM is allowed to degrade silently
+# (return ``[]`` / ``None``) rather than crash the caller. Programming
+# errors (KeyError, AttributeError, …) deliberately propagate.
+NETWORK_LIKE_ERRORS: tuple[type[Exception], ...] = (
+    requests.RequestException,
+    OSError,
+    AJError,
+)
 
 
 def parse_exception_message(exc: BaseException) -> str:
-    """Best-effort extraction of a human-readable message from an exception.
+    """Best-effort human-readable message from an exception.
 
-    Walks an Azure-style ``{ "error": { "message": ... } }`` JSON blob
-    embedded in ``str(exc)`` and returns its ``message`` field. Falls
-    back to the first line of the exception string, stripping any
-    ``(Code) `` prefix.
+    Walks an Azure-style ``{"error": {"message": ...}}`` JSON blob
+    embedded in ``str(exc)`` and returns its ``message``. Falls back to
+    the first line, stripping any ``(Code) `` prefix.
     """
     msg = str(exc)
     if "{" in msg:
@@ -126,16 +133,10 @@ def parse_exception_message(exc: BaseException) -> str:
             return err.get("error", {}).get("message", msg).strip()
         except (ValueError, json.JSONDecodeError):
             pass
-    # Fallback: first line, strip error-code prefix like "(BadRequest) ..."
     first = msg.split("\n")[0].strip()
     if first.startswith("(") and ") " in first:
         return first.split(") ", 1)[1]
     return first
-
-
-# Back-compat alias: the original name is still imported from a few
-# call sites. Deprecate in a future major; remove the alias then.
-extract_json_error = parse_exception_message
 
 
 __all__ = [
@@ -149,6 +150,6 @@ __all__ = [
     "SubmissionError",
     "QuotaError",
     "BackendError",
+    "NETWORK_LIKE_ERRORS",
     "parse_exception_message",
-    "extract_json_error",
 ]

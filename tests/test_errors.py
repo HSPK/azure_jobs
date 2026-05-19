@@ -9,13 +9,13 @@ from azure_jobs.core.errors import (
     AuthError,
     BackendError,
     ConfigError,
+    NETWORK_LIKE_ERRORS,
     QuotaError,
     RestError,
     SkuResolveError,
     SubmissionError,
     TemplateError,
     WorkspaceError,
-    extract_json_error,
     parse_exception_message,
 )
 from azure_jobs.core.log_download import filter_log_lines
@@ -41,6 +41,13 @@ class TestHierarchy:
     def test_subclass_of_aj_error(self, exc):
         assert isinstance(exc, AJError)
         assert isinstance(exc, Exception)
+
+    def test_network_like_errors_tuple_contains_aj_and_network(self):
+        import requests
+
+        assert AJError in NETWORK_LIKE_ERRORS
+        assert requests.RequestException in NETWORK_LIKE_ERRORS
+        assert OSError in NETWORK_LIKE_ERRORS
 
 
 class TestRestError:
@@ -78,10 +85,6 @@ class TestParseExceptionMessage:
         exc = Exception("has { but not valid json }")
         result = parse_exception_message(exc)
         assert "has" in result
-
-    def test_legacy_alias(self) -> None:
-        """``extract_json_error`` is preserved as a back-compat alias."""
-        assert extract_json_error is parse_exception_message
 
 
 class TestFilterLogLines:

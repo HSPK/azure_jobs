@@ -1,4 +1,4 @@
-"""Tests for core/submit.py — the Azure ML submission engine."""
+﻿"""Tests for core/submit.py â€” the Azure ML submission engine."""
 
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ from azure_jobs.core.submit.native.environment import (
     _build_environment,
 )
 from azure_jobs.core.submit.native.storage import _build_storage_mounts
-from azure_jobs.core.errors import parse_exception_message as _extract_error_message
+from azure_jobs.core.errors import parse_exception_message
 from azure_jobs.core.template import Template
 
 
@@ -297,14 +297,14 @@ class TestExtractErrorMessage:
             "Code: UserError\n"
             "Message: Unknown compute target 'foo'."
         )
-        assert _extract_error_message(Exception(msg)) == "Unknown compute target 'foo'."
+        assert parse_exception_message(Exception(msg)) == "Unknown compute target 'foo'."
 
     def test_simple_error(self):
-        assert _extract_error_message(Exception("something broke")) == "something broke"
+        assert parse_exception_message(Exception("something broke")) == "something broke"
 
     def test_multiline_without_code(self):
         msg = "First line\nSecond line\nThird line"
-        assert _extract_error_message(Exception(msg)) == "First line"
+        assert parse_exception_message(Exception(msg)) == "First line"
 
 
 class TestResolveCompute:

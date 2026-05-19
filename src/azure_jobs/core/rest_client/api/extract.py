@@ -104,10 +104,6 @@ def parse_azure_error_dict(err: dict | str | None) -> str:
     return str(err)
 
 
-# Back-compat alias — the public name is :func:`parse_azure_error_dict`.
-extract_error_message = parse_azure_error_dict
-
-
 def trim_arm_id(arm_id: str) -> str:
     """Extract the trailing name segment from an ARM resource ID."""
     if "/" in arm_id:
@@ -159,7 +155,7 @@ def extract_rest_job(raw: dict[str, Any]) -> JobInfo:
     created_by = sys_data.get("createdBy", "") or ""
 
     # Error
-    error_msg = extract_error_message(props.get("error", None))
+    error_msg = parse_azure_error_dict(props.get("error", None))
 
     # Portal URL
     services = props.get("services", {}) or {}
