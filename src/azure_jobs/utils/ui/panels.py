@@ -1,7 +1,9 @@
-"""Panel renderers — submission preview, job status, job detail."""
+"""Panel renderers — submission preview, submission result, job status."""
 
 from __future__ import annotations
 
+import json
+import sys
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
@@ -16,9 +18,10 @@ from .console import (
     short_portal_url,
     status_badge,
 )
+from .render import get_output_mode
 
 if TYPE_CHECKING:
-    from azure_jobs.core.submit import SubmitRequest
+    from azure_jobs.core.submit import SubmissionRecord, SubmitRequest, SubmitResult
 
 
 def show_submission_preview(
@@ -27,7 +30,49 @@ def show_submission_preview(
     submission_file: str,
     dry_run: bool = False,
 ) -> None:
-    """Display a rich panel summarising the job before submission."""
+    """Display a job preview.
+
+    Rich mode shows the existing two-column panel. JSON mode (under
+    ``aj --json`` / ``AJ_OUTPUT=json``) emits a structured envelope with
+    the full rendered submission config under ``config`` plus the
+    headline request fields under ``request`` — sufficient for an agent
+    to inspect what *would* be submitted with ``-d`` and pipe the result
+    forward.
+    """
+    if get_output_mode() == "json":
+        from azure_jobs.core.submit import render_amlt_config
+
+        payload = {
+            "kind": "submission_preview",
+            "dry_run": dry_run,
+            "submission_file": submission_file,
+            "request": {
+                "sid": request.sid,
+                "name": request.name,
+                "template_name": request.template_name,
+                "expr_name": request.expr_name,
+                "service": request.service,
+                "compute": request.compute,
+                "sku": request.sku,
+                "nodes": request.nodes,
+                "gpus_per_node": request.gpus_per_node,
+                "processes_per_node": request.processes_per_node,
+                "image": request.image,
+                "image_registry": request.image_registry,
+                "code_dir": request.code_dir,
+                "workspace_name": request.workspace_name,
+                "resource_group": request.resource_group,
+                "subscription_id": request.subscription_id,
+                "priority": request.priority,
+                "sla_tier": request.sla_tier,
+                "tags": list(request.tags),
+                "command": list(request.command),
+            },
+            "config": render_amlt_config(request),
+        }
+        sys.stdout.write(json.dumps(payload, indent=2, default=str) + "\n")
+        return
+
     total_processes = request.nodes * request.processes_per_node
     final_cmd = request.command[-1] if request.command else ""
     storage_count = len(request.storage)
@@ -104,6 +149,86 @@ def show_submission_preview(
         Panel(body, title=f"[bold]{title}[/bold]", border_style=style, expand=False)
     )
     console.print()
+
+
+def show_submission_result(
+    rec: SubmissionRecord,
+    result: SubmitResult,
+    *,
+    display_name: str,
+    backend_label: str = "",
+) -> None:
+    """Emit the post-submit result.
+
+    JSON mode writes a structured ``{kind: "submission_result", …}``
+    envelope to stdout; Rich mode prints the existing success/dim lines.
+    Caller is responsible for any non-zero exit on failure — this is a
+    pure presentation step.
+    """
+    payload = {
+        "kind": "submission_result",
+        "status": rec.status,
+        "sid": rec.request.sid,
+        "name": display_name,
+        "azure_name": rec.azure_name or result.azure_name or "",
+        "portal_url": rec.portal or result.portal_url or "",
+        "backend": backend_label,
+        "submission_path": rec.request.submission_path,
+        "note": rec.note,
+        "error": result.error or "",
+    }
+    if get_output_mode() == "json":
+        sys.stdout.write(json.dumps(payload, indent=2, default=str) + "\n")
+        return
+
+    if rec.status == "failed":
+        from .console import error
+
+        error(f"Submission failed: {payload['note'] or payload['error']}")
+        return
+
+    from .console import dim, success
+
+    suffix = f" via {backend_label}" if backend_label else ""
+    success(f"Job [bold]{display_name}[/bold] submitted{suffix}")
+    azure_name = payload["azure_name"]
+    if azure_name and azure_name != display_name:
+        dim(f"Azure ID: {azure_name}")
+    if payload["portal_url"]:
+        dim(f"Portal: {short_portal_url(payload['portal_url'])}")
+    if payload["note"] and not payload["portal_url"]:
+        # e.g. ``kubectl create`` output for Volcano
+        dim(payload["note"])
+
+
+def show_local_run_result(
+    *,
+    sid: str,
+    name: str,
+    command: str,
+    exit_code: int,
+    stdout: str = "",
+    stderr: str = "",
+) -> None:
+    """Emit the result of ``aj run -L`` (local execution).
+
+    Rich mode is silent (the subprocess already streamed its output to
+    the terminal); JSON mode emits a structured result, optionally
+    including captured stdout/stderr so agents get a single envelope.
+    """
+    if get_output_mode() != "json":
+        return
+    payload = {
+        "kind": "local_run_result",
+        "status": "completed" if exit_code == 0 else "failed",
+        "sid": sid,
+        "name": name,
+        "command": command,
+        "exit_code": exit_code,
+        "stdout": stdout,
+        "stderr": stderr,
+    }
+    sys.stdout.write(json.dumps(payload, indent=2, default=str) + "\n")
 
 
 def show_job_status(job_status: Any) -> None:

@@ -36,7 +36,9 @@ from .panels import (
     build_job_info_lines,
     show_job_detail,
     show_job_status,
+    show_local_run_result,
     show_submission_preview,
+    show_submission_result,
 )
 from .quota_tables import (
     show_aml_quota_table,
@@ -119,6 +121,8 @@ __all__ = [
     "show_stats_overview",
     # Panels
     "show_submission_preview",
+    "show_submission_result",
+    "show_local_run_result",
     "show_job_status",
     "show_job_detail",
     "build_job_info_lines",

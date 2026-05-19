@@ -157,8 +157,30 @@ def run(
     final_cmd = request.command[-1] if request.command else ""
 
     if run_local:
-        info(f"Running locally: {final_cmd}")
-        subprocess.run(final_cmd, shell=True)
+        from azure_jobs.utils.ui import get_output_mode, show_local_run_result
+
+        json_mode = get_output_mode() == "json"
+        if not json_mode:
+            info(f"Running locally: {final_cmd}")
+            proc = subprocess.run(final_cmd, shell=True)
+            return
+
+        # JSON mode: capture stdout/stderr so the result envelope is the
+        # only thing on stdout.
+        proc = subprocess.run(
+            final_cmd,
+            shell=True,
+            capture_output=True,
+            text=True,
+        )
+        show_local_run_result(
+            sid=sid,
+            name=name,
+            command=final_cmd,
+            exit_code=proc.returncode,
+            stdout=proc.stdout,
+            stderr=proc.stderr,
+        )
         return
 
     # Render + write the submission YAML, then stamp the path onto the
