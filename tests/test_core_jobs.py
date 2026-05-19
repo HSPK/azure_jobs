@@ -124,6 +124,58 @@ def test_fetch_jobs_calls_on_progress_per_page():
         ([{"name": "b"}], None),
     ]
     client = _client_with_pages(pages)
-    progress: list[int] = []
-    fetch_jobs(client, n=10, on_progress=progress.append)
-    assert progress == [1, 2]
+    progress: list[tuple[int, int]] = []
+    fetch_jobs(client, n=10, on_progress=lambda m, s: progress.append((m, s)))
+    assert progress == [(1, 1), (2, 2)]
+
+
+def test_fetch_jobs_predicate_filters_clientside():
+    pages = [
+        (
+            [
+                {"name": "j1", "status": "Completed"},
+                {"name": "j2", "status": "Failed"},
+                {"name": "j3", "status": "Completed"},
+            ],
+            None,
+        )
+    ]
+    client = _client_with_pages(pages)
+    out = fetch_jobs(
+        client,
+        n=10,
+        predicate=lambda j: j["status"] == "Completed",
+    )
+    assert [j["name"] for j in out] == ["j1", "j3"]
+
+
+def test_fetch_jobs_max_scan_caps_examination():
+    pages = [
+        ([{"name": f"j{i}", "status": "Failed"} for i in range(10)], "next"),
+        ([{"name": f"j{i}", "status": "Completed"} for i in range(10, 20)], None),
+    ]
+    client = _client_with_pages(pages)
+    out = fetch_jobs(
+        client,
+        n=10,
+        predicate=lambda j: j["status"] == "Completed",
+        max_scan=10,
+    )
+    # All 10 from first page scanned, none match → stop without fetching page 2.
+    assert out == []
+    assert client.jobs.list_page.call_count == 1
+
+
+def test_fetch_jobs_passes_list_view_and_filters_to_client():
+    client = _client_with_pages([([], None)])
+    fetch_jobs(
+        client,
+        n=5,
+        list_view_type="All",
+        job_type="Command",
+        tag="foo",
+    )
+    kwargs = client.jobs.list_page.call_args.kwargs
+    assert kwargs["list_view_type"] == "All"
+    assert kwargs["job_type"] == "Command"
+    assert kwargs["tag"] == "foo"

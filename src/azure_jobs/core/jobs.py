@@ -27,8 +27,8 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-ProgressCallback = Callable[[int], None]
-"""``on_progress(running_total)`` — called after each fetched page."""
+ProgressCallback = Callable[[int, int], None]
+"""``on_progress(matched, scanned)`` — called after each fetched page."""
 
 WorkspaceStartCallback = Callable[[str], None]
 """``on_workspace_start(ws_name)`` — called before a workspace fetch."""
@@ -38,6 +38,9 @@ WorkspaceDoneCallback = Callable[[str, int], None]
 
 WorkspaceFailureCallback = Callable[[dict[str, Any], BaseException], None]
 """``on_workspace_failure(workspace, exc)`` — called per failed workspace."""
+
+JobPredicate = Callable[[dict[str, Any]], bool]
+"""``predicate(job) -> keep?`` — client-side filter applied during fetch."""
 
 
 def resolve_short_id(job_id: str) -> str:
@@ -59,39 +62,56 @@ def fetch_jobs(
     *,
     cutoff_utc: datetime | None = None,
     on_progress: ProgressCallback | None = None,
+    list_view_type: str = "ActiveOnly",
+    job_type: str = "",
+    tag: str = "",
+    predicate: JobPredicate | None = None,
+    max_scan: int | None = None,
 ) -> list[dict[str, Any]]:
-    """Fetch up to *n* jobs from one workspace client (active only).
+    """Fetch up to *n* jobs from one workspace client.
 
-    Pages via ``client.jobs.list_page`` until *n* is reached, the cursor
-    runs out, or — when *cutoff_utc* is set — a page contains a job older
-    than the cutoff (assumes pages are newest-first).
+    Pages via ``client.jobs.list_page`` until *n* matches are collected,
+    the cursor runs out, ``max_scan`` jobs have been examined, or — when
+    *cutoff_utc* is set — a page contains a job older than the cutoff
+    (assumes pages are newest-first).
 
-    *on_progress* is invoked once per page with the running total. It
-    must not raise.
+    Server-side filters (*list_view_type*, *job_type*, *tag*) are sent to
+    Azure ML directly. *predicate* is applied client-side per job and is
+    useful when the REST API does not support the filter (status,
+    experiment name, etc.).
+
+    *on_progress* is invoked once per page with ``(matched, scanned)``.
+    It must not raise.
     """
     jobs: list[dict[str, Any]] = []
     next_link = None
+    scanned = 0
 
-    while len(jobs) < n:
+    while len(jobs) < n and (max_scan is None or scanned < max_scan):
         page, next_link = client.jobs.list_page(
             next_link=next_link,
             top=n,
-            list_view_type="ActiveOnly",
+            list_view_type=list_view_type,
+            job_type=job_type,
+            tag=tag,
         )
         if not page:
             break
 
         past_cutoff = False
         for j in page:
+            scanned += 1
             if cutoff_utc and _job_older_than(j, cutoff_utc):
                 past_cutoff = True
                 break
+            if predicate is not None and not predicate(j):
+                continue
             jobs.append(j)
             if len(jobs) >= n:
                 break
 
         if on_progress is not None:
-            on_progress(len(jobs))
+            on_progress(len(jobs), scanned)
 
         if past_cutoff or not next_link:
             break

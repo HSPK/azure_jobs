@@ -238,32 +238,7 @@ def template_diff() -> None:
         console.print()
         console.print(
             Syntax("".join(diff_output), "diff", theme="monokai", line_numbers=False)
-        )
-
-
-@main.command(name="tl", hidden=True)
-def _alias_tl() -> None:
-    """Shortcut for ``aj template list``."""
-    template_list.callback()
-
-
-@main.command(name="pull", hidden=True)
-@click.argument("repo_id", type=str, required=False, default=None)
-@click.option(
-    "-f", "--force", is_flag=True, help="Force re-clone (discard local changes)"
-)
-def pull_alias(repo_id: str | None, force: bool) -> None:
-    from azure_jobs.cli.pull import _do_pull
-
-    _do_pull(repo_id, force)
-
-
-@main.command(name="push", hidden=True)
-@click.option("-m", "--message", default=None, help="Commit message")
-def push_alias(message: str | None) -> None:
-    from azure_jobs.cli.pull import _do_push
-
-    _do_push(message)
+            )
 
 
 def _show_templates() -> None:

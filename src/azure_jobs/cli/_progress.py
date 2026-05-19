@@ -38,8 +38,8 @@ def fetch_jobs_with_progress(
             client,
             n,
             cutoff_utc=cutoff_utc,
-            on_progress=lambda c: st.update(
-                f"[bold cyan]Fetching jobs… {c} loaded[/bold cyan]"
+            on_progress=lambda matched, scanned: st.update(
+                f"[bold cyan]Fetching jobs… {matched} loaded[/bold cyan]"
             ),
         )
 

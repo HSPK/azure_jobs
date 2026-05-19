@@ -32,52 +32,55 @@ _configure_debug_logging()
 
 
 class _LazyGroup(click.Group):
-    """Click group that defers command module imports until needed."""
+    """Click group that defers command module imports until needed.
 
-    # Map every registered command/group name → module to import.
-    # Modules that register multiple commands appear multiple times.
-    _CMD_TO_MODULE = {
-        # run.py
-        "run": ".run",
-        # templates.py
-        "template": ".templates",
-        "tl": ".templates",
-        "pull": ".templates",
-        "push": ".templates",
-        # jobs.py
-        "job": ".jobs",
-        "list": ".jobs",
-        "js": ".jobs",
-        "jl": ".jobs",
-        "jc": ".jobs",
-        "jlogs": ".jobs",
-        # images.py
-        "image": ".images",
-        # dashboard.py
-        "dash": ".dashboard",
-        "d": ".dashboard",
-        # config.py
-        "config": ".config",
-        # auth.py
-        "auth": ".auth",
-        # workspace.py
-        "ws": ".workspace",
-        # experiment.py
-        "exp": ".experiment",
-        # quota.py
-        "quota": ".quota",
-        "ql": ".quota",
-        # env.py
-        "env": ".env",
-        # ds.py
-        "ds": ".ds",
-        # sku.py
-        "sku": ".sku",
-        # init.py
-        "init": ".init",
-        # code.py
-        "code": ".code",
+    Adding a new ``aj`` command:
+
+    1. Create ``cli/<module>.py`` with ``@main.command`` / ``@main.group``.
+    2. Add one entry below in ``_MODULE_TO_COMMANDS``.
+
+    Adding a hidden alias: edit ``cli/_aliases.py`` only — its module
+    registration below already covers any name listed in ``_aliases.ALIASES``.
+    """
+
+    # One row per module; commands listed in load-order. Adding/removing a
+    # command edits exactly one line here.
+    _MODULE_TO_COMMANDS: dict[str, tuple[str, ...]] = {
+        ".run": ("run",),
+        ".templates": ("template",),
+        ".jobs": ("job", "list"),
+        ".images": ("image",),
+        ".dashboard": ("dash",),
+        ".config": ("config",),
+        ".auth": ("auth",),
+        ".workspace": ("ws",),
+        ".experiment": ("exp",),
+        ".quota": ("quota",),
+        ".env": ("env",),
+        ".ds": ("ds",),
+        ".sku": ("sku",),
+        ".init": ("init",),
+        ".code": ("code",),
+        # Hidden aliases — populated from cli/_aliases.py:ALIASES at first use.
+        "._aliases": (),
     }
+
+    @classmethod
+    def _cmd_to_module(cls) -> dict[str, str]:
+        # Flatten _MODULE_TO_COMMANDS + dynamically import aliases registry.
+        flat: dict[str, str] = {
+            cmd: mod
+            for mod, cmds in cls._MODULE_TO_COMMANDS.items()
+            for cmd in cmds
+        }
+        try:
+            from . import _aliases as _aliases_mod
+
+            for name in _aliases_mod.ALIASES:
+                flat[name] = "._aliases"
+        except ImportError:
+            pass
+        return flat
 
     def list_commands(self, ctx: click.Context) -> list[str]:
         # Eagerly import all modules to discover every command
@@ -91,7 +94,7 @@ class _LazyGroup(click.Group):
         cmd = super().get_command(ctx, cmd_name)
         if cmd is not None:
             return cmd
-        mod_path = self._CMD_TO_MODULE.get(cmd_name)
+        mod_path = self._cmd_to_module().get(cmd_name)
         if mod_path is None:
             return None
         import importlib
@@ -103,7 +106,7 @@ class _LazyGroup(click.Group):
         """Import every command module (for help/list_commands)."""
         import importlib
 
-        for mod_path in set(self._CMD_TO_MODULE.values()):
+        for mod_path in set(self._MODULE_TO_COMMANDS) | {"._aliases"}:
             importlib.import_module(mod_path, package=__name__)
 
 

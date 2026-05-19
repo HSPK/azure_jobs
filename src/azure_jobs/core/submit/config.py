@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any
 from azure_jobs.utils.fs import read_ignore_file
 
 from ..config import AJWorkspace
-from .models import SubmitRequest
+from .models import StorageMount, SubmitRequest
 
 if TYPE_CHECKING:
     from ..template import Template
@@ -31,6 +31,17 @@ def _escape_amlt_dollars(value: Any) -> Any:
             value,
         )
     return value
+
+
+_VOLCANO_PREAMBLE = (
+    Path(__file__).parent / "volcano" / "distributed_preamble.sh"
+)
+
+
+def _load_volcano_preamble(nodes: int) -> str:
+    """Read the Volcano distributed-env preamble and substitute ``{WORLD_SIZE_DEFAULT}``."""
+    text = _VOLCANO_PREAMBLE.read_text()
+    return text.replace("{WORLD_SIZE_DEFAULT}", str(nodes))
 
 
 def render_amlt_config(request: SubmitRequest) -> dict[str, Any]:
@@ -109,8 +120,6 @@ def build_submit_request(
     code = template.code
     submit_args = job.submit_args if job else {}
 
-    from .models import StorageMount
-
     storage = {}
     for k, v in storage_dict.items():
         if isinstance(v, StorageMount):
@@ -144,17 +153,7 @@ def build_submit_request(
 
     # Volcano distributed env fallback (when amlt-style vars aren't set).
     if service == "volcano":
-        cmd_list.extend(
-            [
-                "# Distributed env (Volcano)",
-                "JOB_NAME=$(echo \"$HOSTNAME\" | sed 's/-\\(master\\|worker\\)-[0-9]*$//')",
-                'if echo "$HOSTNAME" | grep -q "master"; then export NODE_RANK=0; else export NODE_RANK=$((${VK_TASK_INDEX:-0} + 1)); fi',
-                "export RANK=${RANK:-$NODE_RANK}",
-                f"export WORLD_SIZE=${{WORLD_SIZE:-{nodes}}}",
-                'export MASTER_ADDR="${MASTER_ADDR:-${JOB_NAME}-master-0.${JOB_NAME}}"',
-                "export MASTER_PORT=${MASTER_PORT:-6105}",
-            ]
-        )
+        cmd_list.extend(_load_volcano_preamble(nodes).splitlines())
 
     # Template commands then user command
     conf_commands = job.command if job else []

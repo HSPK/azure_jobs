@@ -38,12 +38,3 @@ def dashboard(last: int, page_size: int | None, mouse: bool) -> None:
         app.run()
     finally:
         os._exit(0)
-
-
-@main.command(name="d", hidden=True)
-@click.option("-n", "--last", default=100)
-@click.option("--page-size", default=None, type=int)
-@click.option("--mouse/--no-mouse", default=False)
-def _alias_d(last: int, page_size: int | None, mouse: bool) -> None:
-    """Shortcut for ``aj dash``."""
-    dashboard.callback(last, page_size, mouse)

@@ -90,46 +90,40 @@ def job_list(
     ws_name: str | None,
 ) -> None:
     """List recent jobs in the cloud workspace."""
+    from azure_jobs.core.jobs import fetch_jobs
     from azure_jobs.core.rest_client import create_rest_client
     from azure_jobs.utils.ui import console, show_cloud_jobs_table
 
     client = create_rest_client(ws_name=ws_name)
-    all_jobs: list[dict[str, Any]] = []
-    next_link = None
-    scanned = 0
     filtering = bool(status or experiment)
-    max_scan = last * 5 if filtering else last
-    view_type = "All" if archived else "ActiveOnly"
+
+    def _predicate(j: dict[str, Any]) -> bool:
+        if status and j.get("status", "").lower() != status.lower():
+            return False
+        if experiment and j.get("experiment", "") != experiment:
+            return False
+        return True
 
     with console.status("[bold cyan]Fetching jobs…[/bold cyan]", spinner="dots") as st:
-        while len(all_jobs) < last and scanned < max_scan:
-            jobs, next_link = client.jobs.list_page(
-                next_link=next_link,
-                top=last,
-                list_view_type=view_type,
-                job_type=job_type or "",
-                tag=tag or "",
-            )
-            if not jobs:
-                break
-            for j in jobs:
-                if status and j.get("status", "").lower() != status.lower():
-                    continue
-                if experiment and j.get("experiment", "") != experiment:
-                    continue
-                all_jobs.append(j)
-                if len(all_jobs) >= last:
-                    break
-            scanned += len(jobs)
-            st.update(
-                f"[bold cyan]Fetching… {len(all_jobs)}/{last} jobs"
-                + (f" ({scanned} scanned)" if filtering else "")
-                + "[/bold cyan]"
-            )
-            if not next_link:
-                break
 
-    show_cloud_jobs_table(all_jobs[:last])
+        def _on_progress(matched: int, scanned: int) -> None:
+            suffix = f" ({scanned} scanned)" if filtering else ""
+            st.update(
+                f"[bold cyan]Fetching… {matched}/{last} jobs{suffix}[/bold cyan]"
+            )
+
+        jobs = fetch_jobs(
+            client,
+            last,
+            list_view_type="All" if archived else "ActiveOnly",
+            job_type=job_type or "",
+            tag=tag or "",
+            predicate=_predicate if filtering else None,
+            max_scan=last * 5 if filtering else last,
+            on_progress=_on_progress,
+        )
+
+    show_cloud_jobs_table(jobs)
 
 
 def _fetch_and_show_job(job_id: str, ws_name: str | None = None) -> None:
@@ -395,50 +389,3 @@ def _show_local_records(
 def list_local(last: int, template: str | None, status: str | None) -> None:
     """Show recent local job submissions."""
     _show_local_records(last, template, status)
-
-
-# ────────────────────────────────────────────────────────────────────────
-# Hidden top-level aliases
-# ────────────────────────────────────────────────────────────────────────
-
-
-@main.command(name="js", hidden=True)
-@click.argument("job_id")
-def _alias_js(job_id: str) -> None:
-    """Shortcut for ``aj job status``."""
-    job_status.callback(job_id)
-
-
-@main.command(name="jl", hidden=True)
-@click.option("-n", "--last", default=30)
-@click.option("-s", "--status", default=None)
-@click.option("-e", "--experiment", default=None)
-@click.option("-T", "--type", "job_type", default=None)
-@click.option("--tag", default=None)
-@click.option("-a", "--archived", is_flag=True, default=False)
-@click.option("--ws", "ws_name", default=None)
-def _alias_jl(
-    last: int,
-    status: str | None,
-    experiment: str | None,
-    job_type: str | None,
-    tag: str | None,
-    archived: bool,
-    ws_name: str | None,
-) -> None:
-    """Shortcut for ``aj job list`` (cloud)."""
-    job_list.callback(last, status, experiment, job_type, tag, archived, ws_name)
-
-
-@main.command(name="jc", hidden=True)
-@click.argument("job_id")
-def _alias_jc(job_id: str) -> None:
-    """Shortcut for ``aj job cancel``."""
-    job_cancel.callback(job_id)
-
-
-@main.command(name="jlogs", hidden=True)
-@click.argument("job_id")
-def _alias_jlogs(job_id: str) -> None:
-    """Shortcut for ``aj job logs``."""
-    job_logs.callback(job_id)

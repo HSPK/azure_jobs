@@ -424,13 +424,3 @@ def _show_aml_quotas(show_all: bool) -> None:
     from azure_jobs.utils.ui import print_table
 
     print_table(table)
-
-
-@main.command(name="ql", hidden=True)
-@click.option("--aml", "backend", flag_value="aml")
-@click.option("--sing", "backend", flag_value="sing", default=True)
-@click.option("--all", "show_all", is_flag=True)
-@click.option("-t", "--template", default=None)
-def _alias_ql(backend: str, show_all: bool, template: str | None) -> None:
-    """Shortcut for ``aj quota list``."""
-    quota_list.callback(backend, show_all, template)

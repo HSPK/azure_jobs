@@ -16,13 +16,15 @@ def submit_via_native(
 ) -> SubmitResult:
     """Submit via the native AJ REST backend (thin alias for :func:`submit`).
 
-    The per-call ``from .submit import submit`` indirection lets tests
-    patch ``azure_jobs.core.submit.native.submit.submit`` to intercept
-    the whole flow at the source module.
+    Dispatches through the ``submit`` *module* attribute (not the directly
+    imported name) so tests can patch
+    ``azure_jobs.core.submit.native.submit.submit`` and see this function
+    re-route accordingly. Without this indirection the local ``submit``
+    binding would shadow the patched module attribute.
     """
-    from .submit import submit
+    from . import submit as _submit_module
 
-    return submit(request, on_event=on_event)
+    return _submit_module.submit(request, on_event=on_event)
 
 
 # Native handles both AML compute targets and Singularity virtual clusters.
