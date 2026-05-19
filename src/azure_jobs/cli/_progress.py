@@ -1,0 +1,105 @@
+"""Rich-progress wrappers around :mod:`azure_jobs.core.jobs`.
+
+These thin helpers belong to the CLI layer (they own console output
+and spinner rendering) but are shared between ``cli/jobs.py`` and
+``cli/experiment.py``.
+
+Kept in a module-private file (leading underscore) so they remain
+package-internal — external callers should use ``core.jobs`` directly.
+"""
+
+from __future__ import annotations
+
+import logging
+from datetime import datetime
+from typing import Any
+
+from azure_jobs.core.jobs import fetch_jobs, fetch_jobs_all_workspaces
+
+log = logging.getLogger(__name__)
+
+
+def fetch_jobs_with_progress(
+    n: int,
+    ws_name: str | None,
+    *,
+    cutoff_utc: datetime | None = None,
+) -> list[dict[str, Any]]:
+    """Single-workspace fetch wrapped with a Rich progress spinner."""
+    from azure_jobs.core.rest_client import create_rest_client
+    from azure_jobs.utils.ui import console
+
+    client = create_rest_client(ws_name=ws_name)
+    with console.status(
+        "[bold cyan]Fetching jobs…[/bold cyan]",
+        spinner="dots",
+    ) as st:
+        return fetch_jobs(
+            client,
+            n,
+            cutoff_utc=cutoff_utc,
+            on_progress=lambda c: st.update(
+                f"[bold cyan]Fetching jobs… {c} loaded[/bold cyan]"
+            ),
+        )
+
+
+def fetch_jobs_all_ws_with_progress(
+    n_per_ws: int,
+    *,
+    cutoff_utc: datetime | None = None,
+) -> list[dict[str, Any]]:
+    """All-workspace parallel fetch with Rich progress + failure warnings."""
+    from azure_jobs.core.rest_client import AzureARMClient
+    from azure_jobs.utils.ui import console, warning
+
+    failures: list[tuple[dict[str, Any], BaseException]] = []
+    done = 0
+
+    with console.status(
+        "[bold cyan]Discovering workspaces…[/bold cyan]", spinner="dots"
+    ) as st:
+        arm = AzureARMClient()
+        workspaces = arm.list_ml_workspaces()
+        arm.ensure_token()
+        if not workspaces:
+            warning("No workspaces found")
+            return []
+
+        total = len(workspaces)
+        st.update(f"[bold cyan]Fetching jobs (0/{total})…[/bold cyan]")
+
+        def _on_done(ws_name: str, count: int) -> None:
+            nonlocal done
+            done += 1
+            st.update(
+                f"[bold cyan]Fetching jobs ({done}/{total}) "
+                f"{ws_name}…[/bold cyan]"
+            )
+
+        def _on_fail(ws: dict[str, Any], exc: BaseException) -> None:
+            nonlocal done
+            done += 1
+            failures.append((ws, exc))
+            log.debug(
+                "Skipping workspace %s",
+                ws.get("name", ""),
+                exc_info=(type(exc), exc, exc.__traceback__),
+            )
+
+        jobs = fetch_jobs_all_workspaces(
+            n_per_ws,
+            cutoff_utc=cutoff_utc,
+            workspaces=workspaces,
+            on_workspace_done=_on_done,
+            on_workspace_failure=_on_fail,
+        )
+
+    if failures:
+        names = [ws.get("name", "") for ws, _ in failures[:3]]
+        warning(
+            f"Skipped {len(failures)} workspace(s): {', '.join(names)}"
+            + (" …" if len(failures) > 3 else "")
+            + "  (run with AJ_DEBUG=1 for details)"
+        )
+    return jobs

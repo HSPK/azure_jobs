@@ -8,6 +8,7 @@ import click
 import yaml
 
 from azure_jobs.cli import main
+from azure_jobs.cli._runner import submit_and_record
 from azure_jobs.core import const
 from azure_jobs.core.config import (
     AJWorkspace,
@@ -23,7 +24,6 @@ from azure_jobs.core.submit import (
     amlt_available,
     build_submit_request,
     render_amlt_config,
-    submit_and_record,
     submit_via_amlt,
     submit_via_native,
     submit_via_volcano,
@@ -122,7 +122,10 @@ def run(
     nodes_int = int(nodes or defaults.nodes or 1)
     processes_int = int(processes or defaults.processes or 1)
     ppn_int = int(ppn or 1)
-    sku_resolved = resolve_sku(tmpl.jobs[0].sku, nodes_int, processes_int)
+    try:
+        sku_resolved = resolve_sku(tmpl.jobs[0].sku, nodes_int, processes_int)
+    except ValueError as exc:
+        raise click.ClickException(str(exc))
 
     # Remember this template as the new default (only after template validation passes)
     save_defaults(template=template, nodes=nodes_int, processes=processes_int)

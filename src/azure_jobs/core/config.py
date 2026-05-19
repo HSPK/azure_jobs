@@ -3,6 +3,12 @@
 Stores tool defaults (template, nodes, processes), repo_id for
 ``aj pull``, and Azure workspace credentials.  All in one file at
 ``.azure_jobs/aj_config.json``.
+
+The interactive auto-detect flows (``ensure_experiment``,
+``get_workspace_config``, ``pick_workspace``) use plain ``input()`` /
+``print()`` so this module stays free of any CLI dependency. CLI
+callers that want styled prompts can monkeypatch the small
+:func:`_prompt` / :func:`_echo` helpers defined below.
 """
 
 from __future__ import annotations
@@ -14,12 +20,39 @@ import subprocess
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
-import click
-
 from . import const
 from .dataclass_utils import dataclass_from_dict, remove_empty_values
 
 log = logging.getLogger(__name__)
+
+
+# ────────────────────────────────────────────────────────────────────────
+# I/O primitives — stdlib only.  Tests / CLI may monkeypatch.
+# ────────────────────────────────────────────────────────────────────────
+
+
+def _prompt(question: str, default: str = "") -> str:
+    """Prompt the user; return the trimmed answer or *default* when blank."""
+    suffix = f" [{default}]" if default else ""
+    try:
+        answer = input(f"{question}{suffix}: ").strip()
+    except EOFError:
+        return default
+    return answer or default
+
+
+def _prompt_int(question: str, default: int = 1) -> int:
+    """Prompt for an integer; fall back to *default* on any parse error."""
+    raw = _prompt(question, default=str(default))
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return default
+
+
+def _echo(message: str = "") -> None:
+    """Plain ``print`` wrapper so callers can capture/replace output."""
+    print(message)
 
 
 @dataclass
@@ -150,26 +183,17 @@ def ensure_experiment() -> str:
     suffix = secrets.token_hex(4)  # 8 hex chars
     suggestion = f"experiment-{suffix}"
 
-    click.echo()
-    click.secho("  No experiment configured yet.", fg="yellow")
-    name = click.prompt(
-        click.style("  Experiment name", fg="white", bold=True),
-        type=str,
-        default=suggestion,
-    )
-    name = name.strip()
-    if not name:
-        name = suggestion
+    _echo()
+    _echo("  No experiment configured yet.")
+    name = _prompt("  Experiment name", default=suggestion).strip() or suggestion
 
     cfg = read_config()
     cfg.experiment = name
     write_config(cfg)
-    click.echo()
-    click.secho(f"  ✓ Experiment set to: {name}", fg="green")
-    click.secho(
-        "    Change anytime with: aj config experiment <name>", fg="bright_black"
-    )
-    click.echo()
+    _echo()
+    _echo(f"  ✓ Experiment set to: {name}")
+    _echo("    Change anytime with: aj config experiment <name>")
+    _echo()
     return name
 
 
@@ -264,22 +288,16 @@ def pick_workspace(workspaces: list[dict[str, str]]) -> dict[str, str] | None:
     Returns dict with ``name`` and ``resource_group``, or *None* if the user
     wants to enter values manually.
     """
-    click.echo()
-    click.secho("  Detected Azure ML workspaces:", fg="cyan", bold=True)
-    click.echo()
+    _echo()
+    _echo("  Detected Azure ML workspaces:")
+    _echo()
     for i, ws in enumerate(workspaces, 1):
-        click.echo(
-            f"    {click.style(str(i), fg='white', bold=True)}. "
-            f"{ws['name']:<20s}  {click.style(ws['resource_group'], fg='bright_black')}"
-            f"  ({ws['location']})"
+        _echo(
+            f"    {i}. {ws['name']:<20s}  {ws['resource_group']}  ({ws['location']})"
         )
-    click.echo(f"    {click.style('0', fg='white', bold=True)}. Enter manually")
-    click.echo()
-    choice = click.prompt(
-        click.style("  Select workspace", fg="white", bold=True),
-        type=int,
-        default=1,
-    )
+    _echo(f"    0. Enter manually")
+    _echo()
+    choice = _prompt_int("  Select workspace", default=1)
     if 1 <= choice <= len(workspaces):
         return workspaces[choice - 1]
     return None
@@ -295,23 +313,18 @@ def _ensure_subscription_id(workspace: AJWorkspace) -> bool:
     az_info = detect_subscription()
     if az_info and az_info["subscription_id"]:
         workspace.subscription_id = az_info["subscription_id"]
-        click.echo()
-        click.secho(
+        _echo()
+        _echo(
             f"  ✓ Detected subscription: {az_info.get('subscription_name', '')} "
-            f"({az_info['subscription_id'][:8]}…)",
-            fg="green",
+            f"({az_info['subscription_id'][:8]}…)"
         )
     else:
-        click.echo()
-        click.secho(
+        _echo()
+        _echo(
             "Could not detect Azure subscription. Run `az login` first, "
-            "or enter manually:",
-            fg="yellow",
+            "or enter manually:"
         )
-        workspace.subscription_id = click.prompt(
-            click.style("  Subscription ID", fg="white", bold=True),
-            type=str,
-        )
+        workspace.subscription_id = _prompt("  Subscription ID")
     return True
 
 
@@ -333,31 +346,22 @@ def _ensure_resource_group_and_workspace(workspace: AJWorkspace) -> bool:
             workspace.resource_group = picked["resource_group"]
         if need_ws:
             workspace.workspace_name = picked["name"]
-        click.echo()
-        click.secho(
+        _echo()
+        _echo(
             f"  ✓ Workspace: {picked['name']} "
-            f"(resource group: {picked['resource_group']})",
-            fg="green",
+            f"(resource group: {picked['resource_group']})"
         )
         return True
 
     # Manual fallback
     changed = False
     if need_rg:
-        click.echo()
-        workspace.resource_group = click.prompt(
-            click.style("  Resource group", fg="white", bold=True),
-            type=str,
-        )
+        _echo()
+        workspace.resource_group = _prompt("  Resource group")
         changed = True
     if need_ws:
-        click.echo()
-        ws_name = click.prompt(
-            click.style("  Workspace name (or empty to skip)", fg="white", bold=True),
-            type=str,
-            default="",
-            show_default=False,
-        )
+        _echo()
+        ws_name = _prompt("  Workspace name (or empty to skip)")
         if ws_name:
             workspace.workspace_name = ws_name
             changed = True
@@ -384,9 +388,9 @@ def get_workspace_config() -> AJWorkspace:
     if changed:
         config.workspace = workspace
         write_config(config)
-        click.echo()
-        click.secho(f"  ✓ Saved to {const.AJ_CONFIG}", fg="green")
-        click.echo()
+        _echo()
+        _echo(f"  ✓ Saved to {const.AJ_CONFIG}")
+        _echo()
 
     return workspace
 

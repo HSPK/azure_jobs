@@ -31,4 +31,8 @@ version-file = "src/azure_jobs/_version.py"
 testpaths = ["tests"]
 
 [dependency-groups]
-dev = ["ipykernel>=6.30.1", "pytest>=8.0", "pytest-asyncio>=0.24"]
+dev = [
+    "ipykernel>=6.30.1",
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+]

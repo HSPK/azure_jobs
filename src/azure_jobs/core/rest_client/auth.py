@@ -30,8 +30,11 @@ TIMEOUT_UPLOAD = 120  # blob upload
 
 # ---- Retry policy -----------------------------------------------------------
 # Retries on transient ARM/storage errors (429, 500, 502, 503, 504).
-# Idempotent verbs only by default; PUT/POST are added because Azure ARM
-# is generally safe to retry on these specific status codes.
+# PUT/POST are included because the Azure ML/ARM operations we issue are
+# idempotent by resource name: ``PUT /jobs/{name}`` is a create-or-update,
+# and ``POST /jobs/{name}/cancel`` re-cancelling an already-cancelled job
+# is a no-op. Both safely tolerate the rare 502/504 double-delivery case
+# that ``urllib3.Retry`` defends against by excluding them by default.
 _RETRY_TOTAL = 3
 _RETRY_BACKOFF = 0.5  # 0.5s, 1s, 2s
 _RETRY_STATUS = (429, 500, 502, 503, 504)

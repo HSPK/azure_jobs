@@ -113,7 +113,7 @@ def format_duration(seconds: int) -> str:
     return f"{seconds}s"
 
 
-def _parse_utc(s: str) -> datetime:
+def parse_utc(s: str) -> datetime:
     """Parse a UTC time string with ``T`` or space separator."""
     s = s.strip()
     for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
@@ -127,12 +127,16 @@ def _parse_utc(s: str) -> datetime:
     return dt
 
 
+# Back-compat alias — public name is :func:`parse_utc` (no underscore).
+_parse_utc = parse_utc
+
+
 def calc_duration_secs(start_utc: str, end_utc: str) -> int | None:
     """Return the number of seconds between two UTC time strings, or *None*."""
     if not start_utc or not end_utc:
         return None
     try:
-        return int((_parse_utc(end_utc) - _parse_utc(start_utc)).total_seconds())
+        return int((parse_utc(end_utc) - parse_utc(start_utc)).total_seconds())
     except (ValueError, TypeError):
         return None
 
@@ -143,14 +147,14 @@ def calc_duration(start_utc: str, end_utc: str) -> str:
         return ""
     if start_utc and end_utc:
         try:
-            t0 = _parse_utc(start_utc)
-            t1 = _parse_utc(end_utc)
+            t0 = parse_utc(start_utc)
+            t1 = parse_utc(end_utc)
             return format_duration(int((t1 - t0).total_seconds()))
         except ValueError:
             return ""
     # Running job — show elapsed time.
     try:
-        t0 = _parse_utc(start_utc)
+        t0 = parse_utc(start_utc)
         elapsed = int((datetime.now(timezone.utc) - t0).total_seconds())
         return format_duration(elapsed) + " ↻"
     except ValueError:

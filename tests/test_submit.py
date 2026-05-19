@@ -6,19 +6,23 @@ from unittest.mock import MagicMock, patch
 
 from azure_jobs.core.config import AJWorkspace
 from azure_jobs.core.submit import (
-    _SING_DUMMY_IMAGE,
     StorageMount,
     SubmitRequest,
-    _build_environment,
-    _build_identity,
-    _build_resources,
-    _build_storage_mounts,
-    _extract_error_message,
-    _resolve_compute,
-    _resolve_sing_identity,
     build_submit_request,
     render_amlt_config,
 )
+from azure_jobs.core.submit.native.compute import (
+    _build_identity,
+    _build_resources,
+    _resolve_compute,
+    _resolve_sing_identity,
+)
+from azure_jobs.core.submit.native.environment import (
+    _SING_DUMMY_IMAGE,
+    _build_environment,
+)
+from azure_jobs.core.submit.native.storage import _build_storage_mounts
+from azure_jobs.core.submit.native.submit import _extract_error_message
 from azure_jobs.core.template import Template
 
 
@@ -223,7 +227,7 @@ class TestSubmitMocked:
             },
         }
 
-        with patch("azure_jobs.core.submit._get_rest_client") as mock_factory:
+        with patch("azure_jobs.core.submit.native.submit._get_rest_client") as mock_factory:
             mock_client = mock_factory.return_value
             mock_client.resources.get_environment_version.return_value = {
                 "id": "env-id-1"
@@ -248,7 +252,7 @@ class TestSubmitMocked:
         )
 
         with patch(
-            "azure_jobs.core.submit._get_rest_client",
+            "azure_jobs.core.submit.native.submit._get_rest_client",
             side_effect=Exception("Azure CLI not logged in"),
         ):
             result = submit(request)
@@ -275,7 +279,7 @@ class TestSubmitMocked:
         def on_event(ev):
             steps.append(ev.kind)
 
-        with patch("azure_jobs.core.submit._get_rest_client") as mock_factory:
+        with patch("azure_jobs.core.submit.native.submit._get_rest_client") as mock_factory:
             mock_client = mock_factory.return_value
             mock_client.resources.get_environment_version.return_value = {
                 "id": "env-id"

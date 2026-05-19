@@ -52,7 +52,11 @@ def exp_list(
     success rate, and GPU hours per experiment. Uses the same aggregation
     as ``aj job stats``.
     """
-    from azure_jobs.cli.jobs import _fetch_jobs_all_ws, _fetch_jobs_for_stats
+    from azure_jobs.cli._progress import (
+        fetch_jobs_all_ws_with_progress,
+        fetch_jobs_with_progress,
+    )
+    from azure_jobs.core.jobs import apply_cutoff
     from azure_jobs.utils.stats import (
         aggregate_by_experiment,
         render_experiment_table,
@@ -66,9 +70,11 @@ def exp_list(
     max_jobs = last if last is not None else 10000
 
     if all_ws:
-        jobs = _fetch_jobs_all_ws(max_jobs, cutoff_utc=cutoff)
+        jobs = fetch_jobs_all_ws_with_progress(max_jobs, cutoff_utc=cutoff)
     else:
-        jobs = _fetch_jobs_for_stats(max_jobs, ws_name, cutoff_utc=cutoff)
+        jobs = fetch_jobs_with_progress(max_jobs, ws_name, cutoff_utc=cutoff)
+
+    jobs = apply_cutoff(jobs, cutoff)
 
     if not jobs:
         warning("No experiments found")

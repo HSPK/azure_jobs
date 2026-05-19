@@ -1,9 +1,12 @@
-"""Backend-agnostic submission runner.
+"""Backend-agnostic submission runner — pure CLI presentation.
 
-Provides :func:`submit_and_record` \u2014 wraps any
-``submit_fn(on_event) -> SubmitResult`` closure with a unified
+Wraps any ``submit_fn(on_event) -> SubmitResult`` closure with a unified
 Live-spinner UX, persistent ``log`` lines, error handling, and record
-logging. Native and Volcano backends both flow through it.
+logging. Native, AMLT, and Volcano backends all flow through it.
+
+Lives under :mod:`azure_jobs.cli` (not :mod:`core.submit`) because the
+spinner, ``click.ClickException``, and ``SystemExit`` are presentation
+concerns; the pure submission logic is in :mod:`azure_jobs.core.submit`.
 """
 
 from __future__ import annotations
@@ -12,7 +15,9 @@ from typing import Callable
 
 import click
 
-from ...utils.ui import (
+from azure_jobs.core.record import SubmissionRecord, log_record
+from azure_jobs.core.submit.models import SubmitEvent, SubmitResult
+from azure_jobs.utils.ui import (
     console,
     dim,
     error,
@@ -20,8 +25,6 @@ from ...utils.ui import (
     success,
     truncate_middle,
 )
-from ..record import SubmissionRecord, log_record
-from .models import SubmitEvent, SubmitResult
 
 
 def submit_and_record(

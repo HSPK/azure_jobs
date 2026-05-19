@@ -125,10 +125,7 @@ def submit(
 
     try:
         _status("auth", "Authenticating…")
-        # Late import so tests can patch _get_rest_client.
-        import azure_jobs.core.submit as _pkg
-
-        client = _pkg._get_rest_client(request)
+        client = _get_rest_client(request)
 
         _status("environment", "Preparing environment…")
         env_id = _build_environment(request, client)

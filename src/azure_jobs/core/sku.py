@@ -18,8 +18,6 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-import click
-
 log = logging.getLogger(__name__)
 
 # Module-level caches for avoiding redundant ARM API calls
@@ -47,11 +45,11 @@ def resolve_sku(sku_template: str | dict[str, str], nodes: int, processes: int) 
                 if int(key_str) == nodes:
                     return value.format(nodes=nodes, processes=processes)
 
-        raise click.ClickException(
+        raise ValueError(
             f"No matching SKU template found for {nodes} nodes in {sku_template}"
         )
 
-    raise click.ClickException(
+    raise ValueError(
         f"Unsupported SKU template type: {type(sku_template).__name__}. "
         "Only str and dict are supported."
     )

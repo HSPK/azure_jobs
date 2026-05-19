@@ -98,7 +98,8 @@ def download_job_logs(
                 return _filter_content(resp.text), ""
 
         return "", ""
-    except Exception as exc:
+    except (_requests.RequestException, OSError) as exc:
+        # Network / I/O failures only — programming errors should propagate.
         return "", str(exc)[:500]
 
 

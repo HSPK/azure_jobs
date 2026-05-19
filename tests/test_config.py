@@ -149,14 +149,14 @@ class TestPickWorkspace:
             {"name": "WS1", "resource_group": "RG1", "location": "eastus"},
             {"name": "WS2", "resource_group": "RG2", "location": "westus"},
         ]
-        monkeypatch.setattr("click.prompt", lambda *a, **kw: 2)
+        monkeypatch.setattr("azure_jobs.core.config._prompt", lambda *a, **kw: 2)
         picked = pick_workspace(workspaces)
         assert picked["name"] == "WS2"
         assert picked["resource_group"] == "RG2"
 
     def test_zero_returns_none_for_manual(self, monkeypatch):
         workspaces = [{"name": "WS1", "resource_group": "RG1", "location": "eastus"}]
-        monkeypatch.setattr("click.prompt", lambda *a, **kw: 0)
+        monkeypatch.setattr("azure_jobs.core.config._prompt", lambda *a, **kw: 0)
         assert pick_workspace(workspaces) is None
 
 
@@ -207,7 +207,7 @@ class TestGetWorkspaceConfig:
             )
 
         monkeypatch.setattr("azure_jobs.core.config.subprocess.run", mock_run)
-        monkeypatch.setattr("click.prompt", lambda *a, **kw: 1)  # pick workspace #1
+        monkeypatch.setattr("azure_jobs.core.config._prompt", lambda *a, **kw: 1)  # pick workspace #1
         result = get_workspace_config()
         assert result.subscription_id == "auto-sub"
         assert result.resource_group == "eastus_2"
@@ -231,7 +231,7 @@ class TestGetWorkspaceConfig:
 
         monkeypatch.setattr("azure_jobs.core.config.subprocess.run", mock_run)
         inputs = iter(["rg-manual", "ws-manual"])
-        monkeypatch.setattr("click.prompt", lambda *a, **kw: next(inputs))
+        monkeypatch.setattr("azure_jobs.core.config._prompt", lambda *a, **kw: next(inputs))
         result = get_workspace_config()
         assert result.resource_group == "rg-manual"
         assert result.workspace_name == "ws-manual"
@@ -259,7 +259,7 @@ class TestGetWorkspaceConfig:
 
         monkeypatch.setattr("azure_jobs.core.config.subprocess.run", mock_run)
         inputs = iter([0, "my-rg", "my-ws"])
-        monkeypatch.setattr("click.prompt", lambda *a, **kw: next(inputs))
+        monkeypatch.setattr("azure_jobs.core.config._prompt", lambda *a, **kw: next(inputs))
         result = get_workspace_config()
         assert result.resource_group == "my-rg"
         assert result.workspace_name == "my-ws"
@@ -271,7 +271,7 @@ class TestGetWorkspaceConfig:
             lambda *a, **kw: (_ for _ in ()).throw(FileNotFoundError("no az")),
         )
         inputs = iter(["manual-sub", "rg-prod", ""])
-        monkeypatch.setattr("click.prompt", lambda *a, **kw: next(inputs))
+        monkeypatch.setattr("azure_jobs.core.config._prompt", lambda *a, **kw: next(inputs))
         result = get_workspace_config()
         assert result.subscription_id == "manual-sub"
         assert result.resource_group == "rg-prod"
