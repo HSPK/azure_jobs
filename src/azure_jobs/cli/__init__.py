@@ -112,5 +112,14 @@ class _LazyGroup(click.Group):
 
 @click.group(cls=_LazyGroup)
 @click.version_option(package_name="azure_jobs")
-def main(**kwargs: Any) -> None:
-    pass
+@click.option(
+    "--json",
+    "json_output",
+    is_flag=True,
+    help="Emit machine-readable JSON instead of Rich tables.",
+)
+def main(json_output: bool, **kwargs: Any) -> None:
+    if json_output:
+        from azure_jobs.utils.ui.render import set_output_mode
+
+        set_output_mode("json")

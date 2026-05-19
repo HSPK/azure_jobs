@@ -34,37 +34,48 @@ def _ensure_workspaces() -> tuple[dict[str, str], list[dict[str, str]]]:
 @ws_group.command(name="list")
 def ws_list() -> None:
     """List Azure ML workspaces in the current subscription."""
-    from rich.table import Table
-
     from azure_jobs.core.config import read_config
-    from azure_jobs.utils.ui import console, print_table
+    from azure_jobs.utils.ui import Column, TableView, console, get_output_mode, render_table
 
     sub, workspaces = _ensure_workspaces()
-
-    console.print(
-        f"\n[dim]Subscription: {sub['subscription_name']}"
-        f" ({sub['subscription_id'][:8]}…)[/dim]"
-    )
-
     current_ws = read_config().workspace.workspace_name
 
-    table = Table(
-        show_header=True,
-        header_style="bold",
-        pad_edge=True,
-        title="[bold]Workspaces[/bold]",
-        title_style="",
+    rows = [
+        {
+            "name": ws["name"],
+            "resource_group": ws["resource_group"],
+            "location": ws["location"],
+            "current": ws["name"] == current_ws,
+        }
+        for ws in workspaces
+    ]
+    view = TableView(
+        title="Workspaces",
+        rows=rows,
+        empty_message="No workspaces found",
+        columns=[
+            Column(
+                key="current",
+                header="",
+                no_wrap=True,
+                format=lambda v, _r: "●" if v else " ",
+            ),
+            Column(key="name", style="cyan bold"),
+            Column(key="resource_group", header="Resource Group", style="dim"),
+            Column(key="location", style="dim"),
+        ],
+        metadata={
+            "subscription_name": sub["subscription_name"],
+            "subscription_id": sub["subscription_id"],
+            "current_workspace": current_ws,
+        },
     )
-    table.add_column("", width=2)
-    table.add_column("Name", style="cyan bold")
-    table.add_column("Resource Group", style="dim")
-    table.add_column("Location", style="dim")
-
-    for ws in workspaces:
-        marker = "●" if ws["name"] == current_ws else " "
-        table.add_row(marker, ws["name"], ws["resource_group"], ws["location"])
-
-    print_table(table)
+    if get_output_mode() == "rich":
+        console.print(
+            f"\n[dim]Subscription: {sub['subscription_name']}"
+            f" ({sub['subscription_id'][:8]}…)[/dim]"
+        )
+    render_table(view)
 
 
 @ws_group.command(name="show")

@@ -38,6 +38,13 @@ from .panels import (
     show_job_status,
     show_submission_preview,
 )
+from .render import (
+    Column,
+    TableView,
+    get_output_mode,
+    render_table,
+    set_output_mode,
+)
 from .tables import (
     show_cloud_jobs_table,
     show_jobs_table,
@@ -60,6 +67,12 @@ __all__ = [
     "status_badge",
     "short_portal_url",
     "truncate_middle",
+    # Render middleware
+    "Column",
+    "TableView",
+    "render_table",
+    "get_output_mode",
+    "set_output_mode",
     # Tables
     "show_template_table",
     "show_jobs_table",
