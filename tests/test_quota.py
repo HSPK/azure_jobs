@@ -295,7 +295,7 @@ class TestQuotaListCli:
         assert result.exit_code != 0
         assert "No Singularity" in result.output
 
-    @patch("azure_jobs.core.sku.fetch_vc_quotas", return_value=[])
+    @patch("azure_jobs.core.sku.quotas.fetch_vc_quotas", return_value=[])
     @patch(
         "azure_jobs.cli.quota._discover_vcs",
         return_value=[
@@ -307,7 +307,7 @@ class TestQuotaListCli:
         assert result.exit_code == 0
         assert "myvc" in result.output
 
-    @patch("azure_jobs.core.sku.fetch_vc_quotas")
+    @patch("azure_jobs.core.sku.quotas.fetch_vc_quotas")
     @patch("azure_jobs.cli.quota._discover_vcs")
     def test_sing_shows_grouped_table(self, mock_disc, mock_fetch):
         mock_disc.return_value = [

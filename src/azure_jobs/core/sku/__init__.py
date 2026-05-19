@@ -15,7 +15,7 @@ lookup, tests patch ``_fetch_vc_families``).
 
 from .catalog import _FAMILY_MAP, _SERIES_GPU_INFO
 from .discovery import VCInfo, _fetch_vc_families, discover_virtual_clusters
-from .quotas import SLA_TIERS, SeriesQuota, SlaTierQuota, fetch_vc_quotas
+from .quotas import SLA_TIERS, SeriesQuota, SlaTierQuota, fetch_all_vc_quotas, fetch_vc_quotas
 from .resolve import _match_family, resolve_instance_type, resolve_sku
 from .spec import SkuSpec
 
@@ -26,6 +26,7 @@ __all__ = [
     "SeriesQuota",
     "VCInfo",
     "fetch_vc_quotas",
+    "fetch_all_vc_quotas",
     "discover_virtual_clusters",
     "resolve_sku",
     "resolve_instance_type",

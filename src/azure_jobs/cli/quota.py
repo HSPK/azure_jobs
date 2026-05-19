@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import operator
 
 import click
 
@@ -126,8 +125,7 @@ def _show_sing_quotas(show_all: bool, template: str | None) -> None:
     from rich.table import Table
 
     from azure_jobs.core.az_client import AzureARMClient
-    from azure_jobs.core.sku import SLA_TIERS, fetch_vc_quotas
-    from azure_jobs.utils.concurrent import parallel_map
+    from azure_jobs.core.sku import SLA_TIERS, fetch_all_vc_quotas
     from azure_jobs.utils.ui import console, error
 
     arm = AzureARMClient()
@@ -135,30 +133,14 @@ def _show_sing_quotas(show_all: bool, template: str | None) -> None:
         vcs = _discover_vcs(template, arm_client=arm)
         arm.ensure_token()
 
-    if not vcs:
-        error("No Singularity virtual clusters found")
-        console.print(
-            "  Make sure you are logged in (`az login`) and have access to VCs"
-        )
-        raise SystemExit(1)
+        if not vcs:
+            error("No Singularity virtual clusters found")
+            console.print(
+                "  Make sure you are logged in (`az login`) and have access to VCs"
+            )
+            raise SystemExit(1)
 
-    def _fetch_one(vc):
-        return fetch_vc_quotas(
-            vc_subscription_id=vc.subscription_id,
-            vc_resource_group=vc.resource_group,
-            vc_name=vc.name,
-            include_zero=show_all,
-            arm_client=arm,
-        )
-
-    results, failures = parallel_map(
-        vcs, _fetch_one, label="Fetching quotas", name=operator.attrgetter("name"), console=console
-    )
-    for vc, quotas in results:
-        vc.quotas = quotas
-    for vc, exc in failures:
-        log.debug("fetch_vc_quotas failed for %s", vc.name, exc_info=(type(exc), exc, exc.__traceback__))
-        vc.quotas = []
+        fetch_all_vc_quotas(vcs, include_zero=show_all, arm_client=arm)
 
     # Determine which SLA tiers are active across ALL VCs
     active_tiers: list[str] = []
@@ -247,10 +229,11 @@ def _show_aml_quotas(show_all: bool) -> None:
     from rich.text import Text
 
     from azure_jobs.core.az_client import AzureARMClient
-    from azure_jobs.utils.concurrent import parallel_map
+    from azure_jobs.core.computes import fetch_aml_computes_all_workspaces
     from azure_jobs.utils.ui import console, error, warning
 
     arm = AzureARMClient()
+    failures: list[tuple[dict, BaseException]] = []
     with console.status("[bold cyan]Discovering AML workspaces…[/bold cyan]", spinner="dots"):
         try:
             workspaces = arm.list_ml_workspaces()
@@ -259,27 +242,19 @@ def _show_aml_quotas(show_all: bool) -> None:
             raise SystemExit(1)
         arm.ensure_token()
 
-    if not workspaces:
-        error("No AML workspaces found")
-        console.print(
-            "  Make sure you are logged in (`az login`) and have access to workspaces"
-        )
-        raise SystemExit(1)
+        if not workspaces:
+            error("No AML workspaces found")
+            console.print(
+                "  Make sure you are logged in (`az login`) and have access to workspaces"
+            )
+            raise SystemExit(1)
 
-    def _fetch_one(ws: dict) -> list:
-        raw = arm.list_workspace_computes(
-            ws["subscriptionId"], ws["resourceGroup"], ws.get("name", "")
+        results = fetch_aml_computes_all_workspaces(
+            workspaces=workspaces,
+            on_workspace_failure=lambda ws, exc: failures.append((ws, exc)),
+            arm_client=arm,
         )
-        return [c for c in raw if c.get("properties", {}).get("computeType") == "AmlCompute"]
 
-    results, failures = parallel_map(
-        workspaces, _fetch_one,
-        label="Fetching computes",
-        name=_ws_name,
-        console=console,
-    )
-    for ws, exc in failures:
-        log.debug("list_workspace_computes failed for %s", _ws_name(ws), exc_info=(type(exc), exc, exc.__traceback__))
     if failures:
         warning(f"Skipped {len(failures)} workspace(s) (run with AJ_DEBUG=1 for details)")
     ws_computes = [(ws, clusters) for ws, clusters in results if clusters or show_all]

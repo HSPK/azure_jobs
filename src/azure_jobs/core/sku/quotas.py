@@ -132,3 +132,63 @@ def fetch_vc_quotas(
     if not include_zero:
         results = [s for s in results if s.has_any_quota()]
     return results
+
+
+VCDoneCallback = Any  # Callable[[VCInfo, int], None] — avoid circular import
+VCFailureCallback = Any  # Callable[[VCInfo, BaseException], None]
+
+
+def fetch_all_vc_quotas(
+    vcs: list[Any],
+    *,
+    include_zero: bool = False,
+    on_vc_done: VCDoneCallback = None,
+    on_vc_failure: VCFailureCallback = None,
+    arm_client: Any = None,
+    max_workers: int = 8,
+) -> None:
+    """Populate ``vc.quotas`` for every :class:`VCInfo` in *vcs*, in parallel.
+
+    Mirrors :func:`azure_jobs.core.jobs.fetch_jobs_all_workspaces`: failures
+    are surfaced via *on_vc_failure* and result in an empty quota list on
+    that VC, so the caller can still render a placeholder row.
+    """
+    from azure_jobs.utils.concurrent import parallel_each
+
+    if arm_client is None:
+        from azure_jobs.core.az_client import AzureARMClient
+
+        arm_client = AzureARMClient()
+
+    def _one(vc: Any) -> list[SeriesQuota]:
+        return fetch_vc_quotas(
+            vc_subscription_id=vc.subscription_id,
+            vc_resource_group=vc.resource_group,
+            vc_name=vc.name,
+            include_zero=include_zero,
+            arm_client=arm_client,
+        )
+
+    def _on_done(vc: Any, quotas: list[SeriesQuota], _d: int, _t: int) -> None:
+        vc.quotas = quotas
+        if on_vc_done is not None:
+            on_vc_done(vc, len(quotas))
+
+    def _on_fail(vc: Any, exc: BaseException, _d: int, _t: int) -> None:
+        vc.quotas = []
+        if on_vc_failure is not None:
+            on_vc_failure(vc, exc)
+        else:
+            log.debug(
+                "fetch_vc_quotas failed for %s",
+                vc.name,
+                exc_info=(type(exc), exc, exc.__traceback__),
+            )
+
+    parallel_each(
+        vcs,
+        _one,
+        on_done=_on_done,
+        on_failure=_on_fail,
+        max_workers=max_workers,
+    )
