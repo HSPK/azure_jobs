@@ -177,17 +177,33 @@ def job_cancel(job_id: str) -> None:
     JOB_ID can be the short aj ID or the full Azure job name.
     """
     from azure_jobs.core.az_client import create_rest_client
-    from azure_jobs.utils.ui import console, success, warning
+    from azure_jobs.utils.ui import (
+        console,
+        get_output_mode,
+        show_command_result,
+        success,
+        warning,
+    )
 
     azure_name = resolve_short_id(job_id)
     client = create_rest_client()
+    json_mode = get_output_mode() == "json"
 
     with console.status("[bold cyan]Checking job…[/bold cyan]", spinner="dots"):
         job = client.jobs.get(azure_name)
 
     current = job.get("status", "")
     if current in ("Completed", "Failed", "Canceled"):
-        warning(f"Job {job_id} already {current.lower()}")
+        if not json_mode:
+            warning(f"Job {job_id} already {current.lower()}")
+        show_command_result(
+            "job.cancel",
+            status="noop",
+            message=f"Job already {current.lower()}",
+            job_id=job_id,
+            azure_name=azure_name,
+            current_status=current,
+        )
         return
 
     with console.status("[bold cyan]Cancelling job…[/bold cyan]", spinner="dots"):
@@ -196,9 +212,27 @@ def job_cancel(job_id: str) -> None:
 
     final = job.get("status", "?")
     if final in ("Canceled", "CancelRequested"):
-        success(f"Job {job_id} cancelled")
+        if not json_mode:
+            success(f"Job {job_id} cancelled")
+        show_command_result(
+            "job.cancel",
+            status="ok",
+            message=f"Job {job_id} cancelled",
+            job_id=job_id,
+            azure_name=azure_name,
+            current_status=final,
+        )
     else:
-        warning(f"Job {job_id} status: {final}")
+        if not json_mode:
+            warning(f"Job {job_id} status: {final}")
+        show_command_result(
+            "job.cancel",
+            status="unknown",
+            message=f"Job {job_id} status: {final}",
+            job_id=job_id,
+            azure_name=azure_name,
+            current_status=final,
+        )
 
 
 @job_group.command(name="logs")
@@ -209,13 +243,19 @@ def job_logs(job_id: str) -> None:
     Downloads log files directly (fast, works for running jobs too).
     JOB_ID can be the short aj ID or the full Azure job name.
     """
-    from azure_jobs.core.logs.download import download_job_logs
     from azure_jobs.core.az_client import create_rest_client
-    from azure_jobs.utils.ui import console, icon_style, short_portal_url
+    from azure_jobs.core.logs.download import download_job_logs
+    from azure_jobs.utils.ui import (
+        console,
+        emit_json,
+        get_output_mode,
+        icon_style,
+        short_portal_url,
+    )
 
     _NO_LOG_STATUSES = ("Queued", "NotStarted", "Provisioning", "Preparing")
-
     azure_name = resolve_short_id(job_id)
+    json_mode = get_output_mode() == "json"
 
     with console.status("[bold cyan]Checking job status…[/bold cyan]", spinner="dots"):
         client = create_rest_client()
@@ -223,14 +263,30 @@ def job_logs(job_id: str) -> None:
 
     status = job.get("status", "")
     display = job.get("display_name") or azure_name
-    icon, sty = icon_style(status)
     portal = job.get("portal_url", "") or f"ml.azure.com/runs/{azure_name}"
-    console.print()
-    console.print(f"[bold]Job Logs[/bold]  {display}  [{sty}]{icon} {status}[/{sty}]")
-    console.print(f"[dim]Portal  {short_portal_url(portal)}[/dim]")
-    console.print()
 
     if status in _NO_LOG_STATUSES:
+        if json_mode:
+            emit_json(
+                {
+                    "kind": "job_logs",
+                    "azure_name": azure_name,
+                    "display_name": display,
+                    "status": status,
+                    "portal_url": portal,
+                    "content": "",
+                    "error": "",
+                    "note": f"Job is {status.lower()} — no logs available yet.",
+                }
+            )
+            return
+        icon, sty = icon_style(status)
+        console.print()
+        console.print(
+            f"[bold]Job Logs[/bold]  {display}  [{sty}]{icon} {status}[/{sty}]"
+        )
+        console.print(f"[dim]Portal  {short_portal_url(portal)}[/dim]")
+        console.print()
         console.print(
             f"[yellow]Job is {status.lower()} — no logs available yet.[/yellow]"
         )
@@ -242,6 +298,26 @@ def job_logs(job_id: str) -> None:
             status=status,
             rest_client=client,
         )
+
+    if json_mode:
+        emit_json(
+            {
+                "kind": "job_logs",
+                "azure_name": azure_name,
+                "display_name": display,
+                "status": status,
+                "portal_url": portal,
+                "content": content or "",
+                "error": error_msg or "",
+            }
+        )
+        return
+
+    icon, sty = icon_style(status)
+    console.print()
+    console.print(f"[bold]Job Logs[/bold]  {display}  [{sty}]{icon} {status}[/{sty}]")
+    console.print(f"[dim]Portal  {short_portal_url(portal)}[/dim]")
+    console.print()
 
     if content:
         console.print(content)

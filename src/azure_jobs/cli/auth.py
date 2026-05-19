@@ -56,23 +56,42 @@ def auth_status() -> None:
 @auth_group.command(name="login")
 def auth_login() -> None:
     """Open Azure CLI login (delegates to ``az login``)."""
-    from azure_jobs.utils.ui import console
+    from azure_jobs.utils.ui import console, get_output_mode, show_command_result
 
-    console.print("[info]ℹ[/info] Opening Azure login…")
+    if get_output_mode() != "json":
+        console.print("[info]ℹ[/info] Opening Azure login…")
     try:
         from azure_jobs.core.config import find_az
 
-        subprocess.run([find_az(), "login"], check=False)
+        # In JSON mode, suppress az's interactive output (it's noisy and
+        # browser-driven; agents likely already authed).
+        kwargs = (
+            {"capture_output": True, "text": True}
+            if get_output_mode() == "json"
+            else {}
+        )
+        result = subprocess.run([find_az(), "login"], check=False, **kwargs)
+        show_command_result(
+            "auth.login",
+            status="ok" if result.returncode == 0 else "failed",
+            exit_code=result.returncode,
+        )
     except FileNotFoundError:
-        console.print("[error]✗[/error] Azure CLI not installed")
-        console.print("  Install: https://aka.ms/installazurecli")
+        if get_output_mode() != "json":
+            console.print("[error]✗[/error] Azure CLI not installed")
+            console.print("  Install: https://aka.ms/installazurecli")
+        show_command_result(
+            "auth.login",
+            status="failed",
+            message="Azure CLI not installed",
+        )
         raise SystemExit(1)
 
 
 @auth_group.command(name="logout")
 def auth_logout() -> None:
     """Sign out of Azure CLI (delegates to ``az logout``)."""
-    from azure_jobs.utils.ui import console
+    from azure_jobs.utils.ui import console, get_output_mode, show_command_result
 
     try:
         from azure_jobs.core.config import find_az
@@ -84,10 +103,22 @@ def auth_logout() -> None:
             timeout=15,
         )
         if result.returncode == 0:
-            console.print("[success]✓[/success] Logged out")
+            if get_output_mode() != "json":
+                console.print("[success]✓[/success] Logged out")
+            show_command_result("auth.logout", status="ok", message="Logged out")
         else:
-            console.print(f"[error]✗[/error] {result.stderr.strip()}")
+            if get_output_mode() != "json":
+                console.print(f"[error]✗[/error] {result.stderr.strip()}")
+            show_command_result(
+                "auth.logout",
+                status="failed",
+                message=result.stderr.strip(),
+            )
             raise SystemExit(1)
     except FileNotFoundError:
-        console.print("[error]✗[/error] Azure CLI not installed")
+        if get_output_mode() != "json":
+            console.print("[error]✗[/error] Azure CLI not installed")
+        show_command_result(
+            "auth.logout", status="failed", message="Azure CLI not installed"
+        )
         raise SystemExit(1)

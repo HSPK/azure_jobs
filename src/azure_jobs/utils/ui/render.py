@@ -167,6 +167,47 @@ def render_detail(view: DetailView) -> None:
     _render_detail_rich(view)
 
 
+def emit_json(payload: dict[str, Any]) -> None:
+    """Write *payload* as a JSON envelope to stdout.
+
+    Used by ``show_command_result`` and ad-hoc CLI exits where neither
+    a ``TableView`` nor a ``DetailView`` fits (free-form data, raw API
+    responses, log content, etc.). No-op outside JSON mode — callers
+    keep their existing Rich code for the human path.
+    """
+    if get_output_mode() != "json":
+        return
+    sys.stdout.write(json.dumps(payload, indent=2, default=str) + "\n")
+
+
+def show_command_result(
+    action: str,
+    *,
+    status: str = "ok",
+    message: str = "",
+    **fields: Any,
+) -> None:
+    """Emit a uniform side-effect envelope.
+
+    Used by commands whose primary purpose is a state change rather than
+    presenting data (e.g. ``aj ws set``, ``aj job cancel``,
+    ``aj auth logout``). JSON mode writes a structured payload; Rich
+    mode is silent — the caller's existing ``success``/``warning``/
+    ``error`` Rich messages remain the human UX.
+    """
+    if get_output_mode() != "json":
+        return
+    payload: dict[str, Any] = {
+        "kind": "command_result",
+        "action": action,
+        "status": status,
+    }
+    if message:
+        payload["message"] = message
+    payload.update(fields)
+    sys.stdout.write(json.dumps(payload, indent=2, default=str) + "\n")
+
+
 def _render_rich(view: TableView) -> None:
     from .console import print_table, warning
 
@@ -297,4 +338,6 @@ __all__ = [
     "get_output_mode",
     "render_table",
     "render_detail",
+    "emit_json",
+    "show_command_result",
 ]

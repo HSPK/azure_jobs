@@ -9,7 +9,14 @@ import click
 
 from azure_jobs.core import const
 from azure_jobs.core.config import read_config, write_config
-from azure_jobs.utils.ui import console, info, success, warning
+from azure_jobs.utils.ui import (
+    console,
+    get_output_mode,
+    info,
+    show_command_result,
+    success,
+    warning,
+)
 
 _SHORTHAND_RE = r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
 
@@ -44,10 +51,18 @@ def _do_pull(repo_id: str | None, force: bool) -> None:
     config.repo_id = repo_id
 
     if const.AJ_HOME.exists() and not force:
-        warning(f"AJ home {const.AJ_HOME} already exists. Use -f to force.")
+        if get_output_mode() != "json":
+            warning(f"AJ home {const.AJ_HOME} already exists. Use -f to force.")
+        show_command_result(
+            "template.pull",
+            status="noop",
+            message=f"AJ home {const.AJ_HOME} already exists. Use -f to force.",
+            repo_id=repo_id,
+        )
         return
     if const.AJ_HOME.exists() and force:
-        info(f"Removing existing {const.AJ_HOME}")
+        if get_output_mode() != "json":
+            info(f"Removing existing {const.AJ_HOME}")
         shutil.rmtree(const.AJ_HOME, onerror=_rm_readonly)
 
     const.AJ_HOME.mkdir(parents=True, exist_ok=True)
@@ -73,7 +88,15 @@ def _do_pull(repo_id: str | None, force: bool) -> None:
 
     const.AJ_CONFIG.parent.mkdir(parents=True, exist_ok=True)
     write_config(config)
-    success(f"Templates cloned to {const.AJ_HOME}")
+    if get_output_mode() != "json":
+        success(f"Templates cloned to {const.AJ_HOME}")
+    show_command_result(
+        "template.pull",
+        status="ok",
+        message=f"Templates cloned to {const.AJ_HOME}",
+        repo_id=repo_id,
+        path=str(const.AJ_HOME),
+    )
 
 
 def _do_push(message: str | None) -> None:
@@ -131,7 +154,14 @@ def _do_push(message: str | None) -> None:
             text=True,
         )
         if not status.stdout.strip():
-            info("No changes to push")
+            if get_output_mode() != "json":
+                info("No changes to push")
+            show_command_result(
+                "template.push",
+                status="noop",
+                message="No changes to push",
+                repo_id=repo_id,
+            )
             return
 
         subprocess.run(
@@ -162,4 +192,12 @@ def _do_push(message: str | None) -> None:
         except subprocess.CalledProcessError as exc:
             raise click.ClickException(f"Failed to push: {exc.stderr.strip()}") from exc
 
-    success("Templates pushed to remote")
+    if get_output_mode() != "json":
+        success("Templates pushed to remote")
+    show_command_result(
+        "template.push",
+        status="ok",
+        message="Templates pushed to remote",
+        repo_id=repo_id,
+        commit_message=message,
+    )

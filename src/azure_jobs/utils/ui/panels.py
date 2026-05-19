@@ -201,38 +201,24 @@ def show_submission_result(
         dim(payload["note"])
 
 
-def show_local_run_result(
-    *,
-    sid: str,
-    name: str,
-    command: str,
-    exit_code: int,
-    stdout: str = "",
-    stderr: str = "",
-) -> None:
-    """Emit the result of ``aj run -L`` (local execution).
-
-    Rich mode is silent (the subprocess already streamed its output to
-    the terminal); JSON mode emits a structured result, optionally
-    including captured stdout/stderr so agents get a single envelope.
-    """
-    if get_output_mode() != "json":
-        return
-    payload = {
-        "kind": "local_run_result",
-        "status": "completed" if exit_code == 0 else "failed",
-        "sid": sid,
-        "name": name,
-        "command": command,
-        "exit_code": exit_code,
-        "stdout": stdout,
-        "stderr": stderr,
-    }
-    sys.stdout.write(json.dumps(payload, indent=2, default=str) + "\n")
-
-
 def show_job_status(job_status: Any) -> None:
-    """Display job status as a rich panel."""
+    """Display job status as a Rich panel or JSON envelope."""
+    if get_output_mode() == "json":
+        payload = {
+            "kind": "job_status",
+            "azure_name": getattr(job_status, "azure_name", ""),
+            "display_name": getattr(job_status, "display_name", ""),
+            "status": getattr(job_status, "status", ""),
+            "compute": getattr(job_status, "compute", ""),
+            "duration": getattr(job_status, "duration", ""),
+            "start_time": getattr(job_status, "start_time", ""),
+            "end_time": getattr(job_status, "end_time", ""),
+            "portal_url": getattr(job_status, "portal_url", ""),
+            "error": str(getattr(job_status, "error", "") or ""),
+        }
+        sys.stdout.write(json.dumps(payload, indent=2, default=str) + "\n")
+        return
+
     status = job_status.status
     style = AZ_STYLE.get(status, "white")
     icon = AZ_ICON.get(status, "?")
@@ -392,7 +378,14 @@ def build_job_info_lines(
 
 
 def show_job_detail(job: dict[str, Any]) -> None:
-    """Display detailed cloud job info as a rich panel."""
+    """Display detailed cloud job info as a Rich panel or JSON envelope."""
+    if get_output_mode() == "json":
+        sys.stdout.write(
+            json.dumps({"kind": "job_detail", "job": job}, indent=2, default=str)
+            + "\n"
+        )
+        return
+
     lines = build_job_info_lines(job)
 
     console.print()

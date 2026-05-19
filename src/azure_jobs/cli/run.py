@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import subprocess
 import uuid
 from datetime import datetime, timezone
 
@@ -19,9 +18,9 @@ from azure_jobs.core.config import (
     save_defaults,
 )
 from azure_jobs.core.errors import AJError
-from azure_jobs.core.submit import SubmissionRecord
 from azure_jobs.core.sku import resolve_sku
 from azure_jobs.core.submit import (
+    SubmissionRecord,
     amlt_available,
     build_submit_request,
     get_backend,
@@ -30,10 +29,7 @@ from azure_jobs.core.submit import (
 )
 from azure_jobs.core.template import Template
 from azure_jobs.utils.naming import resolve_name
-from azure_jobs.utils.ui import (
-    info,
-    show_submission_preview,
-)
+from azure_jobs.utils.ui import show_submission_preview
 
 __all__ = ["resolve_name"]
 
@@ -70,7 +66,6 @@ __all__ = ["resolve_name"]
 @click.option(
     "-d", "--dry-run", is_flag=True, help="Dry run the command without executing"
 )
-@click.option("-L", "--run-local", is_flag=True, help="Run the command locally")
 @click.option(
     "--amlt",
     is_flag=True,
@@ -86,7 +81,6 @@ def run(
     gpus_per_node: str | None,
     ppn: str | None,
     dry_run: bool,
-    run_local: bool,
     amlt: bool,
 ) -> None:
     """Submit a job to Azure ML using a template.
@@ -96,8 +90,7 @@ def run(
     registers the environment, and submits via REST. The resolved template
     is remembered as the default for the next ``aj run``.
 
-    Use ``-d`` to inspect the assembled config without submitting, and
-    ``-L`` to execute the command locally instead of in the cloud.
+    Use ``-d`` to inspect the assembled config without submitting.
     """
     defaults = get_defaults()
 
@@ -131,10 +124,8 @@ def run(
 
     # Remember this template as the new default (only after template validation passes)
     save_defaults(template=template, nodes=nodes_int, processes=gpn_int)
-    workspace = AJWorkspace() if (dry_run or run_local) else get_workspace_config()
-    experiment = (
-        get_experiment() or "aj" if (dry_run or run_local) else ensure_experiment()
-    )
+    workspace = AJWorkspace() if dry_run else get_workspace_config()
+    experiment = get_experiment() or "aj" if dry_run else ensure_experiment()
 
     try:
         request = build_submit_request(
@@ -153,35 +144,6 @@ def run(
         )
     except (AJError, ValueError) as exc:
         raise click.ClickException(str(exc)) from exc
-
-    final_cmd = request.command[-1] if request.command else ""
-
-    if run_local:
-        from azure_jobs.utils.ui import get_output_mode, show_local_run_result
-
-        json_mode = get_output_mode() == "json"
-        if not json_mode:
-            info(f"Running locally: {final_cmd}")
-            proc = subprocess.run(final_cmd, shell=True)
-            return
-
-        # JSON mode: capture stdout/stderr so the result envelope is the
-        # only thing on stdout.
-        proc = subprocess.run(
-            final_cmd,
-            shell=True,
-            capture_output=True,
-            text=True,
-        )
-        show_local_run_result(
-            sid=sid,
-            name=name,
-            command=final_cmd,
-            exit_code=proc.returncode,
-            stdout=proc.stdout,
-            stderr=proc.stderr,
-        )
-        return
 
     # Render + write the submission YAML, then stamp the path onto the
     # request so backends (e.g. amlt) and downstream tooling can locate

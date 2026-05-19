@@ -33,6 +33,17 @@ def init(ctx: click.Context, force: bool) -> None:
     Use ``aj init amlt`` to additionally set up amlt integration.
     Use -f to re-run all steps (each step can be skipped).
     """
+    from azure_jobs.utils.ui import get_output_mode, show_command_result
+
+    if get_output_mode() == "json":
+        # Interactive setup is not appropriate for agent consumers.
+        show_command_result(
+            "init",
+            status="failed",
+            message="aj init is interactive — not supported in JSON mode.",
+        )
+        raise SystemExit(1)
+
     if ctx.invoked_subcommand is not None:
         # Subcommand (e.g. 'aj init amlt') will handle its own logic
         ctx.ensure_object(dict)

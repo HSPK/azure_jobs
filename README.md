@@ -62,7 +62,6 @@ aj run -t gpu train.py           # submit via REST
 aj run train.py                  # reuse last template
 aj run -t gpu -n 4 -p 8 train.py # 4 nodes × 8 GPUs/node
 aj run -d train.py               # dry run — print config, don't submit
-aj run -L train.py               # run locally
 aj run --amlt -t gpu train.py    # submit via amlt instead
 ```
 
@@ -73,7 +72,6 @@ aj run --amlt -t gpu train.py    # submit via amlt instead
 | `-p` | GPUs per node (drives SKU + `AJ_PROCESSES`) |
 | `--ppn` | Launcher processes per node (e.g. `torchrun --nproc-per-node`) |
 | `-d` | Dry run |
-| `-L` | Run locally |
 | `--amlt` | Submit via amlt |
 
 Positional args after the script are forwarded verbatim to your command.

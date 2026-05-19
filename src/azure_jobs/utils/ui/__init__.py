@@ -36,7 +36,6 @@ from .panels import (
     build_job_info_lines,
     show_job_detail,
     show_job_status,
-    show_local_run_result,
     show_submission_preview,
     show_submission_result,
 )
@@ -50,10 +49,12 @@ from .render import (
     DetailField,
     DetailView,
     TableView,
+    emit_json,
     get_output_mode,
     render_detail,
     render_table,
     set_output_mode,
+    show_command_result,
 )
 from .stats_tables import (
     show_compute_stats_table,
@@ -98,6 +99,8 @@ __all__ = [
     "DetailView",
     "render_table",
     "render_detail",
+    "emit_json",
+    "show_command_result",
     "get_output_mode",
     "set_output_mode",
     # Tables
@@ -122,7 +125,6 @@ __all__ = [
     # Panels
     "show_submission_preview",
     "show_submission_result",
-    "show_local_run_result",
     "show_job_status",
     "show_job_detail",
     "build_job_info_lines",

@@ -49,6 +49,7 @@ def template_push(message: str | None) -> None:
 def template_show(name: str) -> None:
     """Show the fully resolved config for a template."""
     from azure_jobs.core.template import ConfigError, read_conf
+    from azure_jobs.utils.ui import emit_json, get_output_mode
 
     tp = const.AJ_TEMPLATE_HOME / f"{name}.yaml"
     if not tp.exists():
@@ -59,16 +60,30 @@ def template_show(name: str) -> None:
     except (ConfigError, FileNotFoundError) as exc:
         raise click.ClickException(str(exc)) from exc
 
-    # Show inheritance chain
     raw = yaml.safe_load(tp.read_text()) or {}
     base = raw.get("base", None)
+
+    if get_output_mode() == "json":
+        chain: list[str] | None = None
+        if base:
+            chain = [base] if isinstance(base, str) else list(base)
+        emit_json(
+            {
+                "kind": "template_detail",
+                "name": name,
+                "path": str(tp),
+                "base": chain,
+                "config": merged,
+            }
+        )
+        return
+
     if base:
         if isinstance(base, str):
             base = [base]
         chain = " → ".join(base) + f" → {name}"
         console.print(f"\n[dim]Inheritance:[/dim] {chain}")
 
-    # Pretty-print the resolved YAML
     output = yaml.dump(
         merged, default_flow_style=False, sort_keys=False, allow_unicode=True
     )
@@ -83,6 +98,7 @@ def template_show(name: str) -> None:
 def template_validate(name: str | None) -> None:
     """Validate template config (all templates if no name given)."""
     from azure_jobs.core.template import validate_template
+    from azure_jobs.utils.ui import emit_json, get_output_mode
     from azure_jobs.utils.ui import error as ui_error
 
     if not const.AJ_TEMPLATE_HOME.exists():
@@ -97,20 +113,35 @@ def template_validate(name: str | None) -> None:
         if not targets:
             raise click.ClickException("No templates found")
 
-    errors: list[tuple[str, str]] = []
-    ok_count = 0
+    results: list[dict[str, object]] = []
     for tp in targets:
         issues = validate_template(tp)
-        if issues:
-            errors.append((tp.stem, "; ".join(issues)))
-        else:
-            ok_count += 1
+        results.append(
+            {"name": tp.stem, "ok": not issues, "issues": issues}
+        )
 
-    if ok_count > 0:
-        success(f"{ok_count} template(s) valid")
-    for tname, msg in errors:
-        ui_error(f"{tname}: {msg}")
-    if errors:
+    valid = sum(1 for r in results if r["ok"])
+    invalid = len(results) - valid
+
+    if get_output_mode() == "json":
+        emit_json(
+            {
+                "kind": "template_validate",
+                "valid_count": valid,
+                "invalid_count": invalid,
+                "results": results,
+            }
+        )
+        if invalid:
+            raise SystemExit(1)
+        return
+
+    if valid:
+        success(f"{valid} template(s) valid")
+    for r in results:
+        if not r["ok"]:
+            ui_error(f"{r['name']}: {'; '.join(r['issues'])}")
+    if invalid:
         raise SystemExit(1)
 
 
@@ -197,14 +228,29 @@ def template_diff() -> None:
                 diff_output.extend(_unified_diff(key, None, l))
 
         if not diff_output:
-            info("No differences with remote")
+            from azure_jobs.utils.ui import emit_json, get_output_mode
+
+            if get_output_mode() != "json":
+                info("No differences with remote")
+            emit_json(
+                {"kind": "template_diff", "has_changes": False, "diff": ""}
+            )
+            return
+
+        from azure_jobs.utils.ui import emit_json, get_output_mode
+
+        diff_text = "".join(diff_output)
+        if get_output_mode() == "json":
+            emit_json(
+                {"kind": "template_diff", "has_changes": True, "diff": diff_text}
+            )
             return
 
         from rich.syntax import Syntax
 
         console.print()
         console.print(
-            Syntax("".join(diff_output), "diff", theme="monokai", line_numbers=False)
+            Syntax(diff_text, "diff", theme="monokai", line_numbers=False)
             )
 
 
@@ -232,18 +278,18 @@ def _show_templates() -> None:
             #   → "drl · ath200 · x"
             parts = [b.split(".")[-1] for b in base if b != "base"]
             base = " · ".join(parts) if parts else "base"
-        sku = "—"
+        sku: str | dict = ""
         jobs = conf.get("jobs", [])
         if jobs and isinstance(jobs[0], dict):
-            sku_val = jobs[0].get("sku", "—")
+            sku_val = jobs[0].get("sku", "")
             sku = str(sku_val) if not isinstance(sku_val, dict) else "range{…}"
 
         templates.append(
             {
                 "name": tp.stem,
-                "base": base or "—",
-                "nodes": extra.get("nodes", "—"),
-                "processes": extra.get("processes", "—"),
+                "base": base or "",
+                "nodes": extra.get("nodes", ""),
+                "processes": extra.get("processes", ""),
                 "sku": sku,
             }
         )

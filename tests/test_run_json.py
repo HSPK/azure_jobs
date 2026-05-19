@@ -11,7 +11,6 @@ from azure_jobs.core.submit.models import SubmitRequest, SubmitResult
 from azure_jobs.core.submit.record import SubmissionRecord
 from azure_jobs.utils.ui import (
     set_output_mode,
-    show_local_run_result,
     show_submission_preview,
     show_submission_result,
 )
@@ -144,38 +143,6 @@ class TestSubmissionResultJson:
         assert parsed["status"] == "failed"
         assert parsed["error"] == "boom"
         assert parsed["note"] == "boom"
-
-
-class TestLocalRunResult:
-    def teardown_method(self):
-        set_output_mode("rich")
-
-    def test_json_mode_emits_envelope(self):
-        set_output_mode("json")
-        out = _capture_stdout(
-            lambda: show_local_run_result(
-                sid="abc",
-                name="x",
-                command="echo hi",
-                exit_code=0,
-                stdout="hi\n",
-                stderr="",
-            )
-        )
-        parsed = json.loads(out)
-        assert parsed["kind"] == "local_run_result"
-        assert parsed["status"] == "completed"
-        assert parsed["exit_code"] == 0
-        assert parsed["stdout"] == "hi\n"
-
-    def test_rich_mode_is_silent(self):
-        set_output_mode("rich")
-        out = _capture_stdout(
-            lambda: show_local_run_result(
-                sid="abc", name="x", command="echo hi", exit_code=0
-            )
-        )
-        assert out == ""
 
 
 class TestSubmitAndRecordJson:

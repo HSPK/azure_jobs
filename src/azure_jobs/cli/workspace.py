@@ -90,7 +90,7 @@ def ws_show(name: str | None) -> None:
     from rich.table import Table
 
     from azure_jobs.core.config import read_config, resolve_workspace
-    from azure_jobs.utils.ui import console, warning
+    from azure_jobs.utils.ui import console, emit_json, get_output_mode, warning
 
     if name:
         try:
@@ -100,9 +100,32 @@ def ws_show(name: str | None) -> None:
     else:
         cfg = read_config()
         if not cfg.workspace.workspace_name:
+            if get_output_mode() == "json":
+                emit_json(
+                    {
+                        "kind": "workspace_detail",
+                        "configured": False,
+                        "workspace": None,
+                    }
+                )
+                return
             warning("No workspace configured. Run `aj ws set` to configure.")
             return
         ws = cfg.workspace
+
+    if get_output_mode() == "json":
+        emit_json(
+            {
+                "kind": "workspace_detail",
+                "configured": True,
+                "workspace": {
+                    "name": ws.workspace_name,
+                    "resource_group": ws.resource_group,
+                    "subscription_id": ws.subscription_id,
+                },
+            }
+        )
+        return
 
     grid = Table.grid(padding=(0, 2))
     grid.add_column(style="bold white", justify="right")
@@ -138,7 +161,7 @@ def ws_set(name: str | None) -> None:
         read_config,
         write_config,
     )
-    from azure_jobs.utils.ui import success
+    from azure_jobs.utils.ui import get_output_mode, show_command_result, success
 
     sub, workspaces = _ensure_workspaces()
 
@@ -165,4 +188,15 @@ def ws_set(name: str | None) -> None:
         workspace_name=picked["name"],
     )
     write_config(cfg)
-    success(f"Workspace set to [bold]{picked['name']}[/bold]")
+    if get_output_mode() != "json":
+        success(f"Workspace set to [bold]{picked['name']}[/bold]")
+    show_command_result(
+        "workspace.set",
+        status="ok",
+        message=f"Workspace set to {picked['name']}",
+        workspace={
+            "name": picked["name"],
+            "resource_group": picked["resource_group"],
+            "subscription_id": sub["subscription_id"],
+        },
+    )
