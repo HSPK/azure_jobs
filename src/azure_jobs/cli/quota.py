@@ -230,56 +230,7 @@ def _show_sing_quotas(show_all: bool, template: str | None) -> None:
     print_table(table)
 
 
-# VM size → (accelerator, gpu_count, gpu_memory_gb) for common AML instance types
-_AML_VM_GPU: dict[str, tuple[str, int, int]] = {
-    # A100
-    "standard_nd96asr_v4": ("A100", 8, 40),
-    "standard_nd96amsr_a100_v4": ("A100", 8, 80),
-    "standard_nc24ads_a100_v4": ("A100", 1, 80),
-    "standard_nc48ads_a100_v4": ("A100", 2, 80),
-    "standard_nc96ads_a100_v4": ("A100", 4, 80),
-    # H100
-    "standard_nd96isr_h100_v5": ("H100", 8, 80),
-    "standard_nc80adis_h100_v5": ("H100", 8, 80),
-    # H200
-    "standard_nd96isr_h200_v5": ("H200", 8, 141),
-    # V100
-    "standard_nd40rs_v2": ("V100", 8, 32),
-    "standard_nc6s_v3": ("V100", 1, 16),
-    "standard_nc12s_v3": ("V100", 2, 16),
-    "standard_nc24s_v3": ("V100", 4, 16),
-    "standard_nc24rs_v3": ("V100", 4, 16),
-    # T4
-    "standard_nc4as_t4_v3": ("T4", 1, 16),
-    "standard_nc8as_t4_v3": ("T4", 1, 16),
-    "standard_nc16as_t4_v3": ("T4", 1, 16),
-    "standard_nc64as_t4_v3": ("T4", 4, 16),
-    # P100
-    "standard_nc6s_v2": ("P100", 1, 16),
-    "standard_nc12s_v2": ("P100", 2, 16),
-    "standard_nc24s_v2": ("P100", 4, 16),
-    "standard_nc24rs_v2": ("P100", 4, 16),
-    # K80
-    "standard_nc6": ("K80", 1, 12),
-    "standard_nc12": ("K80", 2, 12),
-    "standard_nc24": ("K80", 4, 12),
-    "standard_nc24r": ("K80", 4, 12),
-    # MI300X
-    "standard_nd96isr_mi300x_v4": ("MI300X", 8, 192),
-}
-
-
-def _vm_sku_label(vm_size: str) -> str:
-    """Derive a short SKU label (like amlt) from a VM size string."""
-    info = _AML_VM_GPU.get(vm_size.lower())
-    if info:
-        accel, count, mem = info
-        return f"{mem}G{count}-{accel}" if accel != "CPU" else "CPU"
-    # CPU heuristic
-    low = vm_size.lower()
-    if low.startswith(("standard_d", "standard_e", "standard_f")):
-        return "CPU"
-    return ""
+from azure_jobs.core.aml_vm_gpu import vm_sku_label as _vm_sku_label
 
 
 def _portal_compute_url(sub: str, rg: str, ws: str, cluster: str) -> str:
