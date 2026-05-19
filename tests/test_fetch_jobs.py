@@ -30,7 +30,7 @@ class TestFetchJobsAllWorkspaces:
         ws2_jobs = [{"name": "job2"}, {"name": "job3"}]
 
         with patch(
-            "azure_jobs.core.jobs.fetch_jobs",
+            "azure_jobs.core.jobs.discovery.fetch_jobs",
             side_effect=[ws1_jobs, ws2_jobs],
         ):
             result = fetch_jobs_all_workspaces(10)
@@ -44,7 +44,7 @@ class TestFetchJobsAllWorkspaces:
         mock_arm_cls.return_value = arm
 
         with patch(
-            "azure_jobs.core.jobs.fetch_jobs",
+            "azure_jobs.core.jobs.discovery.fetch_jobs",
             return_value=[{"name": "j1"}],
         ):
             result = fetch_jobs_all_workspaces(5)
@@ -73,7 +73,7 @@ class TestFetchJobsAllWorkspaces:
             return [{"name": "j1"}]
 
         failures: list[tuple[dict, BaseException]] = []
-        with patch("azure_jobs.core.jobs.fetch_jobs", side_effect=_fetch_side_effect):
+        with patch("azure_jobs.core.jobs.discovery.fetch_jobs", side_effect=_fetch_side_effect):
             result = fetch_jobs_all_workspaces(
                 10,
                 on_workspace_failure=lambda ws, exc: failures.append((ws, exc)),
@@ -90,7 +90,7 @@ class TestFetchJobsAllWorkspaces:
         mock_arm_cls.return_value = arm
 
         with patch(
-            "azure_jobs.core.jobs.fetch_jobs",
+            "azure_jobs.core.jobs.discovery.fetch_jobs",
             side_effect=RuntimeError("network error"),
         ):
             result = fetch_jobs_all_workspaces(10)
