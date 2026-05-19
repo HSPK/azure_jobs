@@ -57,11 +57,8 @@ def exp_list(
         fetch_jobs_with_progress,
     )
     from azure_jobs.core.jobs import apply_cutoff
-    from azure_jobs.utils.stats import (
-        aggregate_by_experiment,
-        render_experiment_table,
-    )
-    from azure_jobs.utils.ui import print_table, warning
+    from azure_jobs.utils.stats import aggregate_by_experiment
+    from azure_jobs.utils.ui import show_experiment_stats_table, warning
 
     cutoff: datetime | None = None
     if days:
@@ -80,17 +77,13 @@ def exp_list(
         warning("No experiments found")
         return
 
-    exp_stats = aggregate_by_experiment(jobs)
-
     scope = f"last {days}d" if days else f"last {len(jobs)}"
     if all_ws:
         ws_count = len({j.get("_workspace", "") for j in jobs})
         scope += f", {ws_count} workspace{'s' if ws_count != 1 else ''}"
-    print_table(
-        render_experiment_table(
-            exp_stats,
-            title=f"Experiments  ({scope})",
-        )
+    show_experiment_stats_table(
+        aggregate_by_experiment(jobs),
+        title=f"Experiments  ({scope})",
     )
 
 

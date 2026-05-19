@@ -255,14 +255,15 @@ def _format_cell(value: Any, col: Column, row: dict[str, Any]) -> str:
     """Render a single cell value for the Rich backend.
 
     JSON output never goes through this — it ships the raw value as-is
-    in ``row[col.key]``.
+    in ``row[col.key]``. A column-level ``format`` callable is always
+    invoked when set (so it can decide how to handle empty values);
+    type-based rendering only applies when no ``format`` is provided.
     """
+    if col.format is not None:
+        return col.format(value, row)
     if value in (None, ""):
         return "[dim]—[/dim]"
-    rendered: str
-    if col.format is not None:
-        rendered = col.format(value, row)
-    elif col.type == "status":
+    if col.type == "status":
         from .console import AZ_ICON, AZ_STYLE
 
         s = str(value)

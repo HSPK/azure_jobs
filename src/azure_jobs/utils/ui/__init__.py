@@ -53,6 +53,13 @@ from .render import (
     render_table,
     set_output_mode,
 )
+from .stats_tables import (
+    show_compute_stats_table,
+    show_experiment_stats_table,
+    show_stats_overview,
+    show_user_stats_table,
+    show_workspace_stats_table,
+)
 from .tables import (
     show_auth_status,
     show_cloud_jobs_table,
@@ -105,6 +112,11 @@ __all__ = [
     "show_sing_quota_table",
     "show_aml_quota_table",
     "show_sku_table",
+    "show_experiment_stats_table",
+    "show_compute_stats_table",
+    "show_workspace_stats_table",
+    "show_user_stats_table",
+    "show_stats_overview",
     # Panels
     "show_submission_preview",
     "show_job_status",

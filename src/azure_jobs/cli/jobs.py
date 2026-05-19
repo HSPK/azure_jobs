@@ -305,13 +305,15 @@ def job_stats(
         aggregate_by_user,
         aggregate_by_workspace,
         compute_overall_summary,
-        render_compute_table,
-        render_experiment_table,
-        render_overview_panel,
-        render_user_table,
-        render_workspace_table,
     )
-    from azure_jobs.utils.ui import console, print_table
+    from azure_jobs.utils.ui import (
+        console,
+        show_compute_stats_table,
+        show_experiment_stats_table,
+        show_stats_overview,
+        show_user_stats_table,
+        show_workspace_stats_table,
+    )
 
     cutoff = (
         datetime.now(timezone.utc) - timedelta(days=days)
@@ -331,23 +333,20 @@ def job_stats(
         console.print("[dim]No jobs found.[/dim]")
         return
 
-    # ── Overview ──────────────────────────────────────────────────────
     summary = compute_overall_summary(jobs)
     scope = f"last {days}d" if days else f"last {summary['total']}"
     if all_ws:
         ws_count = len({j.get("_workspace", "") for j in jobs})
         scope += f", {ws_count} workspace{'s' if ws_count != 1 else ''}"
-    console.print()
-    console.print(render_overview_panel(summary, scope=scope))
 
-    # ── Breakdown tables ──────────────────────────────────────────────
-    print_table(render_experiment_table(aggregate_by_experiment(jobs)))
-    print_table(render_compute_table(aggregate_by_compute(jobs)))
+    show_stats_overview(summary, scope=scope)
+    show_experiment_stats_table(aggregate_by_experiment(jobs))
+    show_compute_stats_table(aggregate_by_compute(jobs))
     if all_ws:
-        print_table(render_workspace_table(aggregate_by_workspace(jobs)))
+        show_workspace_stats_table(aggregate_by_workspace(jobs))
     user_stats = aggregate_by_user(jobs)
     if len(user_stats) > 1:
-        print_table(render_user_table(user_stats))
+        show_user_stats_table(user_stats)
 
 
 # ────────────────────────────────────────────────────────────────────────
