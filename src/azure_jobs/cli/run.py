@@ -5,6 +5,7 @@ import uuid
 from datetime import datetime, timezone
 
 import click
+import yaml
 
 from azure_jobs.cli import main
 from azure_jobs.cli.runner import submit_and_record
@@ -18,10 +19,12 @@ from azure_jobs.core.config import (
     save_defaults,
 )
 from azure_jobs.core.record import SubmissionRecord
+from azure_jobs.core.sku import resolve_sku
 from azure_jobs.core.submit import (
     amlt_available,
+    build_submit_request,
     get_backend,
-    orchestrate,
+    render_amlt_config,
     submit_via_amlt,
 )
 from azure_jobs.core.template import Template
@@ -118,6 +121,10 @@ def run(
     nodes_int = int(nodes or defaults.nodes or 1)
     processes_int = int(processes or defaults.processes or 1)
     ppn_int = int(ppn or 1)
+    try:
+        sku_resolved = resolve_sku(tmpl.jobs[0].sku, nodes_int, processes_int)
+    except ValueError as exc:
+        raise click.ClickException(str(exc))
 
     # Remember this template as the new default (only after template validation passes)
     save_defaults(template=template, nodes=nodes_int, processes=processes_int)
@@ -127,31 +134,40 @@ def run(
     )
 
     try:
-        prepared = orchestrate(
+        request = build_submit_request(
             tmpl,
+            name=name,
+            sid=sid,
+            sku=sku_resolved,
             user_command=command,
             user_args=args,
-            template_name=template,
             workspace=workspace,
+            template_name=template,
             experiment=experiment,
             nodes=nodes_int,
             processes=processes_int,
             processes_per_node=ppn_int,
-            sid=sid,
-            name=name,
-            dry_run=dry_run,
         )
-    except ValueError as exc:
-        raise click.ClickException(str(exc))
+    except ValueError as e:
+        raise click.ClickException(str(e))
 
-    request = prepared.request
-    submission_fp = prepared.submission_path
     final_cmd = request.command[-1] if request.command else ""
 
     if run_local:
         info(f"Running locally: {final_cmd}")
         subprocess.run(final_cmd, shell=True)
         return
+
+    # Render + write the submission YAML, then stamp the path onto the
+    # request so backends (e.g. amlt) and downstream tooling can locate
+    # the materialised config from the request alone.
+    amlt_conf = render_amlt_config(request)
+    home = const.AJ_DRYRUN_HOME if dry_run else const.AJ_SUBMISSION_HOME
+    submission_fp = home / f"{sid}.yaml"
+    submission_fp.parent.mkdir(parents=True, exist_ok=True)
+    with open(submission_fp, "w") as f:
+        yaml.dump(amlt_conf, f, default_flow_style=False)
+    request.submission_path = str(submission_fp)
 
     show_submission_preview(
         request, submission_file=str(submission_fp), dry_run=dry_run

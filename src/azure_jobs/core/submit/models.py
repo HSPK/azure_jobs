@@ -63,6 +63,11 @@ class SubmitRequest:
     # Backend-specific target metadata (e.g. Volcano namespace/queue/rdma).
     target_extra: dict[str, Any] = field(default_factory=dict)
 
+    # Path to the rendered submission YAML on disk (set by the CLI after
+    # writing). Lets backends that consume the YAML directly (e.g. amlt)
+    # find it via the request alone.
+    submission_path: str = ""
+
     # Singularity-only (service == "sing").
     vc_subscription_id: str = ""
     vc_resource_group: str = ""
