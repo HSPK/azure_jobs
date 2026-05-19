@@ -110,7 +110,7 @@ def _get_log_urls(
 ) -> dict[str, str]:
     """Get ``{log_path: signed_url}`` dict from REST API."""
     if rest_client is None:
-        from azure_jobs.core.rest_client import create_rest_client
+        from azure_jobs.core.az_client import create_rest_client
 
         rest_client = create_rest_client(workspace)
     return rest_client.jobs.get_run_log_urls(job_name)

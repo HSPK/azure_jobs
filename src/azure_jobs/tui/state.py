@@ -19,8 +19,8 @@ from azure_jobs.core.config import AJWorkspace
 if TYPE_CHECKING:
     from textual.widgets import OptionList, Static
 
-    from azure_jobs.core.log_stream import LogStreamer
-    from azure_jobs.core.rest_client import AzureMLClient
+    from azure_jobs.core.logs.stream import LogStreamer
+    from azure_jobs.core.az_client import AzureMLClient
     from azure_jobs.tui.components import LogViewer
 
 

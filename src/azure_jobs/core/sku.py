@@ -170,7 +170,7 @@ def _fetch_vc_families(
             return _vc_families_cache[cache_key]
     try:
         if arm_client is None:
-            from azure_jobs.core.rest_client import AzureARMClient
+            from azure_jobs.core.az_client import AzureARMClient
 
             arm_client = AzureARMClient()
 
@@ -267,7 +267,7 @@ def fetch_vc_quotas(
     Each quota item from the API has ``{id, slaTier, limit, used}``.
     """
     if arm_client is None:
-        from azure_jobs.core.rest_client import AzureARMClient
+        from azure_jobs.core.az_client import AzureARMClient
 
         arm_client = AzureARMClient()
 
@@ -338,7 +338,7 @@ def discover_virtual_clusters(
     ``microsoft.machinelearningservices/virtualclusters`` across all of them.
     """
     if arm_client is None:
-        from azure_jobs.core.rest_client import AzureARMClient
+        from azure_jobs.core.az_client import AzureARMClient
 
         arm_client = AzureARMClient()
 

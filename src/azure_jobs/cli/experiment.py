@@ -109,7 +109,7 @@ def exp_show(name: str, last: int, ws_name: str | None) -> None:
 
     NAME is the experiment name (case-sensitive).
     """
-    from azure_jobs.core.rest_client import create_rest_client
+    from azure_jobs.core.az_client import create_rest_client
     from azure_jobs.utils.ui import console, show_cloud_jobs_table, warning
 
     client = create_rest_client(ws_name=ws_name)

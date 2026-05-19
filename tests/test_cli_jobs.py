@@ -105,7 +105,7 @@ class TestJobListCommand:
         mock_client = MagicMock()
         mock_client.jobs.list_page.return_value = ([], None)
         with patch(
-            "azure_jobs.core.rest_client.create_rest_client", return_value=mock_client
+            "azure_jobs.core.az_client.create_rest_client", return_value=mock_client
         ):
             runner = CliRunner()
             result = runner.invoke(main, ["job", "list"])
@@ -129,7 +129,7 @@ class TestJobListCommand:
         mock_client = MagicMock()
         mock_client.jobs.list_page.return_value = (jobs, None)
         with patch(
-            "azure_jobs.core.rest_client.create_rest_client", return_value=mock_client
+            "azure_jobs.core.az_client.create_rest_client", return_value=mock_client
         ):
             runner = CliRunner()
             result = runner.invoke(main, ["job", "list"])
@@ -163,7 +163,7 @@ class TestJobListCommand:
         mock_client = MagicMock()
         mock_client.jobs.list_page.return_value = (jobs, None)
         with patch(
-            "azure_jobs.core.rest_client.create_rest_client", return_value=mock_client
+            "azure_jobs.core.az_client.create_rest_client", return_value=mock_client
         ):
             runner = CliRunner()
             result = runner.invoke(main, ["job", "list", "-s", "Failed"])
@@ -198,7 +198,7 @@ class TestJobListCommand:
         mock_client = MagicMock()
         mock_client.jobs.list_page.return_value = (jobs, None)
         with patch(
-            "azure_jobs.core.rest_client.create_rest_client", return_value=mock_client
+            "azure_jobs.core.az_client.create_rest_client", return_value=mock_client
         ):
             runner = CliRunner()
             result = runner.invoke(main, ["job", "list", "-e", "exp-A"])
@@ -231,7 +231,7 @@ class TestJobStatusCommand:
             "error": "",
         }
         with patch(
-            "azure_jobs.core.rest_client.create_rest_client", return_value=mock_client
+            "azure_jobs.core.az_client.create_rest_client", return_value=mock_client
         ):
             runner = CliRunner()
             result = runner.invoke(main, ["job", "status", "my-job-xyz"])
@@ -280,7 +280,7 @@ class TestJobStatusCommand:
             "error": "",
         }
         with patch(
-            "azure_jobs.core.rest_client.create_rest_client", return_value=mock_client
+            "azure_jobs.core.az_client.create_rest_client", return_value=mock_client
         ):
             runner = CliRunner()
             result = runner.invoke(main, ["job", "status", "abc12345"])
@@ -316,7 +316,7 @@ class TestJobCancelCommand:
             {"name": "azure_jobs_abc12345", "status": "Canceled"},
         ]
         with mock_patch(
-            "azure_jobs.core.rest_client.create_rest_client", return_value=mock_client
+            "azure_jobs.core.az_client.create_rest_client", return_value=mock_client
         ):
             runner = CliRunner()
             result = runner.invoke(main, ["job", "cancel", "abc12345"])
@@ -333,7 +333,7 @@ class TestJobCancelCommand:
             "status": "Completed",
         }
         with mock_patch(
-            "azure_jobs.core.rest_client.create_rest_client", return_value=mock_client
+            "azure_jobs.core.az_client.create_rest_client", return_value=mock_client
         ):
             runner = CliRunner()
             result = runner.invoke(main, ["job", "cancel", "some-job"])
@@ -354,7 +354,7 @@ class TestJobLogsCommand:
             "portal_url": "",
         }
         with mock_patch(
-            "azure_jobs.core.rest_client.create_rest_client", return_value=mock_client
+            "azure_jobs.core.az_client.create_rest_client", return_value=mock_client
         ):
             runner = CliRunner()
             result = runner.invoke(main, ["job", "logs", "some-job"])
@@ -375,11 +375,11 @@ class TestJobLogsCommand:
         }
         with (
             mock_patch(
-                "azure_jobs.core.rest_client.create_rest_client",
+                "azure_jobs.core.az_client.create_rest_client",
                 return_value=mock_client,
             ),
             mock_patch(
-                "azure_jobs.core.log_download.download_job_logs",
+                "azure_jobs.core.logs.download.download_job_logs",
                 return_value=("Hello from training", ""),
             ),
         ):
@@ -402,11 +402,11 @@ class TestJobLogsCommand:
         }
         with (
             mock_patch(
-                "azure_jobs.core.rest_client.create_rest_client",
+                "azure_jobs.core.az_client.create_rest_client",
                 return_value=mock_client,
             ),
             mock_patch(
-                "azure_jobs.core.log_download.download_job_logs",
+                "azure_jobs.core.logs.download.download_job_logs",
                 return_value=("Epoch 1/10 loss=0.5", ""),
             ),
         ):

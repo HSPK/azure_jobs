@@ -145,7 +145,7 @@ def init_amlt(ctx: click.Context, force: bool) -> None:
         "[bold cyan]Querying workspace storage…[/bold cyan]", spinner="dots"
     ):
         try:
-            from azure_jobs.core.rest_client import create_rest_client
+            from azure_jobs.core.az_client import create_rest_client
 
             client = create_rest_client(workspace=ws)
             ws_info = client.get_workspace()

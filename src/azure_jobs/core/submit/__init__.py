@@ -22,7 +22,7 @@ from .amlt import (
     extract_portal_url,
     submit_via_amlt,
 )
-from .config import build_submit_request, render_amlt_config
+from .build import build_submit_request
 from .dispatch import (
     BackendEntry,
     get_backend,
@@ -46,7 +46,8 @@ from .native import (
     precheck,
     submit_via_native,
 )
-from .native.submit import submit
+from .native.orchestrate import submit
+from .render import render_amlt_config
 from .volcano import submit_via_volcano
 
 __all__ = [

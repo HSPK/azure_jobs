@@ -15,7 +15,7 @@ China cloud auto-detected from `*.cn` URLs (scope + blob host switch).
 
 ## Clients
 
-`core/rest_client/` exposes:
+`core/az_client/` exposes:
 
 **`AzureARMClient`** — cross-subscription:
 

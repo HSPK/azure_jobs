@@ -1,7 +1,7 @@
 """Generic Azure Resource Manager REST client.
 
 Workspace-agnostic — for workspace-scoped operations use
-:class:`azure_jobs.core.rest_client.AzureMLClient` instead.
+:class:`azure_jobs.core.az_client.AzureMLClient` instead.
 """
 
 from __future__ import annotations

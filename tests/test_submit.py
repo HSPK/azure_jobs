@@ -223,7 +223,7 @@ class TestSubmitMocked:
             },
         }
 
-        with patch("azure_jobs.core.submit.native.submit._get_rest_client") as mock_factory:
+        with patch("azure_jobs.core.submit.native.orchestrate._get_rest_client") as mock_factory:
             mock_client = mock_factory.return_value
             mock_client.resources.get_environment_version.return_value = {
                 "id": "env-id-1"
@@ -249,7 +249,7 @@ class TestSubmitMocked:
         )
 
         with patch(
-            "azure_jobs.core.submit.native.submit._get_rest_client",
+            "azure_jobs.core.submit.native.orchestrate._get_rest_client",
             side_effect=AuthError("Azure CLI not logged in"),
         ):
             result = submit(request)
@@ -276,7 +276,7 @@ class TestSubmitMocked:
         def on_event(ev):
             steps.append(ev.kind)
 
-        with patch("azure_jobs.core.submit.native.submit._get_rest_client") as mock_factory:
+        with patch("azure_jobs.core.submit.native.orchestrate._get_rest_client") as mock_factory:
             mock_client = mock_factory.return_value
             mock_client.resources.get_environment_version.return_value = {
                 "id": "env-id"
@@ -672,7 +672,7 @@ class TestBuildStorageMounts:
 class TestInternalEnvKeys:
     def test_no_internal_env_keys_leaked(self):
         """All keys in env_vars should be passed through to the job verbatim."""
-        from azure_jobs.core.submit.native.submit import _build_env_vars
+        from azure_jobs.core.submit.native.orchestrate import _build_env_vars
 
         r = SubmitRequest(name="j", env_vars={"FOO": "bar"}, shm_size="")
         assert _build_env_vars(r, {}) == {"FOO": "bar"}

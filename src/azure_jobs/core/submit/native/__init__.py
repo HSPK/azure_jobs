@@ -16,15 +16,14 @@ def submit_via_native(
 ) -> SubmitResult:
     """Submit via the native AJ REST backend (thin alias for :func:`submit`).
 
-    Dispatches through the ``submit`` *module* attribute (not the directly
-    imported name) so tests can patch
-    ``azure_jobs.core.submit.native.submit.submit`` and see this function
-    re-route accordingly. Without this indirection the local ``submit``
-    binding would shadow the patched module attribute.
+    Dispatches through the ``orchestrate`` module attribute (not the
+    directly imported name) so tests can patch
+    ``azure_jobs.core.submit.native.orchestrate.submit`` and see this
+    function re-route accordingly.
     """
-    from . import submit as _submit_module
+    from . import orchestrate as _orchestrate
 
-    return _submit_module.submit(request, on_event=on_event)
+    return _orchestrate.submit(request, on_event=on_event)
 
 
 # Native handles both AML compute targets and Singularity virtual clusters.

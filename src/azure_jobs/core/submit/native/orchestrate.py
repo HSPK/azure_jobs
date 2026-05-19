@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any, Callable
 import requests
 
 if TYPE_CHECKING:
-    from azure_jobs.core.rest_client import AzureMLClient
+    from azure_jobs.core.az_client import AzureMLClient
 
 from ...errors import AJError, parse_exception_message
 from ..models import SubmitEvent, SubmitRequest, SubmitResult
@@ -37,7 +37,7 @@ _SING_DEFAULT_ENV = {
 
 def _get_rest_client(request: SubmitRequest) -> AzureMLClient:
     """Create a REST client from a SubmitRequest."""
-    from azure_jobs.core.rest_client import AzureMLClient
+    from azure_jobs.core.az_client import AzureMLClient
 
     return AzureMLClient(
         subscription_id=request.subscription_id,

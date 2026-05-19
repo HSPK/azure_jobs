@@ -1,6 +1,6 @@
 import pytest
 
-from azure_jobs.core.conf import merge_confs
+from azure_jobs.core.template import merge_confs
 
 
 class TestMergeConfsNoneHandling:

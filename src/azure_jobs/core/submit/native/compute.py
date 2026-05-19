@@ -9,7 +9,7 @@ from ..models import SubmitRequest
 from .environment import _SING_IMAGE_PREFIX
 
 if TYPE_CHECKING:
-    from azure_jobs.core.rest_client import AzureMLClient
+    from azure_jobs.core.az_client import AzureMLClient
 
 log = logging.getLogger(__name__)
 

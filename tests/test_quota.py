@@ -283,7 +283,7 @@ class TestDiscoverVirtualClusters:
 class TestQuotaListCli:
     def setup_method(self):
         self.runner = CliRunner()
-        self._arm_patcher = patch("azure_jobs.core.rest_client.AzureARMClient")
+        self._arm_patcher = patch("azure_jobs.core.az_client.AzureARMClient")
         self._arm_patcher.start()
 
     def teardown_method(self):

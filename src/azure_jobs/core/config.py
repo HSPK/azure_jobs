@@ -22,8 +22,8 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from . import const
-from .dataclass_utils import dataclass_from_dict, remove_empty_values
 from .errors import AuthError, WorkspaceError
+from ..utils.dataclass_utils import dataclass_from_dict, remove_empty_values
 
 log = logging.getLogger(__name__)
 

@@ -48,7 +48,7 @@ def template_push(message: str | None) -> None:
 @click.argument("name", type=str)
 def template_show(name: str) -> None:
     """Show the fully resolved config for a template."""
-    from azure_jobs.core.conf import ConfigError, read_conf
+    from azure_jobs.core.template import ConfigError, read_conf
 
     tp = const.AJ_TEMPLATE_HOME / f"{name}.yaml"
     if not tp.exists():
@@ -82,7 +82,7 @@ def template_show(name: str) -> None:
 @click.argument("name", type=str, required=False, default=None)
 def template_validate(name: str | None) -> None:
     """Validate template config (all templates if no name given)."""
-    from azure_jobs.core.conf import ConfigError, read_conf
+    from azure_jobs.core.template import ConfigError, read_conf
 
     if not const.AJ_TEMPLATE_HOME.exists():
         raise click.ClickException(f"No templates found in {const.AJ_TEMPLATE_HOME}")

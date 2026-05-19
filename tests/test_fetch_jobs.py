@@ -11,8 +11,8 @@ def _make_ws(name: str) -> dict:
     return {"name": name, "subscriptionId": "sub", "resourceGroup": "rg"}
 
 
-@patch("azure_jobs.core.rest_client.AzureMLClient")
-@patch("azure_jobs.core.rest_client.AzureARMClient")
+@patch("azure_jobs.core.az_client.AzureMLClient")
+@patch("azure_jobs.core.az_client.AzureARMClient")
 class TestFetchJobsAllWorkspaces:
     def test_returns_empty_when_no_workspaces(self, mock_arm_cls, mock_ml_cls):
         arm = MagicMock()

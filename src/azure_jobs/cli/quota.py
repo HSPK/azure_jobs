@@ -95,7 +95,7 @@ def _fmt_nodes(
 def _discover_vcs(template: str | None, arm_client: object | None = None) -> list:
     """Discover VCs: from explicit template or via Resource Graph."""
     from azure_jobs.core import const
-    from azure_jobs.core.conf import read_conf
+    from azure_jobs.core.template import read_conf
     from azure_jobs.core.config import get_workspace_config
     from azure_jobs.core.sku import VCInfo, discover_virtual_clusters
 
@@ -125,7 +125,7 @@ def _show_sing_quotas(show_all: bool, template: str | None) -> None:
     """Discover all VCs and display their quotas grouped by VC."""
     from rich.table import Table
 
-    from azure_jobs.core.rest_client import AzureARMClient
+    from azure_jobs.core.az_client import AzureARMClient
     from azure_jobs.core.sku import SLA_TIERS, fetch_vc_quotas
     from azure_jobs.utils.concurrent import parallel_map
     from azure_jobs.utils.ui import console, error
@@ -295,7 +295,7 @@ def _show_aml_quotas(show_all: bool) -> None:
     from rich.table import Table
     from rich.text import Text
 
-    from azure_jobs.core.rest_client import AzureARMClient
+    from azure_jobs.core.az_client import AzureARMClient
     from azure_jobs.utils.concurrent import parallel_map
     from azure_jobs.utils.ui import console, error, warning
 

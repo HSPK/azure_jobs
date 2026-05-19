@@ -225,7 +225,7 @@ class TestRunCommand:
         mock_result = SubmitResult(
             job_name="test-job", status="submitted", portal_url="https://example.com"
         )
-        with patch("azure_jobs.core.submit.native.submit.submit", return_value=mock_result):
+        with patch("azure_jobs.core.submit.native.orchestrate.submit", return_value=mock_result):
             result = runner.invoke(main, ["run", "echo", "hello"])
         assert result.exit_code == 0
         assert aj_env["record_fp"].exists()
@@ -325,7 +325,7 @@ class TestRunErrorPaths:
         mock_result = SubmitResult(
             job_name="test", status="failed", error="auth failed"
         )
-        with patch("azure_jobs.core.submit.native.submit.submit", return_value=mock_result):
+        with patch("azure_jobs.core.submit.native.orchestrate.submit", return_value=mock_result):
             result = runner.invoke(main, ["run", "echo", "hello"])
         assert result.exit_code != 0
         assert "failed" in result.output.lower()
@@ -352,7 +352,7 @@ class TestRunErrorPaths:
         mock_result = SubmitResult(
             job_name="test", status="failed", error="compute not found"
         )
-        with patch("azure_jobs.core.submit.native.submit.submit", return_value=mock_result):
+        with patch("azure_jobs.core.submit.native.orchestrate.submit", return_value=mock_result):
             runner.invoke(main, ["run", "echo", "hello"])
         assert aj_env["record_fp"].exists()
         record = json.loads(aj_env["record_fp"].read_text().strip())

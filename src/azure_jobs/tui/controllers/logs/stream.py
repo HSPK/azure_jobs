@@ -9,12 +9,12 @@ from typing import Any
 from rich.markup import escape
 from textual.worker import get_current_worker
 
-from azure_jobs.core.log_download import (
+from azure_jobs.core.logs.download import (
     get_log_content_uri,
     list_log_files,
     pick_default_log,
 )
-from azure_jobs.core.log_stream import DEFAULT_POLL_INTERVAL, LogStreamer
+from azure_jobs.core.logs.stream import DEFAULT_POLL_INTERVAL, LogStreamer
 from azure_jobs.tui.controllers.base import Controller
 from azure_jobs.tui.controllers.logs._shared import LIVE_TAIL_BYTES
 from azure_jobs.tui.helpers import safe_close

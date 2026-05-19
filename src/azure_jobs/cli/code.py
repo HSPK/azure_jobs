@@ -28,7 +28,7 @@ def _resolve_ignore_patterns(template: str | None, code_dir: Path) -> list[str]:
     """
     template_ignore: list[str] = []
     if template:
-        from azure_jobs.core.conf import ConfigError, read_conf
+        from azure_jobs.core.template import ConfigError, read_conf
         from azure_jobs.core.template import Template
 
         tp = const.AJ_TEMPLATE_HOME / f"{template}.yaml"

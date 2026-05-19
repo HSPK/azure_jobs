@@ -1,13 +1,16 @@
-"""Template config → SubmitRequest translation."""
+"""Template + CLI args → :class:`SubmitRequest` translation.
+
+This is the canonical entry point that wraps a user's amlt-style
+template, CLI overrides, and workspace context into a normalised
+:class:`SubmitRequest` consumed by every submission backend.
+"""
 
 from __future__ import annotations
 
 import os
-import re
-from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from azure_jobs.utils.fs import read_ignore_file
 
@@ -18,77 +21,13 @@ if TYPE_CHECKING:
     from ..template import Template
 
 
-def _escape_amlt_dollars(value: Any) -> Any:
-    """Recursively escape ``$`` for AMLT (preserves ``$$`` and ``$CONFIG_DIR``)."""
-    if isinstance(value, dict):
-        return {k: _escape_amlt_dollars(v) for k, v in value.items()}
-    if isinstance(value, list):
-        return [_escape_amlt_dollars(v) for v in value]
-    if isinstance(value, str):
-        return re.sub(
-            r"\$\$|\$(?!CONFIG_DIR\b)",
-            lambda m: m.group() if len(m.group()) == 2 else "$$",
-            value,
-        )
-    return value
-
-
-_VOLCANO_PREAMBLE = (
-    Path(__file__).parent / "volcano" / "distributed_preamble.sh"
-)
+_VOLCANO_PREAMBLE = Path(__file__).parent / "volcano" / "distributed_preamble.sh"
 
 
 def _load_volcano_preamble(nodes: int) -> str:
     """Read the Volcano distributed-env preamble and substitute ``{WORLD_SIZE_DEFAULT}``."""
     text = _VOLCANO_PREAMBLE.read_text()
     return text.replace("{WORLD_SIZE_DEFAULT}", str(nodes))
-
-
-def render_amlt_config(request: SubmitRequest) -> dict[str, Any]:
-    """Reconstruct an amlt-style config dict from a SubmitRequest for display/save."""
-    output_conf = {
-        "description": request.description,
-        "jobs": [
-            {
-                "name": request.name,
-                "sku": request.sku,
-                "command": request.command,
-                "submit_args": {
-                    "env": request.env_vars,
-                },
-            }
-        ],
-    }
-
-    # Add optional sections if present
-    if request.compute or request.service:
-        output_conf["target"] = {
-            "name": request.compute,
-            "service": request.service,
-        }
-        if request.workspace_name and request.service == "sing":
-            output_conf["target"]["workspace_name"] = request.workspace_name
-
-    if request.image or request.setup_commands:
-        output_conf["environment"] = {}
-        if request.image:
-            output_conf["environment"]["image"] = request.image
-        if request.image_registry:
-            output_conf["environment"]["registry"] = request.image_registry
-        if request.setup_commands:
-            output_conf["environment"]["setup"] = request.setup_commands
-
-    if request.amlt.code_dir != "." or request.code_ignore:
-        output_conf["code"] = {}
-        if request.amlt.code_dir != ".":
-            output_conf["code"]["local_dir"] = request.amlt.code_dir
-        if request.code_ignore:
-            output_conf["code"]["ignore"] = request.code_ignore
-
-    if request.storage:
-        output_conf["storage"] = {k: asdict(v) for k, v in request.storage.items()}
-
-    return _escape_amlt_dollars(output_conf)
 
 
 def build_submit_request(
@@ -208,7 +147,6 @@ def build_submit_request(
         rg = workspace.resource_group
     ws_name = target.workspace_name or workspace.workspace_name
 
-    # Backend-specific options ───────────────────────────────────────────
     sing_opts = SingularityOpts(
         vc_subscription_id=target.subscription_id,
         vc_resource_group=target.resource_group,

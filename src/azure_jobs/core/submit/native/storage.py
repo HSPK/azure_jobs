@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any
 from ..models import SubmitRequest
 
 if TYPE_CHECKING:
-    from azure_jobs.core.rest_client import AzureMLClient
+    from azure_jobs.core.az_client import AzureMLClient
 
 
 def _build_storage_mounts(

@@ -39,7 +39,7 @@ from rich.markup import escape
 from textual.worker import get_current_worker
 
 from azure_jobs.core.config import AJWorkspace
-from azure_jobs.core.rest_client import create_rest_client
+from azure_jobs.core.az_client import create_rest_client
 from azure_jobs.tui.controllers.base import Controller
 from azure_jobs.tui.controllers.jobs._shared import short_error
 from azure_jobs.tui.helpers import safe_notify

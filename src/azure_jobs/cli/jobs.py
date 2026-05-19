@@ -91,7 +91,7 @@ def job_list(
 ) -> None:
     """List recent jobs in the cloud workspace."""
     from azure_jobs.core.jobs import fetch_jobs
-    from azure_jobs.core.rest_client import create_rest_client
+    from azure_jobs.core.az_client import create_rest_client
     from azure_jobs.utils.ui import console, show_cloud_jobs_table
 
     client = create_rest_client(ws_name=ws_name)
@@ -129,7 +129,7 @@ def job_list(
 def _fetch_and_show_job(job_id: str, ws_name: str | None = None) -> None:
     """Resolve *job_id*, fetch via REST, and display details."""
     from azure_jobs.core.errors import RestError
-    from azure_jobs.core.rest_client import create_rest_client
+    from azure_jobs.core.az_client import create_rest_client
     from azure_jobs.utils.ui import console, error, show_job_detail
 
     name = resolve_short_id(job_id)
@@ -176,7 +176,7 @@ def job_cancel(job_id: str) -> None:
 
     JOB_ID can be the short aj ID or the full Azure job name.
     """
-    from azure_jobs.core.rest_client import create_rest_client
+    from azure_jobs.core.az_client import create_rest_client
     from azure_jobs.utils.ui import console, success, warning
 
     azure_name = resolve_short_id(job_id)
@@ -209,8 +209,8 @@ def job_logs(job_id: str) -> None:
     Downloads log files directly (fast, works for running jobs too).
     JOB_ID can be the short aj ID or the full Azure job name.
     """
-    from azure_jobs.core.log_download import download_job_logs
-    from azure_jobs.core.rest_client import create_rest_client
+    from azure_jobs.core.logs.download import download_job_logs
+    from azure_jobs.core.az_client import create_rest_client
     from azure_jobs.utils.ui import console, icon_style, short_portal_url
 
     _NO_LOG_STATUSES = ("Queued", "NotStarted", "Provisioning", "Preparing")

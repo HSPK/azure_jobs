@@ -23,7 +23,7 @@ from azure_jobs.core.record import read_records
 from azure_jobs.utils.time import parse_utc
 
 if TYPE_CHECKING:
-    from azure_jobs.core.rest_client import AzureMLClient
+    from azure_jobs.core.az_client import AzureMLClient
 
 log = logging.getLogger(__name__)
 
@@ -138,7 +138,7 @@ def fetch_jobs_all_workspaces(
     Callbacks are invoked from worker threads; they must be threadsafe
     or short-lived (a ``console.status.update`` is fine).
     """
-    from azure_jobs.core.rest_client import AzureARMClient, AzureMLClient
+    from azure_jobs.core.az_client import AzureARMClient, AzureMLClient
 
     if workspaces is None:
         arm = AzureARMClient()

@@ -23,7 +23,7 @@ def sku_list(template: str | None, show_all: bool) -> None:
     """
     from rich.table import Table
 
-    from azure_jobs.core.rest_client import AzureARMClient
+    from azure_jobs.core.az_client import AzureARMClient
     from azure_jobs.core.sku import (
         SLA_TIERS,
         fetch_vc_quotas,

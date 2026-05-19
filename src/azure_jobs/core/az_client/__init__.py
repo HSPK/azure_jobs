@@ -7,13 +7,13 @@ Two top-level clients:
 - :class:`AzureMLClient`   — workspace-scoped operations
   (jobs, environments, datastores, code upload)
 
-Domain APIs live under :mod:`azure_jobs.core.rest_client.api` and are
+Domain APIs live under :mod:`azure_jobs.core.az_client.api` and are
 composed onto :class:`AzureMLClient` as ``client.jobs``,
 ``client.resources``, and ``client.blob``.
 
 Usage::
 
-    from azure_jobs.core.rest_client import AzureMLClient, create_rest_client
+    from azure_jobs.core.az_client import AzureMLClient, create_rest_client
 
     with create_rest_client() as client:
         page, next_link = client.jobs.list_page(top=50)

@@ -7,7 +7,7 @@ src/azure_jobs/
 ├── cli/            # Click commands
 ├── core/
 │   ├── submit/     # Submission engine
-│   ├── rest_client/# Azure ARM + ML REST
+│   ├── az_client/# Azure ARM + ML REST
 │   ├── conf.py     # YAML loader + merge
 │   ├── config.py   # aj_config.json
 │   ├── record.py   # record.jsonl
@@ -64,7 +64,7 @@ Code upload uses a short-lived "tar" pod with the PVC mounted. `tar cv --null -T
 
 ## REST client
 
-`core/rest_client/` is split by surface:
+`core/az_client/` is split by surface:
 
 - `auth.py` — token cache (60 s early refresh).
 - `arm.py` — `AzureARMClient`: cross-subscription ARM, Resource Graph, VC quotas, AML compute lookups.

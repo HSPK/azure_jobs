@@ -18,7 +18,7 @@ def env_list(ws_name: str | None) -> None:
     """List environments in the current workspace."""
     from rich.table import Table
 
-    from azure_jobs.core.rest_client import create_rest_client
+    from azure_jobs.core.az_client import create_rest_client
     from azure_jobs.utils.ui import console, print_table, warning
 
     client = create_rest_client(ws_name=ws_name)
@@ -74,7 +74,7 @@ def env_show(name: str, last: int, ws_name: str | None) -> None:
     """
     from rich.table import Table
 
-    from azure_jobs.core.rest_client import create_rest_client
+    from azure_jobs.core.az_client import create_rest_client
     from azure_jobs.utils.time import format_time
     from azure_jobs.utils.ui import console, print_table, warning
 

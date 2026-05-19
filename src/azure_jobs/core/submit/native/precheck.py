@@ -19,7 +19,7 @@ from azure_jobs.core.submit.models import SubmitRequest
 from azure_jobs.utils.cache import cache_get, cache_set
 
 if TYPE_CHECKING:
-    from azure_jobs.core.rest_client import AzureARMClient
+    from azure_jobs.core.az_client import AzureARMClient
 
 log = logging.getLogger(__name__)
 
@@ -215,7 +215,7 @@ def check_singularity(
         return CheckResult()
 
     if arm_client is None:
-        from azure_jobs.core.rest_client import AzureARMClient
+        from azure_jobs.core.az_client import AzureARMClient
 
         arm_client = AzureARMClient()
 
@@ -345,7 +345,7 @@ def check_aml_compute(
         return CheckResult()
 
     if arm_client is None:
-        from azure_jobs.core.rest_client import AzureARMClient
+        from azure_jobs.core.az_client import AzureARMClient
 
         arm_client = AzureARMClient()
 

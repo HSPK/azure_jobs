@@ -26,7 +26,7 @@ def fetch_jobs_with_progress(
     cutoff_utc: datetime | None = None,
 ) -> list[dict[str, Any]]:
     """Single-workspace fetch wrapped with a Rich progress spinner."""
-    from azure_jobs.core.rest_client import create_rest_client
+    from azure_jobs.core.az_client import create_rest_client
     from azure_jobs.utils.ui import console
 
     client = create_rest_client(ws_name=ws_name)
@@ -50,7 +50,7 @@ def fetch_jobs_all_ws_with_progress(
     cutoff_utc: datetime | None = None,
 ) -> list[dict[str, Any]]:
     """All-workspace parallel fetch with Rich progress + failure warnings."""
-    from azure_jobs.core.rest_client import AzureARMClient
+    from azure_jobs.core.az_client import AzureARMClient
     from azure_jobs.utils.ui import console, warning
 
     failures: list[tuple[dict[str, Any], BaseException]] = []

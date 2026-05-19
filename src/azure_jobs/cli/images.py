@@ -73,7 +73,7 @@ def image_list(query: str | None) -> None:
 
 def _fetch_sing_images() -> list[dict]:
     """Fetch Singularity base images via Azure ARM REST API."""
-    from azure_jobs.core.rest_client import AzureARMClient
+    from azure_jobs.core.az_client import AzureARMClient
 
     with AzureARMClient() as arm:
         try:
