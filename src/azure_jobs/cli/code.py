@@ -6,13 +6,11 @@ import os
 from pathlib import Path
 
 import click
-from rich.table import Table
 
 from azure_jobs.cli import main
 from azure_jobs.core import const
-from azure_jobs.utils.format import format_size
 from azure_jobs.utils.fs import compute_code_hash, read_ignore_file, walk_code
-from azure_jobs.utils.ui import console, info, warning
+from azure_jobs.utils.ui import info, warning
 
 
 @main.group(name="code")
@@ -28,8 +26,7 @@ def _resolve_ignore_patterns(template: str | None, code_dir: Path) -> list[str]:
     """
     template_ignore: list[str] = []
     if template:
-        from azure_jobs.core.template import ConfigError, read_conf
-        from azure_jobs.core.template import Template
+        from azure_jobs.core.template import ConfigError, Template, read_conf
 
         tp = const.AJ_TEMPLATE_HOME / f"{template}.yaml"
         if not tp.exists():
@@ -90,6 +87,8 @@ def code_stats(
     its tar archive content). For native, the registered code asset hash
     additionally mixes in the synthetic runner script.
     """
+    from azure_jobs.utils.ui import show_code_stats
+
     base = Path(code_dir or os.getcwd()).resolve()
     if not base.is_dir():
         raise click.ClickException(f"Not a directory: {base}")
@@ -107,31 +106,13 @@ def code_stats(
     total_bytes = sum(cf.size for cf in files)
     code_hash = compute_code_hash(files)
 
-    summary = Table.grid(padding=(0, 2))
-    summary.add_column(style="dim")
-    summary.add_column()
-    summary.add_row("code_dir", str(base))
-    if template:
-        summary.add_row("template", template)
-    summary.add_row("ignore patterns", str(len(patterns)))
-    summary.add_row("files", str(len(files)))
-    summary.add_row("total size", f"{format_size(total_bytes)} ({total_bytes:,} bytes)")
-    summary.add_row("content hash", code_hash)
-
-    console.print()
-    console.print(summary)
-
-    rows = sorted(files, key=lambda cf: cf.size, reverse=True)
-    if not list_all:
-        rows = rows[: max(top, 0)]
-    if not rows:
-        return
-
-    title = "All files" if list_all else f"Top {len(rows)} largest"
-    table = Table(title=title, title_style="bold", show_lines=False)
-    table.add_column("Size", justify="right", style="cyan", no_wrap=True)
-    table.add_column("Path")
-    for cf in rows:
-        table.add_row(format_size(cf.size), cf.rel)
-    console.print()
-    console.print(table)
+    show_code_stats(
+        code_dir=str(base),
+        template=template,
+        ignore_count=len(patterns),
+        files=files,
+        code_hash=code_hash,
+        total_bytes=total_bytes,
+        top=top,
+        list_all=list_all,
+    )

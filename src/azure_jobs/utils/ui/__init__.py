@@ -38,16 +38,31 @@ from .panels import (
     show_job_status,
     show_submission_preview,
 )
+from .quota_tables import (
+    show_aml_quota_table,
+    show_sing_quota_table,
+    show_sku_table,
+)
 from .render import (
     Column,
+    DetailField,
+    DetailView,
     TableView,
     get_output_mode,
+    render_detail,
     render_table,
     set_output_mode,
 )
 from .tables import (
+    show_auth_status,
     show_cloud_jobs_table,
+    show_code_stats,
+    show_datastore_detail,
+    show_datastores_table,
+    show_environment_versions_table,
+    show_environments_table,
     show_jobs_table,
+    show_sing_images_table,
     show_template_table,
 )
 
@@ -70,13 +85,26 @@ __all__ = [
     # Render middleware
     "Column",
     "TableView",
+    "DetailField",
+    "DetailView",
     "render_table",
+    "render_detail",
     "get_output_mode",
     "set_output_mode",
     # Tables
     "show_template_table",
     "show_jobs_table",
     "show_cloud_jobs_table",
+    "show_environments_table",
+    "show_environment_versions_table",
+    "show_datastores_table",
+    "show_datastore_detail",
+    "show_sing_images_table",
+    "show_auth_status",
+    "show_code_stats",
+    "show_sing_quota_table",
+    "show_aml_quota_table",
+    "show_sku_table",
     # Panels
     "show_submission_preview",
     "show_job_status",

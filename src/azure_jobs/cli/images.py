@@ -3,7 +3,6 @@ from __future__ import annotations
 import click
 
 from azure_jobs.cli import main
-from azure_jobs.utils.ui import console
 
 
 @main.group(name="image")
@@ -25,7 +24,7 @@ def image_list(query: str | None) -> None:
     Queries the Singularity API for curated images that can be used
     in environment.sing.yaml with the amlt-sing/ prefix.
     """
-    from rich.table import Table
+    from azure_jobs.utils.ui import console, get_output_mode, show_sing_images_table
 
     with console.status("[bold cyan]Fetching base images…[/bold cyan]", spinner="dots"):
         images = _fetch_sing_images()
@@ -38,37 +37,10 @@ def image_list(query: str | None) -> None:
             or any(query.lower() in a.lower() for a in img["aliases"])
         ]
 
-    if not images:
-        from azure_jobs.utils.ui import warning
-
-        warning("No images found" + (f" matching '{query}'" if query else ""))
-        return
-
-    table = Table(
-        show_header=True,
-        header_style="bold",
-        show_lines=False,
-        pad_edge=True,
-        title="[bold]Singularity Base Images[/bold]",
-        title_style="",
-    )
-    table.add_column("ID", style="dim", no_wrap=True)
-    table.add_column("Image", style="highlight", no_wrap=True)
-    table.add_column("Aliases", style="dim")
-
-    for img in images:
-        aliases = [a for a in img["aliases"] if a != img["name"]]
-        table.add_row(
-            img["id"],
-            f"amlt-sing/{img['name']}",
-            ", ".join(aliases[:3]) + ("…" if len(aliases) > 3 else ""),
-        )
-
-    from azure_jobs.utils.ui import print_table
-
-    print_table(table)
-    console.print(f"[dim]{len(images)} images available[/dim]")
-    console.print()
+    show_sing_images_table(images)
+    if get_output_mode() == "rich" and images:
+        console.print(f"[dim]{len(images)} images available[/dim]")
+        console.print()
 
 
 def _fetch_sing_images() -> list[dict]:

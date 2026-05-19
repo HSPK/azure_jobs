@@ -8,12 +8,7 @@ import pytest
 from click.testing import CliRunner
 
 from azure_jobs.cli import main
-from azure_jobs.cli.quota import (
-    _fmt_nodes,
-    _parse_compute_nodes,
-    _portal_compute_url,
-    _vm_sku_label,
-)
+from azure_jobs.core.aml import vm_sku_label as _vm_sku_label
 from azure_jobs.core.sku import (
     SLA_TIERS,
     SeriesQuota,
@@ -21,6 +16,11 @@ from azure_jobs.core.sku import (
     VCInfo,
     discover_virtual_clusters,
     fetch_vc_quotas,
+)
+from azure_jobs.utils.ui.quota_tables import (
+    _fmt_nodes,
+    _parse_compute_nodes,
+    _portal_compute_url,
 )
 
 

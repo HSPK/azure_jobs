@@ -80,13 +80,54 @@ class TableView:
     title: str = ""
     empty_message: str = "No rows"
     metadata: dict[str, Any] = field(default_factory=dict)
+    # Optional row-field name; when consecutive rows have different
+    # values for this field, the Rich renderer inserts a section
+    # divider. JSON output adds ``section_by`` to ``metadata`` so
+    # consumers can group themselves.
+    section_by: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         """JSON-serialisable representation."""
+        meta = dict(self.metadata)
+        if self.section_by:
+            meta["section_by"] = self.section_by
         return {
             "title": self.title,
             "columns": [c.key for c in self.columns],
             "rows": self.rows,
+            "metadata": meta,
+        }
+
+
+@dataclass
+class DetailField:
+    """Field spec for :class:`DetailView` (one label / value row)."""
+
+    key: str
+    label: str = ""
+    type: ColumnType = "text"
+    format: Callable[[Any, dict[str, Any]], str] | None = None
+
+    def display_label(self) -> str:
+        if self.label:
+            return self.label
+        return self.key.replace("_", " ").title()
+
+
+@dataclass
+class DetailView:
+    """A renderable key-value detail panel (single record)."""
+
+    data: dict[str, Any]
+    fields: list[DetailField]
+    title: str = ""
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "title": self.title,
+            "fields": [f.key for f in self.fields],
+            "data": self.data,
             "metadata": self.metadata,
         }
 
@@ -118,6 +159,14 @@ def render_table(view: TableView) -> None:
     _render_rich(view)
 
 
+def render_detail(view: DetailView) -> None:
+    """Render a key-value detail panel in the current output mode."""
+    if get_output_mode() == "json":
+        sys.stdout.write(json.dumps(view.to_dict(), indent=2, default=str) + "\n")
+        return
+    _render_detail_rich(view)
+
+
 def _render_rich(view: TableView) -> None:
     from .console import print_table, warning
 
@@ -145,10 +194,61 @@ def _render_rich(view: TableView) -> None:
             kwargs["overflow"] = col.overflow
         table.add_column(col.display_header(), **kwargs)
 
-    for row in view.rows:
+    prev_section: Any = None
+    for i, row in enumerate(view.rows):
+        if view.section_by:
+            cur = row.get(view.section_by)
+            if i > 0 and cur != prev_section:
+                table.add_section()
+            prev_section = cur
         cells = [_format_cell(row.get(c.key), c, row) for c in view.columns]
         table.add_row(*cells)
     print_table(table)
+
+
+def _render_detail_rich(view: DetailView) -> None:
+    from rich.panel import Panel
+    from rich.table import Table as RichTable
+
+    from .console import console
+
+    grid = RichTable.grid(padding=(0, 2))
+    grid.add_column(style="bold white", justify="right")
+    grid.add_column()
+    for f in view.fields:
+        raw = view.data.get(f.key)
+        if f.format is not None:
+            rendered = f.format(raw, view.data)
+        elif raw in (None, ""):
+            rendered = "[dim]—[/dim]"
+        elif f.type == "status":
+            from .console import AZ_ICON, AZ_STYLE
+
+            s = str(raw)
+            icon = AZ_ICON.get(s, "?")
+            style = AZ_STYLE.get(s, "white")
+            rendered = f"[{style}]{icon} {s}[/{style}]"
+        elif f.type == "url":
+            from .console import short_portal_url
+
+            rendered = short_portal_url(str(raw))
+        else:
+            rendered = str(raw)
+        grid.add_row(f.display_label(), rendered)
+
+    console.print()
+    if view.title:
+        console.print(
+            Panel(
+                grid,
+                title=f"[bold]{view.title}[/bold]",
+                border_style="cyan",
+                expand=False,
+            )
+        )
+    else:
+        console.print(grid)
+    console.print()
 
 
 def _format_cell(value: Any, col: Column, row: dict[str, Any]) -> str:
@@ -188,9 +288,12 @@ def _format_cell(value: Any, col: Column, row: dict[str, Any]) -> str:
 __all__ = [
     "Column",
     "TableView",
+    "DetailField",
+    "DetailView",
     "OutputMode",
     "ColumnType",
     "set_output_mode",
     "get_output_mode",
     "render_table",
+    "render_detail",
 ]

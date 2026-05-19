@@ -11,10 +11,6 @@ from . import main
 log = logging.getLogger(__name__)
 
 
-def _ws_name(ws: dict) -> str:
-    return ws.get("name", "")
-
-
 @main.group(name="quota")
 def quota_group() -> None:
     """View compute quota and availability."""
@@ -43,60 +39,12 @@ def quota_list(backend: str, show_all: bool, template: str | None) -> None:
         _show_sing_quotas(show_all, template=template)
 
 
-def _fmt_used_limit(used: int | None, limit: int) -> str:
-    """Format a ``used/limit`` cell with color coding like amlt."""
-    if limit == 0:
-        return "[dim]·[/dim]"
-    u = str(used) if used is not None else "?"
-    color = "green" if (used or 0) < limit else "red"
-    return f"[{color}]{u}[/{color}][dim]/[/dim][yellow]{limit}[/yellow]"
-
-
-def _parse_compute_nodes(props: dict) -> tuple[int, int, int]:
-    """Extract (idle, busy, max_nodes) from ARM compute properties."""
-    scale = props.get("scaleSettings", {}) or {}
-    max_nodes = scale.get("maxNodeCount", 0) or 0
-    state = props.get("nodeStateCounts", {}) or {}
-    busy = (
-        (state.get("runningNodeCount") or 0)
-        + (state.get("preparingNodeCount") or 0)
-        + (state.get("leavingNodeCount") or 0)
-    )
-    idle = state.get("idleNodeCount") or 0
-    return idle, busy, max_nodes
-
-
-def _fmt_nodes(
-    idle: int,
-    busy: int,
-    max_nodes: int,
-    low_priority: bool,
-    w_idle: int = 1,
-    w_busy: int = 1,
-    w_total: int = 1,
-) -> str:
-    """Format the Nodes cell with alignment and conditional dimming."""
-    if max_nodes == 0:
-        return "[dim]0/0[/dim]"
-    i_s = str(idle).rjust(w_idle)
-    b_s = str(busy).rjust(w_busy)
-    t_s = str(max_nodes).rjust(w_total)
-    if idle == 0 and busy == 0:
-        return f"[dim]{i_s} idle {b_s} busy /{t_s}[/dim]"
-    free_col = "red" if low_priority else "green"
-    idle_part = (
-        f"[{free_col}]{i_s}[/{free_col}] idle" if idle > 0 else f"[dim]{i_s} idle[/dim]"
-    )
-    busy_part = f"[cyan]{b_s}[/cyan] busy" if busy > 0 else f"[dim]{b_s} busy[/dim]"
-    return f"{idle_part} {busy_part} [dim]/{t_s}[/dim]"
-
-
 def _discover_vcs(template: str | None, arm_client: object | None = None) -> list:
     """Discover VCs: from explicit template or via Resource Graph."""
     from azure_jobs.core import const
-    from azure_jobs.core.template import read_conf
     from azure_jobs.core.config import get_workspace_config
     from azure_jobs.core.sku import VCInfo, discover_virtual_clusters
+    from azure_jobs.core.template import read_conf
 
     # Only use template when explicitly specified via -t
     if template:
@@ -121,120 +69,43 @@ def _discover_vcs(template: str | None, arm_client: object | None = None) -> lis
 
 
 def _show_sing_quotas(show_all: bool, template: str | None) -> None:
-    """Discover all VCs and display their quotas grouped by VC."""
-    from rich.table import Table
-
+    """Discover VCs, fetch quotas, hand off to the display layer."""
     from azure_jobs.core.az_client import AzureARMClient
-    from azure_jobs.core.sku import SLA_TIERS, fetch_all_vc_quotas
-    from azure_jobs.utils.ui import console, error
+    from azure_jobs.core.sku import fetch_all_vc_quotas
+    from azure_jobs.utils.ui import console, error, show_sing_quota_table
 
     arm = AzureARMClient()
-    with console.status("[bold cyan]Discovering virtual clusters…[/bold cyan]", spinner="dots"):
+    with console.status(
+        "[bold cyan]Discovering virtual clusters…[/bold cyan]", spinner="dots"
+    ):
         vcs = _discover_vcs(template, arm_client=arm)
         arm.ensure_token()
-
         if not vcs:
             error("No Singularity virtual clusters found")
             console.print(
                 "  Make sure you are logged in (`az login`) and have access to VCs"
             )
             raise SystemExit(1)
-
         fetch_all_vc_quotas(vcs, include_zero=show_all, arm_client=arm)
-
-    # Determine which SLA tiers are active across ALL VCs
-    active_tiers: list[str] = []
-    has_quota_limit = False
-    for vc in vcs:
-        for tier in SLA_TIERS:
-            if tier not in active_tiers and any(tier in sq.tiers for sq in vc.quotas):
-                active_tiers.append(tier)
-        if not has_quota_limit and any(sq.overall for sq in vc.quotas):
-            has_quota_limit = True
-
-    # Build one table with VC grouping
-    table = Table(
-        title="[bold]Singularity Quotas[/bold]",
-        title_style="",
-        show_header=True,
-        header_style="bold",
-        show_lines=False,
-        pad_edge=True,
-    )
-    table.add_column("VC", style="bold magenta", no_wrap=True)
-    table.add_column("Series", style="bold cyan", no_wrap=True)
-    table.add_column("Accelerator", no_wrap=True)
-    for tier in active_tiers:
-        color = {"Premium": "green", "Standard": "yellow", "Basic": "bright_red"}.get(
-            tier, "white"
-        )
-        table.add_column(f"[{color}]{tier}[/{color}]", justify="right", no_wrap=True)
-    if has_quota_limit:
-        table.add_column("[cyan]Quota[/cyan]", justify="right", no_wrap=True)
-
-    for vi, vc in enumerate(vcs):
-        if not vc.quotas:
-            empty_row: list[str] = [vc.name, "[dim]no quotas[/dim]", ""]
-            empty_row += [""] * len(active_tiers)
-            if has_quota_limit:
-                empty_row.append("")
-            table.add_row(*empty_row)
-            continue
-
-        for i, sq in enumerate(vc.quotas):
-            vc_label = vc.name if i == 0 else ""
-            acc = sq.accelerator or ""
-            mem = f" {sq.gpu_memory}GB" if sq.gpu_memory else ""
-            acc_cell = f"{acc}[dim]{mem}[/dim]" if acc else "[dim]—[/dim]"
-
-            row: list[str] = [vc_label, sq.series, acc_cell]
-            for tier in active_tiers:
-                tq = sq.tiers.get(tier)
-                if tq:
-                    row.append(_fmt_used_limit(tq.used, tq.limit))
-                else:
-                    row.append("[dim]·[/dim]")
-            if has_quota_limit:
-                if sq.overall:
-                    # Quota column shows just the limit cap (user max)
-                    row.append(f"[cyan]{sq.overall.limit}[/cyan]")
-                else:
-                    row.append("[dim]·[/dim]")
-
-            table.add_row(*row)
-
-        # Divider line between VC groups
-        if vi < len(vcs) - 1:
-            table.add_section()
-
-    from azure_jobs.utils.ui import print_table
-
-    print_table(table)
-
-
-from azure_jobs.core.aml import vm_sku_label as _vm_sku_label
-
-
-def _portal_compute_url(sub: str, rg: str, ws: str, cluster: str) -> str:
-    return (
-        f"https://ml.azure.com/compute/{cluster}/details"
-        f"?wsid=/subscriptions/{sub}/resourceGroups/{rg}"
-        f"/providers/Microsoft.MachineLearningServices/workspaces/{ws}"
-    )
+    show_sing_quota_table(vcs)
 
 
 def _show_aml_quotas(show_all: bool) -> None:
-    """Display AML compute clusters across all discovered workspaces."""
-    from rich.table import Table
-    from rich.text import Text
-
-    from azure_jobs.core.az_client import AzureARMClient
+    """Discover AML workspaces, fetch computes, hand off to the display layer."""
     from azure_jobs.core.aml import fetch_aml_computes_all_workspaces
-    from azure_jobs.utils.ui import console, error, warning
+    from azure_jobs.core.az_client import AzureARMClient
+    from azure_jobs.utils.ui import (
+        console,
+        error,
+        show_aml_quota_table,
+        warning,
+    )
 
     arm = AzureARMClient()
     failures: list[tuple[dict, BaseException]] = []
-    with console.status("[bold cyan]Discovering AML workspaces…[/bold cyan]", spinner="dots"):
+    with console.status(
+        "[bold cyan]Discovering AML workspaces…[/bold cyan]", spinner="dots"
+    ):
         try:
             workspaces = arm.list_ml_workspaces()
         except Exception as exc:
@@ -256,97 +127,13 @@ def _show_aml_quotas(show_all: bool) -> None:
         )
 
     if failures:
-        warning(f"Skipped {len(failures)} workspace(s) (run with AJ_DEBUG=1 for details)")
+        warning(
+            f"Skipped {len(failures)} workspace(s) (run with AJ_DEBUG=1 for details)"
+        )
     ws_computes = [(ws, clusters) for ws, clusters in results if clusters or show_all]
-    ws_computes.sort(key=lambda x: _ws_name(x[0]))
+    ws_computes.sort(key=lambda x: x[0].get("name", ""))
 
     if not ws_computes:
         warning("No AML compute clusters found in any workspace")
         return
-
-    # Build grouped table
-    table = Table(
-        title="[bold]AML Compute Clusters[/bold]",
-        title_style="",
-        show_header=True,
-        header_style="bold",
-        show_lines=False,
-        pad_edge=True,
-    )
-    table.add_column("Workspace", style="bold magenta", no_wrap=True)
-    table.add_column("Cluster", style="bold cyan", no_wrap=True)
-    table.add_column("VM Size", no_wrap=True)
-    table.add_column("SKU", no_wrap=True)
-    table.add_column("Nodes", justify="right", no_wrap=True)
-    table.add_column("Priority", no_wrap=True)
-    table.add_column("Location", no_wrap=True)
-    table.add_column("Portal", no_wrap=True, overflow="fold")
-
-    # Pre-compute column widths for node alignment
-    all_rows: list[tuple[int, int, dict, dict | None]] = []
-    max_idle_w = max_busy_w = max_total_w = 1
-    for ws_idx, (ws, clusters) in enumerate(ws_computes):
-        if not clusters:
-            all_rows.append((ws_idx, 0, ws, None))
-            continue
-        for ci, c in enumerate(sorted(clusters, key=lambda x: x.get("name", ""))):
-            props = c.get("properties", {}).get("properties", {}) or {}
-            idle, busy, max_nodes = _parse_compute_nodes(props)
-            max_idle_w = max(max_idle_w, len(str(idle)))
-            max_busy_w = max(max_busy_w, len(str(busy)))
-            max_total_w = max(max_total_w, len(str(max_nodes)))
-            all_rows.append((ws_idx, ci, ws, c))
-
-    prev_ws_idx = -1
-    for ws_idx, ci, ws, c in all_rows:
-        ws_name = ws.get("name", "")
-        sub = ws.get("subscriptionId", "")
-        rg = ws.get("resourceGroup", "")
-        ws_label = ws_name if ci == 0 else ""
-
-        # Section divider between workspace groups
-        if prev_ws_idx >= 0 and ws_idx != prev_ws_idx:
-            table.add_section()
-        prev_ws_idx = ws_idx
-
-        if c is None:
-            table.add_row(ws_label, "[dim]no clusters[/dim]", "", "", "", "", "", "")
-            continue
-
-        name = c.get("name", "")
-        props = c.get("properties", {}).get("properties", {}) or {}
-        vm_size = props.get("vmSize", "") or ""
-        vm_pri = props.get("vmPriority", "") or ""
-        location = c.get("location", "") or ""
-
-        idle, busy, max_nodes = _parse_compute_nodes(props)
-        nodes_s = _fmt_nodes(
-            idle,
-            busy,
-            max_nodes,
-            vm_pri == "LowPriority",
-            max_idle_w,
-            max_busy_w,
-            max_total_w,
-        )
-
-        sku = _vm_sku_label(vm_size)
-        sku_s = (
-            f"[bold]{sku}[/bold]" if sku and sku != "CPU" else (sku or "[dim]—[/dim]")
-        )
-
-        pri_s = {
-            "LowPriority": "[yellow]Low[/yellow]",
-            "Dedicated": "[green]Dedicated[/green]",
-        }.get(vm_pri, vm_pri)
-
-        portal = _portal_compute_url(sub, rg, ws_name, name)
-        portal_text = Text("portal ↗", style=f"dim link {portal}")
-
-        table.add_row(
-            ws_label, name, vm_size, sku_s, nodes_s, pri_s, location, portal_text
-        )
-
-    from azure_jobs.utils.ui import print_table
-
-    print_table(table)
+    show_aml_quota_table(ws_computes)

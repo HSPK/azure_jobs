@@ -21,199 +21,24 @@ def sku_list(template: str | None, show_all: bool) -> None:
     Shows instance types, GPU specs, amlt-style shorthand, and quota for
     each instance family available on the discovered virtual clusters.
     """
-    from rich.table import Table
-
     from azure_jobs.core.az_client import AzureARMClient
-    from azure_jobs.core.sku import (
-        SLA_TIERS,
-        fetch_vc_quotas,
-    )
-    from azure_jobs.utils.ui import console, error, print_table
+    from azure_jobs.core.sku import fetch_all_vc_quotas
+    from azure_jobs.utils.ui import console, error, show_sku_table
 
-    arm = AzureARMClient()
-
-    # Reuse quota.py's VC discovery logic
     from .quota import _discover_vcs
 
+    arm = AzureARMClient()
     with console.status(
         "[bold cyan]Discovering virtual clusters…[/bold cyan]", spinner="dots"
     ):
         vcs = _discover_vcs(template, arm_client=arm)
-
-    if not vcs:
-        error("No Singularity virtual clusters found")
-        console.print(
-            "  Make sure you are logged in (`az login`) and have access to VCs"
-        )
-        raise SystemExit(1)
-
-    # Fetch quotas for each VC
-    for idx, vc in enumerate(vcs, 1):
-        with console.status(
-            f"[bold cyan]Fetching SKUs ({idx}/{len(vcs)}) {vc.name}…[/bold cyan]",
-            spinner="dots",
-        ):
-            vc.quotas = fetch_vc_quotas(
-                vc_subscription_id=vc.subscription_id,
-                vc_resource_group=vc.resource_group,
-                vc_name=vc.name,
-                include_zero=show_all,
-                arm_client=arm,
+        arm.ensure_token()
+        if not vcs:
+            error("No Singularity virtual clusters found")
+            console.print(
+                "  Make sure you are logged in (`az login`) and have access to VCs"
             )
+            raise SystemExit(1)
+        fetch_all_vc_quotas(vcs, include_zero=show_all, arm_client=arm)
 
-    # Determine which SLA tiers are active across ALL VCs (matches quota list style)
-    active_tiers: list[str] = []
-    has_overall = False
-    for vc in vcs:
-        for tier in SLA_TIERS:
-            if tier not in active_tiers and any(tier in sq.tiers for sq in vc.quotas):
-                active_tiers.append(tier)
-        if not has_overall and any(sq.overall for sq in vc.quotas):
-            has_overall = True
-
-    table = Table(
-        title="[bold]Singularity SKUs[/bold]",
-        title_style="",
-        show_header=True,
-        header_style="bold",
-        show_lines=False,
-        pad_edge=True,
-        border_style="dim",
-    )
-    table.add_column("VC", style="bold magenta", no_wrap=True)
-    table.add_column("GPU / CPU", no_wrap=True)
-    table.add_column("Instance Type", style="cyan", no_wrap=True)
-    table.add_column("SKU Shorthand", style="green", no_wrap=True)
-    for tier in active_tiers:
-        color = {
-            "Premium": "green",
-            "Standard": "yellow",
-            "Basic": "bright_red",
-        }.get(tier, "white")
-        table.add_column(f"[{color}]{tier}[/{color}]", justify="right", no_wrap=True)
-    if has_overall:
-        table.add_column("[cyan]Quota[/cyan]", justify="right", no_wrap=True)
-
-    for vi, vc in enumerate(vcs):
-        if not vc.quotas:
-            empty: list[str] = [vc.name, "[dim]no quotas[/dim]", "", ""]
-            empty += [""] * len(active_tiers)
-            if has_overall:
-                empty.append("")
-            table.add_row(*empty)
-            if vi < len(vcs) - 1:
-                table.add_section()
-            continue
-
-        first_row_in_vc = True
-        for sq in vc.quotas:
-            rows = _series_to_rows(sq)
-            for gpu_label, instance, shorthand in rows:
-                vc_label = vc.name if first_row_in_vc else ""
-                first_row_in_vc = False
-                row: list[str] = [vc_label, gpu_label, instance, shorthand]
-                for tier in active_tiers:
-                    tq = sq.tiers.get(tier)
-                    row.append(_fmt_quota(tq) if tq else "[dim]·[/dim]")
-                if has_overall:
-                    row.append(
-                        f"[cyan]{sq.overall.limit}[/cyan]"
-                        if sq.overall
-                        else "[dim]·[/dim]"
-                    )
-                table.add_row(*row)
-
-        if vi < len(vcs) - 1:
-            table.add_section()
-
-    print_table(table)
-
-
-def _fmt_quota(tq: object) -> str:
-    """Format a used/limit quota cell."""
-    limit = getattr(tq, "limit", 0)
-    used = getattr(tq, "used", None)
-    if limit == 0:
-        return "[dim]·[/dim]"
-    u = str(used) if used is not None else "?"
-    color = "green" if (used or 0) < limit else "red"
-    return f"[{color}]{u}[/{color}][dim]/[/dim][yellow]{limit}[/yellow]"
-
-
-def _series_to_rows(sq: object) -> list[tuple[str, str, str]]:
-    """Convert a SeriesQuota into display rows: (gpu_label, instance_type, sku_shorthand)."""
-    from azure_jobs.core.sku import _FAMILY_MAP, _SERIES_GPU_INFO
-
-    series = sq.series
-    gpu_model = sq.accelerator or ""
-    gpu_mem = sq.gpu_memory or 0
-
-    # Try to find matching family in _FAMILY_MAP
-    family = _FAMILY_MAP.get(series)
-    if family:
-        return _family_rows(family, gpu_model, gpu_mem)
-
-    # Series not in _FAMILY_MAP — use _SERIES_GPU_INFO for metadata
-    info = _SERIES_GPU_INFO.get(series)
-    if info:
-        model, mem = info
-        if model == "CPU":
-            return [("CPU", f"[dim]{series}[/dim]", "[dim]C1[/dim]")]
-        label = f"[bold]{model}[/bold] [dim]{mem}GB[/dim]"
-        return [(label, f"[dim]{series}[/dim]", "[dim]—[/dim]")]
-
-    # Completely unknown series
-    label = (
-        f"[dim]{gpu_model} {gpu_mem}GB[/dim]" if gpu_model else f"[dim]{series}[/dim]"
-    )
-    return [(label, f"[dim]{series}[/dim]", "[dim]—[/dim]")]
-
-
-# vCPU counts for known CPU instances (from amlt fallback data)
-_CPU_VCPU: dict[str, int] = {
-    "E4ads_v5": 4,
-    "E8ads_v5": 8,
-    "E16ads_v5": 16,
-    "E32ads_v5": 32,
-    "E64ads_v5": 64,
-    "D4_v3": 4,
-    "D8_v3": 8,
-    "D16_v3": 16,
-    "D32_v3": 32,
-    "D64_v3": 64,
-}
-
-
-def _family_rows(
-    family: dict, gpu_model: str, gpu_mem: int
-) -> list[tuple[str, str, str]]:
-    """Generate rows for a known _FAMILY_MAP entry."""
-    rows: list[tuple[str, str, str]] = []
-
-    if family.get("cpu"):
-        instances = family.get("instances", [])
-        for i, inst in enumerate(instances):
-            vcpu = _CPU_VCPU.get(inst, 0)
-            label = f"[bold]{vcpu} vCPU[/bold]" if vcpu else "CPU"
-            shorthand = f"C{i + 1}"
-            rows.append((label, inst, shorthand))
-        return rows
-
-    model = family.get("gpu_model", gpu_model) or "GPU"
-    mem = family.get("gpu_memory", gpu_mem) or 0
-    nvlink = family.get("nvlink", False)
-    nvlink_flag = " ⚡" if nvlink else ""
-    nvlink_suffix = "-NvLink" if nvlink else ""
-
-    instances_by_gpu = family.get("instances_by_gpu", {})
-    for gpu_count in sorted(instances_by_gpu.keys()):
-        instance = instances_by_gpu[gpu_count]
-        label = f"[bold]{gpu_count}×{model}[/bold] [dim]{mem}GB[/dim]{nvlink_flag}"
-        shorthand = (
-            f"{mem}G{gpu_count}-{model}{nvlink_suffix}"
-            if mem
-            else f"G{gpu_count}-{model}{nvlink_suffix}"
-        )
-        rows.append((label, instance, shorthand))
-
-    return rows
+    show_sku_table(vcs)

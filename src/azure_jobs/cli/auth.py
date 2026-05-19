@@ -15,71 +15,42 @@ def auth_group() -> None:
 @auth_group.command(name="status")
 def auth_status() -> None:
     """Show current Azure login status, subscription, and credential health."""
-    from rich.panel import Panel
-    from rich.table import Table
+    from azure_jobs.core.config import az_json, read_config
+    from azure_jobs.utils.ui import console, show_auth_status
 
-    from azure_jobs.core.config import az_json
-    from azure_jobs.utils.ui import console
-
-    rows: list[tuple[str, str]] = []
-
-    # ── 1. az CLI login ──
     account = az_json(["account", "show"])
     if account is None:
         console.print("[error]✗[/error] Not logged in (or Azure CLI not installed)")
         console.print("  Run [bold]az login[/bold] to authenticate")
         raise SystemExit(1)
 
-    rows.append(("Status", "[bold green]✓ Logged in[/bold green]"))
-    rows.append(("User", account.get("user", {}).get("name", "unknown")))
-    rows.append(("Subscription", account.get("name", "unknown")))
-    rows.append(("Subscription ID", account.get("id", "unknown")))
-    rows.append(("Tenant", account.get("tenantId", "unknown")))
-
-    # ── 2. Azure credential check ──
-    sdk_ok = False
+    cred_ok = False
+    cred_err = ""
+    cred_missing_pkg = False
     try:
         from azure.identity import AzureCliCredential
 
         cred = AzureCliCredential()
         token = cred.get_token("https://management.azure.com/.default")
         if token and token.token:
-            sdk_ok = True
-            rows.append(("Credential", "[bold green]✓ Valid[/bold green]"))
+            cred_ok = True
     except Exception as exc:
-        rows.append(("Credential", f"[bold red]✗ {exc}[/bold red]"))
-
-    if not sdk_ok:
+        cred_err = str(exc)
+    if not cred_ok and not cred_err:
         try:
             import azure.identity  # noqa: F401
         except ImportError:
-            rows.append(
-                ("Credential", "[yellow]⚠ azure-identity not installed[/yellow]")
-            )
+            cred_missing_pkg = True
 
-    # ── 3. aj workspace config ──
-    from azure_jobs.core.config import read_config
-
-    cfg = read_config()
-    ws = cfg.workspace
-    if ws.workspace_name:
-        rows.append(("Workspace", ws.workspace_name))
-        rows.append(("Resource Group", ws.resource_group or "—"))
-    else:
-        rows.append(("Workspace", "[dim]Not configured[/dim]"))
-
-    # ── render ──
-    grid = Table.grid(padding=(0, 2))
-    grid.add_column(style="bold white", justify="right")
-    grid.add_column()
-    for key, val in rows:
-        grid.add_row(key, val)
-
-    console.print()
-    console.print(
-        Panel(grid, title="[bold]Azure Auth[/bold]", border_style="cyan", expand=False)
+    ws = read_config().workspace
+    show_auth_status(
+        account=account,
+        workspace_name=ws.workspace_name,
+        resource_group=ws.resource_group,
+        credential_ok=cred_ok,
+        credential_error=cred_err,
+        credential_missing_pkg=cred_missing_pkg,
     )
-    console.print()
 
 
 @auth_group.command(name="login")
