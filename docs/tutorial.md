@@ -3,13 +3,42 @@
 A guided walkthrough — from an empty directory to a tracked, iterating
 Azure ML training job — in ten minutes.
 
-> **Prerequisites**
-> `pipx install azure_jobs` · `az login` · (optional) `kubectl` for the
-> Volcano backend.
+---
+
+## 1 · Install
+
+`aj` is distributed on PyPI. Install via [`pipx`](https://pipx.pypa.io/)
+so the CLI lives in its own isolated environment:
+
+```bash
+sudo apt install pipx          # or: python3 -m pip install --user pipx
+pipx ensurepath
+
+pipx install azure_jobs
+```
+
+Verify:
+
+```bash
+aj --version
+```
+
+### Authenticate
+
+`aj` uses the standard Azure credential chain. A one-time `az login` is
+enough for most users:
+
+```bash
+az login                       # opens a browser
+aj auth status                 # check the credential is picked up
+```
+
+The **Volcano** backend additionally requires `kubectl` configured
+against your cluster.
 
 ---
 
-## 1 · Scaffold
+## 2 · Scaffold
 
 ```bash
 mkdir my-project && cd my-project
@@ -39,7 +68,7 @@ You now have:
 
 ---
 
-## 2 · Author a template
+## 3 · Author a template
 
 A leaf template composes building blocks via `base` and overrides only
 what it needs:
@@ -74,7 +103,7 @@ aj template validate          # schema sweep
 
 ---
 
-## 3 · Dry-run before you spend
+## 4 · Dry-run before you spend
 
 ```bash
 aj run -t gpu -d -n 2 -p 8 train.py
@@ -97,7 +126,7 @@ aj code stats -t gpu -n 20    # 20 largest files
 
 ---
 
-## 4 · Pre-flight
+## 5 · Pre-flight
 
 Catch SKU and quota issues before submitting:
 
@@ -109,7 +138,7 @@ aj quota list --aml           # AML cluster availability
 
 ---
 
-## 5 · Submit
+## 6 · Submit
 
 ```bash
 aj run -t gpu -n 2 -p 8 train.py --lr 1e-3
@@ -147,7 +176,7 @@ Full env contract: [env_vars.md](env_vars.md).
 
 ---
 
-## 6 · Track
+## 7 · Track
 
 ```bash
 aj list                       # local submission history
@@ -167,7 +196,7 @@ aj dash                       # TUI dashboard
 
 ---
 
-## 7 · Iterate
+## 8 · Iterate
 
 ```bash
 aj template diff              # local edits vs upstream
@@ -176,7 +205,7 @@ aj template push -m "bump to A100-80GB"
 
 ---
 
-## 8 · Where to go next
+## 9 · Where to go next
 
 - **Compose** richer setups by splitting `account.*`, `storage.*`,
   `environment.*` blocks.
