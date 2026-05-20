@@ -180,7 +180,12 @@ def init_amlt(ctx: click.Context, force: bool) -> None:
     dim(f"Storage account: {storage_account}")
 
     # 3. Create amlt project
-    project_name = ws.workspace_name.lower().replace(" ", "-")
+    import secrets
+
+    default_project_name = f"project-{secrets.token_hex(3)}"
+    project_name = click.prompt(
+        "  amlt project name", default=default_project_name
+    ).strip() or default_project_name
     info(f"Creating amlt project [bold]{project_name}[/bold]…")
 
     result = subprocess.run(
