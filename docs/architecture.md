@@ -33,15 +33,15 @@ submit/
 └── amlt/            # shells out to amlt
 ```
 
-Every backend's submit fn has the same shape — `(request, *, on_event) -> SubmitResult` — and self-registers via `register_backend()` at import. The CLI dispatches by `request.service` (or the synthetic `"amlt"` service when `--amlt` is passed).
+Every backend exposes `(request, *, on_event) -> SubmitResult` and self-registers via `register_backend()` at import. The CLI dispatches by `request.service` (or `"amlt"` when `--amlt` is passed).
 
 ## Flow
 
 ```
 aj run -t gpu -n 4 -p 8 train.py
   ├─ read_conf()          resolve `base` chain
-  ├─ merge_confs()        dicts recurse; lists-of-dicts merge by index;
-  │                       lists of scalars concatenate; scalars last-wins
+  ├─ merge_confs()        dicts recurse; lists-of-dicts by index;
+  │                       scalar lists concat; scalars last-wins
   ├─ apply -n / -p / --ppn
   ├─ build_submit_request → SubmitRequest
   ├─ dispatch by request.service

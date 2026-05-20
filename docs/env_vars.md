@@ -48,13 +48,12 @@ torchrun \
 
 ## Opt-out / opt-in env vars
 
-These control aj's own client-side behaviour (not injected into the job
-container):
+Client-side flags, not injected into the job container:
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `AJ_SHIP_SSH` | `1` (ship by default) | Set to `0` / `false` / `no` / `off` (case-insensitive) to suppress shipping the `~/.ssh` whitelist (`id_rsa`, `id_ed25519`, `id_ecdsa`, `config`, `known_hosts`) with the uploaded code asset. When suppressed, only an empty `.ssh/.keep` placeholder is uploaded so the directory exists on the remote worker. A vendored `<code_dir>/.ssh` always wins. |
-| `AJ_DEBUG` | unset | When truthy, enables stderr `DEBUG`-level logging from the CLI. |
+| `AJ_SHIP_SSH` | `1` | Set to `0`/`false`/`no`/`off` to skip shipping `~/.ssh` whitelist (`id_rsa`, `id_ed25519`, `id_ecdsa`, `config`, `known_hosts`). Only `.ssh/.keep` is uploaded instead. A vendored `<code_dir>/.ssh` always wins. |
+| `AJ_DEBUG` | unset | Truthy enables stderr `DEBUG` logging. |
 
 ## Note on `$$`
 

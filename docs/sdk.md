@@ -29,7 +29,7 @@ from azure_jobs import (
 | `submit_via_native(request, *, on_event=None)` | Submit to AML / Singularity via REST |
 | `submit_via_volcano(request, *, on_event=None)` | Submit to a Volcano cluster via `kubectl` |
 | `submit_via_amlt(request, *, on_event=None)` | Delegate to the `amlt` CLI (reads `request.submission_path`) |
-| `materialise_submission(request, *, dry_run=False) -> Path` | Render the amlt-style YAML and write it to `AJ_SUBMISSION_HOME` (or `AJ_DRYRUN_HOME`); mutates `request.submission_path`. Required before `submit_via_amlt`. |
+| `materialise_submission(request, *, dry_run=False) -> Path` | Render the amlt-style YAML to `AJ_SUBMISSION_HOME` (or `AJ_DRYRUN_HOME`); stamps `request.submission_path`. Required before `submit_via_amlt`. |
 | `SubmitResult` | `{job_name, azure_name, status, portal_url, error}` |
 | `SubmitEvent` | Progress event consumed by `on_event` callbacks |
 
@@ -85,8 +85,8 @@ submit_and_record(
 
 ## Notes
 
-- `submit_via_*` is pure — no global state, no `record.jsonl` write. Use `submit_and_record` if you want the CLI-style UX.
-- All backend submit fns share the same signature `(request, *, on_event=None) -> SubmitResult` and self-register via `register_backend()`; you can dispatch generically with `get_backend(request.service).fn(request, on_event=...)`.
-- `on_event` is optional. Passing `None` makes the call silent.
-- Native backends submit straight from the in-memory `SubmitRequest`. Only `submit_via_amlt` needs a materialised YAML on disk — call `materialise_submission(request)` first so `request.submission_path` is populated.
-- Backend dispatch on `request.service` (`"aml"` / `"sing"` → native, `"volcano"` → volcano, `"amlt"` → amlt) is handled by `azure_jobs.core.submit.get_backend()` / `submit_and_record()` if you don't want to pick the backend yourself.
+- `submit_via_*` is pure — no global state, no `record.jsonl` write. Use `submit_and_record` for the CLI-style UX.
+- All backend submit fns share `(request, *, on_event=None) -> SubmitResult` and self-register; dispatch generically with `get_backend(request.service).fn(request, on_event=...)`.
+- `on_event=None` makes the call silent.
+- Only `submit_via_amlt` needs an on-disk YAML — call `materialise_submission(request)` first. Native backends submit straight from the in-memory request.
+- `request.service` maps `"aml"`/`"sing"` → native, `"volcano"` → volcano, `"amlt"` → amlt.
