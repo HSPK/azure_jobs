@@ -12,7 +12,6 @@ from azure_jobs.core.config import (
     ensure_experiment,
     get_defaults,
     get_experiment,
-    get_workspace_config,
     save_defaults,
 )
 from azure_jobs.core.errors import AJError
@@ -104,7 +103,11 @@ def run(
         raise click.ClickException(str(exc)) from exc
 
     save_defaults(template=template_name, nodes=nodes_int, processes=gpn_int)
-    workspace = AJWorkspace() if dry_run else get_workspace_config()
+    # Submission MUST NOT read aj ws / local CLI config — workspace coords
+    # are template-owned (target.workspace_subscription_id / _resource_group
+    # / workspace_name). Pass an empty AJWorkspace so build_submit_request
+    # has no fallback.
+    workspace = AJWorkspace()
     experiment = get_experiment() or "aj" if dry_run else ensure_experiment()
 
     try:

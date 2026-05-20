@@ -88,14 +88,18 @@ class TestSubmitRequest:
 class TestBuildRequestFromConfig:
     def test_basic_config(self):
         conf = {
-            "target": {"name": "gpu01", "service": "aml"},
+            "target": {
+                "name": "gpu01",
+                "service": "aml",
+                "subscription_id": "sub1",
+                "resource_group": "rg1",
+                "workspace_name": "ws1",
+            },
             "environment": {"image": "pytorch:2.0", "registry": "docker.io"},
             "jobs": [{"sku": "G1", "identity": "managed", "command": ["echo hi"]}],
             "code": {"local_dir": "."},
         }
-        ws = AJWorkspace(
-            subscription_id="sub1", resource_group="rg1", workspace_name="ws1"
-        )
+        ws = AJWorkspace()
         r = _make_request(conf, name="test-job", workspace=ws)
         assert r.compute == "gpu01"
         assert r.image == "pytorch:2.0"

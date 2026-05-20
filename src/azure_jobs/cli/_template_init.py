@@ -508,6 +508,8 @@ def run_wizard(leaf_name: str | None, *, force: bool) -> None:
             "target": {
                 **target,
                 "workspace_name": workspace["workspace_name"],
+                "workspace_subscription_id": workspace["subscription_id"],
+                "workspace_resource_group": workspace["resource_group"],
             },
             "_extra": {"nodes": 1, "processes": 1},
             "jobs": [{"sku": sku}],

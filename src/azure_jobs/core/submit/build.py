@@ -151,14 +151,23 @@ def build_submit_request(
     env_extra = _merge_env(dict(submit_args.get("env", {})), aj_envs)
     container_args = dict(submit_args.get("container_args", {}))
 
-    # AML target may override sub/rg; others use local workspace.
+    # Workspace coordinates come from the template only — never from the
+    # local CLI config. \`aj ws set\` is for read-only commands; submission
+    # paths must be self-contained so a template runs the same anywhere.
     if service == "aml":
-        sub_id = target.subscription_id or workspace.subscription_id
-        rg = target.resource_group or workspace.resource_group
+        # AML target.subscription_id / target.resource_group ARE the
+        # workspace coords.
+        sub_id = target.subscription_id
+        rg = target.resource_group
+    elif service == "sing":
+        # Singularity target.subscription_id / target.resource_group are
+        # the VC's. Workspace lives in target.workspace_*.
+        sub_id = target.workspace_subscription_id
+        rg = target.workspace_resource_group
     else:
-        sub_id = workspace.subscription_id
-        rg = workspace.resource_group
-    ws_name = target.workspace_name or workspace.workspace_name
+        sub_id = target.subscription_id
+        rg = target.resource_group
+    ws_name = target.workspace_name
 
     sing_opts = SingularityOpts(
         vc_subscription_id=target.subscription_id,
