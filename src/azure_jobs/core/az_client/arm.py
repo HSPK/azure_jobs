@@ -129,3 +129,51 @@ class AzureARMClient(AuthSession):
             "| project name, resourceGroup, subscriptionId, location"
         )
         return self.resource_graph_query(query, subscription_ids)
+
+    def list_user_assigned_identities(
+        self,
+        subscription_ids: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Discover all user-assigned managed identities the user can read.
+
+        Each row carries ``name``, ``resourceGroup``, ``subscriptionId``,
+        ``location``, ``id`` (full ARM ID), ``clientId``, and ``principalId``.
+        Returned sorted by name. Useful for resolving the
+        ``_AZUREML_SINGULARITY_JOB_UAI`` value in account templates.
+        """
+        if not subscription_ids:
+            subscription_ids = self.list_subscriptions()
+        if not subscription_ids:
+            return []
+        query = (
+            "resources "
+            "| where type == 'microsoft.managedidentity/userassignedidentities' "
+            "| order by name asc "
+            "| project name, resourceGroup, subscriptionId, location, id, "
+            "clientId = tostring(properties.clientId), "
+            "principalId = tostring(properties.principalId)"
+        )
+        return self.resource_graph_query(query, subscription_ids)
+
+    def list_storage_accounts(
+        self,
+        subscription_ids: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Discover all storage accounts the user can read.
+
+        Each row carries ``name``, ``resourceGroup``, ``subscriptionId``,
+        ``location``, ``kind``, and ``sku``. Useful for filling in
+        ``storage_account_name`` in storage templates.
+        """
+        if not subscription_ids:
+            subscription_ids = self.list_subscriptions()
+        if not subscription_ids:
+            return []
+        query = (
+            "resources "
+            "| where type == 'microsoft.storage/storageaccounts' "
+            "| order by name asc "
+            "| project name, resourceGroup, subscriptionId, location, "
+            "kind, sku = tostring(sku.name)"
+        )
+        return self.resource_graph_query(query, subscription_ids)

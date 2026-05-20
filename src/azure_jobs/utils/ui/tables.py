@@ -14,7 +14,14 @@ from typing import Any
 from azure_jobs.utils.format import format_size
 from azure_jobs.utils.time import format_time, time_ago
 
-from .render import Column, DetailField, DetailView, TableView, render_detail, render_table
+from .render import (
+    Column,
+    DetailField,
+    DetailView,
+    TableView,
+    render_detail,
+    render_table,
+)
 
 _LOCAL_STATUS_STYLE = {
     "success": "green",
@@ -346,22 +353,91 @@ def show_sing_images_table(images: list[dict[str, Any]]) -> None:
         aliases = [a for a in img.get("aliases", []) if a != img.get("name")]
         rows.append(
             {
-                "id": img.get("id", ""),
-                "name": img.get("name", ""),
                 "image": f"amlt-sing/{img.get('name', '')}",
                 "aliases": aliases,
-                "aliases_display": ", ".join(aliases[:3])
-                + ("…" if len(aliases) > 3 else ""),
             }
         )
+
+    def _aliases_fmt(value: Any, _row: dict[str, Any]) -> str:
+        aliases = list(value or [])
+        return ", ".join(aliases[:3]) + ("…" if len(aliases) > 3 else "")
+
     view = TableView(
         title="Singularity Base Images",
         rows=rows,
         empty_message="No images found",
         columns=[
-            Column(key="id", style="dim", no_wrap=True),
             Column(key="image", header="Image", style="highlight", no_wrap=True),
-            Column(key="aliases_display", header="Aliases", style="dim"),
+            Column(key="aliases", header="Aliases", style="dim", format=_aliases_fmt),
+        ],
+        metadata={"count": len(rows)},
+    )
+    render_table(view)
+
+
+def show_uai_table(identities: list[dict[str, Any]]) -> None:
+    """Display user-assigned managed identities as a TableView.
+
+    Rows come from :meth:`AzureARMClient.list_user_assigned_identities`.
+    The full ARM ID (``id``) is what goes into
+    ``_AZUREML_SINGULARITY_JOB_UAI``; it is shown verbatim in its own
+    column so users can copy it directly.
+    """
+    rows = [
+        {
+            "name": uai.get("name", ""),
+            "resource_group": uai.get("resourceGroup", ""),
+            "subscription_id": uai.get("subscriptionId", ""),
+            "location": uai.get("location", ""),
+            "client_id": uai.get("clientId", ""),
+            "id": uai.get("id", ""),
+        }
+        for uai in identities
+    ]
+    view = TableView(
+        title="User-Assigned Managed Identities",
+        rows=rows,
+        empty_message="No user-assigned managed identities found",
+        columns=[
+            Column(key="name", style="cyan bold"),
+            Column(key="resource_group", header="Resource Group"),
+            Column(key="location", header="Location", style="dim"),
+            Column(key="client_id", header="Client ID", style="dim", no_wrap=True),
+            Column(key="id", header="ARM ID", style="dim"),
+        ],
+        metadata={"count": len(rows)},
+    )
+    render_table(view)
+
+
+def show_storage_accounts_table(accounts: list[dict[str, Any]]) -> None:
+    """Display Azure storage accounts as a TableView.
+
+    Rows come from :meth:`AzureARMClient.list_storage_accounts`. The
+    ``Name`` column is the value that goes into ``storage_account_name``
+    in storage templates.
+    """
+    rows = [
+        {
+            "name": sa.get("name", ""),
+            "resource_group": sa.get("resourceGroup", ""),
+            "location": sa.get("location", ""),
+            "kind": sa.get("kind", ""),
+            "sku": sa.get("sku", ""),
+            "subscription_id": sa.get("subscriptionId", ""),
+        }
+        for sa in accounts
+    ]
+    view = TableView(
+        title="Storage Accounts",
+        rows=rows,
+        empty_message="No storage accounts found",
+        columns=[
+            Column(key="name", style="cyan bold"),
+            Column(key="resource_group", header="Resource Group"),
+            Column(key="location", header="Location", style="dim"),
+            Column(key="kind", header="Kind", style="dim"),
+            Column(key="sku", header="SKU", style="dim"),
         ],
         metadata={"count": len(rows)},
     )
@@ -409,7 +485,9 @@ def show_auth_status(
                 key="logged_in",
                 label="Status",
                 format=lambda v, _d: (
-                    "[bold green]✓ Logged in[/bold green]" if v else "[red]✗ Not logged in[/red]"
+                    "[bold green]✓ Logged in[/bold green]"
+                    if v
+                    else "[red]✗ Not logged in[/red]"
                 ),
             ),
             DetailField(key="user", label="User"),

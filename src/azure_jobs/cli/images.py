@@ -24,7 +24,7 @@ def image_list(query: str | None) -> None:
     Queries the Singularity API for curated images that can be used
     in environment.sing.yaml with the amlt-sing/ prefix.
     """
-    from azure_jobs.utils.ui import console, get_output_mode, show_sing_images_table
+    from azure_jobs.utils.ui import console, show_sing_images_table
 
     with console.status("[bold cyan]Fetching base images…[/bold cyan]", spinner="dots"):
         images = _fetch_sing_images()
@@ -38,9 +38,6 @@ def image_list(query: str | None) -> None:
         ]
 
     show_sing_images_table(images)
-    if get_output_mode() == "rich" and images:
-        console.print(f"[dim]{len(images)} images available[/dim]")
-        console.print()
 
 
 def _fetch_sing_images() -> list[dict]:
@@ -66,7 +63,9 @@ def _fetch_sing_images() -> list[dict]:
                 if data and data.get("value"):
                     return _parse_images(data["value"])
             except Exception:
-                log.debug("Singularity images fetch failed for %s", sub_id, exc_info=True)
+                log.debug(
+                    "Singularity images fetch failed for %s", sub_id, exc_info=True
+                )
                 continue
     return []
 

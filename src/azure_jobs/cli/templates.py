@@ -23,6 +23,32 @@ def template_list() -> None:
     _show_templates()
 
 
+@template_group.command(name="init")
+@click.argument("name", type=str, required=False, default=None)
+@click.option(
+    "-f", "--force", is_flag=True, help="Overwrite an existing leaf template"
+)
+def template_init(name: str | None, force: bool) -> None:
+    """Interactively author a new leaf template.
+
+    Walks through account / storage / environment / target / SKU,
+    reusing existing component files or creating new ones from live
+    Azure data. Writes the leaf to ``.azure_jobs/template/<name>.yaml``.
+    """
+    from azure_jobs.cli._template_init import run_wizard
+    from azure_jobs.utils.ui import get_output_mode, show_command_result
+
+    if get_output_mode() == "json":
+        show_command_result(
+            "template_init",
+            status="failed",
+            message="aj template init is interactive — not supported in JSON mode.",
+        )
+        raise SystemExit(1)
+
+    run_wizard(name, force=force)
+
+
 @template_group.command(name="pull")
 @click.argument("repo_id", type=str, required=False, default=None)
 @click.option(

@@ -74,7 +74,9 @@ from .tables import (
     show_environments_table,
     show_jobs_table,
     show_sing_images_table,
+    show_storage_accounts_table,
     show_template_table,
+    show_uai_table,
 )
 
 __all__ = [
@@ -113,6 +115,8 @@ __all__ = [
     "show_datastores_table",
     "show_datastore_detail",
     "show_sing_images_table",
+    "show_storage_accounts_table",
+    "show_uai_table",
     "show_auth_status",
     "show_code_stats",
     "show_sing_quota_table",

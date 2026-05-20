@@ -1,0 +1,35 @@
+"""``aj sa`` — list storage accounts."""
+
+from __future__ import annotations
+
+import click
+
+from azure_jobs.cli import main
+
+
+@main.group(name="sa")
+def sa_group() -> None:
+    """List Azure Storage accounts."""
+
+
+@sa_group.command(name="list")
+def sa_list() -> None:
+    """List storage accounts across accessible subscriptions.
+
+    Each row's ``Name`` is the value that goes into
+    ``storage_account_name`` in your storage template.
+    """
+    from azure_jobs.core.az_client import AzureARMClient
+    from azure_jobs.utils.ui import console, error, show_storage_accounts_table
+
+    arm = AzureARMClient()
+    with console.status(
+        "[bold cyan]Discovering storage accounts…[/bold cyan]", spinner="dots"
+    ):
+        try:
+            accounts = arm.list_storage_accounts()
+        except Exception as exc:
+            error(f"Could not list storage accounts: {exc}")
+            raise SystemExit(1) from exc
+
+    show_storage_accounts_table(accounts)

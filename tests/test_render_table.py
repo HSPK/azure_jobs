@@ -6,7 +6,14 @@ import io
 import json
 import sys
 
-from azure_jobs.utils.ui import Column, TableView, get_output_mode, render_table, set_output_mode
+from azure_jobs.utils.ui import (
+    Column,
+    TableView,
+    get_output_mode,
+    render_table,
+    set_output_mode,
+)
+from azure_jobs.utils.ui.tables import show_sing_images_table
 
 
 def _capture_stdout(fn) -> str:
@@ -175,3 +182,29 @@ class TestStatusColumn:
         assert "submitted" in out
         # ↑ icon should appear in Rich rendering
         assert "↑" in out
+
+
+class TestSingImagesTable:
+    def setup_method(self):
+        set_output_mode("json")
+
+    def teardown_method(self):
+        set_output_mode("rich")
+
+    def test_json_has_only_image_and_aliases_columns(self):
+        out = _capture_stdout(
+            lambda: show_sing_images_table(
+                [
+                    {
+                        "id": "/subscriptions/sub/providers/Microsoft.Singularity/images/x",
+                        "name": "torch:cuda12",
+                        "aliases": ["latest", "torch:cuda12", "torch2"],
+                    }
+                ]
+            )
+        )
+        parsed = json.loads(out)
+        assert parsed["columns"] == ["image", "aliases"]
+        assert parsed["rows"] == [
+            {"image": "amlt-sing/torch:cuda12", "aliases": ["latest", "torch2"]}
+        ]
