@@ -26,7 +26,13 @@ def quota_group() -> None:
     help="Show Singularity VC quotas (default)",
 )
 @click.option("--all", "show_all", is_flag=True, help="Include zero-quota families")
-def quota_list(backend: str, show_all: bool) -> None:
+@click.option(
+    "--full",
+    "full",
+    is_flag=True,
+    help="Include Resource Group + Subscription columns (Singularity only)",
+)
+def quota_list(backend: str, show_all: bool, full: bool) -> None:
     """List compute quotas.
 
     By default discovers all Singularity virtual clusters and shows their quotas.
@@ -35,7 +41,7 @@ def quota_list(backend: str, show_all: bool) -> None:
     if backend == "aml":
         _show_aml_quotas(show_all)
     else:
-        _show_sing_quotas(show_all)
+        _show_sing_quotas(show_all, full=full)
 
 
 def load_vcs_with_quotas(*, include_zero: bool) -> list:
@@ -66,11 +72,11 @@ def load_vcs_with_quotas(*, include_zero: bool) -> list:
     return vcs
 
 
-def _show_sing_quotas(show_all: bool) -> None:
+def _show_sing_quotas(show_all: bool, *, full: bool = False) -> None:
     """Discover VCs, fetch quotas, hand off to the display layer."""
     from azure_jobs.utils.ui import show_sing_quota_table
 
-    show_sing_quota_table(load_vcs_with_quotas(include_zero=show_all))
+    show_sing_quota_table(load_vcs_with_quotas(include_zero=show_all), full=full)
 
 
 def _show_aml_quotas(show_all: bool) -> None:

@@ -122,11 +122,12 @@ def _alias_jlogs(job_id: str) -> None:
 @click.option("--aml", "backend", flag_value="aml")
 @click.option("--sing", "backend", flag_value="sing", default=True)
 @click.option("--all", "show_all", is_flag=True)
-def _alias_ql(backend: str, show_all: bool) -> None:
+@click.option("--full", "full", is_flag=True)
+def _alias_ql(backend: str, show_all: bool, full: bool) -> None:
     """Shortcut for ``aj quota list``."""
     from .quota import quota_list
 
-    quota_list.callback(backend, show_all)
+    quota_list.callback(backend, show_all, full)
 
 
 # Names registered above — kept in sync with the ``@main.command(name=...)``

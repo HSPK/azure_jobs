@@ -358,15 +358,23 @@ class TestQuotaListCli:
         result = self.runner.invoke(main, ["quota", "list"])
         assert result.exit_code == 0
         assert "vc1" in result.output
-        assert "rg1" in result.output
-        assert "s" in result.output
         assert "vc2" in result.output
-        assert "rg2" in result.output
+        # Resource Group + Subscription columns are hidden by default
+        assert "rg1" not in result.output
+        assert "Resource Group" not in result.output
         assert "NDH100v5" in result.output
         assert "NDAMv4" in result.output
         # Accelerator info should be populated
         assert "H100" in result.output
         assert "A100" in result.output
+
+        # With --full, RG + Subscription appear
+        mock_fetch.side_effect = [[sq1], [sq2]]
+        full_result = self.runner.invoke(main, ["quota", "list", "--full"])
+        assert full_result.exit_code == 0
+        assert "rg1" in full_result.output
+        assert "rg2" in full_result.output
+        assert "Resource Group" in full_result.output
 
     def test_ql_alias_works(self):
         with patch(

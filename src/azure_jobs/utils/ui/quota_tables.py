@@ -143,13 +143,15 @@ def show_sing_quota_table(
     vcs: list[Any],
     *,
     sla_tiers: tuple[str, ...] = _SLA_TIERS_DEFAULT,
+    full: bool = False,
 ) -> None:
     """Display Singularity VC quotas grouped by VC.
 
     Each VC has been pre-populated with ``vc.quotas`` (a list of
     :class:`SeriesQuota`). Active SLA tiers are derived from the data,
     and an extra ``Quota`` column appears only when at least one series
-    has an overall (user-level) cap.
+    has an overall (user-level) cap. Pass ``full=True`` to include the
+    Resource Group + Subscription columns (hidden by default).
     """
     active_tiers, has_overall = _active_tiers_and_overall(vcs, sla_tiers)
 
@@ -203,18 +205,8 @@ def show_sing_quota_table(
             return "[dim]—[/dim]"
         return f"{acc}[dim] {mem}GB[/dim]" if mem else acc
 
-    _render_vc_grouped(
-        title="Singularity Quotas",
-        empty_message="No quotas found",
-        rows=rows,
-        base_columns=[
-            Column(
-                key="vc",
-                header="VC",
-                style="bold magenta",
-                no_wrap=True,
-                format=_vc_label_fmt,
-            ),
+    _location_columns: list[Column] = (
+        [
             Column(
                 key="resource_group",
                 header="Resource Group",
@@ -229,6 +221,24 @@ def show_sing_quota_table(
                 no_wrap=True,
                 format=_vc_first_fmt,
             ),
+        ]
+        if full
+        else []
+    )
+
+    _render_vc_grouped(
+        title="Singularity Quotas",
+        empty_message="No quotas found",
+        rows=rows,
+        base_columns=[
+            Column(
+                key="vc",
+                header="VC",
+                style="bold magenta",
+                no_wrap=True,
+                format=_vc_label_fmt,
+            ),
+            *_location_columns,
             Column(
                 key="series",
                 header="Series",
