@@ -130,7 +130,6 @@ def run(
             raise click.ClickException(
                 "amlt CLI not available or no .amltconfig in current directory."
             )
-        request.service = "amlt"
     else:
         try:
             _resolve_or_warn_sing_target_coords(
@@ -141,7 +140,7 @@ def run(
         except AJError as exc:
             raise click.ClickException(str(exc)) from exc
 
-    if dry_run or request.service == "amlt":
+    if dry_run or amlt:
         materialise_submission(request, dry_run=dry_run)
 
     show_submission_preview(request, dry_run=dry_run)
@@ -150,7 +149,7 @@ def run(
         return
 
     try:
-        entry = get_backend(request.service)
+        entry = get_backend("amlt" if amlt else request.service)
     except AJError as exc:
         raise click.ClickException(str(exc)) from exc
 
