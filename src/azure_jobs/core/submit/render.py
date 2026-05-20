@@ -42,18 +42,33 @@ def _escape_amlt_dollars(value: Any) -> Any:
 
 def render_amlt_config(request: SubmitRequest) -> dict[str, Any]:
     """Reconstruct an amlt-style config dict from a SubmitRequest for display/save."""
-    output_conf = {
+    job: dict[str, Any] = {
+        "name": request.name,
+        "sku": request.sku,
+        "command": request.command,
+        "submit_args": {
+            "env": request.env_vars,
+        },
+    }
+    if request.identity:
+        job["identity"] = request.identity
+    if request.sla_tier:
+        job["sla_tier"] = request.sla_tier
+    if request.priority:
+        job["priority"] = request.priority
+    if request.tags:
+        job["tags"] = list(request.tags)
+    if request.processes_per_node:
+        job["process_count_per_node"] = request.processes_per_node
+    container_args = dict(request.container_args)
+    if request.shm_size and "shm_size" not in container_args:
+        container_args["shm_size"] = request.shm_size
+    if container_args:
+        job["submit_args"]["container_args"] = container_args
+
+    output_conf: dict[str, Any] = {
         "description": request.description,
-        "jobs": [
-            {
-                "name": request.name,
-                "sku": request.sku,
-                "command": request.command,
-                "submit_args": {
-                    "env": request.env_vars,
-                },
-            }
-        ],
+        "jobs": [job],
     }
 
     if request.compute or request.service:
