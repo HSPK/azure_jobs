@@ -23,6 +23,8 @@ Verify:
 aj --version
 ```
 
+![aj version command](_assets/aj_version.png)
+
 ### Authenticate
 
 `aj` uses the standard Azure credential chain. A one-time `az login` is
@@ -33,6 +35,8 @@ az login                       # opens a browser
 aj auth status                 # check the credential is picked up
 ```
 
+![aj auth success](_assets/aj_auth_success.png)
+
 The **Volcano** backend additionally requires `kubectl` configured
 against your cluster.
 
@@ -40,18 +44,34 @@ against your cluster.
 
 ## 2 · Scaffold
 
-```bash
-mkdir my-project && cd my-project
-aj init
-```
+`aj init` is interactive. Its first prompt is for a **shared template
+repo** (e.g. `user/repo` or `git@github.com:…`). It then walks you
+through subscription → resource group → workspace → experiment, and
+writes `.azure_jobs/aj_config.json`.
 
-`aj init` walks you through subscription → resource group → workspace
-and writes `.azure_jobs/aj_config.json`. To start from a team's shared
-templates, layer them on top:
+Pick the path that matches your situation:
 
-```bash
-aj pull <user>/<repo>
-```
+=== "I have a shared template repo"
+
+    ```bash
+    mkdir my-project && cd my-project
+    aj init
+    # → Template repo URL: <user>/<repo>
+    # → walks you through workspace + experiment
+    ```
+
+=== "I'm starting from scratch"
+
+    Pre-create an empty `.azure_jobs/template/` so `aj init` skips the
+    repo prompt and only configures the workspace:
+
+    ```bash
+    mkdir -p my-project/.azure_jobs/template
+    cd my-project
+    aj init                       # workspace + experiment only
+    ```
+
+    You'll author your first template in [§3](#3-author-a-template).
 
 You now have:
 
@@ -60,11 +80,14 @@ You now have:
 ├── aj_config.json
 ├── record.jsonl
 └── template/
-    ├── account/
-    ├── storage/
-    ├── environment/
-    └── …
+    ├── account/        # populated by `aj pull`
+    ├── storage/        # populated by `aj pull`
+    ├── environment/    # populated by `aj pull`
+    └── …               # leaf templates
 ```
+
+> **Tip** — you can pull a shared repo later with
+> `aj pull <user>/<repo>`; it merges into the existing `.azure_jobs/`.
 
 ---
 
