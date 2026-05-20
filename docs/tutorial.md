@@ -60,6 +60,8 @@ Pick the path that matches your situation:
     # → walks you through workspace + experiment
     ```
 
+![init from template](_assets/init_from_template.png)
+
 === "I'm starting from scratch"
 
     Pre-create an empty `.azure_jobs/template/` so `aj init` skips the
@@ -93,36 +95,100 @@ You now have:
 
 ## 3 · Author a template
 
-A leaf template composes building blocks via `base` and overrides only
-what it needs:
+A template is just YAML. `aj` composes a final job spec by walking the
+`base:` chain, so a typical project splits concerns into four files:
+
+```
+.azure_jobs/template/
+├── account/
+│   └── default.yaml          # subscription + workspace
+├── storage/
+│   └── default.yaml          # blob mounts
+├── environment/
+│   └── aml.yaml              # service + image + setup
+└── gpu.yaml                  # leaf — what `aj run -t gpu` picks up
+```
+
+Create each file as follows.
+
+### 3.1 · Account — subscription & workspace
+
+```yaml
+# .azure_jobs/template/account/default.yaml
+target:
+  service: aml                            # aml | sing | volcano
+  subscription_id: 00000000-0000-0000-0000-000000000000
+  resource_group: my-rg
+  workspace_name: my-workspace
+```
+
+> `aj init` already wrote these three values into
+> `.azure_jobs/aj_config.json`. Hard-coding them in a template only
+> matters if you want a single project to address multiple workspaces.
+
+### 3.2 · Storage — blob mounts
+
+```yaml
+# .azure_jobs/template/storage/default.yaml
+storage:
+  data:                                   # mount alias, free-form
+    storage_account_name: mydataacct
+    container_name: datasets
+    mount_dir: /mnt/data                  # path inside the container
+  ckpt:
+    storage_account_name: mydataacct
+    container_name: checkpoints
+    mount_dir: /mnt/ckpt
+```
+
+`aj` creates the matching datastore in the workspace on first submit
+and exposes each mount as a read/write path in the job container.
+
+### 3.3 · Environment — image & setup
+
+```yaml
+# .azure_jobs/template/environment/aml.yaml
+environment:
+  image: nvcr.io/nvidia/pytorch:24.07-py3
+  registry: nvcr.io                       # optional, only if private
+  setup:                                  # commands run before user cmd
+    - pip install -U pip
+    - pip install -r requirements.txt
+```
+
+### 3.4 · Leaf — what you actually submit
 
 ```yaml
 # .azure_jobs/template/gpu.yaml
+description: 1–8× A100 training
 base: [account.default, storage.default, environment.aml]
-config:
-  target:
-    name: my-cluster
-  jobs:
-    - name: train
-      sku: "{nodes}xA100-80GB"
-      command:
-        - pip install -r requirements.txt
+target:
+  name: my-a100-cluster                   # the AML compute name
+jobs:
+  - name: train
+    sku: "{nodes}xA100-80GB"              # {nodes} comes from `-n`
 ```
 
-**Things to know**
+That's it. `aj run -t gpu` resolves the `base:` chain left-to-right,
+overlays this leaf, and submits.
 
-- Dotted `base` names resolve to `.azure_jobs/<dir>/<name>.yaml`.
+### Inspect what you wrote
+
+```bash
+aj template list                          # available leaves
+aj template show gpu                      # resolved config, post-inheritance
+aj template validate                      # schema sweep across all templates
+```
+
+### Things to know
+
+- Dotted `base:` names resolve to `.azure_jobs/<dir>/<name>.yaml`;
+  plain names resolve next to the current file.
 - `{nodes}` / `{processes}` are substituted from `-n` / `-p` at submit.
 - Merge: dicts recurse, lists-of-dicts by index, scalar lists concat,
   scalars last-wins. See [configuration.md](configuration.md).
-
-Inspect what you wrote:
-
-```bash
-aj template list
-aj template show gpu          # resolved config, post-inheritance
-aj template validate          # schema sweep
-```
+- The leaf is the only file `aj run -t <name>` looks at; everything
+  else is reachable only via `base:`.
 
 ---
 
