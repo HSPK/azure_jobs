@@ -634,15 +634,21 @@ class TestBuildStorageMounts:
         client.resources.get_datastore.return_value = None  # not found
         outputs, poc, env = _build_storage_mounts(r, client)
 
-        # Datastore should have been created
+        # Datastore should have been created with deterministic hash-based name
         client.resources.get_or_create_datastore.assert_called_once()
         call_kwargs = client.resources.get_or_create_datastore.call_args
-        assert call_kwargs.kwargs["name"] == "aj_fast_shared"
+        from azure_jobs.core.submit.native.storage import _datastore_name
+
+        expected_ds = _datastore_name(
+            "fastaml123", "shared", "fast_shared", "/mnt/fast_shared"
+        )
+        assert call_kwargs.kwargs["name"] == expected_ds
+        assert expected_ds.startswith("ds_")
         assert call_kwargs.kwargs["account_name"] == "fastaml123"
 
         # Output dict created
         assert "fast_shared" in outputs
-        assert "/datastores/aj_fast_shared/" in outputs["fast_shared"]["uri"]
+        assert f"/datastores/{expected_ds}/" in outputs["fast_shared"]["uri"]
 
         # PathOnCompute property set
         assert poc["AZURE_ML_OUTPUT_PathOnCompute_fast_shared"] == "/mnt/fast_shared/"
@@ -666,7 +672,7 @@ class TestBuildStorageMounts:
         )
         client = MagicMock()
         client.resources.get_datastore.return_value = {
-            "name": "aj_data"
+            "name": "ds_deadbeef"
         }  # already exists
         outputs, poc, env = _build_storage_mounts(r, client)
 

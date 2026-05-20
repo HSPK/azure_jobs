@@ -2,9 +2,20 @@
 
 from __future__ import annotations
 
+import hashlib
 from typing import TYPE_CHECKING, Any
 
 from ..models import SubmitRequest
+
+
+def _datastore_name(
+    account: str, container: str, mount_name: str, mount_dir: str
+) -> str:
+    digest = hashlib.sha1(
+        "\0".join((account, container, mount_name, mount_dir)).encode("utf-8")
+    ).hexdigest()[:8]
+    return f"ds_{digest}"
+
 
 if TYPE_CHECKING:
     from azure_jobs.core.az_client import AzureMLClient
@@ -33,7 +44,7 @@ def _build_storage_mounts(
         account = mount_cfg.storage_account_name
         container = mount_cfg.container_name
         mount_dir = mount_cfg.mount_dir or f"/mnt/{mount_name}"
-        ds_name = f"aj_{mount_name}".replace("-", "_")
+        ds_name = _datastore_name(account, container, mount_name, mount_dir)
 
         client.resources.get_or_create_datastore(
             name=ds_name,
