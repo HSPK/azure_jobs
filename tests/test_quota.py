@@ -9,20 +9,20 @@ from click.testing import CliRunner
 
 from azure_jobs.cli import main
 from azure_jobs.core.aml import vm_sku_label as _vm_sku_label
+from azure_jobs.core.errors import ConfigError
 from azure_jobs.core.sku import (
-    SLA_TIERS,
     SeriesQuota,
     SlaTierQuota,
     VCInfo,
     discover_virtual_clusters,
     fetch_vc_quotas,
+    resolve_virtual_cluster,
 )
 from azure_jobs.utils.ui.quota_tables import (
     _fmt_nodes,
     _parse_compute_nodes,
     _portal_compute_url,
 )
-
 
 # ---------------------------------------------------------------------------
 # SlaTierQuota unit tests
@@ -274,6 +274,33 @@ class TestDiscoverVirtualClusters:
         client.resource_graph_query.return_value = []
         assert discover_virtual_clusters(arm_client=client) == []
 
+    def test_resolves_vc_by_name(self):
+        client = MagicMock()
+        client.list_subscriptions.return_value = ["sub-1"]
+        client.resource_graph_query.return_value = [
+            {"name": "vc1", "resourceGroup": "rg1", "subscriptionId": "sub-1"},
+        ]
+
+        vc = resolve_virtual_cluster("vc1", arm_client=client)
+
+        assert vc.name == "vc1"
+        assert vc.resource_group == "rg1"
+        assert vc.subscription_id == "sub-1"
+
+    def test_resolve_vc_ambiguous_requires_filter(self):
+        client = MagicMock()
+        client.list_subscriptions.return_value = ["sub-1", "sub-2"]
+        client.resource_graph_query.return_value = [
+            {"name": "vc1", "resourceGroup": "rg1", "subscriptionId": "sub-1"},
+            {"name": "vc1", "resourceGroup": "rg2", "subscriptionId": "sub-2"},
+        ]
+
+        with pytest.raises(ConfigError, match="ambiguous"):
+            resolve_virtual_cluster("vc1", arm_client=client)
+
+        vc = resolve_virtual_cluster("vc1", subscription_id="sub-2", arm_client=client)
+        assert vc.resource_group == "rg2"
+
 
 # ---------------------------------------------------------------------------
 # CLI tests
@@ -289,7 +316,10 @@ class TestQuotaListCli:
     def teardown_method(self):
         self._arm_patcher.stop()
 
-    @patch("azure_jobs.core.sku.discovery.discover_vcs_from_template_or_arm", return_value=[])
+    @patch(
+        "azure_jobs.core.sku.discovery.discover_virtual_clusters",
+        return_value=[],
+    )
     def test_sing_no_vcs_found(self, mock_disc):
         result = self.runner.invoke(main, ["quota", "list"])
         assert result.exit_code != 0
@@ -297,7 +327,7 @@ class TestQuotaListCli:
 
     @patch("azure_jobs.core.sku.quotas.fetch_vc_quotas", return_value=[])
     @patch(
-        "azure_jobs.core.sku.discovery.discover_vcs_from_template_or_arm",
+        "azure_jobs.core.sku.discovery.discover_virtual_clusters",
         return_value=[
             VCInfo(name="myvc", resource_group="rg", subscription_id="s"),
         ],
@@ -307,8 +337,13 @@ class TestQuotaListCli:
         assert result.exit_code == 0
         assert "myvc" in result.output
 
+    def test_sing_template_option_is_not_supported(self):
+        result = self.runner.invoke(main, ["quota", "list", "-t", "gpu"])
+        assert result.exit_code != 0
+        assert "No such option" in result.output
+
     @patch("azure_jobs.core.sku.quotas.fetch_vc_quotas")
-    @patch("azure_jobs.core.sku.discovery.discover_vcs_from_template_or_arm")
+    @patch("azure_jobs.core.sku.discovery.discover_virtual_clusters")
     def test_sing_shows_grouped_table(self, mock_disc, mock_fetch):
         mock_disc.return_value = [
             VCInfo(name="vc1", resource_group="rg1", subscription_id="s"),
@@ -323,7 +358,10 @@ class TestQuotaListCli:
         result = self.runner.invoke(main, ["quota", "list"])
         assert result.exit_code == 0
         assert "vc1" in result.output
+        assert "rg1" in result.output
+        assert "s" in result.output
         assert "vc2" in result.output
+        assert "rg2" in result.output
         assert "NDH100v5" in result.output
         assert "NDAMv4" in result.output
         # Accelerator info should be populated
@@ -331,7 +369,10 @@ class TestQuotaListCli:
         assert "A100" in result.output
 
     def test_ql_alias_works(self):
-        with patch("azure_jobs.core.sku.discovery.discover_vcs_from_template_or_arm", return_value=[]):
+        with patch(
+            "azure_jobs.core.sku.discovery.discover_virtual_clusters",
+            return_value=[],
+        ):
             result = self.runner.invoke(main, ["ql"])
             assert "No Singularity" in result.output
 

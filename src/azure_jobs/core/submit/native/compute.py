@@ -108,7 +108,9 @@ def _build_resources(
         }
     }
     if request.sing.group_policy:
-        res["properties"]["AISuperComputer"]["groupPolicyName"] = request.sing.group_policy
+        res["properties"]["AISuperComputer"]["groupPolicyName"] = (
+            request.sing.group_policy
+        )
     return res
 
 

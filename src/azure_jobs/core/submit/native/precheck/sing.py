@@ -110,7 +110,7 @@ def check_singularity(
                 severity="error",
                 title=f"SKU '{sku_raw}' has no matching instance type on VC '{vc}'",
                 detail=[
-                    "Check the shorthand against `aj sku list -t <template>`.",
+                    "Check the shorthand against `aj sku list`.",
                     "If the family is correct, your VC may not have any quota for it.",
                 ],
             )

@@ -1,8 +1,6 @@
 """Tests for aj run (split from test_cli.py)."""
 
 import json
-import subprocess
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -49,6 +47,21 @@ class TestRunCommand:
         sub_file = list(aj_env["dryrun_home"].glob("*.yaml"))[0]
         sub = yaml.safe_load(sub_file.read_text())
         assert sub["jobs"][0]["sku"] == "Standard_NC2s_v3"
+
+    def test_sing_dry_run_warns_when_vc_coords_missing(self, aj_env):
+        conf = {
+            "target": {"name": "vc1", "service": "sing"},
+            "environment": {"image": "img"},
+            "jobs": [{"sku": "1xC1", "command": []}],
+        }
+        write_template(aj_env["template_home"], "default", conf)
+        runner = CliRunner()
+
+        result = runner.invoke(main, ["run", "-d", "echo", "hello"])
+
+        assert result.exit_code == 0
+        assert "omits target.subscription_id/resource_group" in result.output
+        assert "Azure Resource Graph" in result.output
 
     def test_str_sku_template_formatting(self, aj_env):
         conf = {
@@ -220,12 +233,13 @@ class TestRunCommand:
             )
         )
         runner = CliRunner()
-        from azure_jobs.core.submit import SubmitResult
 
         mock_result = SubmitResult(
             job_name="test-job", status="submitted", portal_url="https://example.com"
         )
-        with patch("azure_jobs.core.submit.native.orchestrate.submit", return_value=mock_result):
+        with patch(
+            "azure_jobs.core.submit.native.orchestrate.submit", return_value=mock_result
+        ):
             result = runner.invoke(main, ["run", "echo", "hello"])
         assert result.exit_code == 0
         assert aj_env["record_fp"].exists()
@@ -234,6 +248,7 @@ class TestRunCommand:
         assert record["request"]["sid"]
         assert record["request"]["command"][-1] == "echo hello"
         assert record["status"] == "submitted"
+
 
 class TestResolveSku:
     def test_string_template(self):
@@ -264,6 +279,7 @@ class TestResolveSku:
         with pytest.raises(Exception, match="No matching SKU"):
             resolve_sku({}, 1, 1)
 
+
 class TestResolveName:
     def test_uses_cwd_name(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
@@ -283,6 +299,7 @@ class TestResolveName:
         script.write_text("print('hi')")
         name = resolve_name("train.py", "abc123")
         assert name == f"{tmp_path.name}_train_abc123"
+
 
 class TestRunErrorPaths:
     def test_missing_jobs_in_template(self, aj_env):
@@ -320,12 +337,13 @@ class TestRunErrorPaths:
             )
         )
         runner = CliRunner()
-        from azure_jobs.core.submit import SubmitResult
 
         mock_result = SubmitResult(
             job_name="test", status="failed", error="auth failed"
         )
-        with patch("azure_jobs.core.submit.native.orchestrate.submit", return_value=mock_result):
+        with patch(
+            "azure_jobs.core.submit.native.orchestrate.submit", return_value=mock_result
+        ):
             result = runner.invoke(main, ["run", "echo", "hello"])
         assert result.exit_code != 0
         assert "failed" in result.output.lower()
@@ -347,12 +365,13 @@ class TestRunErrorPaths:
             )
         )
         runner = CliRunner()
-        from azure_jobs.core.submit import SubmitResult
 
         mock_result = SubmitResult(
             job_name="test", status="failed", error="compute not found"
         )
-        with patch("azure_jobs.core.submit.native.orchestrate.submit", return_value=mock_result):
+        with patch(
+            "azure_jobs.core.submit.native.orchestrate.submit", return_value=mock_result
+        ):
             runner.invoke(main, ["run", "echo", "hello"])
         assert aj_env["record_fp"].exists()
         record = json.loads(aj_env["record_fp"].read_text().strip())

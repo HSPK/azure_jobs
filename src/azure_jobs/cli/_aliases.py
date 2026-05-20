@@ -16,7 +16,6 @@ import click
 
 from . import main
 
-
 # ── aj dash ─────────────────────────────────────────────────────────────
 
 
@@ -123,12 +122,11 @@ def _alias_jlogs(job_id: str) -> None:
 @click.option("--aml", "backend", flag_value="aml")
 @click.option("--sing", "backend", flag_value="sing", default=True)
 @click.option("--all", "show_all", is_flag=True)
-@click.option("-t", "--template", default=None)
-def _alias_ql(backend: str, show_all: bool, template: str | None) -> None:
+def _alias_ql(backend: str, show_all: bool) -> None:
     """Shortcut for ``aj quota list``."""
     from .quota import quota_list
 
-    quota_list.callback(backend, show_all, template)
+    quota_list.callback(backend, show_all)
 
 
 # Names registered above — kept in sync with the ``@main.command(name=...)``

@@ -5,6 +5,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 from azure_jobs.core.config import AJWorkspace
+from azure_jobs.core.errors import parse_exception_message
 from azure_jobs.core.submit import (
     AmltOpts,
     SingularityOpts,
@@ -24,7 +25,6 @@ from azure_jobs.core.submit.native.environment import (
     _build_environment,
 )
 from azure_jobs.core.submit.native.storage import _build_storage_mounts
-from azure_jobs.core.errors import parse_exception_message
 from azure_jobs.core.template import Template
 
 
@@ -223,7 +223,9 @@ class TestSubmitMocked:
             },
         }
 
-        with patch("azure_jobs.core.submit.native.orchestrate._get_rest_client") as mock_factory:
+        with patch(
+            "azure_jobs.core.submit.native.orchestrate._get_rest_client"
+        ) as mock_factory:
             mock_client = mock_factory.return_value
             mock_client.resources.get_environment_version.return_value = {
                 "id": "env-id-1"
@@ -276,7 +278,9 @@ class TestSubmitMocked:
         def on_event(ev):
             steps.append(ev.kind)
 
-        with patch("azure_jobs.core.submit.native.orchestrate._get_rest_client") as mock_factory:
+        with patch(
+            "azure_jobs.core.submit.native.orchestrate._get_rest_client"
+        ) as mock_factory:
             mock_client = mock_factory.return_value
             mock_client.resources.get_environment_version.return_value = {
                 "id": "env-id"
@@ -297,10 +301,14 @@ class TestExtractErrorMessage:
             "Code: UserError\n"
             "Message: Unknown compute target 'foo'."
         )
-        assert parse_exception_message(Exception(msg)) == "Unknown compute target 'foo'."
+        assert (
+            parse_exception_message(Exception(msg)) == "Unknown compute target 'foo'."
+        )
 
     def test_simple_error(self):
-        assert parse_exception_message(Exception("something broke")) == "something broke"
+        assert (
+            parse_exception_message(Exception("something broke")) == "something broke"
+        )
 
     def test_multiline_without_code(self):
         msg = "First line\nSecond line\nThird line"
@@ -329,8 +337,10 @@ class TestResolveCompute:
             name="j",
             compute="msrresrchvc",
             service="sing",
-            subscription_id="sub-123",
-            resource_group="rg-1",
+            sing=SingularityOpts(
+                vc_subscription_id="sub-123",
+                vc_resource_group="rg-1",
+            ),
         )
         arm = _resolve_compute(r)
         assert arm.startswith("/subscriptions/sub-123/")
@@ -367,8 +377,7 @@ class TestBuildResources:
             name="j",
             compute="vc1",
             service="sing",
-            subscription_id="s",
-            resource_group="r",
+            sing=SingularityOpts(vc_subscription_id="s", vc_resource_group="r"),
             nodes=2,
             sla_tier="Premium",
             priority="high",
@@ -393,8 +402,7 @@ class TestBuildResources:
             name="j",
             compute="vc1",
             service="sing",
-            subscription_id="s",
-            resource_group="r",
+            sing=SingularityOpts(vc_subscription_id="s", vc_resource_group="r"),
             image="amlt-sing/acpt-torch2.7.1-py3.10-cuda12.6-ubuntu22.04",
             sku="1xC1",
         )
@@ -408,8 +416,7 @@ class TestBuildResources:
             name="j",
             compute="vc1",
             service="sing",
-            subscription_id="s",
-            resource_group="r",
+            sing=SingularityOpts(vc_subscription_id="s", vc_resource_group="r"),
             image="pytorch:2.0",
             sku="1xC1",
         )
@@ -424,8 +431,7 @@ class TestBuildResources:
             name="j",
             compute="vc1",
             service="sing",
-            subscription_id="s",
-            resource_group="r",
+            sing=SingularityOpts(vc_subscription_id="s", vc_resource_group="r"),
             sku="2xC1",
         )
         res = _build_resources(r)

@@ -13,9 +13,8 @@ def sku_group() -> None:
 
 
 @sku_group.command(name="list")
-@click.option("-t", "--template", default=None, help="Read VC config from a template")
 @click.option("--all", "show_all", is_flag=True, help="Include zero-quota families")
-def sku_list(template: str | None, show_all: bool) -> None:
+def sku_list(show_all: bool) -> None:
     """List available SKUs on Singularity virtual clusters.
 
     Shows instance types, GPU specs, amlt-style shorthand, and quota for
@@ -25,4 +24,4 @@ def sku_list(template: str | None, show_all: bool) -> None:
 
     from .quota import load_vcs_with_quotas
 
-    show_sku_table(load_vcs_with_quotas(template, include_zero=show_all))
+    show_sku_table(load_vcs_with_quotas(include_zero=show_all))

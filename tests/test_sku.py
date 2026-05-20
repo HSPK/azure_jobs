@@ -4,12 +4,13 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-import pytest
+from click.testing import CliRunner
 
+from azure_jobs.cli import main
 from azure_jobs.core.sku import (
+    _FAMILY_MAP,
     SkuSpec,
     _match_family,
-    _FAMILY_MAP,
     resolve_instance_type,
 )
 
@@ -138,3 +139,10 @@ class TestResolveInstanceType:
         """Without VC info, all known families are tried."""
         result = resolve_instance_type("1xC1")
         assert len(result) > 0  # Should find CPU instances from all families
+
+
+class TestSkuCli:
+    def test_sku_list_template_option_is_not_supported(self):
+        result = CliRunner().invoke(main, ["sku", "list", "-t", "gpu"])
+        assert result.exit_code != 0
+        assert "No such option" in result.output

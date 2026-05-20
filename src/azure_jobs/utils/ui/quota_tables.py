@@ -13,7 +13,6 @@ from typing import Any, Callable
 
 from .render import Column, TableView, render_table
 
-
 # ────────────────────────────────────────────────────────────────────────
 # Shared VC-grouped quota helpers (sing quotas + sku list)
 # ────────────────────────────────────────────────────────────────────────
@@ -67,6 +66,11 @@ def _empty_tier_row_fields(active_tiers: list[str]) -> dict[str, Any]:
 def _vc_label_fmt(value: Any, row: dict) -> str:
     """Show the VC name on the first row of each group only."""
     return value if row.get("vc_first") else ""
+
+
+def _vc_first_fmt(value: Any, row: dict) -> str:
+    """Show VC-level metadata on the first row of each group only."""
+    return str(value or "") if row.get("vc_first") else ""
 
 
 def _make_tier_fmt(tier: str) -> Callable[[Any, dict], str]:
@@ -157,6 +161,8 @@ def show_sing_quota_table(
                 {
                     "vc": vc.name,
                     "vc_first": vc.name != prev_vc,
+                    "resource_group": vc.resource_group,
+                    "subscription_id": vc.subscription_id,
                     "series": "",
                     "no_quotas": True,
                     "accelerator": "",
@@ -174,6 +180,8 @@ def show_sing_quota_table(
                 {
                     "vc": vc.name,
                     "vc_first": first_in_vc and vc.name != prev_vc,
+                    "resource_group": vc.resource_group,
+                    "subscription_id": vc.subscription_id,
                     "series": sq.series,
                     "no_quotas": False,
                     "accelerator": sq.accelerator or "",
@@ -208,6 +216,20 @@ def show_sing_quota_table(
                 format=_vc_label_fmt,
             ),
             Column(
+                key="resource_group",
+                header="Resource Group",
+                style="dim",
+                no_wrap=True,
+                format=_vc_first_fmt,
+            ),
+            Column(
+                key="subscription_id",
+                header="Subscription",
+                style="dim",
+                no_wrap=True,
+                format=_vc_first_fmt,
+            ),
+            Column(
                 key="series",
                 header="Series",
                 style="bold cyan",
@@ -232,8 +254,16 @@ def show_sing_quota_table(
 
 
 _CPU_VCPU: dict[str, int] = {
-    "E4ads_v5": 4, "E8ads_v5": 8, "E16ads_v5": 16, "E32ads_v5": 32, "E64ads_v5": 64,
-    "D4_v3": 4, "D8_v3": 8, "D16_v3": 16, "D32_v3": 32, "D64_v3": 64,
+    "E4ads_v5": 4,
+    "E8ads_v5": 8,
+    "E16ads_v5": 16,
+    "E32ads_v5": 32,
+    "E64ads_v5": 64,
+    "D4_v3": 4,
+    "D8_v3": 8,
+    "D16_v3": 16,
+    "D32_v3": 32,
+    "D64_v3": 64,
 }
 
 
@@ -488,9 +518,7 @@ def _fmt_nodes(
         return f"[dim]{i_s} idle {b_s} busy /{t_s}[/dim]"
     free_col = "red" if low_priority else "green"
     idle_part = (
-        f"[{free_col}]{i_s}[/{free_col}] idle"
-        if idle > 0
-        else f"[dim]{i_s} idle[/dim]"
+        f"[{free_col}]{i_s}[/{free_col}] idle" if idle > 0 else f"[dim]{i_s} idle[/dim]"
     )
     busy_part = f"[cyan]{b_s}[/cyan] busy" if busy > 0 else f"[dim]{b_s} busy[/dim]"
     return f"{idle_part} {busy_part} [dim]/{t_s}[/dim]"
@@ -612,7 +640,9 @@ def show_aml_quota_table(ws_computes: list[tuple[dict, list[dict]]]) -> None:
                 no_wrap=True,
                 format=_nodes_fmt,
             ),
-            Column(key="priority", header="Priority", no_wrap=True, format=_priority_fmt),
+            Column(
+                key="priority", header="Priority", no_wrap=True, format=_priority_fmt
+            ),
             Column(key="location", header="Location", no_wrap=True),
             Column(
                 key="portal_url",
