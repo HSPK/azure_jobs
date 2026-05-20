@@ -105,7 +105,7 @@ A template is just YAML. `aj` composes a final job spec by walking the
 ├── storage/
 │   └── default.yaml          # blob mounts
 ├── environment/
-│   └── aml.yaml              # service + image + setup
+│   └── sing.yaml             # service + image + setup
 └── gpu.yaml                  # leaf — what `aj run -t gpu` picks up
 ```
 
@@ -116,7 +116,6 @@ Create each file as follows.
 ```yaml
 # .azure_jobs/template/account/default.yaml
 target:
-  service: aml                            # aml | sing | volcano
   subscription_id: 00000000-0000-0000-0000-000000000000
   resource_group: my-rg
   workspace_name: my-workspace
@@ -144,10 +143,12 @@ storage:
 `aj` creates the matching datastore in the workspace on first submit
 and exposes each mount as a read/write path in the job container.
 
-### 3.3 · Environment — image & setup
+### 3.3 · Environment — Singularity image & setup
 
 ```yaml
-# .azure_jobs/template/environment/aml.yaml
+# .azure_jobs/template/environment/sing.yaml
+target:
+  service: sing                           # Singularity backend
 environment:
   image: nvcr.io/nvidia/pytorch:24.07-py3
   registry: nvcr.io                       # optional, only if private
@@ -160,13 +161,15 @@ environment:
 
 ```yaml
 # .azure_jobs/template/gpu.yaml
-description: 1–8× A100 training
-base: [account.default, storage.default, environment.aml]
+description: 1–8× A100 Singularity training
+base: [account.default, storage.default, environment.sing]
 target:
-  name: my-a100-cluster                   # the AML compute name
+  name: my-vc                             # Singularity virtual cluster
 jobs:
   - name: train
     sku: "{nodes}xA100-80GB"              # {nodes} comes from `-n`
+    sla_tier: Premium                     # Premium | Standard | Basic
+    priority: high                        # high | medium | low
 ```
 
 That's it. `aj run -t gpu` resolves the `base:` chain left-to-right,
@@ -189,6 +192,51 @@ aj template validate                      # schema sweep across all templates
   scalars last-wins. See [configuration.md](configuration.md).
 - The leaf is the only file `aj run -t <name>` looks at; everything
   else is reachable only via `base:`.
+
+### 3.5 · Share via a private GitHub repo
+
+Push the `.azure_jobs/` tree to a GitHub repo so the rest of your team
+can `aj pull <user>/<repo>`. Use a **private** repo if any value in
+`account/` or `storage/` is sensitive.
+
+**One-time, on GitHub** — create an empty private repo, e.g.
+`my-org/aj-templates`.
+
+**One-time, on your machine** — make sure SSH auth works, since `aj
+pull` / `aj template push` shell out to `git`:
+
+```bash
+# generate a key if you don't have one
+ssh-keygen -t ed25519 -C "you@example.com"
+
+# add ~/.ssh/id_ed25519.pub to GitHub → Settings → SSH and GPG keys
+
+# verify
+ssh -T git@github.com
+```
+
+**First push** — tell `aj` which remote owns these templates, then push:
+
+```bash
+# register the remote (writes repo_id into .azure_jobs/aj_config.json)
+aj pull my-org/aj-templates                    # empty repo is fine
+
+# push everything except local-only files (record.jsonl, aj_config.json)
+aj template push -m "initial templates"
+```
+
+**Teammate onboarding** — anyone with read access to the repo can now
+bootstrap a fresh project against the same templates:
+
+```bash
+mkdir my-project && cd my-project
+aj init                                        # → my-org/aj-templates
+```
+
+> `aj template push` clones the remote into a temp dir, mirrors your
+> local `.azure_jobs/` over it (skipping `record.jsonl` and
+> `aj_config.json`), commits, and pushes. Run `aj template diff` first
+> to preview what will change.
 
 ---
 
