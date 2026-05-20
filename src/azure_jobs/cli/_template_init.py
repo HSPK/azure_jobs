@@ -29,7 +29,6 @@ from rich.table import Table
 
 from azure_jobs.core import const
 
-
 _STEPS = 7
 
 
@@ -117,9 +116,7 @@ def _pick_account() -> str:
     data = {
         "base": None,
         "config": {
-            "jobs": [
-                {"submit_args": {"env": {"_AZUREML_SINGULARITY_JOB_UAI": uai_id}}}
-            ]
+            "jobs": [{"submit_args": {"env": {"_AZUREML_SINGULARITY_JOB_UAI": uai_id}}}]
         },
     }
     path = const.AJ_HOME / "account" / f"{name}.yaml"
@@ -167,7 +164,7 @@ def _pick_environment() -> tuple[str, str]:
             "target": {"service": "sing"},
             "environment": {
                 "image": image,
-                "setup": ["bash install.sh"],
+                "setup": ["bash .azure_jobs/scripts/install.sh"],
             },
         },
     }
@@ -201,9 +198,7 @@ def _pick_storage() -> str:
                 }
                 for s in sas
             ]
-            account = _pick_row(
-                f"Storage account ({len(mounts) + 1})", rows
-            )["name"]
+            account = _pick_row(f"Storage account ({len(mounts) + 1})", rows)["name"]
         else:
             account = click.prompt("  Storage account name")
         container = click.prompt("  Container name")
@@ -267,8 +262,6 @@ _SKU_SUGGESTIONS = [
 
 
 def _pick_sku() -> str:
-    from azure_jobs.utils.ui import console
-
     rows = [{"_label": f"[bold]{s}[/bold]", "sku": s} for s in _SKU_SUGGESTIONS]
     rows.append({"_label": "[italic]custom (type your own)[/italic]", "sku": None})
     picked = _pick_row("SKU pattern", rows)
@@ -346,17 +339,19 @@ uv python install 3.10
 
 
 def _ensure_install_sh() -> None:
-    """Drop a default ``install.sh`` at the project root if missing.
+    """Drop a default ``install.sh`` under ``.azure_jobs/scripts/`` if missing.
 
-    The env yaml references it via ``setup: [bash install.sh]`` so it runs
-    on the cluster before the user command. Lives next to ``.azure_jobs/``
-    so it's uploaded with the rest of the code.
+    The env yaml references it via
+    ``setup: [bash .azure_jobs/scripts/install.sh]`` so it runs on the
+    cluster before the user command. Lives inside ``.azure_jobs/`` so it
+    ships with the rest of the template tree.
     """
     from azure_jobs.utils.ui import dim
 
-    p = const.AJ_HOME.parent / "install.sh"
+    p = const.AJ_HOME / "scripts" / "install.sh"
     if p.exists():
         return
+    p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(_INSTALL_SH, encoding="utf-8")
     p.chmod(0o755)
     dim(f"  → wrote {p}")
@@ -450,8 +445,7 @@ def _summary(
     table.add_row("SKU", sku)
     table.add_row(
         "Workspace",
-        f"{workspace['workspace_name']}  "
-        f"[dim]({workspace['resource_group']})[/dim]",
+        f"{workspace['workspace_name']}  [dim]({workspace['resource_group']})[/dim]",
     )
     console.print()
     console.print(Panel(table, title="[bold]Summary[/bold]", border_style="green"))
@@ -464,32 +458,43 @@ def run_wizard(leaf_name: str | None, *, force: bool) -> None:
 
     _ensure_template_base()
 
-    _step(1, "Account (managed identity)",
-          "Picks an Azure managed identity for the job.")
+    _step(
+        1, "Account (managed identity)", "Picks an Azure managed identity for the job."
+    )
     account_ref = _pick_account()
 
-    _step(2, "Environment (Singularity image)",
-          "Container image baked by the Singularity team.")
+    _step(
+        2,
+        "Environment (Singularity image)",
+        "Container image baked by the Singularity team.",
+    )
     env_ref, image = _pick_environment()
 
-    _step(3, "Storage (blob mounts)",
-          "One or more storage account / container pairs to mount inside the job.")
+    _step(
+        3,
+        "Storage (blob mounts)",
+        "One or more storage account / container pairs to mount inside the job.",
+    )
     storage_ref = _pick_storage()
 
-    _step(4, "Target (virtual cluster)",
-          "Which Singularity VC this leaf submits to.")
+    _step(4, "Target (virtual cluster)", "Which Singularity VC this leaf submits to.")
     target = _pick_target()
 
-    _step(5, "SKU",
-          "Per-node instance type — `{nodes}` / `{processes}` are filled in at submit.")
+    _step(
+        5,
+        "SKU",
+        "Per-node instance type — `{nodes}` / `{processes}` are filled in at submit.",
+    )
     sku = _pick_sku()
 
-    _step(6, "Workspace",
-          "The Azure ML workspace that owns this leaf's runs.")
+    _step(6, "Workspace", "The Azure ML workspace that owns this leaf's runs.")
     workspace = _pick_workspace()
 
-    _step(7, "Leaf name",
-          "The name you'll pass to `aj run -t <name>` and the filename under .azure_jobs/template/.")
+    _step(
+        7,
+        "Leaf name",
+        "The name you'll pass to `aj run -t <name>` and the filename under .azure_jobs/template/.",
+    )
     leaf_name = leaf_name or click.prompt("  Leaf name (e.g. vca100, h100)")
     leaf_path = const.AJ_TEMPLATE_HOME / f"{leaf_name}.yaml"
     if leaf_path.exists() and not force:
