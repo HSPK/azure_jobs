@@ -189,9 +189,10 @@ def init_amlt(ctx: click.Context, force: bool) -> None:
     info(f"Creating amlt project [bold]{project_name}[/bold]…")
 
     result = subprocess.run(
-        ["amlt", "project", "create", project_name, storage_account, "-d", "."],
+        ["amlt", "project", "create", project_name, storage_account],
         capture_output=True,
         text=True,
+        cwd=".",
     )
 
     if result.returncode != 0:
