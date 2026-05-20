@@ -75,35 +75,64 @@ def _status_columns() -> list[Column]:
     ]
 
 
+def _rate_column() -> Column:
+    return Column(
+        key="success_rate_pct",
+        header="Rate",
+        justify="right",
+        format=lambda _v, row: _success_rate_str(row),
+    )
+
+
+def _gpu_hours_column() -> Column:
+    return Column(
+        key="gpu_hours",
+        header="GPU Hours",
+        justify="right",
+        format=lambda _v, row: _gpu_hours_str(row),
+    )
+
+
+def _show_grouped_stats(
+    stats: dict[str, dict[str, Any]],
+    *,
+    name_key: str,
+    title: str,
+    name_header: str,
+    empty_message: str,
+    extra_columns: tuple[Column, ...] = (),
+) -> None:
+    """Shared renderer for ``show_*_stats_table`` — name + status counts
+    + optional extras + GPU hours."""
+    rows = _stats_to_rows(stats, name_key=name_key)
+    view = TableView(
+        title=title,
+        rows=rows,
+        empty_message=empty_message,
+        columns=[
+            Column(key=name_key, header=name_header, style="cyan"),
+            *_status_columns(),
+            *extra_columns,
+            _gpu_hours_column(),
+        ],
+    )
+    render_table(view)
+
+
 def show_experiment_stats_table(
     stats: dict[str, dict[str, Any]],
     *,
     title: str = "By Experiment",
 ) -> None:
     """Per-experiment summary: status counts, success rate, GPU hours."""
-    rows = _stats_to_rows(stats, name_key="experiment")
-    view = TableView(
+    _show_grouped_stats(
+        stats,
+        name_key="experiment",
         title=title,
-        rows=rows,
+        name_header="Experiment",
         empty_message="No experiments found",
-        columns=[
-            Column(key="experiment", style="cyan"),
-            *_status_columns(),
-            Column(
-                key="success_rate_pct",
-                header="Rate",
-                justify="right",
-                format=lambda _v, row: _success_rate_str(row),
-            ),
-            Column(
-                key="gpu_hours",
-                header="GPU Hours",
-                justify="right",
-                format=lambda _v, row: _gpu_hours_str(row),
-            ),
-        ],
+        extra_columns=(_rate_column(),),
     )
-    render_table(view)
 
 
 def show_compute_stats_table(
@@ -112,42 +141,27 @@ def show_compute_stats_table(
     title: str = "By Compute",
 ) -> None:
     """Per-compute summary with queue avg/p50/max columns."""
-    rows = _stats_to_rows(stats, name_key="compute")
 
-    view = TableView(
+    def _q(key: str, header: str) -> Column:
+        return Column(
+            key=key,
+            header=header,
+            justify="right",
+            format=lambda v, _row: format_duration(v) if v is not None else "—",
+        )
+
+    _show_grouped_stats(
+        stats,
+        name_key="compute",
         title=title,
-        rows=rows,
+        name_header="Compute",
         empty_message="No compute targets found",
-        columns=[
-            Column(key="compute", style="cyan"),
-            *_status_columns(),
-            Column(
-                key="queue_avg_secs",
-                header="Avg Queue",
-                justify="right",
-                format=lambda v, _row: format_duration(v) if v is not None else "—",
-            ),
-            Column(
-                key="queue_p50_secs",
-                header="P50 Queue",
-                justify="right",
-                format=lambda v, _row: format_duration(v) if v is not None else "—",
-            ),
-            Column(
-                key="queue_max_secs",
-                header="Max Queue",
-                justify="right",
-                format=lambda v, _row: format_duration(v) if v is not None else "—",
-            ),
-            Column(
-                key="gpu_hours",
-                header="GPU Hours",
-                justify="right",
-                format=lambda _v, row: _gpu_hours_str(row),
-            ),
-        ],
+        extra_columns=(
+            _q("queue_avg_secs", "Avg Queue"),
+            _q("queue_p50_secs", "P50 Queue"),
+            _q("queue_max_secs", "Max Queue"),
+        ),
     )
-    render_table(view)
 
 
 def show_workspace_stats_table(
@@ -156,29 +170,14 @@ def show_workspace_stats_table(
     title: str = "By Workspace",
 ) -> None:
     """Per-workspace summary."""
-    rows = _stats_to_rows(stats, name_key="workspace")
-    view = TableView(
+    _show_grouped_stats(
+        stats,
+        name_key="workspace",
         title=title,
-        rows=rows,
+        name_header="Workspace",
         empty_message="No workspaces found",
-        columns=[
-            Column(key="workspace", style="cyan"),
-            *_status_columns(),
-            Column(
-                key="success_rate_pct",
-                header="Rate",
-                justify="right",
-                format=lambda _v, row: _success_rate_str(row),
-            ),
-            Column(
-                key="gpu_hours",
-                header="GPU Hours",
-                justify="right",
-                format=lambda _v, row: _gpu_hours_str(row),
-            ),
-        ],
+        extra_columns=(_rate_column(),),
     )
-    render_table(view)
 
 
 def show_user_stats_table(
@@ -187,29 +186,14 @@ def show_user_stats_table(
     title: str = "By User",
 ) -> None:
     """Per-user summary."""
-    rows = _stats_to_rows(stats, name_key="user")
-    view = TableView(
+    _show_grouped_stats(
+        stats,
+        name_key="user",
         title=title,
-        rows=rows,
+        name_header="User",
         empty_message="No users found",
-        columns=[
-            Column(key="user", style="cyan"),
-            *_status_columns(),
-            Column(
-                key="success_rate_pct",
-                header="Rate",
-                justify="right",
-                format=lambda _v, row: _success_rate_str(row),
-            ),
-            Column(
-                key="gpu_hours",
-                header="GPU Hours",
-                justify="right",
-                format=lambda _v, row: _gpu_hours_str(row),
-            ),
-        ],
+        extra_columns=(_rate_column(),),
     )
-    render_table(view)
 
 
 def show_stats_overview(summary: OverallSummary, *, scope: str) -> None:

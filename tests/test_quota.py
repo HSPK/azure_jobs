@@ -289,7 +289,7 @@ class TestQuotaListCli:
     def teardown_method(self):
         self._arm_patcher.stop()
 
-    @patch("azure_jobs.cli.quota._discover_vcs", return_value=[])
+    @patch("azure_jobs.core.sku.discovery.discover_vcs_from_template_or_arm", return_value=[])
     def test_sing_no_vcs_found(self, mock_disc):
         result = self.runner.invoke(main, ["quota", "list"])
         assert result.exit_code != 0
@@ -297,7 +297,7 @@ class TestQuotaListCli:
 
     @patch("azure_jobs.core.sku.quotas.fetch_vc_quotas", return_value=[])
     @patch(
-        "azure_jobs.cli.quota._discover_vcs",
+        "azure_jobs.core.sku.discovery.discover_vcs_from_template_or_arm",
         return_value=[
             VCInfo(name="myvc", resource_group="rg", subscription_id="s"),
         ],
@@ -308,7 +308,7 @@ class TestQuotaListCli:
         assert "myvc" in result.output
 
     @patch("azure_jobs.core.sku.quotas.fetch_vc_quotas")
-    @patch("azure_jobs.cli.quota._discover_vcs")
+    @patch("azure_jobs.core.sku.discovery.discover_vcs_from_template_or_arm")
     def test_sing_shows_grouped_table(self, mock_disc, mock_fetch):
         mock_disc.return_value = [
             VCInfo(name="vc1", resource_group="rg1", subscription_id="s"),
@@ -331,7 +331,7 @@ class TestQuotaListCli:
         assert "A100" in result.output
 
     def test_ql_alias_works(self):
-        with patch("azure_jobs.cli.quota._discover_vcs", return_value=[]):
+        with patch("azure_jobs.core.sku.discovery.discover_vcs_from_template_or_arm", return_value=[]):
             result = self.runner.invoke(main, ["ql"])
             assert "No Singularity" in result.output
 

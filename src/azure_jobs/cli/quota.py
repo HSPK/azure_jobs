@@ -39,46 +39,23 @@ def quota_list(backend: str, show_all: bool, template: str | None) -> None:
         _show_sing_quotas(show_all, template=template)
 
 
-def _discover_vcs(template: str | None, arm_client: object | None = None) -> list:
-    """Discover VCs: from explicit template or via Resource Graph."""
-    from azure_jobs.core import const
-    from azure_jobs.core.config import get_workspace_config
-    from azure_jobs.core.sku import VCInfo, discover_virtual_clusters
-    from azure_jobs.core.template import read_conf
+def load_vcs_with_quotas(template: str | None, *, include_zero: bool) -> list:
+    """Discover Singularity VCs and fetch their quotas — shared CLI helper.
 
-    # Only use template when explicitly specified via -t
-    if template:
-        fp = const.AJ_TEMPLATE_HOME / f"{template}.yaml"
-        if fp.exists():
-            conf = read_conf(fp)
-            t = conf.get("target", {})
-            if t.get("name") and t.get("service", "aml") == "sing":
-                ws = get_workspace_config()
-                return [
-                    VCInfo(
-                        name=t["name"],
-                        resource_group=t.get("resource_group")
-                        or ws.get("resource_group", ""),
-                        subscription_id=t.get("subscription_id")
-                        or ws.get("subscription_id", ""),
-                    )
-                ]
-
-    # Discover all VCs via Azure Resource Graph
-    return discover_virtual_clusters(arm_client=arm_client)
-
-
-def _show_sing_quotas(show_all: bool, template: str | None) -> None:
-    """Discover VCs, fetch quotas, hand off to the display layer."""
+    Drives the spinner, exits with a friendly error if discovery returns
+    nothing, and populates ``vc.quotas`` on each :class:`VCInfo`. Used by
+    both ``aj quota --sing`` and ``aj sku list``.
+    """
     from azure_jobs.core.az_client import AzureARMClient
-    from azure_jobs.core.sku import fetch_all_vc_quotas
-    from azure_jobs.utils.ui import console, error, show_sing_quota_table
+    from azure_jobs.core.sku.discovery import discover_vcs_from_template_or_arm
+    from azure_jobs.core.sku.quotas import fetch_all_vc_quotas
+    from azure_jobs.utils.ui import console, error
 
     arm = AzureARMClient()
     with console.status(
         "[bold cyan]Discovering virtual clusters…[/bold cyan]", spinner="dots"
     ):
-        vcs = _discover_vcs(template, arm_client=arm)
+        vcs = discover_vcs_from_template_or_arm(template, arm_client=arm)
         arm.ensure_token()
         if not vcs:
             error("No Singularity virtual clusters found")
@@ -86,8 +63,15 @@ def _show_sing_quotas(show_all: bool, template: str | None) -> None:
                 "  Make sure you are logged in (`az login`) and have access to VCs"
             )
             raise SystemExit(1)
-        fetch_all_vc_quotas(vcs, include_zero=show_all, arm_client=arm)
-    show_sing_quota_table(vcs)
+        fetch_all_vc_quotas(vcs, include_zero=include_zero, arm_client=arm)
+    return vcs
+
+
+def _show_sing_quotas(show_all: bool, template: str | None) -> None:
+    """Discover VCs, fetch quotas, hand off to the display layer."""
+    from azure_jobs.utils.ui import show_sing_quota_table
+
+    show_sing_quota_table(load_vcs_with_quotas(template, include_zero=show_all))
 
 
 def _show_aml_quotas(show_all: bool) -> None:

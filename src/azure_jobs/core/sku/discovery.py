@@ -86,6 +86,41 @@ def discover_virtual_clusters(
     ]
 
 
+def discover_vcs_from_template_or_arm(
+    template: str | None,
+    arm_client: Any = None,
+) -> list[VCInfo]:
+    """Resolve a VC list — either from a single explicit template's
+    ``target`` block, or by Resource-Graph discovery across all
+    subscriptions when no template is given.
+
+    Shared by ``aj quota --sing`` and ``aj sku list`` so neither CLI
+    file owns the discovery logic.
+    """
+    if template:
+        from .. import const
+        from ..config import get_workspace_config
+        from ..template import read_conf
+
+        fp = const.AJ_TEMPLATE_HOME / f"{template}.yaml"
+        if fp.exists():
+            conf = read_conf(fp)
+            t = conf.get("target", {})
+            if t.get("name") and t.get("service", "aml") == "sing":
+                ws = get_workspace_config()
+                return [
+                    VCInfo(
+                        name=t["name"],
+                        resource_group=t.get("resource_group")
+                        or ws.get("resource_group", ""),
+                        subscription_id=t.get("subscription_id")
+                        or ws.get("subscription_id", ""),
+                    )
+                ]
+
+    return discover_virtual_clusters(arm_client=arm_client)
+
+
 def _fetch_vc_families(
     vc_subscription_id: str,
     vc_resource_group: str,

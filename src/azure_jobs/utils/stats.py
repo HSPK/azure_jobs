@@ -7,7 +7,7 @@ workspace) and ``aj exp list`` (per-experiment summary).
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import Any
+from typing import Any, TypedDict
 
 STATUS_TERMINAL = {"Completed", "Failed", "Canceled", "CancelRequested"}
 STATUS_RUNNING = {
@@ -142,8 +142,17 @@ def aggregate_by_user(jobs: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     return _aggregate_by(jobs, _user)
 
 
-class OverallSummary(dict):
-    """Result of :func:`compute_overall_summary` — exposed as plain dict."""
+class OverallSummary(TypedDict):
+    """Result of :func:`compute_overall_summary`."""
+
+    total: int
+    completed: int
+    failed: int
+    canceled: int
+    active: int
+    queued: int
+    gpu_secs: list[int]
+    queue_secs: list[int]
 
 
 def compute_overall_summary(jobs: list[dict[str, Any]]) -> OverallSummary:

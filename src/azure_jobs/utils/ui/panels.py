@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import json
-import sys
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
@@ -18,10 +16,36 @@ from .console import (
     short_portal_url,
     status_badge,
 )
-from .render import get_output_mode
+from .render import emit_json, get_output_mode
 
 if TYPE_CHECKING:
     from azure_jobs.core.submit import SubmissionRecord, SubmitRequest, SubmitResult
+
+
+def _request_payload(request: SubmitRequest) -> dict[str, Any]:
+    """JSON-friendly snapshot of a ``SubmitRequest`` — shared by submission
+    result/dry-run envelopes so they carry the same shape."""
+    return {
+        "template_name": request.template_name,
+        "experiment": request.expr_name,
+        "service": request.service,
+        "compute": request.compute,
+        "sku": request.sku,
+        "nodes": request.nodes,
+        "gpus_per_node": request.gpus_per_node,
+        "processes_per_node": request.processes_per_node,
+        "total_processes": request.nodes * (request.processes_per_node or 1),
+        "image": request.image,
+        "image_registry": request.image_registry,
+        "subscription_id": request.subscription_id,
+        "resource_group": request.resource_group,
+        "workspace_name": request.workspace_name,
+        "code_dir": request.code_dir,
+        "priority": request.priority,
+        "sla_tier": request.sla_tier,
+        "tags": list(request.tags),
+        "command": list(request.command),
+    }
 
 
 def show_submission_preview(
@@ -32,12 +56,10 @@ def show_submission_preview(
 ) -> None:
     """Display a job preview.
 
-    Rich mode shows the existing two-column panel. JSON mode (under
-    ``aj --json`` / ``AJ_OUTPUT=json``) emits a structured envelope with
-    the full rendered submission config under ``config`` plus the
-    headline request fields under ``request`` — sufficient for an agent
-    to inspect what *would* be submitted with ``-d`` and pipe the result
-    forward.
+    Rich mode shows the existing two-column panel. JSON mode is silent —
+    the final ``submission_result`` envelope (or :func:`show_dry_run_result`
+    for ``-d``) carries everything an agent needs without producing a
+    duplicate envelope here.
     """
     if get_output_mode() == "json":
         return
@@ -137,7 +159,6 @@ def show_submission_result(
     pure presentation step.
     """
     request = rec.request
-    total_processes = request.nodes * (request.processes_per_node or 1)
     payload = {
         "kind": "submission_result",
         "status": rec.status,
@@ -149,30 +170,10 @@ def show_submission_result(
         "submission_path": request.submission_path,
         "note": rec.note,
         "error": result.error or "",
-        "request": {
-            "template_name": request.template_name,
-            "experiment": request.expr_name,
-            "service": request.service,
-            "compute": request.compute,
-            "sku": request.sku,
-            "nodes": request.nodes,
-            "gpus_per_node": request.gpus_per_node,
-            "processes_per_node": request.processes_per_node,
-            "total_processes": total_processes,
-            "image": request.image,
-            "image_registry": request.image_registry,
-            "subscription_id": request.subscription_id,
-            "resource_group": request.resource_group,
-            "workspace_name": request.workspace_name,
-            "code_dir": request.code_dir,
-            "priority": request.priority,
-            "sla_tier": request.sla_tier,
-            "tags": list(request.tags),
-            "command": list(request.command),
-        },
+        "request": _request_payload(request),
     }
     if get_output_mode() == "json":
-        sys.stdout.write(json.dumps(payload, indent=2, default=str) + "\n")
+        emit_json(payload)
         return
     _render_submission_result_rich(payload, request)
 
@@ -189,42 +190,22 @@ def show_dry_run_result(request: SubmitRequest, *, submission_file: str) -> None
         return
     from azure_jobs.core.submit import render_amlt_config
 
-    total_processes = request.nodes * (request.processes_per_node or 1)
-    payload = {
-        "kind": "submission_result",
-        "status": "dry_run",
-        "sid": request.sid,
-        "name": request.name,
-        "azure_name": "",
-        "portal_url": "",
-        "backend": "",
-        "submission_path": submission_file,
-        "note": "",
-        "error": "",
-        "request": {
-            "template_name": request.template_name,
-            "experiment": request.expr_name,
-            "service": request.service,
-            "compute": request.compute,
-            "sku": request.sku,
-            "nodes": request.nodes,
-            "gpus_per_node": request.gpus_per_node,
-            "processes_per_node": request.processes_per_node,
-            "total_processes": total_processes,
-            "image": request.image,
-            "image_registry": request.image_registry,
-            "subscription_id": request.subscription_id,
-            "resource_group": request.resource_group,
-            "workspace_name": request.workspace_name,
-            "code_dir": request.code_dir,
-            "priority": request.priority,
-            "sla_tier": request.sla_tier,
-            "tags": list(request.tags),
-            "command": list(request.command),
-        },
-        "config": render_amlt_config(request),
-    }
-    sys.stdout.write(json.dumps(payload, indent=2, default=str) + "\n")
+    emit_json(
+        {
+            "kind": "submission_result",
+            "status": "dry_run",
+            "sid": request.sid,
+            "name": request.name,
+            "azure_name": "",
+            "portal_url": "",
+            "backend": "",
+            "submission_path": submission_file,
+            "note": "",
+            "error": "",
+            "request": _request_payload(request),
+            "config": render_amlt_config(request),
+        }
+    )
 
 
 def _render_submission_result_rich(
@@ -291,19 +272,20 @@ def _render_submission_result_rich(
 def show_job_status(job_status: Any) -> None:
     """Display job status as a Rich panel or JSON envelope."""
     if get_output_mode() == "json":
-        payload = {
-            "kind": "job_status",
-            "azure_name": getattr(job_status, "azure_name", ""),
-            "display_name": getattr(job_status, "display_name", ""),
-            "status": getattr(job_status, "status", ""),
-            "compute": getattr(job_status, "compute", ""),
-            "duration": getattr(job_status, "duration", ""),
-            "start_time": getattr(job_status, "start_time", ""),
-            "end_time": getattr(job_status, "end_time", ""),
-            "portal_url": getattr(job_status, "portal_url", ""),
-            "error": str(getattr(job_status, "error", "") or ""),
-        }
-        sys.stdout.write(json.dumps(payload, indent=2, default=str) + "\n")
+        emit_json(
+            {
+                "kind": "job_status",
+                "azure_name": getattr(job_status, "azure_name", ""),
+                "display_name": getattr(job_status, "display_name", ""),
+                "status": getattr(job_status, "status", ""),
+                "compute": getattr(job_status, "compute", ""),
+                "duration": getattr(job_status, "duration", ""),
+                "start_time": getattr(job_status, "start_time", ""),
+                "end_time": getattr(job_status, "end_time", ""),
+                "portal_url": getattr(job_status, "portal_url", ""),
+                "error": str(getattr(job_status, "error", "") or ""),
+            }
+        )
         return
 
     status = job_status.status
@@ -467,9 +449,7 @@ def build_job_info_lines(
 def show_job_detail(job: dict[str, Any]) -> None:
     """Display detailed cloud job info as a Rich panel or JSON envelope."""
     if get_output_mode() == "json":
-        sys.stdout.write(
-            json.dumps({"kind": "job_detail", "job": job}, indent=2, default=str) + "\n"
-        )
+        emit_json({"kind": "job_detail", "job": job})
         return
 
     lines = build_job_info_lines(job)

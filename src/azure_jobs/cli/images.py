@@ -45,12 +45,16 @@ def image_list(query: str | None) -> None:
 
 def _fetch_sing_images() -> list[dict]:
     """Fetch Singularity base images via Azure ARM REST API."""
+    import logging
+
     from azure_jobs.core.az_client import AzureARMClient
 
+    log = logging.getLogger(__name__)
     with AzureARMClient() as arm:
         try:
             subs = arm.list_subscriptions()
         except Exception:
+            log.debug("list_subscriptions failed", exc_info=True)
             return []
         for sub_id in subs:
             try:
@@ -62,6 +66,7 @@ def _fetch_sing_images() -> list[dict]:
                 if data and data.get("value"):
                     return _parse_images(data["value"])
             except Exception:
+                log.debug("Singularity images fetch failed for %s", sub_id, exc_info=True)
                 continue
     return []
 

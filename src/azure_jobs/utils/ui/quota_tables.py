@@ -9,14 +9,18 @@ JSON consumers get every row's group field populated and a
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Callable
 
 from .render import Column, TableView, render_table
 
 
 # ────────────────────────────────────────────────────────────────────────
-# Singularity quotas (aj quota --sing)
+# Shared VC-grouped quota helpers (sing quotas + sku list)
 # ────────────────────────────────────────────────────────────────────────
+
+
+_SLA_TIERS_DEFAULT: tuple[str, ...] = ("Premium", "Standard", "Basic")
+_TIER_COLOURS = {"Premium": "green", "Standard": "yellow", "Basic": "bright_red"}
 
 
 def _fmt_used_limit(used: int | None, limit: int) -> str:
@@ -28,10 +32,113 @@ def _fmt_used_limit(used: int | None, limit: int) -> str:
     return f"[{colour}]{u}[/{colour}][dim]/[/dim][yellow]{limit}[/yellow]"
 
 
+def _active_tiers_and_overall(
+    vcs: list[Any], sla_tiers: tuple[str, ...]
+) -> tuple[list[str], bool]:
+    """Inspect VC quotas to figure out which SLA-tier columns to render
+    and whether at least one series has an overall (user-level) cap."""
+    active: list[str] = []
+    has_overall = False
+    for vc in vcs:
+        for tier in sla_tiers:
+            if tier not in active and any(tier in sq.tiers for sq in vc.quotas):
+                active.append(tier)
+        if not has_overall and any(sq.overall for sq in vc.quotas):
+            has_overall = True
+    return active, has_overall
+
+
+def _tier_row_fields(sq: Any, active_tiers: list[str]) -> dict[str, Any]:
+    """Per-row ``tier_<Tier>_used`` / ``tier_<Tier>_limit`` slots."""
+    out: dict[str, Any] = {}
+    for tier in active_tiers:
+        tq = sq.tiers.get(tier) if sq is not None else None
+        out[f"tier_{tier}_used"] = tq.used if tq else None
+        out[f"tier_{tier}_limit"] = tq.limit if tq else 0
+    return out
+
+
+def _empty_tier_row_fields(active_tiers: list[str]) -> dict[str, Any]:
+    return {f"tier_{tier}_used": None for tier in active_tiers} | {
+        f"tier_{tier}_limit": 0 for tier in active_tiers
+    }
+
+
+def _vc_label_fmt(value: Any, row: dict) -> str:
+    """Show the VC name on the first row of each group only."""
+    return value if row.get("vc_first") else ""
+
+
+def _make_tier_fmt(tier: str) -> Callable[[Any, dict], str]:
+    def _fmt(_v: Any, row: dict) -> str:
+        used = row.get(f"tier_{tier}_used")
+        limit = row.get(f"tier_{tier}_limit", 0) or 0
+        return _fmt_used_limit(used, limit) if limit else "[dim]·[/dim]"
+
+    return _fmt
+
+
+def _overall_fmt(v: Any, _row: dict) -> str:
+    return f"[cyan]{v}[/cyan]" if v else "[dim]·[/dim]"
+
+
+def _tier_columns(active_tiers: list[str], *, has_overall: bool) -> list[Column]:
+    """Build the dynamic tail of tier columns (+ optional overall column)."""
+    cols: list[Column] = []
+    for tier in active_tiers:
+        colour = _TIER_COLOURS.get(tier, "white")
+        cols.append(
+            Column(
+                key=f"tier_{tier}_limit",
+                header=f"[{colour}]{tier}[/{colour}]",
+                justify="right",
+                no_wrap=True,
+                format=_make_tier_fmt(tier),
+            )
+        )
+    if has_overall:
+        cols.append(
+            Column(
+                key="overall_limit",
+                header="[cyan]Quota[/cyan]",
+                justify="right",
+                no_wrap=True,
+                format=_overall_fmt,
+            )
+        )
+    return cols
+
+
+def _render_vc_grouped(
+    *,
+    title: str,
+    empty_message: str,
+    rows: list[dict[str, Any]],
+    base_columns: list[Column],
+    active_tiers: list[str],
+    has_overall: bool,
+) -> None:
+    """Build a TableView with a section_by=vc grouping and render it."""
+    view = TableView(
+        title=title,
+        rows=rows,
+        empty_message=empty_message,
+        columns=[*base_columns, *_tier_columns(active_tiers, has_overall=has_overall)],
+        section_by="vc",
+        metadata={"active_tiers": active_tiers, "has_overall": has_overall},
+    )
+    render_table(view)
+
+
+# ────────────────────────────────────────────────────────────────────────
+# Singularity quotas (aj quota --sing)
+# ────────────────────────────────────────────────────────────────────────
+
+
 def show_sing_quota_table(
     vcs: list[Any],
     *,
-    sla_tiers: tuple[str, ...] = ("Premium", "Standard", "Basic"),
+    sla_tiers: tuple[str, ...] = _SLA_TIERS_DEFAULT,
 ) -> None:
     """Display Singularity VC quotas grouped by VC.
 
@@ -40,57 +147,43 @@ def show_sing_quota_table(
     and an extra ``Quota`` column appears only when at least one series
     has an overall (user-level) cap.
     """
-    # Determine which SLA tiers actually carry data + whether to show overall.
-    active_tiers: list[str] = []
-    has_overall = False
-    for vc in vcs:
-        for tier in sla_tiers:
-            if tier not in active_tiers and any(tier in sq.tiers for sq in vc.quotas):
-                active_tiers.append(tier)
-        if not has_overall and any(sq.overall for sq in vc.quotas):
-            has_overall = True
+    active_tiers, has_overall = _active_tiers_and_overall(vcs, sla_tiers)
 
     rows: list[dict[str, Any]] = []
     prev_vc = None
     for vc in vcs:
         if not vc.quotas:
-            row: dict[str, Any] = {
-                "vc": vc.name,
-                "vc_first": vc.name != prev_vc,
-                "series": "",
-                "no_quotas": True,
-                "accelerator": "",
-                "accelerator_memory_gb": 0,
-                "overall_limit": None,
-            }
-            for tier in active_tiers:
-                row[f"tier_{tier}_used"] = None
-                row[f"tier_{tier}_limit"] = 0
-            rows.append(row)
+            rows.append(
+                {
+                    "vc": vc.name,
+                    "vc_first": vc.name != prev_vc,
+                    "series": "",
+                    "no_quotas": True,
+                    "accelerator": "",
+                    "accelerator_memory_gb": 0,
+                    "overall_limit": None,
+                    **_empty_tier_row_fields(active_tiers),
+                }
+            )
             prev_vc = vc.name
             continue
 
         first_in_vc = True
         for sq in vc.quotas:
-            row = {
-                "vc": vc.name,
-                "vc_first": first_in_vc and vc.name != prev_vc,
-                "series": sq.series,
-                "no_quotas": False,
-                "accelerator": sq.accelerator or "",
-                "accelerator_memory_gb": sq.gpu_memory or 0,
-                "overall_limit": sq.overall.limit if sq.overall else None,
-            }
-            for tier in active_tiers:
-                tq = sq.tiers.get(tier)
-                row[f"tier_{tier}_used"] = tq.used if tq else None
-                row[f"tier_{tier}_limit"] = tq.limit if tq else 0
-            rows.append(row)
+            rows.append(
+                {
+                    "vc": vc.name,
+                    "vc_first": first_in_vc and vc.name != prev_vc,
+                    "series": sq.series,
+                    "no_quotas": False,
+                    "accelerator": sq.accelerator or "",
+                    "accelerator_memory_gb": sq.gpu_memory or 0,
+                    "overall_limit": sq.overall.limit if sq.overall else None,
+                    **_tier_row_fields(sq, active_tiers),
+                }
+            )
             first_in_vc = False
         prev_vc = vc.name
-
-    def _vc_fmt(v: Any, row: dict) -> str:
-        return v if row.get("vc_first") else ""
 
     def _series_fmt(v: Any, row: dict) -> str:
         return "[dim]no quotas[/dim]" if row.get("no_quotas") else str(v) if v else ""
@@ -102,61 +195,35 @@ def show_sing_quota_table(
             return "[dim]—[/dim]"
         return f"{acc}[dim] {mem}GB[/dim]" if mem else acc
 
-    def _tier_fmt(tier: str):
-        def _f(_v: Any, row: dict) -> str:
-            used = row.get(f"tier_{tier}_used")
-            limit = row.get(f"tier_{tier}_limit", 0) or 0
-            if not limit:
-                return "[dim]·[/dim]"
-            return _fmt_used_limit(used, limit)
-        return _f
-
-    def _overall_fmt(v: Any, _row: dict) -> str:
-        return f"[cyan]{v}[/cyan]" if v else "[dim]·[/dim]"
-
-    columns: list[Column] = [
-        Column(key="vc", header="VC", style="bold magenta", no_wrap=True, format=_vc_fmt),
-        Column(
-            key="series",
-            header="Series",
-            style="bold cyan",
-            no_wrap=True,
-            format=_series_fmt,
-        ),
-        Column(key="accelerator", header="Accelerator", no_wrap=True, format=_acc_fmt),
-    ]
-    tier_colours = {"Premium": "green", "Standard": "yellow", "Basic": "bright_red"}
-    for tier in active_tiers:
-        colour = tier_colours.get(tier, "white")
-        columns.append(
-            Column(
-                key=f"tier_{tier}_limit",
-                header=f"[{colour}]{tier}[/{colour}]",
-                justify="right",
-                no_wrap=True,
-                format=_tier_fmt(tier),
-            )
-        )
-    if has_overall:
-        columns.append(
-            Column(
-                key="overall_limit",
-                header="[cyan]Quota[/cyan]",
-                justify="right",
-                no_wrap=True,
-                format=_overall_fmt,
-            )
-        )
-
-    view = TableView(
+    _render_vc_grouped(
         title="Singularity Quotas",
-        rows=rows,
         empty_message="No quotas found",
-        columns=columns,
-        section_by="vc",
-        metadata={"active_tiers": active_tiers, "has_overall": has_overall},
+        rows=rows,
+        base_columns=[
+            Column(
+                key="vc",
+                header="VC",
+                style="bold magenta",
+                no_wrap=True,
+                format=_vc_label_fmt,
+            ),
+            Column(
+                key="series",
+                header="Series",
+                style="bold cyan",
+                no_wrap=True,
+                format=_series_fmt,
+            ),
+            Column(
+                key="accelerator",
+                header="Accelerator",
+                no_wrap=True,
+                format=_acc_fmt,
+            ),
+        ],
+        active_tiers=active_tiers,
+        has_overall=has_overall,
     )
-    render_table(view)
 
 
 # ────────────────────────────────────────────────────────────────────────
@@ -263,7 +330,7 @@ def _series_to_sku_rows(sq: Any) -> list[dict[str, Any]]:
 def show_sku_table(
     vcs: list[Any],
     *,
-    sla_tiers: tuple[str, ...] = ("Premium", "Standard", "Basic"),
+    sla_tiers: tuple[str, ...] = _SLA_TIERS_DEFAULT,
 ) -> None:
     """Display Singularity SKUs grouped by VC.
 
@@ -271,53 +338,41 @@ def show_sku_table(
     SKU row is one instance variant (CPU sizes or per-GPU-count GPU
     instances).
     """
-    active_tiers: list[str] = []
-    has_overall = False
-    for vc in vcs:
-        for tier in sla_tiers:
-            if tier not in active_tiers and any(tier in sq.tiers for sq in vc.quotas):
-                active_tiers.append(tier)
-        if not has_overall and any(sq.overall for sq in vc.quotas):
-            has_overall = True
+    active_tiers, has_overall = _active_tiers_and_overall(vcs, sla_tiers)
 
     rows: list[dict[str, Any]] = []
     for vc in vcs:
         if not vc.quotas:
-            row: dict[str, Any] = {
-                "vc": vc.name,
-                "no_quotas": True,
-                "series": "",
-                "kind": "",
-                "gpu_label": "",
-                "instance_type": "",
-                "sku_shorthand": "",
-                "overall_limit": None,
-            }
-            for tier in active_tiers:
-                row[f"tier_{tier}_used"] = None
-                row[f"tier_{tier}_limit"] = 0
-            rows.append(row)
+            rows.append(
+                {
+                    "vc": vc.name,
+                    "vc_first": True,
+                    "no_quotas": True,
+                    "series": "",
+                    "kind": "",
+                    "gpu_label": "",
+                    "instance_type": "",
+                    "sku_shorthand": "",
+                    "overall_limit": None,
+                    **_empty_tier_row_fields(active_tiers),
+                }
+            )
             continue
 
         first_in_vc = True
         for sq in vc.quotas:
             for sku_row in _series_to_sku_rows(sq):
-                row = {
-                    "vc": vc.name,
-                    "vc_first": first_in_vc,
-                    "no_quotas": False,
-                    **sku_row,
-                    "overall_limit": sq.overall.limit if sq.overall else None,
-                }
-                for tier in active_tiers:
-                    tq = sq.tiers.get(tier)
-                    row[f"tier_{tier}_used"] = tq.used if tq else None
-                    row[f"tier_{tier}_limit"] = tq.limit if tq else 0
-                rows.append(row)
+                rows.append(
+                    {
+                        "vc": vc.name,
+                        "vc_first": first_in_vc,
+                        "no_quotas": False,
+                        **sku_row,
+                        "overall_limit": sq.overall.limit if sq.overall else None,
+                        **_tier_row_fields(sq, active_tiers),
+                    }
+                )
                 first_in_vc = False
-
-    def _vc_fmt(v: Any, row: dict) -> str:
-        return v if row.get("vc_first") else ""
 
     def _gpu_cpu_fmt(_v: Any, row: dict) -> str:
         if row.get("no_quotas"):
@@ -332,7 +387,11 @@ def show_sku_table(
         if count and model:
             return f"[bold]{count}×{model}[/bold] [dim]{mem}GB[/dim]{nvlink_flag}"
         if model:
-            return f"[bold]{model}[/bold] [dim]{mem}GB[/dim]" if mem else f"[bold]{model}[/bold]"
+            return (
+                f"[bold]{model}[/bold] [dim]{mem}GB[/dim]"
+                if mem
+                else f"[bold]{model}[/bold]"
+            )
         return f"[dim]{row.get('series', '')}[/dim]"
 
     def _instance_fmt(v: Any, row: dict) -> str:
@@ -341,70 +400,46 @@ def show_sku_table(
         return str(v) if row.get("kind") != "unknown" else f"[dim]{v}[/dim]"
 
     def _shorthand_fmt(v: Any, row: dict) -> str:
-        if not v or row.get("no_quotas"):
-            return "[dim]—[/dim]" if not row.get("no_quotas") else ""
-        return str(v)
+        if row.get("no_quotas"):
+            return ""
+        return str(v) if v else "[dim]—[/dim]"
 
-    def _tier_fmt(tier: str):
-        def _f(_v: Any, row: dict) -> str:
-            used = row.get(f"tier_{tier}_used")
-            limit = row.get(f"tier_{tier}_limit", 0) or 0
-            return _fmt_used_limit(used, limit) if limit else "[dim]·[/dim]"
-        return _f
-
-    def _overall_fmt(v: Any, _row: dict) -> str:
-        return f"[cyan]{v}[/cyan]" if v else "[dim]·[/dim]"
-
-    columns: list[Column] = [
-        Column(key="vc", header="VC", style="bold magenta", no_wrap=True, format=_vc_fmt),
-        Column(key="gpu_label", header="GPU / CPU", no_wrap=True, format=_gpu_cpu_fmt),
-        Column(
-            key="instance_type",
-            header="Instance Type",
-            style="cyan",
-            no_wrap=True,
-            format=_instance_fmt,
-        ),
-        Column(
-            key="sku_shorthand",
-            header="SKU Shorthand",
-            style="green",
-            no_wrap=True,
-            format=_shorthand_fmt,
-        ),
-    ]
-    tier_colours = {"Premium": "green", "Standard": "yellow", "Basic": "bright_red"}
-    for tier in active_tiers:
-        colour = tier_colours.get(tier, "white")
-        columns.append(
-            Column(
-                key=f"tier_{tier}_limit",
-                header=f"[{colour}]{tier}[/{colour}]",
-                justify="right",
-                no_wrap=True,
-                format=_tier_fmt(tier),
-            )
-        )
-    if has_overall:
-        columns.append(
-            Column(
-                key="overall_limit",
-                header="[cyan]Quota[/cyan]",
-                justify="right",
-                no_wrap=True,
-                format=_overall_fmt,
-            )
-        )
-
-    view = TableView(
+    _render_vc_grouped(
         title="Singularity SKUs",
-        rows=rows,
         empty_message="No SKUs found",
-        columns=columns,
-        section_by="vc",
-        metadata={"active_tiers": active_tiers, "has_overall": has_overall},
+        rows=rows,
+        base_columns=[
+            Column(
+                key="vc",
+                header="VC",
+                style="bold magenta",
+                no_wrap=True,
+                format=_vc_label_fmt,
+            ),
+            Column(
+                key="gpu_label",
+                header="GPU / CPU",
+                no_wrap=True,
+                format=_gpu_cpu_fmt,
+            ),
+            Column(
+                key="instance_type",
+                header="Instance Type",
+                style="cyan",
+                no_wrap=True,
+                format=_instance_fmt,
+            ),
+            Column(
+                key="sku_shorthand",
+                header="SKU Shorthand",
+                style="green",
+                no_wrap=True,
+                format=_shorthand_fmt,
+            ),
+        ],
+        active_tiers=active_tiers,
+        has_overall=has_overall,
     )
-    render_table(view)
 
 
 # ────────────────────────────────────────────────────────────────────────
