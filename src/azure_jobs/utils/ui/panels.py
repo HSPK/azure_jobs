@@ -51,7 +51,6 @@ def _request_payload(request: SubmitRequest) -> dict[str, Any]:
 def show_submission_preview(
     request: SubmitRequest,
     *,
-    submission_file: str,
     dry_run: bool = False,
 ) -> None:
     """Display a job preview.
@@ -60,6 +59,11 @@ def show_submission_preview(
     the final ``submission_result`` envelope (or :func:`show_dry_run_result`
     for ``-d``) carries everything an agent needs without producing a
     duplicate envelope here.
+
+    The rendered amlt-style YAML path is read from
+    ``request.submission_path`` and only shown when populated (amlt
+    backend / dry-run); native backends submit straight from the
+    in-memory request and have no on-disk config to surface.
     """
     if get_output_mode() == "json":
         return
@@ -131,7 +135,8 @@ def show_submission_preview(
     body.add_row(
         f"[key]Command[/key]      [highlight]{esc(final_cmd or '-')}[/highlight]"
     )
-    body.add_row(f"[key]AMLT Config[/key]  {esc(str(submission_file))}")
+    if request.submission_path:
+        body.add_row(f"[key]AMLT Config[/key]  {esc(request.submission_path)}")
 
     title = "Dry Run Preview" if dry_run else "Submission Preview"
     style = "cyan" if dry_run else "green"
@@ -178,7 +183,7 @@ def show_submission_result(
     _render_submission_result_rich(payload, request)
 
 
-def show_dry_run_result(request: SubmitRequest, *, submission_file: str) -> None:
+def show_dry_run_result(request: SubmitRequest) -> None:
     """Emit a dry-run envelope (JSON mode only).
 
     Mirrors :func:`show_submission_result` so agent consumers can route
@@ -199,7 +204,7 @@ def show_dry_run_result(request: SubmitRequest, *, submission_file: str) -> None
             "azure_name": "",
             "portal_url": "",
             "backend": "",
-            "submission_path": submission_file,
+            "submission_path": request.submission_path,
             "note": "",
             "error": "",
             "request": _request_payload(request),

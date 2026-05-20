@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import os
 import shutil
-import stat
 import subprocess
 import tempfile
 from pathlib import Path
@@ -17,7 +15,6 @@ from azure_jobs.utils.ui import (
     info,
     show_command_result,
     success,
-    warning,
 )
 
 _SHORTHAND_RE = r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
@@ -43,10 +40,13 @@ def _is_local_only(rel: Path) -> bool:
     return any(part in _LOCAL_ONLY for part in rel.parts)
 
 
-def _rm_readonly(func, path, _exc_info):  # noqa: ANN001
-    """Clear read-only flag and retry removal (Windows .git files)."""
-    os.chmod(path, stat.S_IWRITE)
-    func(path)
+def _git(*args: str, cwd: str | Path | None = None) -> subprocess.CompletedProcess:
+    """Run a ``git`` subcommand, capturing output and raising on failure."""
+    cmd: list[str] = ["git"]
+    if cwd is not None:
+        cmd.extend(["-C", str(cwd)])
+    cmd.extend(args)
+    return subprocess.run(cmd, check=True, capture_output=True, text=True)
 
 
 def _do_pull(repo_id: str | None, force: bool) -> None:
@@ -78,12 +78,7 @@ def _do_pull(repo_id: str | None, force: bool) -> None:
             with console.status(
                 f"[bold cyan]Cloning {repo_id}…[/bold cyan]", spinner="dots"
             ):
-                subprocess.run(
-                    ["git", "clone", "--depth=1", repo_id, tmp],
-                    check=True,
-                    capture_output=True,
-                    text=True,
-                )
+                _git("clone", "--depth=1", repo_id, tmp)
         except subprocess.CalledProcessError as exc:
             raise click.ClickException(
                 f"Failed to clone {repo_id}: {exc.stderr.strip()}"
@@ -163,12 +158,7 @@ def _do_push(message: str | None) -> None:
             with console.status(
                 "[bold cyan]Syncing with remote…[/bold cyan]", spinner="dots"
             ):
-                subprocess.run(
-                    ["git", "clone", repo_id, tmp],
-                    check=True,
-                    capture_output=True,
-                    text=True,
-                )
+                _git("clone", repo_id, tmp)
         except subprocess.CalledProcessError as exc:
             raise click.ClickException(
                 f"Failed to clone remote: {exc.stderr.strip()}"
@@ -207,31 +197,16 @@ def _do_push(message: str | None) -> None:
             )
             return
 
-        subprocess.run(
-            ["git", "-C", tmp, "add", "-A"],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
+        _git("add", "-A", cwd=tmp)
         if message is None:
             message = "update templates"
         try:
-            subprocess.run(
-                ["git", "-C", tmp, "commit", "-m", message],
-                check=True,
-                capture_output=True,
-                text=True,
-            )
+            _git("commit", "-m", message, cwd=tmp)
         except subprocess.CalledProcessError as exc:
             raise click.ClickException(f"Failed to commit: {exc.stderr.strip()}") from exc
         try:
             with console.status("[bold cyan]Pushing…[/bold cyan]", spinner="dots"):
-                subprocess.run(
-                    ["git", "-C", tmp, "push"],
-                    check=True,
-                    capture_output=True,
-                    text=True,
-                )
+                _git("push", cwd=tmp)
         except subprocess.CalledProcessError as exc:
             raise click.ClickException(f"Failed to push: {exc.stderr.strip()}") from exc
 

@@ -34,6 +34,12 @@ _SING_DEFAULT_ENV = {
     "AZUREML_COMPUTE_USE_COMMON_RUNTIME": "false",
 }
 
+_SSH_OPT_OUT_ENV = "AJ_SHIP_SSH"
+_SSH_WHITELIST = frozenset(
+    {"id_rsa", "id_ed25519", "id_ecdsa", "config", "known_hosts"}
+)
+_FALSY = frozenset({"0", "false", "no", "off"})
+
 
 def _get_rest_client(request: SubmitRequest) -> AzureMLClient:
     """Create a REST client from a SubmitRequest."""
@@ -71,32 +77,120 @@ def _build_tags(tag_strings: list[str]) -> dict[str, str | None]:
     return tags
 
 
-def _collect_ssh_files(code_dir: str) -> dict[str, bytes]:
+def _ssh_disabled() -> bool:
+    return os.getenv(_SSH_OPT_OUT_ENV, "").strip().lower() in _FALSY
+
+
+def _collect_ssh_files(
+    code_dir: str,
+    on_event: Callable[[SubmitEvent], None],
+) -> dict[str, bytes]:
     """Collect ``.ssh`` files to ship with the code upload.
 
-    Prefer ``code_dir/.ssh`` if present; otherwise pull a whitelist from
-    ``~/.ssh``. Always returns at least a ``.ssh/.keep`` placeholder so the
-    directory exists on the remote.
+    Behaviour:
+
+    * If ``<code_dir>/.ssh`` exists, do nothing (user vendored their own).
+    * Else if ``AJ_SHIP_SSH=0`` (opt-out), ship only an empty
+      ``.ssh/.keep`` so the directory exists on the remote worker.
+    * Else copy a whitelist of files from ``~/.ssh`` (default).
     """
     code_path = Path(code_dir).resolve()
     if (code_path / ".ssh").is_dir():
         return {}
 
+    if _ssh_disabled():
+        return {".ssh/.keep": b""}
+
     home_ssh = Path.home() / ".ssh"
     if not home_ssh.is_dir():
         return {".ssh/.keep": b""}
 
-    _ALLOWED = {"id_rsa", "id_ed25519", "id_ecdsa", "config", "known_hosts"}
     result: dict[str, bytes] = {}
+    shipped: list[str] = []
     for fp in sorted(home_ssh.iterdir()):
-        if fp.is_file() and fp.name in _ALLOWED:
+        if fp.is_file() and fp.name in _SSH_WHITELIST:
             try:
                 result[f".ssh/{fp.name}"] = fp.read_bytes()
+                shipped.append(fp.name)
             except OSError:
                 log.debug("Failed to read %s", fp, exc_info=True)
     if not result:
-        result[".ssh/.keep"] = b""
+        return {".ssh/.keep": b""}
+
+    on_event(
+        SubmitEvent(
+            kind="log",
+            detail=f"Shipping ~/.ssh files to remote: {', '.join(shipped)} "
+            f"(disable with {_SSH_OPT_OUT_ENV}=0)",
+        )
+    )
     return result
+
+
+def _build_job_body(
+    request: SubmitRequest,
+    *,
+    env_id: str,
+    code_id: str,
+    compute_id: str,
+    env_vars: dict[str, str],
+    distribution: dict[str, Any] | None,
+    identity: dict[str, Any] | None,
+    resources: dict[str, Any] | None,
+    outputs: dict[str, Any] | None,
+    custom_props: dict[str, Any] | None,
+    tags: dict[str, str | None],
+) -> dict[str, Any]:
+    """Assemble the Azure ML REST job-create payload.
+
+    Pure function: no I/O, deterministic given inputs. The shape matches
+    ``PUT /jobs/{name}``'s body — top-level ``properties`` carries the
+    job spec; ``properties.properties`` is Azure ML's user-defined
+    custom-properties dict (named confusingly by Azure).
+    """
+    job_payload: dict[str, Any] = {
+        "jobType": "Command",
+        "displayName": request.name,
+        "description": request.description,
+        "experimentName": request.expr_name,
+        "command": f"bash {RUNNER_FILENAME}",
+        "computeId": compute_id,
+        "environmentVariables": env_vars,
+    }
+
+    if code_id:
+        job_payload["codeId"] = code_id
+
+    # environmentId is either a registered asset id or an inline image ref.
+    if env_id:
+        job_payload["environmentId"] = env_id
+    else:
+        image = request.image
+        if request.image_registry:
+            image = f"{request.image_registry}/{image}"
+        job_payload["environmentId"] = image
+
+    if distribution:
+        job_payload["distribution"] = distribution
+    if identity:
+        job_payload["identity"] = identity
+
+    res: dict[str, Any] = {"instanceCount": request.nodes}
+    if resources:
+        res["properties"] = resources.get("properties", {})
+    if request.shm_size:
+        res["shmSize"] = request.shm_size
+    job_payload["resources"] = res
+
+    if outputs:
+        job_payload["outputs"] = outputs
+    if tags:
+        job_payload["tags"] = tags
+    if custom_props:
+        # Azure ML's user-defined properties live at properties.properties.
+        job_payload["properties"] = custom_props
+
+    return {"properties": job_payload}
 
 
 def submit(
@@ -110,7 +204,22 @@ def submit(
     step, per-file upload progress, and informational log lines.
     """
     emit = on_event or (lambda _ev: None)
+    try:
+        return _submit_impl(request, emit)
+    except (AJError, requests.RequestException, OSError) as exc:
+        # Backend never crashes the caller — failures become a SubmitResult.
+        # Programming errors (NameError/AttributeError/…) deliberately propagate.
+        return SubmitResult(
+            job_name=request.name,
+            status="failed",
+            error=parse_exception_message(exc),
+        )
 
+
+def _submit_impl(
+    request: SubmitRequest,
+    emit: Callable[[SubmitEvent], None],
+) -> SubmitResult:
     def _status(step: str, detail: str = "") -> None:
         emit(SubmitEvent(kind=step, detail=detail))
 
@@ -125,122 +234,69 @@ def submit(
             )
         )
 
-    try:
-        _status("auth", "Authenticating…")
-        client = _get_rest_client(request)
+    _status("auth", "Authenticating…")
+    client = _get_rest_client(request)
 
-        _status("environment", "Preparing environment…")
-        env_id = _build_environment(request, client)
+    _status("environment", "Preparing environment…")
+    env_id = _build_environment(request, client)
 
-        _status("storage", f"Configuring {len(request.storage)} storage mount(s)…")
-        outputs, poc_props, dataref_env = _build_storage_mounts(request, client)
-        _status("command", "Building command…")
-        distribution = _build_distribution(request)
-        identity = _build_identity(request)
-        compute = _resolve_compute(request)
-        resources = _build_resources(request, compute_id=compute, on_log=_status)
-        env_vars = _build_env_vars(request, dataref_env)
+    _status("storage", f"Configuring {len(request.storage)} storage mount(s)…")
+    outputs, poc_props, dataref_env = _build_storage_mounts(request, client)
+    _status("command", "Building command…")
+    distribution = _build_distribution(request)
+    identity = _build_identity(request)
+    compute = _resolve_compute(request)
+    resources = _build_resources(request, compute_id=compute, on_log=_status)
+    env_vars = _build_env_vars(request, dataref_env)
 
-        identity_client_id = ""
-        if request.service == "sing":
-            _status("identity", "Resolving Singularity identity…")
-            identity_client_id = _resolve_sing_identity(request, client) or ""
+    identity_client_id = ""
+    if request.service == "sing":
+        _status("identity", "Resolving Singularity identity…")
+        identity_client_id = _resolve_sing_identity(request, client) or ""
 
-        runner_script = generate_runner_script(request, identity_client_id)
+    runner_script = generate_runner_script(request, identity_client_id)
+    extra_files: dict[str, str | bytes] = {RUNNER_FILENAME: runner_script}
 
-        extra_files: dict[str, str | bytes] = {RUNNER_FILENAME: runner_script}
+    code_root = request.code_dir or os.getcwd()
+    extra_files.update(_collect_ssh_files(code_root, emit))
 
-        code_root = request.code_dir or os.getcwd()
+    _status("code", "Uploading code…")
+    code_id = client.blob.upload_code(
+        code_root,
+        ignore_patterns=request.code_ignore or None,
+        extra_files=extra_files,
+        on_progress=_on_upload,
+    )
 
-        # Use code_dir/.ssh if present, else fall back to ~/.ssh.
-        extra_files.update(_collect_ssh_files(code_root))
+    _status("submit", f"Submitting to {request.compute}…")
 
-        _status("code", "Uploading code…")
-        code_id = client.blob.upload_code(
-            code_root,
-            ignore_patterns=request.code_ignore or None,
-            extra_files=extra_files,
-            on_progress=_on_upload,
-        )
+    job_body = _build_job_body(
+        request,
+        env_id=env_id,
+        code_id=code_id,
+        compute_id=compute,
+        env_vars=env_vars,
+        distribution=distribution,
+        identity=identity,
+        resources=resources,
+        outputs=outputs,
+        custom_props=dict(poc_props) if poc_props else None,
+        tags=_build_tags(request.tags),
+    )
 
-        command_str = f"bash {RUNNER_FILENAME}"
+    returned_job = client.jobs.create_or_update(request.name, job_body)
 
-        tags = _build_tags(request.tags)
-        properties = dict(poc_props) if poc_props else {}
+    ret_props = returned_job.get("properties") or {}
+    services = ret_props.get("services") or {}
+    studio = services.get("Studio") or {}
+    portal_url = studio.get("endpoint") or ""
 
-        _status("submit", f"Submitting to {request.compute}…")
+    azure_name = returned_job.get("name", "") or request.name
+    _status("done", f"Job {azure_name} submitted")
 
-        job_body: dict[str, Any] = {
-            "properties": {
-                "jobType": "Command",
-                "displayName": request.name,
-                "description": request.description,
-                "experimentName": request.expr_name,
-                "command": command_str,
-                "computeId": compute,
-                "environmentVariables": env_vars,
-            }
-        }
-
-        job_props = job_body["properties"]
-
-        if code_id:
-            job_props["codeId"] = code_id
-
-        # environmentId is either a registered asset id or an inline image ref.
-        if env_id:
-            job_props["environmentId"] = env_id
-        else:
-            image = request.image
-            if request.image_registry:
-                image = f"{request.image_registry}/{image}"
-            job_props["environmentId"] = image
-
-        if distribution:
-            job_props["distribution"] = distribution
-
-        if identity:
-            job_props["identity"] = identity
-
-        res: dict[str, Any] = {"instanceCount": request.nodes}
-        if resources:
-            res["properties"] = resources.get("properties", {})
-        job_props["resources"] = res
-
-        if outputs:
-            job_props["outputs"] = outputs
-
-        if tags:
-            job_props["tags"] = tags
-        if properties:
-            job_props["properties"] = properties
-
-        if request.shm_size:
-            job_props["resources"]["shmSize"] = request.shm_size
-
-        returned_job = client.jobs.create_or_update(request.name, job_body)
-
-        portal_url = ""
-        ret_props = returned_job.get("properties") or {}
-        services = ret_props.get("services") or {}
-        studio = services.get("Studio") or {}
-        portal_url = studio.get("endpoint") or ""
-
-        azure_name = returned_job.get("name", "") or request.name
-        _status("done", f"Job {azure_name} submitted")
-
-        return SubmitResult(
-            job_name=request.name,
-            azure_name=azure_name,
-            status="submitted",
-            portal_url=portal_url,
-        )
-
-    except (AJError, requests.RequestException, OSError) as exc:
-        # Backend never crashes the caller — failures become a SubmitResult.
-        # Programming errors (NameError/AttributeError/…) deliberately propagate.
-        return SubmitResult(
-            job_name=request.name,
-            status="failed",
-            error=parse_exception_message(exc),
-        )
+    return SubmitResult(
+        job_name=request.name,
+        azure_name=azure_name,
+        status="submitted",
+        portal_url=portal_url,
+    )

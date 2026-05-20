@@ -7,18 +7,72 @@ template, CLI overrides, and workspace context into a normalised
 
 from __future__ import annotations
 
+import logging
 import os
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 from azure_jobs.utils.fs import read_ignore_file
 
 from ..config import AJWorkspace
 from .models import AmltOpts, SingularityOpts, StorageMount, SubmitRequest, VolcanoOpts
+from .script_runner import build_user_command
 
 if TYPE_CHECKING:
     from ..template import Template
+
+log = logging.getLogger(__name__)
+
+# Setup commands prepended to every job (env bootstrap independent of user code).
+_PRELUDE_COMMANDS: tuple[str, ...] = (
+    "[ -f /tmp/.aj_ssh_env ] && source /tmp/.aj_ssh_env",
+    "export PATH=$HOME/.local/bin:$PATH",
+)
+
+
+def _normalize_storage(
+    storage_dict: dict[str, object],
+) -> dict[str, StorageMount]:
+    """Coerce template storage entries into :class:`StorageMount` instances."""
+    storage: dict[str, StorageMount] = {}
+    for k, v in storage_dict.items():
+        if isinstance(v, StorageMount):
+            storage[k] = v
+        elif isinstance(v, dict):
+            storage[k] = StorageMount(
+                storage_account_name=v.get("storage_account_name", ""),
+                container_name=v.get("container_name", ""),
+                mount_dir=v.get("mount_dir", ""),
+            )
+        else:
+            raise TypeError(
+                f"Unsupported storage entry for '{k}': {type(v).__name__}"
+            )
+    return storage
+
+
+def _normalize_template_commands(raw: object) -> list[str]:
+    """Coerce template ``job.command`` into a list of strings."""
+    if isinstance(raw, str):
+        return [raw]
+    if isinstance(raw, list):
+        return list(raw)
+    return []
+
+
+def _merge_env(
+    user_env: dict[str, str], aj_env: dict[str, str]
+) -> dict[str, str]:
+    """Merge AJ_* env over user-supplied env, warning on collisions."""
+    overrides = sorted(k for k in aj_env if k in user_env)
+    if overrides:
+        log.warning(
+            "Template env overridden by aj-injected vars: %s",
+            ", ".join(overrides),
+        )
+    merged = dict(user_env)
+    merged.update(aj_env)
+    return merged
 
 
 def build_submit_request(
@@ -49,21 +103,16 @@ def build_submit_request(
     target = template.target
     env = template.environment
     job = template.jobs[0] if template.jobs else None
-    storage_dict = template.storage
+    if job is None:
+        # Callers validate this, but a defensive raise keeps the type checker
+        # happy and surfaces template misuse with a clear message.
+        from ..errors import TemplateError
+
+        raise TemplateError("Template missing 'jobs' section")
     code = template.code
-    submit_args = job.submit_args if job else {}
+    submit_args = job.submit_args
 
-    storage = {}
-    for k, v in storage_dict.items():
-        if isinstance(v, StorageMount):
-            storage[k] = v
-        else:
-            storage[k] = StorageMount(
-                storage_account_name=v.get("storage_account_name", ""),
-                container_name=v.get("container_name", ""),
-                mount_dir=v.get("mount_dir", ""),
-            )
-
+    storage = _normalize_storage(template.storage)
     service = target.service
 
     # AJ_* travel via env_vars (not the runner script) so per-submission
@@ -79,33 +128,11 @@ def build_submit_request(
         "AJ_PROCESSES_PER_NODE": str(processes_per_node),
     }
 
-    cmd_list: list[str] = [
-        "[ -f /tmp/.aj_ssh_env ] && source /tmp/.aj_ssh_env",
-        "export PATH=$HOME/.local/bin:$PATH",
+    command_list: list[str] = [
+        *_PRELUDE_COMMANDS,
+        *_normalize_template_commands(job.command),
+        build_user_command(user_command, user_args),
     ]
-
-    # Template commands then user command
-    conf_commands = job.command if job else []
-    if isinstance(conf_commands, str):
-        conf_commands = [conf_commands]
-    elif not isinstance(conf_commands, list):
-        conf_commands = []
-    cmd_list.extend(conf_commands)
-
-    if Path(user_command).is_file():
-        if user_command.endswith(".sh"):
-            cmd = f"bash {user_command} {' '.join(user_args)}".strip()
-        elif user_command.endswith(".py"):
-            cmd = f"uv run {user_command} {' '.join(user_args)}".strip()
-        else:
-            raise ValueError(
-                f"Unsupported script type: {user_command}. Only .sh and .py are supported."
-            )
-    else:
-        cmd = f"{user_command} {' '.join(user_args)}".strip()
-
-    cmd_list.append(cmd)
-    command_list = cmd_list
 
     # amlt rendering keeps the template's literal value (may include
     # ``$CONFIG_DIR``); backends upload from ``resolved_code_dir``.
@@ -121,8 +148,7 @@ def build_submit_request(
             seen.add(pat)
             code_ignore.append(pat)
 
-    env_extra = dict(submit_args.get("env", {}))
-    env_extra.update(aj_envs)
+    env_extra = _merge_env(dict(submit_args.get("env", {})), aj_envs)
     container_args = dict(submit_args.get("container_args", {}))
 
     # AML target may override sub/rg; others use local workspace.
@@ -171,10 +197,10 @@ def build_submit_request(
         setup_commands=env.setup,
         command=command_list,
         storage=storage,
-        identity=job.identity if job else "managed",
-        sla_tier=job.sla_tier if job else "Premium",
-        priority=job.priority if job else "high",
-        tags=job.tags if job else [],
+        identity=job.identity,
+        sla_tier=job.sla_tier,
+        priority=job.priority,
+        tags=job.tags,
         container_args=container_args,
         shm_size=container_args.get("shm_size", "2048g"),
         template_name=template_name,

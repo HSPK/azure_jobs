@@ -16,8 +16,9 @@ def merge_confs(*data: Any) -> Any:
     """Recursively merge dicts, lists, or scalars.
 
     - Dicts: merged recursively by key.
-    - Lists of dicts: merged by index position.
-    - Lists of scalars: concatenated.
+    - Lists where any element is a dict: merged element-wise by index
+      (positions absent in one list inherit from the other).
+    - Lists of pure scalars: concatenated.
     - Scalars: last value wins (deep-copied).
     """
     filtered: list[Any] = [d for d in data if d is not None]

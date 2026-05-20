@@ -30,6 +30,7 @@ from .dispatch import (
     register_backend,
     submit_via,
 )
+from .materialise import materialise_submission
 from .models import (
     AmltOpts,
     SingularityOpts,
@@ -62,6 +63,7 @@ __all__ = [
     "submit",
     "submit_via",
     "build_submit_request",
+    "materialise_submission",
     "render_amlt_config",
     "CheckResult",
     "check_aml_compute",

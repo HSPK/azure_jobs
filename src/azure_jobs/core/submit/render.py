@@ -13,16 +13,27 @@ from typing import Any
 
 from .models import SubmitRequest
 
+# Variable names left untouched (no ``$`` → ``$$`` escape) inside string
+# values rendered for amlt. Add a name here to allowlist a new amlt-side
+# template variable.
+_AMLT_PASSTHROUGH_VARS: frozenset[str] = frozenset({"CONFIG_DIR"})
+_AMLT_DOLLAR_RE = re.compile(
+    r"\$\$|\$(?!(?:" + "|".join(_AMLT_PASSTHROUGH_VARS) + r")\b)"
+)
+
 
 def _escape_amlt_dollars(value: Any) -> Any:
-    """Recursively escape ``$`` for AMLT (preserves ``$$`` and ``$CONFIG_DIR``)."""
+    """Recursively escape ``$`` for AMLT.
+
+    Preserves any pre-existing ``$$`` and any variable name listed in
+    :data:`_AMLT_PASSTHROUGH_VARS`.
+    """
     if isinstance(value, dict):
         return {k: _escape_amlt_dollars(v) for k, v in value.items()}
     if isinstance(value, list):
         return [_escape_amlt_dollars(v) for v in value]
     if isinstance(value, str):
-        return re.sub(
-            r"\$\$|\$(?!CONFIG_DIR\b)",
+        return _AMLT_DOLLAR_RE.sub(
             lambda m: m.group() if len(m.group()) == 2 else "$$",
             value,
         )

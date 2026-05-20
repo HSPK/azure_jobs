@@ -148,9 +148,7 @@ def template_validate(name: str | None) -> None:
 @template_group.command(name="diff")
 def template_diff() -> None:
     """Show local changes compared to the remote repository."""
-    import difflib
-    import filecmp
-    import tempfile
+    from azure_jobs.utils.ui import emit_json, get_output_mode
 
     config = read_config()
     repo_id = config.repo_id
@@ -161,97 +159,108 @@ def template_diff() -> None:
     if not const.AJ_HOME.exists():
         raise click.ClickException("No AJ home found. Run `aj pull` first.")
 
-    _EXCLUDE = {".git", "aj_config.json", "submission", "record.jsonl"}
+    diff_text = _compute_remote_diff(repo_id)
 
-    def _collect_files(root: Path) -> dict[str, Path]:
-        """Walk *root* and return {relative_posix_path: absolute_path}."""
-        files: dict[str, Path] = {}
-        for p in root.rglob("*"):
-            if not p.is_file():
-                continue
-            rel = p.relative_to(root)
-            if any(part in _EXCLUDE for part in rel.parts):
-                continue
-            files[rel.as_posix()] = p
-        return files
+    if not diff_text:
+        if get_output_mode() != "json":
+            info("No differences with remote")
+        emit_json({"kind": "template_diff", "has_changes": False, "diff": ""})
+        return
 
-    def _unified_diff(rel: str, a_path: Path | None, b_path: Path | None) -> list[str]:
-        a_lines = (
-            a_path.read_text(errors="replace").splitlines(keepends=True)
-            if a_path
-            else []
-        )
-        b_lines = (
-            b_path.read_text(errors="replace").splitlines(keepends=True)
-            if b_path
-            else []
-        )
-        return list(
-            difflib.unified_diff(
-                a_lines,
-                b_lines,
-                fromfile=f"remote/{rel}",
-                tofile=f"local/{rel}",
+    if get_output_mode() == "json":
+        emit_json({"kind": "template_diff", "has_changes": True, "diff": diff_text})
+        return
+
+    from rich.syntax import Syntax
+
+    console.print()
+    console.print(Syntax(diff_text, "diff", theme="monokai", line_numbers=False))
+
+
+_DIFF_EXCLUDE = {".git", "aj_config.json", "submission", "record.jsonl"}
+
+
+def _clone_remote(repo_id: str, dst: str) -> None:
+    """Shallow-clone *repo_id* into *dst* with a spinner."""
+    try:
+        with console.status(
+            "[bold cyan]Fetching remote…[/bold cyan]", spinner="dots"
+        ):
+            subprocess.run(
+                ["git", "clone", "--depth=1", repo_id, dst],
+                check=True,
+                capture_output=True,
+                text=True,
             )
+    except subprocess.CalledProcessError as exc:
+        raise click.ClickException(
+            f"Failed to clone remote: {exc.stderr.strip()}"
+        ) from exc
+
+
+def _collect_diff_files(root: Path) -> dict[str, Path]:
+    """Walk *root* and return ``{relative_posix_path: absolute_path}``."""
+    files: dict[str, Path] = {}
+    for p in root.rglob("*"):
+        if not p.is_file():
+            continue
+        rel = p.relative_to(root)
+        if any(part in _DIFF_EXCLUDE for part in rel.parts):
+            continue
+        files[rel.as_posix()] = p
+    return files
+
+
+def _unified_diff_lines(
+    rel: str, a_path: Path | None, b_path: Path | None
+) -> list[str]:
+    """Render a unified diff between *a_path* (remote) and *b_path* (local)."""
+    import difflib
+
+    a_lines = (
+        a_path.read_text(errors="replace").splitlines(keepends=True)
+        if a_path
+        else []
+    )
+    b_lines = (
+        b_path.read_text(errors="replace").splitlines(keepends=True)
+        if b_path
+        else []
+    )
+    return list(
+        difflib.unified_diff(
+            a_lines,
+            b_lines,
+            fromfile=f"remote/{rel}",
+            tofile=f"local/{rel}",
         )
+    )
+
+
+def _compute_remote_diff(repo_id: str) -> str:
+    """Shallow-clone *repo_id* and return a unified diff vs. ``AJ_HOME``."""
+    import filecmp
+    import tempfile
 
     with tempfile.TemporaryDirectory() as tmp:
-        try:
-            with console.status(
-                "[bold cyan]Fetching remote…[/bold cyan]", spinner="dots"
-            ):
-                subprocess.run(
-                    ["git", "clone", "--depth=1", repo_id, tmp],
-                    check=True,
-                    capture_output=True,
-                    text=True,
-                )
-        except subprocess.CalledProcessError as exc:
-            raise click.ClickException(
-                f"Failed to clone remote: {exc.stderr.strip()}"
-            ) from exc
+        _clone_remote(repo_id, tmp)
 
-        remote_files = _collect_files(Path(tmp))
-        local_files = _collect_files(const.AJ_HOME)
+        remote_files = _collect_diff_files(Path(tmp))
+        local_files = _collect_diff_files(const.AJ_HOME)
         all_keys = sorted(set(remote_files) | set(local_files))
 
         diff_output: list[str] = []
         for key in all_keys:
             r = remote_files.get(key)
-            l = local_files.get(key)  # noqa: E741
-            if r and l:
-                if not filecmp.cmp(str(r), str(l), shallow=False):
-                    diff_output.extend(_unified_diff(key, r, l))
-            elif r and not l:
-                diff_output.extend(_unified_diff(key, r, None))
+            ll = local_files.get(key)
+            if r and ll:
+                if not filecmp.cmp(str(r), str(ll), shallow=False):
+                    diff_output.extend(_unified_diff_lines(key, r, ll))
+            elif r and not ll:
+                diff_output.extend(_unified_diff_lines(key, r, None))
             else:
-                diff_output.extend(_unified_diff(key, None, l))
-
-        if not diff_output:
-            from azure_jobs.utils.ui import emit_json, get_output_mode
-
-            if get_output_mode() != "json":
-                info("No differences with remote")
-            emit_json(
-                {"kind": "template_diff", "has_changes": False, "diff": ""}
-            )
-            return
-
-        from azure_jobs.utils.ui import emit_json, get_output_mode
-
-        diff_text = "".join(diff_output)
-        if get_output_mode() == "json":
-            emit_json(
-                {"kind": "template_diff", "has_changes": True, "diff": diff_text}
-            )
-            return
-
-        from rich.syntax import Syntax
-
-        console.print()
-        console.print(
-            Syntax(diff_text, "diff", theme="monokai", line_numbers=False)
-            )
+                diff_output.extend(_unified_diff_lines(key, None, ll))
+        return "".join(diff_output)
 
 
 def _show_templates() -> None:

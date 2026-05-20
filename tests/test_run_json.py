@@ -64,9 +64,8 @@ class TestDryRunResultJson:
 
     def test_dry_run_emits_full_envelope(self):
         req = _make_request()
-        out = _capture_stdout(
-            lambda: show_dry_run_result(req, submission_file="/tmp/abc12345.yaml")
-        )
+        req.submission_path = "/tmp/abc12345.yaml"
+        out = _capture_stdout(lambda: show_dry_run_result(req))
         parsed = json.loads(out)
         assert parsed["kind"] == "submission_result"
         assert parsed["status"] == "dry_run"
@@ -85,9 +84,8 @@ class TestDryRunResultJson:
 
     def test_no_rich_markup_leaks(self):
         req = _make_request(tags=["env:prod", "owner:alice"])
-        out = _capture_stdout(
-            lambda: show_dry_run_result(req, submission_file="/tmp/abc12345.yaml")
-        )
+        req.submission_path = "/tmp/abc12345.yaml"
+        out = _capture_stdout(lambda: show_dry_run_result(req))
         assert "[bold" not in out
         assert "[/bold" not in out
         assert "[dim" not in out
@@ -105,9 +103,7 @@ class TestSubmissionPreviewJsonSilent:
     def test_preview_emits_nothing_in_json(self):
         req = _make_request()
         out = _capture_stdout(
-            lambda: show_submission_preview(
-                req, submission_file="/tmp/abc12345.yaml", dry_run=False
-            )
+            lambda: show_submission_preview(req, dry_run=False)
         )
         assert out == ""
 

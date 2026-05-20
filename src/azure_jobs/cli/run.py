@@ -4,11 +4,9 @@ import uuid
 from datetime import datetime, timezone
 
 import click
-import yaml
 
 from azure_jobs.cli import main
 from azure_jobs.cli.runner import submit_and_record
-from azure_jobs.core import const
 from azure_jobs.core.config import (
     AJWorkspace,
     ensure_experiment,
@@ -24,8 +22,7 @@ from azure_jobs.core.submit import (
     amlt_available,
     build_submit_request,
     get_backend,
-    render_amlt_config,
-    submit_via_amlt,
+    materialise_submission,
 )
 from azure_jobs.core.template import Template
 from azure_jobs.utils.naming import resolve_name
@@ -87,15 +84,86 @@ def run(
 
     Loads the named template, resolves its ``base`` inheritance chain,
     merges configs, applies CLI overrides (``-n``/``-p``), uploads code,
-    registers the environment, and submits via REST. The resolved template
-    is remembered as the default for the next ``aj run``.
+    registers the environment, and submits via the registered backend
+    for the template's ``target.service`` (or amlt with ``--amlt``).
 
     Use ``-d`` to inspect the assembled config without submitting.
     """
+    tmpl, template_name = _load_template(template)
+
+    sid = uuid.uuid4().hex[:8]
+    name = resolve_name(command, sid)
+
     defaults = get_defaults()
+    nodes_int = int(nodes or defaults.nodes or 1)
+    gpn_int = int(gpus_per_node or defaults.processes or 1)
+    ppn_int = int(ppn or 1)
+    try:
+        sku_resolved = resolve_sku(tmpl.jobs[0].sku, nodes_int, gpn_int)
+    except AJError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    save_defaults(template=template_name, nodes=nodes_int, processes=gpn_int)
+    workspace = AJWorkspace() if dry_run else get_workspace_config()
+    experiment = get_experiment() or "aj" if dry_run else ensure_experiment()
+
+    try:
+        request = build_submit_request(
+            tmpl,
+            name=name,
+            sid=sid,
+            sku=sku_resolved,
+            user_command=command,
+            user_args=args,
+            workspace=workspace,
+            template_name=template_name,
+            experiment=experiment,
+            nodes=nodes_int,
+            gpus_per_node=gpn_int,
+            processes_per_node=ppn_int,
+        )
+    except (AJError, ValueError) as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    if amlt:
+        if not amlt_available():
+            raise click.ClickException(
+                "amlt CLI not available or no .amltconfig in current directory."
+            )
+        request.service = "amlt"
+
+    if dry_run or request.service == "amlt":
+        materialise_submission(request, dry_run=dry_run)
+
+    show_submission_preview(request, dry_run=dry_run)
+    if dry_run:
+        show_dry_run_result(request)
+        return
+
+    try:
+        entry = get_backend(request.service)
+    except AJError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    rec = SubmissionRecord(
+        request=request,
+        created_at=datetime.now(timezone.utc).isoformat(),
+        status="submitted",
+    )
+    submit_and_record(
+        lambda on_event: entry.fn(request, on_event=on_event),
+        rec,
+        name,
+        backend_label=entry.label,
+    )
+
+
+def _load_template(template: str | None) -> tuple[Template, str]:
+    """Resolve the template name (with default fallback) and load it."""
+    from azure_jobs.core import const
 
     if template is None:
-        template = defaults.template
+        template = get_defaults().template
     if template is None:
         raise click.ClickException(
             "No template specified. Use -t <template> or set a default with aj config."
@@ -110,90 +178,4 @@ def run(
     tmpl = Template.from_conf_path(template_fp)
     if not tmpl.jobs:
         raise click.ClickException("Template missing 'jobs' section")
-
-    sid = uuid.uuid4().hex[:8]
-    name = resolve_name(command, sid)
-
-    nodes_int = int(nodes or defaults.nodes or 1)
-    gpn_int = int(gpus_per_node or defaults.processes or 1)
-    ppn_int = int(ppn or 1)
-    try:
-        sku_resolved = resolve_sku(tmpl.jobs[0].sku, nodes_int, gpn_int)
-    except AJError as exc:
-        raise click.ClickException(str(exc)) from exc
-
-    # Remember this template as the new default (only after template validation passes)
-    save_defaults(template=template, nodes=nodes_int, processes=gpn_int)
-    workspace = AJWorkspace() if dry_run else get_workspace_config()
-    experiment = get_experiment() or "aj" if dry_run else ensure_experiment()
-
-    try:
-        request = build_submit_request(
-            tmpl,
-            name=name,
-            sid=sid,
-            sku=sku_resolved,
-            user_command=command,
-            user_args=args,
-            workspace=workspace,
-            template_name=template,
-            experiment=experiment,
-            nodes=nodes_int,
-            gpus_per_node=gpn_int,
-            processes_per_node=ppn_int,
-        )
-    except (AJError, ValueError) as exc:
-        raise click.ClickException(str(exc)) from exc
-
-    # Render + write the submission YAML, then stamp the path onto the
-    # request so backends (e.g. amlt) and downstream tooling can locate
-    # the materialised config from the request alone.
-    amlt_conf = render_amlt_config(request)
-    home = const.AJ_DRYRUN_HOME if dry_run else const.AJ_SUBMISSION_HOME
-    submission_fp = home / f"{sid}.yaml"
-    submission_fp.parent.mkdir(parents=True, exist_ok=True)
-    with open(submission_fp, "w") as f:
-        yaml.dump(amlt_conf, f, default_flow_style=False)
-    request.submission_path = str(submission_fp)
-
-    show_submission_preview(
-        request, submission_file=str(submission_fp), dry_run=dry_run
-    )
-
-    if dry_run:
-        show_dry_run_result(request, submission_file=str(submission_fp))
-        return
-
-    # ── Choose submission backend ────────────────────────────────────
-    rec = SubmissionRecord(
-        request=request,
-        created_at=datetime.now(timezone.utc).isoformat(),
-        status="submitted",
-    )
-
-    if amlt and amlt_available():
-        # --amlt flag forces the external amlt CLI regardless of service —
-        # its different signature (YAML path + experiment) keeps it outside
-        # the SubmitRequest-based backend registry.
-        submit_and_record(
-            lambda on_event: submit_via_amlt(
-                submission_fp, experiment, name=name, on_event=on_event
-            ),
-            rec,
-            name,
-            backend_label="amlt",
-        )
-        return
-
-    # Normal path: dispatch on request.service via the backend registry.
-    try:
-        entry = get_backend(request.service)
-    except AJError as exc:
-        raise click.ClickException(str(exc)) from exc
-
-    submit_and_record(
-        lambda on_event: entry.fn(request, on_event=on_event),
-        rec,
-        name,
-        backend_label=entry.label,
-    )
+    return tmpl, template

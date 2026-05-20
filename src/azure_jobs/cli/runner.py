@@ -20,6 +20,7 @@ from typing import Callable
 
 import click
 
+from azure_jobs.core.errors import parse_exception_message
 from azure_jobs.core.submit import SubmissionRecord, log_record
 from azure_jobs.core.submit.models import SubmitEvent, SubmitResult
 from azure_jobs.utils.ui import (
@@ -72,15 +73,16 @@ def submit_and_record(
         raise
     except Exception as exc:
         rec.status = "failed"
-        rec.note = str(exc)
+        msg = parse_exception_message(exc)
+        rec.note = msg
         if json_mode:
             # Build a synthetic failure result so JSON output still happens.
-            synth = SubmitResult(job_name=display_name, status="failed", error=str(exc))
+            synth = SubmitResult(job_name=display_name, status="failed", error=msg)
             show_submission_result(
                 rec, synth, display_name=display_name, backend_label=backend_label
             )
             raise SystemExit(1) from exc
-        raise click.ClickException(f"Submission failed: {exc}")
+        raise click.ClickException(f"Submission failed: {msg}")
     finally:
         log_record(rec)
 

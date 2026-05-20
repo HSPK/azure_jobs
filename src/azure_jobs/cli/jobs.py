@@ -21,9 +21,13 @@ from azure_jobs.cli._progress import (
 )
 from azure_jobs.core.jobs import apply_cutoff, resolve_short_id
 from azure_jobs.core.submit import read_records
+from azure_jobs.utils.stats import STATUS_TERMINAL
 from azure_jobs.utils.ui import show_jobs_table
 
 log = logging.getLogger(__name__)
+
+# Statuses where no log content is available yet (job hasn't started).
+_NO_LOG_STATUSES = frozenset({"Queued", "NotStarted", "Provisioning", "Preparing"})
 
 
 # ────────────────────────────────────────────────────────────────────────
@@ -193,7 +197,7 @@ def job_cancel(job_id: str) -> None:
         job = client.jobs.get(azure_name)
 
     current = job.get("status", "")
-    if current in ("Completed", "Failed", "Canceled"):
+    if current in STATUS_TERMINAL:
         if not json_mode:
             warning(f"Job {job_id} already {current.lower()}")
         show_command_result(
@@ -253,7 +257,6 @@ def job_logs(job_id: str) -> None:
         short_portal_url,
     )
 
-    _NO_LOG_STATUSES = ("Queued", "NotStarted", "Provisioning", "Preparing")
     azure_name = resolve_short_id(job_id)
     json_mode = get_output_mode() == "json"
 

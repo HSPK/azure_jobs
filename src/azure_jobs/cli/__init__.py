@@ -30,6 +30,8 @@ def _configure_debug_logging() -> None:
 
 _configure_debug_logging()
 
+log = logging.getLogger(__name__)
+
 
 class _LazyGroup(click.Group):
     """Click group that defers command module imports until needed.
@@ -44,7 +46,8 @@ class _LazyGroup(click.Group):
     """
 
     # One row per module; commands listed in load-order. Adding/removing a
-    # command edits exactly one line here.
+    # command edits exactly one line here. Aliases live in `cli/_aliases.py`
+    # and are appended dynamically on first lookup.
     _MODULE_TO_COMMANDS: dict[str, tuple[str, ...]] = {
         ".run": ("run",),
         ".templates": ("template",),
@@ -61,13 +64,18 @@ class _LazyGroup(click.Group):
         ".sku": ("sku",),
         ".init": ("init",),
         ".code": ("code",),
-        # Hidden aliases — populated from cli/_aliases.py:ALIASES at first use.
-        "._aliases": (),
     }
+    _ALIASES_MODULE = "._aliases"
+
+    # Memoised after first construction; aliases are static for a process.
+    _cmd_map_cache: dict[str, str] | None = None
 
     @classmethod
     def _cmd_to_module(cls) -> dict[str, str]:
-        # Flatten _MODULE_TO_COMMANDS + dynamically import aliases registry.
+        """Flatten ``_MODULE_TO_COMMANDS`` + alias registry, memoised."""
+        if cls._cmd_map_cache is not None:
+            return cls._cmd_map_cache
+
         flat: dict[str, str] = {
             cmd: mod
             for mod, cmds in cls._MODULE_TO_COMMANDS.items()
@@ -77,9 +85,10 @@ class _LazyGroup(click.Group):
             from . import _aliases as _aliases_mod
 
             for name in _aliases_mod.ALIASES:
-                flat[name] = "._aliases"
+                flat[name] = cls._ALIASES_MODULE
         except ImportError:
-            pass
+            log.debug("Failed to import cli._aliases", exc_info=True)
+        cls._cmd_map_cache = flat
         return flat
 
     def list_commands(self, ctx: click.Context) -> list[str]:
@@ -106,7 +115,7 @@ class _LazyGroup(click.Group):
         """Import every command module (for help/list_commands)."""
         import importlib
 
-        for mod_path in set(self._MODULE_TO_COMMANDS) | {"._aliases"}:
+        for mod_path in set(self._MODULE_TO_COMMANDS) | {self._ALIASES_MODULE}:
             importlib.import_module(mod_path, package=__name__)
 
 

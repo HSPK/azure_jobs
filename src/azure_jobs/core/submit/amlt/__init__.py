@@ -1,4 +1,4 @@
-"""AMLT backend helpers for CLI orchestration."""
+"""AMLT backend — submit a :class:`SubmitRequest` via the external ``amlt`` CLI."""
 
 from __future__ import annotations
 
@@ -10,7 +10,8 @@ from typing import Callable
 
 import yaml
 
-from ..models import SubmitEvent, SubmitResult
+from ..dispatch import register_backend
+from ..models import SubmitEvent, SubmitRequest, SubmitResult
 
 
 def amlt_available() -> bool:
@@ -53,33 +54,28 @@ def extract_portal_url(output: str) -> str:
 
 
 def submit_via_amlt(
-    config_fp: Path,
-    experiment: str,
+    request: SubmitRequest,
     *,
-    name: str = "",
     on_event: Callable[[SubmitEvent], None] | None = None,
 ) -> SubmitResult:
     """Submit a job via the external ``amlt run`` CLI.
 
-    Operates on a rendered submission YAML on disk plus an experiment
-    name — keeps amlt decoupled from :class:`SubmitRequest` since the
-    config has already been materialized. The ``submit_and_record``
-    contract is satisfied by wrapping the call in a closure that fixes
-    the positional args, e.g.::
-
-        submit_and_record(
-            lambda on_event: submit_via_amlt(fp, exp, name=name, on_event=on_event),
-            ...,
-        )
-
-    Each line of ``amlt`` output is forwarded as a ``log`` event so the
-    caller can render it above the spinner.
+    Reads the rendered submission YAML from ``request.submission_path``
+    (set by :func:`azure_jobs.core.submit.materialise_submission`) and
+    invokes ``amlt run <yaml> <experiment> -y``. Each line of amlt
+    output is forwarded as a ``log`` event so the caller can render it
+    above any spinner.
     """
     emit = on_event or (lambda _ev: None)
-    job_name = name or config_fp.stem
+    job_name = request.name
+    experiment = request.expr_name
 
-    if not config_fp.exists():
-        msg = f"Submission YAML not found: {config_fp}"
+    config_fp = Path(request.submission_path) if request.submission_path else None
+    if config_fp is None or not config_fp.exists():
+        msg = (
+            f"Submission YAML not found: {config_fp}. "
+            "Did you call materialise_submission() first?"
+        )
         emit(SubmitEvent(kind="error", detail=msg))
         return SubmitResult(job_name=job_name, status="failed", error=msg)
 
@@ -137,3 +133,9 @@ def submit_via_amlt(
         msg = str(exc)
         emit(SubmitEvent(kind="error", detail=msg))
         return SubmitResult(job_name=job_name, status="failed", error=msg)
+
+
+# Registered under a synthetic "amlt" service. The CLI's ``--amlt`` flag
+# rewrites ``request.service`` to this name before dispatch.
+register_backend("amlt", submit_via_amlt, label="amlt")
+

@@ -9,7 +9,9 @@
 
 from __future__ import annotations
 
+import math
 import re
+from dataclasses import dataclass
 
 from ..errors import SkuResolveError
 from . import discovery
@@ -22,26 +24,48 @@ from .spec import SkuSpec
 _AMD_GPUS = frozenset({"MI50", "MI100", "MI200", "MI300X"})
 
 
+@dataclass(frozen=True)
+class _SkuRange:
+    """Inclusive node-count range parsed from a SKU-template dict key.
+
+    Supports three key shapes:
+
+    * ``"4"`` — exact match (``min == max == 4``).
+    * ``"1-2"`` — closed range (``min=1, max=2``).
+    * ``"4+"`` — open-ended (``min=4, max=inf``).
+    """
+
+    min: int
+    max: float  # math.inf for "4+" style
+
+    @classmethod
+    def parse(cls, key: object) -> _SkuRange:
+        key_str = str(key)
+        if "-" in key_str:
+            min_s, max_s = key_str.split("-", 1)
+            return cls(int(min_s), math.inf if max_s == "+" else int(max_s))
+        if key_str.endswith("+"):
+            return cls(int(key_str[:-1]), math.inf)
+        n = int(key_str)
+        return cls(n, n)
+
+    def contains(self, nodes: int) -> bool:
+        return self.min <= nodes <= self.max
+
+
 def resolve_sku(sku_template: str | dict[str, str], nodes: int, processes: int) -> str:
-    """Resolve a SKU template (string or range-dict) into a concrete SKU string."""
+    """Resolve a SKU template (string or range-dict) into a concrete SKU string.
+
+    Dict keys are evaluated in declaration order; the first matching
+    range wins.
+    """
     if isinstance(sku_template, str):
         return sku_template.format(nodes=nodes, processes=processes)
 
     if isinstance(sku_template, dict):
         for key, value in sku_template.items():
-            key_str = str(key)
-            if "-" in key_str:
-                min_s, max_s = key_str.split("-", 1)
-                min_val = int(min_s)
-                max_val = int(max_s) if max_s != "+" else float("inf")
-                if min_val <= nodes <= max_val:
-                    return value.format(nodes=nodes, processes=processes)
-            elif key_str.endswith("+"):
-                if nodes >= int(key_str[:-1]):
-                    return value.format(nodes=nodes, processes=processes)
-            else:
-                if int(key_str) == nodes:
-                    return value.format(nodes=nodes, processes=processes)
+            if _SkuRange.parse(key).contains(nodes):
+                return value.format(nodes=nodes, processes=processes)
 
         raise SkuResolveError(
             f"No matching SKU template found for {nodes} nodes in {sku_template}"
