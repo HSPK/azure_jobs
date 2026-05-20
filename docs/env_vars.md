@@ -46,6 +46,16 @@ torchrun \
     train.py
 ```
 
+## Opt-out / opt-in env vars
+
+These control aj's own client-side behaviour (not injected into the job
+container):
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `AJ_SHIP_SSH` | `1` (ship by default) | Set to `0` / `false` / `no` / `off` (case-insensitive) to suppress shipping the `~/.ssh` whitelist (`id_rsa`, `id_ed25519`, `id_ecdsa`, `config`, `known_hosts`) with the uploaded code asset. When suppressed, only an empty `.ssh/.keep` placeholder is uploaded so the directory exists on the remote worker. A vendored `<code_dir>/.ssh` always wins. |
+| `AJ_DEBUG` | unset | When truthy, enables stderr `DEBUG`-level logging from the CLI. |
+
 ## Note on `$$`
 
 Azure ML's runtime pre-processes shell commands and replaces `$$` with `$`

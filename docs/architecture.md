@@ -22,26 +22,32 @@ src/azure_jobs/
 
 ```
 submit/
-├── models.py       # SubmitRequest / Result / Event
-├── config.py       # template + CLI → SubmitRequest
-├── runner.py       # backend dispatch
-├── native/         # AML + Singularity via REST
-├── volcano/        # K8s Volcano via kubectl
-└── amlt/           # shells out to amlt
+├── models.py        # SubmitRequest / Result / Event
+├── build.py         # template + CLI → SubmitRequest
+├── script_runner.py # `.py` → `uv run`, `.sh` → `bash` dispatch
+├── render.py        # SubmitRequest → amlt-style YAML
+├── materialise.py   # write rendered YAML to disk, stamp submission_path
+├── dispatch.py      # backend registry (register_backend / get_backend)
+├── native/          # AML + Singularity via REST
+├── volcano/         # K8s Volcano via kubectl
+└── amlt/            # shells out to amlt
 ```
+
+Every backend's submit fn has the same shape — `(request, *, on_event) -> SubmitResult` — and self-registers via `register_backend()` at import. The CLI dispatches by `request.service` (or the synthetic `"amlt"` service when `--amlt` is passed).
 
 ## Flow
 
 ```
 aj run -t gpu -n 4 -p 8 train.py
   ├─ read_conf()          resolve `base` chain
-  ├─ merge_confs()        dicts merge, lists zip, scalars last-wins
+  ├─ merge_confs()        dicts recurse; lists-of-dicts merge by index;
+  │                       lists of scalars concatenate; scalars last-wins
   ├─ apply -n / -p / --ppn
   ├─ build_submit_request → SubmitRequest
   ├─ dispatch by request.service
   │     native  → register env → upload code → PUT /jobs/{name}
   │     volcano → kubectl exec tar (PVC) → kubectl create
-  │     amlt    → write YAML → exec amlt run
+  │     amlt    → materialise YAML → exec amlt run
   └─ append SubmitRecord to record.jsonl
 ```
 

@@ -5,7 +5,8 @@ Stable SDK surface (covered by ``docs/sdk.md``):
 * Models:        :class:`Template`, :class:`SubmitRequest`,
                  :class:`SubmitResult`, :class:`SubmitEvent`,
                  :class:`StorageMount`
-* Building:      :func:`build_submit_request`, :func:`render_amlt_config`
+* Building:      :func:`build_submit_request`, :func:`render_amlt_config`,
+                 :func:`materialise_submission`
 * Submission:    :func:`submit_via` (dispatch by ``request.service``),
                  :func:`submit_and_record` (CLI-style UX wrapper),
                  :func:`submit_via_native`, :func:`submit_via_volcano`,
@@ -44,6 +45,7 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
     # Building
     "build_submit_request": ("azure_jobs.core.submit", "build_submit_request"),
     "render_amlt_config": ("azure_jobs.core.submit", "render_amlt_config"),
+    "materialise_submission": ("azure_jobs.core.submit", "materialise_submission"),
     # Submission
     "submit_via": ("azure_jobs.core.submit", "submit_via"),
     "submit_via_native": ("azure_jobs.core.submit", "submit_via_native"),
@@ -83,6 +85,7 @@ if TYPE_CHECKING:  # static-analyzer hints — never executed at runtime
         SubmitResult,
         build_submit_request,
         list_backends,
+        materialise_submission,
         register_backend,
         render_amlt_config,
         submit_via,
@@ -104,6 +107,7 @@ __all__ = [
     # Building
     "build_submit_request",
     "render_amlt_config",
+    "materialise_submission",
     # Submission
     "submit_via",
     "submit_and_record",
