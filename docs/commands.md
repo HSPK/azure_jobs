@@ -1,6 +1,6 @@
 # Commands
 
-`aj run` is documented in the [README](../README.md). Everything else lives here.
+`aj run` is documented in the [Tutorial](tutorial.md) and on the [home page](index.md). Everything else lives here.
 
 ## Job management
 

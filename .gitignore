@@ -17,4 +17,5 @@ src/azure_jobs/_version.py
 # Virtual environments
 .venv
 .DS_Store
-/dev/
+/dev/site/
+site/
