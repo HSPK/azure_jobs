@@ -1,8 +1,10 @@
-"""Singularity instance family + series catalogs.
+"""Singularity instance family catalog.
 
-Data is loaded once from ``families.yaml`` and ``series_gpu.yaml``
-sitting alongside this module — editing those YAMLs is enough to add
-new VC families without touching Python.
+Loaded once from ``families.yaml`` sitting alongside this module —
+editing that YAML is enough to add new VC families without touching
+Python. Per-series GPU model/memory used to live in ``series_gpu.yaml``
+but is now derived from the API's friendly quota ``name`` (see
+:func:`azure_jobs.core.az_client.arm.vc._parse_quota_name`).
 """
 
 from __future__ import annotations
@@ -19,19 +21,3 @@ def _load_yaml(name: str) -> dict[str, Any]:
 
 
 _FAMILY_MAP: dict[str, dict[str, Any]] = _load_yaml("families.yaml")
-
-# Series → (gpu_model, gpu_memory_gb) lookup for the quota table.
-_SERIES_GPU_INFO: dict[str, tuple[str, int]] = {
-    k: (v[0], int(v[1])) for k, v in _load_yaml("series_gpu.yaml").items()
-}
-
-
-def _infer_gpu_model(series: str) -> str:
-    """Best-effort GPU model from an unknown series ID."""
-    s = series.upper().replace("_", "")
-    for model in ("MI300X", "MI200", "H200", "H100", "A100", "A10", "T4", "V100"):
-        if model in s:
-            return model
-    if s.startswith(("E", "D", "F")) and not s.startswith(("ND", "NC", "NV")):
-        return "CPU"
-    return ""

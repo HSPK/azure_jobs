@@ -36,7 +36,7 @@ class CheckResult:
         return self.severity != "error"
 
 
-def _cached_vc_quotas_raw(
+def _cached_vc_quotas(
     arm_client: AzureARMClient,
     sub: str,
     rg: str,
@@ -44,19 +44,71 @@ def _cached_vc_quotas_raw(
     *,
     ttl: int = _QUOTA_TTL,
     refresh: bool = False,
-) -> dict[str, Any] | None:
+) -> list[Any] | None:
+    """Return parsed :class:`SeriesQuota` list for one VC (cached).
+
+    Fetches via :meth:`AzureARMClient.vc.list` scoped to the
+    subscription, then picks the matching VC by name + resource group.
+    Returns ``None`` on network failure or if the VC isn't visible.
+    """
+    from azure_jobs.core.sku import SeriesQuota, SlaTierQuota
+
     key = f"{sub}_{rg}_{vc}"
     if not refresh:
         cached = cache_get("vc_quotas", key, ttl)
         if cached is not None:
-            return cached
+            return [_seriesquota_from_dict(d, SeriesQuota, SlaTierQuota) for d in cached]
     try:
-        data = arm_client.get_vc_quotas_raw(sub, rg, vc)
+        vcs = arm_client.vc.quota.list(
+            subscription_ids=[sub] if sub else None,
+            include_zero=True,
+        )
     except NETWORK_LIKE_ERRORS as exc:
-        log.debug("get_vc_quotas_raw failed: %s", exc)
+        log.debug("vc.list failed: %s", exc)
         return None
-    cache_set("vc_quotas", key, data)
-    return data
+    match = next(
+        (
+            v
+            for v in vcs
+            if v.name == vc and (not rg or v.resource_group == rg)
+        ),
+        None,
+    )
+    if match is None:
+        return None
+    cache_set("vc_quotas", key, [_seriesquota_to_dict(sq) for sq in match.quotas])
+    return match.quotas
+
+
+def _seriesquota_to_dict(sq: Any) -> dict[str, Any]:
+    return {
+        "series": sq.series,
+        "accelerator": sq.accelerator,
+        "gpu_memory": sq.gpu_memory,
+        "overall": (
+            {"limit": sq.overall.limit, "used": sq.overall.used}
+            if sq.overall
+            else None
+        ),
+        "tiers": {
+            tier: {"limit": q.limit, "used": q.used}
+            for tier, q in sq.tiers.items()
+        },
+    }
+
+
+def _seriesquota_from_dict(d: dict[str, Any], SeriesQuota, SlaTierQuota) -> Any:
+    sq = SeriesQuota(
+        series=d.get("series", ""),
+        accelerator=d.get("accelerator", ""),
+        gpu_memory=int(d.get("gpu_memory", 0) or 0),
+    )
+    overall = d.get("overall")
+    if overall:
+        sq.overall = SlaTierQuota(limit=overall.get("limit", 0), used=overall.get("used", 0))
+    for tier, q in (d.get("tiers") or {}).items():
+        sq.tiers[tier] = SlaTierQuota(limit=q.get("limit", 0), used=q.get("used", 0))
+    return sq
 
 
 def _cached_aml_compute(
@@ -68,19 +120,31 @@ def _cached_aml_compute(
     *,
     ttl: int = _COMPUTE_TTL,
     refresh: bool = False,
-) -> dict[str, Any] | None:
+) -> Any | None:
+    """Return :class:`ComputeInfo` for the cluster (cached).
+
+    Caches a JSON-serialisable dict (``dataclasses.asdict``) on disk and
+    rebuilds the :class:`ComputeInfo` on read so the on-disk format stays
+    portable across versions.
+    """
+    from dataclasses import asdict
+
+    from azure_jobs.core.az_client import ComputeInfo
+
     key = f"{sub}_{rg}_{ws}_{name}"
     if not refresh:
         cached = cache_get("aml_computes", key, ttl)
         if cached is not None:
-            return cached
+            return ComputeInfo(**cached)
     try:
-        data = arm_client.get_workspace_compute(sub, rg, ws, name)
+        info = arm_client.compute.get(sub, rg, ws, name)
     except NETWORK_LIKE_ERRORS as exc:
-        log.debug("get_workspace_compute failed: %s", exc)
+        log.debug("compute.get failed: %s", exc)
         return None
-    cache_set("aml_computes", key, data)
-    return data
+    if info is None:
+        return None
+    cache_set("aml_computes", key, asdict(info))
+    return info
 
 
 def _instance_to_series(instance: str) -> str | None:
@@ -93,36 +157,6 @@ def _instance_to_series(instance: str) -> str | None:
         if instance in (fam.get("instances_by_gpu") or {}).values():
             return series
     return None
-
-
-def _build_quotas_from_raw(raw: dict[str, Any]) -> list[Any]:
-    """Reuse :func:`fetch_vc_quotas` parsing logic on a raw cached dict."""
-    from azure_jobs.core.sku import SeriesQuota
-
-    managed = raw.get("properties", {}).get("managed", {})
-    raw_items: list[dict[str, Any]] = []
-    raw_items.extend(
-        managed.get("defaultGroupPolicyOverallQuotas", {}).get("limits", []) or []
-    )
-    for region_data in (managed.get("quotas", {}) or {}).values():
-        if isinstance(region_data, dict):
-            raw_items.extend(region_data.get("limits", []) or [])
-
-    series_map: dict[str, SeriesQuota] = {}
-    for item in raw_items:
-        sid = item.get("id", "")
-        if not sid:
-            continue
-        sq = series_map.get(sid)
-        if sq is None:
-            sq = SeriesQuota(series=sid)
-            series_map[sid] = sq
-        sq.set_tier(
-            item.get("slaTier"),
-            item.get("limit", 0),
-            item.get("used") if "used" in item else None,
-        )
-    return list(series_map.values())
 
 
 def _toggle_nvlink(sku_raw: str) -> str | None:

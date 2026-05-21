@@ -14,7 +14,6 @@ import re
 from dataclasses import dataclass
 
 from ..errors import SkuResolveError
-from . import discovery
 from .catalog import _FAMILY_MAP
 from .spec import SkuSpec
 
@@ -22,6 +21,35 @@ from .spec import SkuSpec
 # accelerator-less shorthand like ``80G8`` matches both vendors we
 # default to Nvidia.
 _AMD_GPUS = frozenset({"MI50", "MI100", "MI200", "MI300X"})
+
+
+def _vc_available_families(
+    vc_subscription_id: str,
+    vc_resource_group: str,
+    vc_name: str,
+) -> list[str]:
+    """Return the family IDs this VC has overall-policy quota for.
+
+    Thin wrapper around ``arm.vc.quota.list`` (subscription-scoped) that
+    projects the matched VC down to the families a user can actually
+    request — used by :func:`resolve_instance_type` to keep ambiguous
+    shorthands like ``80G8`` from matching families the VC has no quota
+    for.
+    """
+    from azure_jobs.core.az_client import AzureARMClient
+
+    for vc in AzureARMClient().vc.quota.list(
+        subscription_ids=[vc_subscription_id],
+        include_zero=True,
+    ):
+        if vc.name != vc_name:
+            continue
+        if vc_resource_group and vc.resource_group != vc_resource_group:
+            continue
+        return [
+            sq.series for sq in vc.quotas if sq.overall and sq.overall.limit > 0
+        ]
+    return []
 
 
 @dataclass(frozen=True)
@@ -157,7 +185,7 @@ def resolve_instance_type(
     # Restrict to the VC's available families when caller provides VC info.
     available_families: list[str] | None = None
     if vc_subscription_id and vc_name:
-        available_families = discovery._fetch_vc_families(
+        available_families = _vc_available_families(
             vc_subscription_id, vc_resource_group, vc_name
         )
 

@@ -14,15 +14,35 @@ from azure_jobs.core.sku import (
     SeriesQuota,
     SlaTierQuota,
     VCInfo,
-    discover_virtual_clusters,
-    fetch_vc_quotas,
-    resolve_virtual_cluster,
 )
+from azure_jobs.core.sku import parse_managed_quotas
 from azure_jobs.utils.ui.quota_tables import (
     _fmt_nodes,
-    _parse_compute_nodes,
     _portal_compute_url,
 )
+
+
+def _quota_payload(series: str, name: str) -> dict:
+    """Build a minimal raw VC payload exposing one limit row."""
+    return {
+        "properties": {
+            "managed": {
+                "quotas": {
+                    "r1": {
+                        "limits": [
+                            {
+                                "id": series,
+                                "slaTier": "Premium",
+                                "limit": 1,
+                                "used": 0,
+                                "name": name,
+                            }
+                        ]
+                    }
+                }
+            }
+        }
+    }
 
 # ---------------------------------------------------------------------------
 # SlaTierQuota unit tests
@@ -91,41 +111,46 @@ class TestSeriesQuota:
         sq.set_tier(None, 10, 5)
         assert sq.has_any_quota()
 
-    def test_accelerator_from_family_map(self):
-        sq = SeriesQuota(series="NDH100v5")
+    def test_accelerator_from_display_name(self):
+        sq = parse_managed_quotas(_quota_payload("NDH100v5", "Singularity NDH100v5 Series NVIDIA H100 80GB GPUs"))[0]
         assert sq.accelerator == "H100"
+        assert sq.gpu_memory == 80
 
-    def test_accelerator_api_format(self):
-        sq = SeriesQuota(series="ND_A100_v4")
+    def test_accelerator_only_in_name_uses_default_memory(self):
+        # "Family vCPUs" carries no GB but A100 → 80GB by default.
+        sq = parse_managed_quotas(_quota_payload("NC_A100_v4", "Singularity NC_A100_v4 Family vCPUs containing NVIDIA A100"))[0]
         assert sq.accelerator == "A100"
+        assert sq.gpu_memory == 80
 
-    def test_accelerator_inferred_from_name(self):
-        sq = SeriesQuota(series="ND_H100_custom_v6")
+    def test_accelerator_inferred_from_series_name(self):
+        # No friendly name at all → series-name heuristic + default memory.
+        sq = parse_managed_quotas(_quota_payload("ND_H100_custom_v6", ""))[0]
         assert sq.accelerator == "H100"
+        assert sq.gpu_memory == 80
 
     def test_accelerator_cpu_series(self):
-        sq = SeriesQuota(series="Eadsv5")
+        sq = parse_managed_quotas(_quota_payload("Eadsv5", "Singularity Eadsv5 Family vCPUs"))[0]
         assert sq.accelerator == "CPU"
+        assert sq.gpu_memory == 0
 
     def test_accelerator_unknown_series(self):
-        sq = SeriesQuota(series="UNKNOWN_SERIES_XYZ")
+        sq = parse_managed_quotas(_quota_payload("UNKNOWN_SERIES_XYZ", ""))[0]
         assert sq.accelerator == ""
-
-    def test_gpu_memory_from_family_map(self):
-        sq = SeriesQuota(series="NDH100v5")
-        assert sq.gpu_memory == 80
-
-    def test_gpu_memory_api_format(self):
-        sq = SeriesQuota(series="ND_A100_v4")
-        assert sq.gpu_memory == 80
-
-    def test_gpu_memory_unknown(self):
-        sq = SeriesQuota(series="UNKNOWN")
         assert sq.gpu_memory == 0
+
+    def test_mi300x_default_memory(self):
+        sq = parse_managed_quotas(_quota_payload("ND_MI300X_v5", "Singularity ND_MI300X_v5 Family vCPUs"))[0]
+        assert sq.accelerator == "MI300X"
+        assert sq.gpu_memory == 192
+
+    def test_mi200_default_memory(self):
+        sq = parse_managed_quotas(_quota_payload("ND_MI200_v4", "Singularity ND_MI200_v4 Family vCPUs"))[0]
+        assert sq.accelerator == "MI200"
+        assert sq.gpu_memory == 64
 
 
 # ---------------------------------------------------------------------------
-# fetch_vc_quotas tests
+# AzureARMClient.list_virtual_clusters tests
 # ---------------------------------------------------------------------------
 
 
@@ -147,22 +172,11 @@ _MOCK_VC_RESPONSE = {
                             "used": 32,
                         },
                         {
-                            "id": "ND_A100_v4",
-                            "slaTier": "Standard",
-                            "limit": 32,
-                            "used": 10,
-                        },
-                        {
                             "id": "ND_H100_v5",
                             "slaTier": "Premium",
                             "limit": 16,
                             "used": 0,
                         },
-                    ]
-                },
-                "westus": {
-                    "limits": [
-                        {"id": "NoProd", "slaTier": "Premium", "limit": 0, "used": 0},
                     ]
                 },
             },
@@ -171,134 +185,88 @@ _MOCK_VC_RESPONSE = {
 }
 
 
-class TestFetchVcQuotas:
-    def _make_client(self, response):
-        client = MagicMock()
-        client.get_vc_quotas_raw.return_value = response
-        return client
+def _make_arm_client():
+    """Construct a real ``AzureARMClient`` with namespaces stubbed."""
+    from azure_jobs.core.az_client import AzureARMClient
 
-    def test_merges_both_sources(self):
-        results = fetch_vc_quotas(
-            "sub", "rg", "myvc", arm_client=self._make_client(_MOCK_VC_RESPONSE)
-        )
-        series_names = [s.series for s in results]
-        assert "ND_A100_v4" in series_names
-        assert "ND_H100_v5" in series_names
-
-    def test_sla_tiers_populated(self):
-        results = fetch_vc_quotas(
-            "sub", "rg", "myvc", arm_client=self._make_client(_MOCK_VC_RESPONSE)
-        )
-        a100 = next(s for s in results if s.series == "ND_A100_v4")
-        assert "Premium" in a100.tiers
-        assert a100.tiers["Premium"].limit == 64
-        assert a100.tiers["Premium"].used == 32
-        assert "Standard" in a100.tiers
-        assert a100.overall is not None
-        assert a100.overall.limit == 128
-
-    def test_excludes_zero_by_default(self):
-        results = fetch_vc_quotas(
-            "sub", "rg", "myvc", arm_client=self._make_client(_MOCK_VC_RESPONSE)
-        )
-        series_names = [s.series for s in results]
-        assert "NoProd" not in series_names
-
-    def test_include_zero(self):
-        results = fetch_vc_quotas(
-            "sub",
-            "rg",
-            "myvc",
-            include_zero=True,
-            arm_client=self._make_client(_MOCK_VC_RESPONSE),
-        )
-        series_names = [s.series for s in results]
-        assert "NoProd" in series_names
-
-    def test_empty_on_exception(self):
-        import requests
-
-        client = MagicMock()
-        client.get_vc_quotas_raw.side_effect = requests.ConnectionError("fail")
-        assert fetch_vc_quotas("sub", "rg", "myvc", arm_client=client) == []
-
-    def test_empty_on_missing_keys(self):
-        assert (
-            fetch_vc_quotas("sub", "rg", "myvc", arm_client=self._make_client({})) == []
-        )
+    client = AzureARMClient()
+    client.subscriptions.list = MagicMock()
+    client.graph.query = MagicMock()
+    return client
 
 
-# ---------------------------------------------------------------------------
-# discover_virtual_clusters tests
-# ---------------------------------------------------------------------------
-
-
-class TestDiscoverVirtualClusters:
-    def test_discovers_vcs_from_resource_graph(self):
-        client = MagicMock()
-        client.list_subscriptions.return_value = ["sub-1", "sub-2"]
-        client.resource_graph_query.return_value = [
+class TestListVirtualClusters:
+    def test_lists_vcs_from_resource_graph(self):
+        client = _make_arm_client()
+        client.subscriptions.list.return_value = ["sub-1", "sub-2"]
+        client.graph.query.return_value = [
             {"name": "vc1", "resourceGroup": "rg1", "subscriptionId": "sub-1"},
             {"name": "vc2", "resourceGroup": "rg2", "subscriptionId": "sub-2"},
         ]
-        vcs = discover_virtual_clusters(arm_client=client)
-        assert len(vcs) == 2
-        assert vcs[0].name == "vc1"
-        assert vcs[1].name == "vc2"
+        vcs = client.vc.list()
+        assert [v.name for v in vcs] == ["vc1", "vc2"]
 
     def test_uses_provided_subscriptions(self):
-        client = MagicMock()
-        client.resource_graph_query.return_value = [
+        client = _make_arm_client()
+        client.graph.query.return_value = [
             {"name": "vc1", "resourceGroup": "rg1", "subscriptionId": "sub-a"},
         ]
-        vcs = discover_virtual_clusters(subscription_ids=["sub-a"], arm_client=client)
+        vcs = client.vc.list(subscription_ids=["sub-a"])
         assert len(vcs) == 1
-        # Should NOT call list_subscriptions when IDs provided
-        client.list_subscriptions.assert_not_called()
+        client.subscriptions.list.assert_not_called()
 
-    def test_skips_empty_subscriptions(self):
-        client = MagicMock()
-        client.list_subscriptions.return_value = []
-        assert discover_virtual_clusters(arm_client=client) == []
+    def test_skips_when_no_subscriptions(self):
+        client = _make_arm_client()
+        client.subscriptions.list.return_value = []
+        assert client.vc.list() == []
 
     def test_handles_exception_gracefully(self):
         import requests
 
-        client = MagicMock()
-        client.list_subscriptions.side_effect = requests.ConnectionError("auth fail")
-        assert discover_virtual_clusters(arm_client=client) == []
+        client = _make_arm_client()
+        client.subscriptions.list.side_effect = requests.ConnectionError("auth fail")
+        assert client.vc.list() == []
 
     def test_empty_on_no_data(self):
-        client = MagicMock()
-        client.list_subscriptions.return_value = ["sub-1"]
-        client.resource_graph_query.return_value = []
-        assert discover_virtual_clusters(arm_client=client) == []
+        client = _make_arm_client()
+        client.subscriptions.list.return_value = ["sub-1"]
+        client.graph.query.return_value = []
+        assert client.vc.list() == []
+
+    def test_quota_list_parses_payload(self):
+        client = _make_arm_client()
+        row = dict(_MOCK_VC_RESPONSE)
+        row.update(name="vc1", resourceGroup="rg1", subscriptionId="sub-1")
+        client.subscriptions.list.return_value = ["sub-1"]
+        client.graph.query.return_value = [row]
+        vcs = client.vc.quota.list()
+        series = sorted(sq.series for sq in vcs[0].quotas)
+        assert "ND_A100_v4" in series
+        assert "ND_H100_v5" in series
 
     def test_resolves_vc_by_name(self):
-        client = MagicMock()
-        client.list_subscriptions.return_value = ["sub-1"]
-        client.resource_graph_query.return_value = [
+        client = _make_arm_client()
+        client.subscriptions.list.return_value = ["sub-1"]
+        client.graph.query.return_value = [
             {"name": "vc1", "resourceGroup": "rg1", "subscriptionId": "sub-1"},
         ]
-
-        vc = resolve_virtual_cluster("vc1", arm_client=client)
-
+        vc = client.vc.get("vc1")
         assert vc.name == "vc1"
         assert vc.resource_group == "rg1"
         assert vc.subscription_id == "sub-1"
 
     def test_resolve_vc_ambiguous_requires_filter(self):
-        client = MagicMock()
-        client.list_subscriptions.return_value = ["sub-1", "sub-2"]
-        client.resource_graph_query.return_value = [
+        client = _make_arm_client()
+        client.subscriptions.list.return_value = ["sub-1", "sub-2"]
+        client.graph.query.return_value = [
             {"name": "vc1", "resourceGroup": "rg1", "subscriptionId": "sub-1"},
             {"name": "vc1", "resourceGroup": "rg2", "subscriptionId": "sub-2"},
         ]
 
         with pytest.raises(ConfigError, match="ambiguous"):
-            resolve_virtual_cluster("vc1", arm_client=client)
+            client.vc.get("vc1")
 
-        vc = resolve_virtual_cluster("vc1", subscription_id="sub-2", arm_client=client)
+        vc = client.vc.get("vc1", subscription_id="sub-2")
         assert vc.resource_group == "rg2"
 
 
@@ -311,28 +279,27 @@ class TestQuotaListCli:
     def setup_method(self):
         self.runner = CliRunner()
         self._arm_patcher = patch("azure_jobs.core.az_client.AzureARMClient")
-        self._arm_patcher.start()
+        self.arm_cls = self._arm_patcher.start()
+        self.arm = self.arm_cls.return_value
+        # ``load_vcs_with_quotas`` now calls ``arm.vc.quota.list(...)`` which
+        # internally re-parses ``vc.raw`` — short-circuit it back to
+        # ``arm.vc.list`` so tests can supply pre-built ``VCInfo`` rows
+        # (with ``quotas`` already populated) directly.
+        self.arm.vc.quota.list.side_effect = lambda **kw: self.arm.vc.list()
 
     def teardown_method(self):
         self._arm_patcher.stop()
 
-    @patch(
-        "azure_jobs.core.sku.discovery.discover_virtual_clusters",
-        return_value=[],
-    )
-    def test_sing_no_vcs_found(self, mock_disc):
+    def test_sing_no_vcs_found(self):
+        self.arm.vc.list.return_value = []
         result = self.runner.invoke(main, ["quota", "list"])
         assert result.exit_code != 0
         assert "No Singularity" in result.output
 
-    @patch("azure_jobs.core.sku.quotas.fetch_vc_quotas", return_value=[])
-    @patch(
-        "azure_jobs.core.sku.discovery.discover_virtual_clusters",
-        return_value=[
+    def test_sing_vc_with_no_quotas(self):
+        self.arm.vc.list.return_value = [
             VCInfo(name="myvc", resource_group="rg", subscription_id="s"),
-        ],
-    )
-    def test_sing_vc_with_no_quotas(self, mock_disc, mock_fetch):
+        ]
         result = self.runner.invoke(main, ["quota", "list"])
         assert result.exit_code == 0
         assert "myvc" in result.output
@@ -342,34 +309,27 @@ class TestQuotaListCli:
         assert result.exit_code != 0
         assert "No such option" in result.output
 
-    @patch("azure_jobs.core.sku.quotas.fetch_vc_quotas")
-    @patch("azure_jobs.core.sku.discovery.discover_virtual_clusters")
-    def test_sing_shows_grouped_table(self, mock_disc, mock_fetch):
-        mock_disc.return_value = [
-            VCInfo(name="vc1", resource_group="rg1", subscription_id="s"),
-            VCInfo(name="vc2", resource_group="rg2", subscription_id="s"),
-        ]
-        sq1 = SeriesQuota(series="NDH100v5")
+    def test_sing_shows_grouped_table(self):
+        sq1 = SeriesQuota(series="NDH100v5", accelerator="H100", gpu_memory=80)
         sq1.set_tier("Premium", 64, 32)
-        sq2 = SeriesQuota(series="NDAMv4")
+        sq2 = SeriesQuota(series="NDAMv4", accelerator="A100", gpu_memory=80)
         sq2.set_tier("Premium", 16, 16)
-        mock_fetch.side_effect = [[sq1], [sq2]]
+        self.arm.vc.list.return_value = [
+            VCInfo(name="vc1", resource_group="rg1", subscription_id="s", quotas=[sq1]),
+            VCInfo(name="vc2", resource_group="rg2", subscription_id="s", quotas=[sq2]),
+        ]
 
         result = self.runner.invoke(main, ["quota", "list"])
         assert result.exit_code == 0
         assert "vc1" in result.output
         assert "vc2" in result.output
-        # Resource Group + Subscription columns are hidden by default
         assert "rg1" not in result.output
         assert "Resource Group" not in result.output
         assert "NDH100v5" in result.output
         assert "NDAMv4" in result.output
-        # Accelerator info should be populated
         assert "H100" in result.output
         assert "A100" in result.output
 
-        # With --full, RG + Subscription appear
-        mock_fetch.side_effect = [[sq1], [sq2]]
         full_result = self.runner.invoke(main, ["quota", "list", "--full"])
         assert full_result.exit_code == 0
         assert "rg1" in full_result.output
@@ -377,12 +337,9 @@ class TestQuotaListCli:
         assert "Resource Group" in full_result.output
 
     def test_ql_alias_works(self):
-        with patch(
-            "azure_jobs.core.sku.discovery.discover_virtual_clusters",
-            return_value=[],
-        ):
-            result = self.runner.invoke(main, ["ql"])
-            assert "No Singularity" in result.output
+        self.arm.vc.list.return_value = []
+        result = self.runner.invoke(main, ["ql"])
+        assert "No Singularity" in result.output
 
     @patch("azure_jobs.cli.quota._show_aml_quotas")
     def test_aml_flag_routes_to_aml(self, mock_aml):
@@ -419,21 +376,6 @@ class TestAmlHelpers:
         assert "sub1" in url
         assert "rg1" in url
         assert "ws1" in url
-
-    def test_parse_compute_nodes(self):
-        props = {
-            "scaleSettings": {"maxNodeCount": 16},
-            "nodeStateCounts": {
-                "idleNodeCount": 2,
-                "runningNodeCount": 5,
-                "preparingNodeCount": 1,
-                "leavingNodeCount": 0,
-            },
-        }
-        assert _parse_compute_nodes(props) == (2, 6, 16)
-
-    def test_parse_compute_nodes_empty(self):
-        assert _parse_compute_nodes({}) == (0, 0, 0)
 
     def test_fmt_nodes_all_zero_activity(self):
         s = _fmt_nodes(0, 0, 16, low_priority=True)

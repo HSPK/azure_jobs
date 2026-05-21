@@ -10,7 +10,7 @@ from azure_jobs.core.submit import precheck
 from azure_jobs.core.submit.models import SubmitRequest
 from azure_jobs.core.submit.native.precheck import (
     _cached_aml_compute,
-    _cached_vc_quotas_raw,
+    _cached_vc_quotas,
     _instance_to_series,
     check_aml_compute,
     check_singularity,
@@ -69,6 +69,55 @@ def test_instance_to_series_known() -> None:
 # Stub ARM client -----------------------------------------------------------
 
 
+class _FakeVcQuotaAPI:
+    def __init__(self, parent_vc: "_FakeVcAPI"):
+        self._vc = parent_vc
+
+    def list(self, subscription_ids=None, *, include_zero=False):
+        from azure_jobs.core.sku import parse_managed_quotas
+
+        vcs = self._vc.list(subscription_ids=subscription_ids, with_raw=True)
+        for vc in vcs:
+            vc.quotas = parse_managed_quotas(vc.raw, include_zero=include_zero)
+        return vcs
+
+
+class _FakeVcAPI:
+    def __init__(self, parent: "FakeArm"):
+        self._parent = parent
+        self.quota = _FakeVcQuotaAPI(self)
+
+    def list(self, subscription_ids=None, *, with_raw=False):
+        from azure_jobs.core.sku import VCInfo
+
+        self._parent.vc_calls += 1
+        if self._parent.vc_data is None:
+            import requests
+
+            raise requests.ConnectionError("no quota")
+        return [
+            VCInfo(
+                name="vc1",
+                resource_group="rg",
+                subscription_id="sub",
+                raw=self._parent.vc_data if with_raw else {},
+            )
+        ]
+
+
+class _FakeComputeAPI:
+    def __init__(self, parent: "FakeArm"):
+        self._parent = parent
+
+    def get(self, sub, rg, ws, name):
+        self._parent.compute_calls += 1
+        if self._parent.raise_compute:
+            import requests
+
+            raise requests.ConnectionError("404")
+        return self._parent.compute_data
+
+
 class FakeArm:
     def __init__(self, vc_data=None, compute_data=None, raise_compute=False):
         self.vc_data = vc_data
@@ -76,22 +125,8 @@ class FakeArm:
         self.raise_compute = raise_compute
         self.vc_calls = 0
         self.compute_calls = 0
-
-    def get_vc_quotas_raw(self, sub, rg, vc):
-        self.vc_calls += 1
-        if self.vc_data is None:
-            import requests
-
-            raise requests.ConnectionError("no quota")
-        return self.vc_data
-
-    def get_workspace_compute(self, sub, rg, ws, name):
-        self.compute_calls += 1
-        if self.raise_compute:
-            import requests
-
-            raise requests.ConnectionError("404")
-        return self.compute_data
+        self.vc = _FakeVcAPI(self)
+        self.compute = _FakeComputeAPI(self)
 
 
 def _vc_payload(series: str, sla: str, limit: int, used: int = 0):
@@ -128,22 +163,33 @@ def _sing_request(sku="1x80G8-A100-NvLink", sla="Premium"):
 
 
 def test_cached_vc_quotas_uses_cache(cache_home: Path) -> None:
-    arm = FakeArm(vc_data={"x": 1})
-    assert _cached_vc_quotas_raw(arm, "s", "r", "v") == {"x": 1}
+    arm = FakeArm(vc_data=_vc_payload("NDAMv4", "Premium", 8))
+    quotas = _cached_vc_quotas(arm, "sub", "rg", "vc1")
+    assert quotas and quotas[0].series == "NDAMv4"
     # Second call should hit cache, not ARM
-    _cached_vc_quotas_raw(arm, "s", "r", "v")
+    _cached_vc_quotas(arm, "sub", "rg", "vc1")
     assert arm.vc_calls == 1
 
 
 def test_cached_vc_quotas_refresh(cache_home: Path) -> None:
-    arm = FakeArm(vc_data={"x": 1})
-    _cached_vc_quotas_raw(arm, "s", "r", "v")
-    _cached_vc_quotas_raw(arm, "s", "r", "v", refresh=True)
+    arm = FakeArm(vc_data=_vc_payload("NDAMv4", "Premium", 8))
+    _cached_vc_quotas(arm, "sub", "rg", "vc1")
+    _cached_vc_quotas(arm, "sub", "rg", "vc1", refresh=True)
     assert arm.vc_calls == 2
 
 
 def test_cached_aml_compute_caches(cache_home: Path) -> None:
-    arm = FakeArm(compute_data={"name": "c"})
+    from azure_jobs.core.az_client import ComputeInfo
+
+    info = ComputeInfo(
+        name="c",
+        resource_group="r",
+        subscription_id="s",
+        workspace_name="w",
+        location="",
+        compute_type="AmlCompute",
+    )
+    arm = FakeArm(compute_data=info)
     _cached_aml_compute(arm, "s", "r", "w", "c")
     _cached_aml_compute(arm, "s", "r", "w", "c")
     assert arm.compute_calls == 1
@@ -310,13 +356,19 @@ def _aml_request():
 
 
 def test_check_aml_ok(cache_home: Path) -> None:
+    from azure_jobs.core.az_client import ComputeInfo
+
     arm = FakeArm(
-        compute_data={
-            "properties": {
-                "provisioningState": "Succeeded",
-                "properties": {"vmSize": "STANDARD_D4"},
-            }
-        }
+        compute_data=ComputeInfo(
+            name="cluster",
+            resource_group="rg",
+            subscription_id="sub",
+            workspace_name="ws",
+            location="",
+            compute_type="AmlCompute",
+            provisioning_state="Succeeded",
+            vm_size="STANDARD_D4",
+        )
     )
     res = check_aml_compute(_aml_request(), arm_client=arm)
     assert res.severity == "ok"
