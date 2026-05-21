@@ -9,12 +9,8 @@ from typing import Any
 from rich.markup import escape
 from textual.worker import get_current_worker
 
-from azure_jobs.core.logs.download import (
-    get_log_content_uri,
-    list_log_files,
-    pick_default_log,
-)
-from azure_jobs.core.logs.stream import DEFAULT_POLL_INTERVAL, LogStreamer
+from azure_jobs.core.az_client import DEFAULT_POLL_INTERVAL, LogStreamer
+from azure_jobs.core.az_client.ml.logs import pick_default_log
 from azure_jobs.tui.controllers.base import Controller
 from azure_jobs.tui.controllers.logs._shared import LIVE_TAIL_BYTES
 from azure_jobs.tui.helpers import safe_close
@@ -151,7 +147,7 @@ class LogsStream(Controller[LogsState]):
         # Resolve log file if not yet known.
         if not log_path:
             try:
-                files = list_log_files(azure_name, rest_client=rest_client)
+                files = rest_client.logs.list_files(azure_name)
                 app.call_from_thread(setattr, st, "files", files)
                 if not files:
                     app.call_from_thread(
@@ -169,9 +165,7 @@ class LogsStream(Controller[LogsState]):
 
         # Resolve signed URL.
         try:
-            content_uri = get_log_content_uri(
-                azure_name, log_path, rest_client=rest_client
-            )
+            content_uri = rest_client.logs.get_content_uri(azure_name, log_path)
         except Exception as exc:
             self._report_stream_error(exc, worker, azure_name)
             return
@@ -227,7 +221,9 @@ class LogsStream(Controller[LogsState]):
                     new_text = streamer.poll()
                 except Exception as exc:
                     log.warning("stream poll failed: %s", exc, exc_info=True)
-                    self._report_stream_error(exc, worker, azure_name, label="Stream error")
+                    self._report_stream_error(
+                        exc, worker, azure_name, label="Stream error"
+                    )
                     break
                 if new_text and st.job == azure_name:
                     app.call_from_thread(buffer.append_lines, new_text)
@@ -288,4 +284,3 @@ class LogsStream(Controller[LogsState]):
         if text:
             buffer.append_lines(text)
         self.app.logs.update_header()
-

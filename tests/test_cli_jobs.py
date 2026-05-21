@@ -362,7 +362,7 @@ class TestJobLogsCommand:
         assert "no logs available" in result.output.lower()
 
     def test_logs_completed_job(self, aj_env):
-        """Completed jobs should download logs via log_download module."""
+        """Completed jobs should download logs via the client.logs namespace."""
         from unittest.mock import MagicMock
         from unittest.mock import patch as mock_patch
 
@@ -373,15 +373,10 @@ class TestJobLogsCommand:
             "status": "Completed",
             "portal_url": "",
         }
-        with (
-            mock_patch(
-                "azure_jobs.core.az_client.create_rest_client",
-                return_value=mock_client,
-            ),
-            mock_patch(
-                "azure_jobs.core.logs.download.download_job_logs",
-                return_value=("Hello from training", ""),
-            ),
+        mock_client.logs.download.return_value = ("Hello from training", "")
+        with mock_patch(
+            "azure_jobs.core.az_client.create_rest_client",
+            return_value=mock_client,
         ):
             runner = CliRunner()
             result = runner.invoke(main, ["job", "logs", "some-job"])
@@ -400,15 +395,10 @@ class TestJobLogsCommand:
             "status": "Running",
             "portal_url": "",
         }
-        with (
-            mock_patch(
-                "azure_jobs.core.az_client.create_rest_client",
-                return_value=mock_client,
-            ),
-            mock_patch(
-                "azure_jobs.core.logs.download.download_job_logs",
-                return_value=("Epoch 1/10 loss=0.5", ""),
-            ),
+        mock_client.logs.download.return_value = ("Epoch 1/10 loss=0.5", "")
+        with mock_patch(
+            "azure_jobs.core.az_client.create_rest_client",
+            return_value=mock_client,
         ):
             runner = CliRunner()
             result = runner.invoke(main, ["job", "logs", "some-job"])

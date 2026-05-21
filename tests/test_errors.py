@@ -18,7 +18,7 @@ from azure_jobs.core.errors import (
     WorkspaceError,
     parse_exception_message,
 )
-from azure_jobs.core.logs.download import filter_log_lines
+from azure_jobs.core.az_client.ml.logs import filter_log_lines
 
 
 class TestHierarchy:

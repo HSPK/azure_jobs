@@ -14,7 +14,7 @@ from azure_jobs.core.jobs import apply_cutoff, fetch_jobs, resolve_short_id
 
 
 def test_resolve_short_id_returns_input_when_no_match():
-    with patch("azure_jobs.core.jobs.ids.read_records", return_value=[]):
+    with patch("azure_jobs.core.jobs.read_records", return_value=[]):
         assert resolve_short_id("abcd1234") == "abcd1234"
 
 
@@ -23,13 +23,13 @@ def test_resolve_short_id_maps_to_azure_name():
         {"id": "abcd1234", "azure_name": "my-job-uuid"},
         {"id": "other", "azure_name": "other-job"},
     ]
-    with patch("azure_jobs.core.jobs.ids.read_records", return_value=records):
+    with patch("azure_jobs.core.jobs.read_records", return_value=records):
         assert resolve_short_id("abcd1234") == "my-job-uuid"
 
 
 def test_resolve_short_id_falls_back_when_azure_name_blank():
     records = [{"id": "abcd1234", "azure_name": ""}]
-    with patch("azure_jobs.core.jobs.ids.read_records", return_value=records):
+    with patch("azure_jobs.core.jobs.read_records", return_value=records):
         assert resolve_short_id("abcd1234") == "abcd1234"
 
 

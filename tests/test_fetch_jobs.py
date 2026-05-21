@@ -4,11 +4,14 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+from azure_jobs.core.az_client import WorkspaceInfo
 from azure_jobs.core.jobs import fetch_jobs_all_workspaces
 
 
-def _make_ws(name: str) -> dict:
-    return {"name": name, "subscriptionId": "sub", "resourceGroup": "rg"}
+def _make_ws(name: str) -> WorkspaceInfo:
+    return WorkspaceInfo(
+        name=name, subscription_id="sub", resource_group="rg", location=""
+    )
 
 
 @patch("azure_jobs.core.az_client.AzureMLClient")
@@ -16,21 +19,21 @@ def _make_ws(name: str) -> dict:
 class TestFetchJobsAllWorkspaces:
     def test_returns_empty_when_no_workspaces(self, mock_arm_cls, mock_ml_cls):
         arm = MagicMock()
-        arm.list_ml_workspaces.return_value = []
+        arm.workspace.list.return_value = []
         mock_arm_cls.return_value = arm
 
         assert fetch_jobs_all_workspaces(10) == []
 
     def test_merges_jobs_from_multiple_workspaces(self, mock_arm_cls, mock_ml_cls):
         arm = MagicMock()
-        arm.list_ml_workspaces.return_value = [_make_ws("ws1"), _make_ws("ws2")]
+        arm.workspace.list.return_value = [_make_ws("ws1"), _make_ws("ws2")]
         mock_arm_cls.return_value = arm
 
         ws1_jobs = [{"name": "job1"}]
         ws2_jobs = [{"name": "job2"}, {"name": "job3"}]
 
         with patch(
-            "azure_jobs.core.jobs.discovery.fetch_jobs",
+            "azure_jobs.core.jobs.fetch_jobs",
             side_effect=[ws1_jobs, ws2_jobs],
         ):
             result = fetch_jobs_all_workspaces(10)
@@ -40,11 +43,11 @@ class TestFetchJobsAllWorkspaces:
 
     def test_workspace_name_tagged_on_jobs(self, mock_arm_cls, mock_ml_cls):
         arm = MagicMock()
-        arm.list_ml_workspaces.return_value = [_make_ws("my-ws")]
+        arm.workspace.list.return_value = [_make_ws("my-ws")]
         mock_arm_cls.return_value = arm
 
         with patch(
-            "azure_jobs.core.jobs.discovery.fetch_jobs",
+            "azure_jobs.core.jobs.fetch_jobs",
             return_value=[{"name": "j1"}],
         ):
             result = fetch_jobs_all_workspaces(5)
@@ -55,11 +58,9 @@ class TestFetchJobsAllWorkspaces:
         self, mock_arm_cls, mock_ml_cls
     ):
         arm = MagicMock()
-        arm.list_ml_workspaces.return_value = [_make_ws("good"), _make_ws("bad")]
+        arm.workspace.list.return_value = [_make_ws("good"), _make_ws("bad")]
         mock_arm_cls.return_value = arm
 
-        # AzureMLClient(workspace_name=...) is called per workspace; tag the
-        # returned mock so the fetch side_effect can branch on identity.
         def _client_factory(*args, **kwargs):
             m = MagicMock()
             m._ws = kwargs.get("workspace_name", "")
@@ -72,8 +73,8 @@ class TestFetchJobsAllWorkspaces:
                 raise RuntimeError("auth error")
             return [{"name": "j1"}]
 
-        failures: list[tuple[dict, BaseException]] = []
-        with patch("azure_jobs.core.jobs.discovery.fetch_jobs", side_effect=_fetch_side_effect):
+        failures: list[tuple[WorkspaceInfo, BaseException]] = []
+        with patch("azure_jobs.core.jobs.fetch_jobs", side_effect=_fetch_side_effect):
             result = fetch_jobs_all_workspaces(
                 10,
                 on_workspace_failure=lambda ws, exc: failures.append((ws, exc)),
@@ -82,15 +83,15 @@ class TestFetchJobsAllWorkspaces:
         assert len(result) == 1
         assert result[0]["_workspace"] == "good"
         assert len(failures) == 1
-        assert failures[0][0]["name"] == "bad"
+        assert failures[0][0].name == "bad"
 
     def test_handles_all_workspaces_failing(self, mock_arm_cls, mock_ml_cls):
         arm = MagicMock()
-        arm.list_ml_workspaces.return_value = [_make_ws("ws1"), _make_ws("ws2")]
+        arm.workspace.list.return_value = [_make_ws("ws1"), _make_ws("ws2")]
         mock_arm_cls.return_value = arm
 
         with patch(
-            "azure_jobs.core.jobs.discovery.fetch_jobs",
+            "azure_jobs.core.jobs.fetch_jobs",
             side_effect=RuntimeError("network error"),
         ):
             result = fetch_jobs_all_workspaces(10)
