@@ -9,7 +9,7 @@ from typing import Any
 import requests
 
 from ..auth import LOG_PREFIXES, TIMEOUT_QUICK, TIMEOUT_STANDARD
-from ..context import RestContext
+from .context import RestContext
 from .extract import parse_azure_error_dict
 
 log = logging.getLogger(__name__)

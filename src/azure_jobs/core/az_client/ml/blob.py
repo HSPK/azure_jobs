@@ -29,7 +29,7 @@ from ..auth import (
     fetch_token,
     raise_for_rest_error,
 )
-from ..context import RestContext
+from .context import RestContext
 
 log = logging.getLogger(__name__)
 

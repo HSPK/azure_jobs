@@ -14,7 +14,7 @@ from ..auth import (
     TIMEOUT_STANDARD,
     raise_for_rest_error,
 )
-from ..context import RestContext
+from .context import RestContext
 from .extract import JobInfo, extract_rest_job
 from .run_history import RunHistoryAPI
 
