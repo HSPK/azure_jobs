@@ -8,8 +8,7 @@ from azure_jobs.core.submit.models import SubmitRequest
 
 from ._shared import (
     CheckResult,
-    _build_quotas_from_raw,
-    _cached_vc_quotas_raw,
+    _cached_vc_quotas,
     _evaluate_sku,
     _instance_to_series,
     _toggle_nvlink,
@@ -45,8 +44,8 @@ def check_singularity(
     sku_raw = request.sku or "C1"
     sla = (request.sla_tier or "Premium").strip().title()
 
-    raw = _cached_vc_quotas_raw(arm_client, sub, rg, vc, refresh=refresh)
-    if raw is None:
+    quotas = _cached_vc_quotas(arm_client, sub, rg, vc, refresh=refresh)
+    if quotas is None:
         from azure_jobs.core.sku import resolve_instance_type
 
         instances = resolve_instance_type(
@@ -61,7 +60,6 @@ def check_singularity(
             detail=[f"Resolved instance(s): {', '.join(instances) or '(none)'}"],
         )
 
-    quotas = _build_quotas_from_raw(raw)
     series_to_quota = {sq.series: sq for sq in quotas}
 
     severity, msg, chosen, tier = _evaluate_sku(

@@ -14,7 +14,6 @@ from typing import TYPE_CHECKING
 
 from azure_jobs.utils.fs import read_ignore_file
 
-from ..config import AJWorkspace
 from .models import AmltOpts, SingularityOpts, StorageMount, SubmitRequest, VolcanoOpts
 from .script_runner import build_user_command
 
@@ -45,9 +44,7 @@ def _normalize_storage(
                 mount_dir=v.get("mount_dir", ""),
             )
         else:
-            raise TypeError(
-                f"Unsupported storage entry for '{k}': {type(v).__name__}"
-            )
+            raise TypeError(f"Unsupported storage entry for '{k}': {type(v).__name__}")
     return storage
 
 
@@ -60,9 +57,7 @@ def _normalize_template_commands(raw: object) -> list[str]:
     return []
 
 
-def _merge_env(
-    user_env: dict[str, str], aj_env: dict[str, str]
-) -> dict[str, str]:
+def _merge_env(user_env: dict[str, str], aj_env: dict[str, str]) -> dict[str, str]:
     """Merge AJ_* env over user-supplied env, warning on collisions."""
     overrides = sorted(k for k in aj_env if k in user_env)
     if overrides:
@@ -83,7 +78,6 @@ def build_submit_request(
     sku: str,
     user_command: str,
     user_args: tuple[str, ...],
-    workspace: AJWorkspace,
     template_name: str = "unknown",
     experiment: str = "aj",
     nodes: int,
@@ -104,8 +98,6 @@ def build_submit_request(
     env = template.environment
     job = template.jobs[0] if template.jobs else None
     if job is None:
-        # Callers validate this, but a defensive raise keeps the type checker
-        # happy and surfaces template misuse with a clear message.
         from ..errors import TemplateError
 
         raise TemplateError("Template missing 'jobs' section")
@@ -115,8 +107,6 @@ def build_submit_request(
     storage = _normalize_storage(template.storage)
     service = target.service
 
-    # AJ_* travel via env_vars (not the runner script) so per-submission
-    # churn doesn't break native's content-addressed code-asset hash.
     aj_envs: dict[str, str] = {
         "AJ_NAME": name,
         "AJ_ID": sid,
@@ -134,12 +124,9 @@ def build_submit_request(
         build_user_command(user_command, user_args),
     ]
 
-    # amlt rendering keeps the template's literal value (may include
-    # ``$CONFIG_DIR``); backends upload from ``resolved_code_dir``.
     amlt_code_dir = code.local_dir
     resolved_code_dir = code_dir if code_dir is not None else os.getcwd()
 
-    # Template ignore patterns + .codeignore/.amltignore, dedup, order-preserved.
     file_ignore = read_ignore_file(resolved_code_dir)
     seen: set[str] = set()
     code_ignore: list[str] = []
@@ -151,29 +138,20 @@ def build_submit_request(
     env_extra = _merge_env(dict(submit_args.get("env", {})), aj_envs)
     container_args = dict(submit_args.get("container_args", {}))
 
-    # Workspace coordinates come from the template only — never from the
-    # local CLI config. \`aj ws set\` is for read-only commands; submission
-    # paths must be self-contained so a template runs the same anywhere.
-    if service == "aml":
-        # AML target.subscription_id / target.resource_group ARE the
-        # workspace coords.
-        sub_id = target.subscription_id
-        rg = target.resource_group
-    elif service == "sing":
-        # Singularity target.subscription_id / target.resource_group are
-        # the VC's. Workspace lives in target.workspace_*.
-        sub_id = target.workspace_subscription_id
-        rg = target.workspace_resource_group
+    sing_opts = SingularityOpts(
+        vc_subscription_id=target.subscription_id if service == "sing" else "",
+        vc_resource_group=target.resource_group if service == "sing" else "",
+    )
+    if service == "sing":
+        # target.{subscription_id,resource_group} are the VC's, not the
+        # workspace's; workspace coords are resolved at submit time.
+        sub_id = ""
+        rg = ""
     else:
         sub_id = target.subscription_id
         rg = target.resource_group
     ws_name = target.workspace_name
 
-    sing_opts = SingularityOpts(
-        vc_subscription_id=target.subscription_id,
-        vc_resource_group=target.resource_group,
-        group_policy=getattr(target, "group_policy_name", ""),
-    )
     amlt_opts = AmltOpts(code_dir=amlt_code_dir)
     volcano_opts = VolcanoOpts()
     if service == "volcano":

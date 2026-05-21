@@ -35,7 +35,7 @@ def uai_list(full: bool) -> None:
         "[bold cyan]Discovering managed identities…[/bold cyan]", spinner="dots"
     ):
         try:
-            uais = arm.list_user_assigned_identities()
+            uais = arm.identity.list()
         except Exception as exc:
             error(f"Could not list managed identities: {exc}")
             raise SystemExit(1) from exc
@@ -45,6 +45,5 @@ def uai_list(full: bool) -> None:
         return
 
     for uai in uais:
-        arm_id = uai.get("id", "")
-        if arm_id:
-            click.echo(arm_id)
+        if uai.id:
+            click.echo(uai.id)

@@ -21,9 +21,8 @@ from azure_jobs.core.submit.models import SubmitRequest
 
 from ._shared import (
     CheckResult,
-    _build_quotas_from_raw,
     _cached_aml_compute,
-    _cached_vc_quotas_raw,
+    _cached_vc_quotas,
     _evaluate_sku,
     _instance_to_series,
     _toggle_nvlink,
@@ -52,9 +51,8 @@ __all__ = [
     "precheck",
     # Underscore re-exports kept for in-repo callers (tests).
     "_cached_aml_compute",
-    "_cached_vc_quotas_raw",
+    "_cached_vc_quotas",
     "_instance_to_series",
     "_toggle_nvlink",
-    "_build_quotas_from_raw",
     "_evaluate_sku",
 ]

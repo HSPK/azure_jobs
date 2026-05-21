@@ -279,7 +279,7 @@ _CPU_VCPU: dict[str, int] = {
 
 def _series_to_sku_rows(sq: Any) -> list[dict[str, Any]]:
     """Convert one ``SeriesQuota`` into 1+ SKU rows (one per instance variant)."""
-    from azure_jobs.core.sku import _FAMILY_MAP, _SERIES_GPU_INFO
+    from azure_jobs.core.sku import _FAMILY_MAP
 
     series = sq.series
     gpu_model = sq.accelerator or ""
@@ -332,35 +332,19 @@ def _series_to_sku_rows(sq: Any) -> list[dict[str, Any]]:
             )
         return out
 
-    info = _SERIES_GPU_INFO.get(series)
-    if info:
-        model, mem = info
-        kind = "cpu" if model == "CPU" else "unknown"
-        out.append(
-            {
-                "series": series,
-                "kind": kind,
-                "gpu_count": 0,
-                "gpu_model": model if model != "CPU" else "",
-                "gpu_memory_gb": mem if model != "CPU" else 0,
-                "vcpu": 0,
-                "instance_type": series,
-                "sku_shorthand": "C1" if model == "CPU" else "",
-                "nvlink": False,
-            }
-        )
-        return out
-
+    # No family entry — fall back to whatever the API gave us through
+    # ``sq.accelerator`` / ``sq.gpu_memory`` (parsed from the friendly name).
+    is_cpu = gpu_model == "CPU"
     out.append(
         {
             "series": series,
-            "kind": "unknown",
+            "kind": "cpu" if is_cpu else "unknown",
             "gpu_count": 0,
-            "gpu_model": gpu_model,
-            "gpu_memory_gb": gpu_mem,
+            "gpu_model": "" if is_cpu else gpu_model,
+            "gpu_memory_gb": 0 if is_cpu else gpu_mem,
             "vcpu": 0,
             "instance_type": series,
-            "sku_shorthand": "",
+            "sku_shorthand": "C1" if is_cpu else "",
             "nvlink": False,
         }
     )
@@ -487,20 +471,6 @@ def show_sku_table(
 # ────────────────────────────────────────────────────────────────────────
 
 
-def _parse_compute_nodes(props: dict) -> tuple[int, int, int]:
-    """Extract ``(idle, busy, max_nodes)`` from ARM compute properties."""
-    scale = props.get("scaleSettings", {}) or {}
-    max_nodes = scale.get("maxNodeCount", 0) or 0
-    state = props.get("nodeStateCounts", {}) or {}
-    busy = (
-        (state.get("runningNodeCount") or 0)
-        + (state.get("preparingNodeCount") or 0)
-        + (state.get("leavingNodeCount") or 0)
-    )
-    idle = state.get("idleNodeCount") or 0
-    return idle, busy, max_nodes
-
-
 def _portal_compute_url(sub: str, rg: str, ws: str, cluster: str) -> str:
     return (
         f"https://ml.azure.com/compute/{cluster}/details"
@@ -534,7 +504,7 @@ def _fmt_nodes(
     return f"{idle_part} {busy_part} [dim]/{t_s}[/dim]"
 
 
-def show_aml_quota_table(ws_computes: list[tuple[dict, list[dict]]]) -> None:
+def show_aml_quota_table(ws_computes: list[tuple[Any, list[Any]]]) -> None:
     """Display AML compute clusters grouped by workspace."""
     from azure_jobs.core.aml import vm_sku_label
 
@@ -542,9 +512,9 @@ def show_aml_quota_table(ws_computes: list[tuple[dict, list[dict]]]) -> None:
     max_idle_w = max_busy_w = max_total_w = 1
 
     for ws, clusters in ws_computes:
-        ws_name = ws.get("name", "")
-        sub = ws.get("subscriptionId", "")
-        rg = ws.get("resourceGroup", "")
+        ws_name = ws.name
+        sub = ws.subscription_id
+        rg = ws.resource_group
         if not clusters:
             rows.append(
                 {
@@ -562,29 +532,23 @@ def show_aml_quota_table(ws_computes: list[tuple[dict, list[dict]]]) -> None:
                 }
             )
             continue
-        for c in sorted(clusters, key=lambda x: x.get("name", "")):
-            name = c.get("name", "")
-            props = c.get("properties", {}).get("properties", {}) or {}
-            vm_size = props.get("vmSize", "") or ""
-            vm_pri = props.get("vmPriority", "") or ""
-            location = c.get("location", "") or ""
-            idle, busy, max_nodes = _parse_compute_nodes(props)
-            max_idle_w = max(max_idle_w, len(str(idle)))
-            max_busy_w = max(max_busy_w, len(str(busy)))
-            max_total_w = max(max_total_w, len(str(max_nodes)))
+        for c in sorted(clusters, key=lambda x: x.name):
+            max_idle_w = max(max_idle_w, len(str(c.nodes_idle)))
+            max_busy_w = max(max_busy_w, len(str(c.nodes_busy)))
+            max_total_w = max(max_total_w, len(str(c.nodes_max)))
             rows.append(
                 {
                     "workspace": ws_name,
-                    "cluster": name,
+                    "cluster": c.name,
                     "no_clusters": False,
-                    "vm_size": vm_size,
-                    "sku": vm_sku_label(vm_size),
-                    "nodes_idle": idle,
-                    "nodes_busy": busy,
-                    "nodes_max": max_nodes,
-                    "priority": vm_pri,
-                    "location": location,
-                    "portal_url": _portal_compute_url(sub, rg, ws_name, name),
+                    "vm_size": c.vm_size,
+                    "sku": vm_sku_label(c.vm_size),
+                    "nodes_idle": c.nodes_idle,
+                    "nodes_busy": c.nodes_busy,
+                    "nodes_max": c.nodes_max,
+                    "priority": c.vm_priority,
+                    "location": c.location,
+                    "portal_url": _portal_compute_url(sub, rg, ws_name, c.name),
                 }
             )
 

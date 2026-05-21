@@ -50,6 +50,7 @@ from .native import (
 from .native.orchestrate import submit
 from .record import SubmissionRecord, log_record, read_records
 from .render import render_amlt_config
+from .native.coords import resolve_request
 from .volcano import submit_via_volcano
 
 __all__ = [
@@ -63,6 +64,7 @@ __all__ = [
     "submit",
     "submit_via",
     "build_submit_request",
+    "resolve_request",
     "materialise_submission",
     "render_amlt_config",
     "CheckResult",

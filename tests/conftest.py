@@ -4,8 +4,25 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
+
+
+@pytest.fixture(autouse=True)
+def _stub_azure_resolvers():
+    """Avoid hitting Azure Resource Graph / ARM during submit pipeline tests."""
+    with (
+        patch(
+            "azure_jobs.core.submit.native.coords._resolve_sing_vc",
+            return_value=("vc-sub", "vc-rg"),
+        ),
+        patch(
+            "azure_jobs.core.submit.native.coords._resolve_workspace",
+            return_value=("ws-sub", "ws-rg", "ws-name"),
+        ),
+    ):
+        yield
 
 
 @pytest.fixture

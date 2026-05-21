@@ -48,9 +48,9 @@ class TestRunCommand:
         sub = yaml.safe_load(sub_file.read_text())
         assert sub["jobs"][0]["sku"] == "Standard_NC2s_v3"
 
-    def test_sing_dry_run_warns_when_vc_coords_missing(self, aj_env):
+    def test_sing_dry_run_resolves_vc_coords(self, aj_env):
         conf = {
-            "target": {"name": "vc1", "service": "sing"},
+            "target": {"name": "vc1", "service": "sing", "workspace_name": "ws1"},
             "environment": {"image": "img"},
             "jobs": [{"sku": "1xC1", "command": []}],
         }
@@ -59,9 +59,10 @@ class TestRunCommand:
 
         result = runner.invoke(main, ["run", "-d", "echo", "hello"])
 
-        assert result.exit_code == 0
-        assert "omits target.subscription_id/resource_group" in result.output
-        assert "Azure Resource Graph" in result.output
+        assert result.exit_code == 0, result.output
+        sub_file = list(aj_env["dryrun_home"].glob("*.yaml"))[0]
+        sub = yaml.safe_load(sub_file.read_text())
+        assert sub["target"]["service"] == "sing"
 
     def test_str_sku_template_formatting(self, aj_env):
         conf = {

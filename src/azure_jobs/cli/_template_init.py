@@ -92,7 +92,7 @@ def _pick_account() -> str:
         "[bold cyan]Discovering managed identities…[/bold cyan]", spinner="dots"
     ):
         try:
-            uais = AzureARMClient().list_user_assigned_identities()
+            uais = AzureARMClient().identity.list()
         except Exception as exc:
             warning(f"Could not list UAIs: {exc}")
             uais = []
@@ -100,15 +100,15 @@ def _pick_account() -> str:
     if uais:
         rows = [
             {
-                "_label": f"[bold]{u['name']}[/bold]   [dim]{u.get('resourceGroup', '')} · {u.get('location', '')}[/dim]",
+                "_label": f"[bold]{u.name}[/bold]   [dim]{u.resource_group} · {u.location}[/dim]",
                 "uai": u,
             }
             for u in uais
         ]
         picked = _pick_row("Managed identity", rows)
         uai = picked["uai"]
-        name = _sanitise(uai["name"])
-        uai_id = uai["id"]
+        name = _sanitise(uai.name)
+        uai_id = uai.id
     else:
         uai_id = click.prompt("  Paste UAI ARM ID")
         name = _sanitise(uai_id.rsplit("/", 1)[-1])
@@ -183,7 +183,7 @@ def _pick_storage() -> str:
         "[bold cyan]Discovering storage accounts…[/bold cyan]", spinner="dots"
     ):
         try:
-            sas = AzureARMClient().list_storage_accounts()
+            sas = AzureARMClient().storage.list()
         except Exception as exc:
             warning(f"Could not list storage accounts: {exc}")
             sas = []
@@ -193,8 +193,8 @@ def _pick_storage() -> str:
         if sas:
             rows = [
                 {
-                    "_label": f"[bold]{s['name']}[/bold]   [dim]{s.get('resourceGroup', '')} · {s.get('location', '')}[/dim]",
-                    "name": s["name"],
+                    "_label": f"[bold]{s.name}[/bold]   [dim]{s.resource_group} · {s.location}[/dim]",
+                    "name": s.name,
                 }
                 for s in sas
             ]
@@ -223,14 +223,13 @@ def _pick_storage() -> str:
 def _pick_target() -> dict[str, str]:
     """Discover Singularity VCs and let the user pick one."""
     from azure_jobs.core.az_client import AzureARMClient
-    from azure_jobs.core.sku.discovery import discover_virtual_clusters
     from azure_jobs.utils.ui import console, warning
 
     with console.status(
         "[bold cyan]Discovering virtual clusters…[/bold cyan]", spinner="dots"
     ):
         try:
-            vcs = discover_virtual_clusters(arm_client=AzureARMClient())
+            vcs = AzureARMClient().vc.list()
         except Exception as exc:
             warning(f"Could not discover VCs: {exc}")
             vcs = []
@@ -246,11 +245,7 @@ def _pick_target() -> dict[str, str]:
         for vc in vcs
     ]
     vc = _pick_row("Target VC", rows)["vc"]
-    return {
-        "name": vc.name,
-        "subscription_id": vc.subscription_id,
-        "resource_group": vc.resource_group,
-    }
+    return {"name": vc.name}
 
 
 _SKU_SUGGESTIONS = [
@@ -284,7 +279,7 @@ def _pick_workspace() -> dict[str, str]:
         "[bold cyan]Discovering AML workspaces…[/bold cyan]", spinner="dots"
     ):
         try:
-            workspaces = AzureARMClient().list_ml_workspaces()
+            workspaces = AzureARMClient().workspace.list()
         except Exception as exc:
             error(f"Could not discover workspaces: {exc}")
             raise SystemExit(1) from exc
@@ -300,9 +295,8 @@ def _pick_workspace() -> dict[str, str]:
     rows = [
         {
             "_label": (
-                f"[bold]{ws['name']}[/bold]   "
-                f"[dim]{ws.get('resourceGroup', '?')} · "
-                f"{ws.get('location', '?')}[/dim]"
+                f"[bold]{ws.name}[/bold]   "
+                f"[dim]{ws.resource_group} · {ws.location}[/dim]"
             ),
             "ws": ws,
         }
@@ -310,9 +304,9 @@ def _pick_workspace() -> dict[str, str]:
     ]
     ws = _pick_row("Workspace", rows)["ws"]
     return {
-        "workspace_name": ws["name"],
-        "resource_group": ws["resourceGroup"],
-        "subscription_id": ws["subscriptionId"],
+        "workspace_name": ws.name,
+        "resource_group": ws.resource_group,
+        "subscription_id": ws.subscription_id,
     }
 
 
@@ -508,8 +502,6 @@ def run_wizard(leaf_name: str | None, *, force: bool) -> None:
             "target": {
                 **target,
                 "workspace_name": workspace["workspace_name"],
-                "workspace_subscription_id": workspace["subscription_id"],
-                "workspace_resource_group": workspace["resource_group"],
             },
             "_extra": {"nodes": 1, "processes": 1},
             "jobs": [{"sku": sku}],

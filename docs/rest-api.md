@@ -23,7 +23,7 @@ China cloud auto-detected from `*.cn` URLs (scope + blob host switch).
 |--------|----------|
 | `list_subscriptions()` | `GET /subscriptions` |
 | `resource_graph_query(query, subs)` | `POST /providers/Microsoft.ResourceGraph/resources` |
-| `get_vc_quotas_raw(sub, rg, vc)` | `GET .../virtualclusters/{vc}` |
+| `vc.list(subscription_ids=None, *, with_raw=False)` | Resource Graph (`microsoft.machinelearningservices/virtualclusters`) |
 | `list_workspace_computes(sub, rg, ws)` | `GET .../workspaces/{ws}/computes` |
 
 **`AzureMLClient`** — workspace-scoped (api-version `2024-04-01`). Composed of namespaces:

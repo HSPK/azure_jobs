@@ -23,7 +23,7 @@ def env_list(ws_name: str | None) -> None:
     with console.status(
         "[bold cyan]Fetching environments…[/bold cyan]", spinner="dots"
     ):
-        envs = client.resources.list_environments()
+        envs = client.environments.list()
     show_environments_table(envs)
 
 
@@ -50,5 +50,5 @@ def env_show(name: str, last: int, ws_name: str | None) -> None:
         f"[bold cyan]Fetching versions for '{name}'…[/bold cyan]",
         spinner="dots",
     ):
-        versions = client.list_environment_versions(name)
+        versions = client.environments.list_versions(name)
     show_environment_versions_table(name, versions, last=last)

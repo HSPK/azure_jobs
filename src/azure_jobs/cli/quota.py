@@ -44,45 +44,29 @@ def quota_list(backend: str, show_all: bool, full: bool) -> None:
         _show_sing_quotas(show_all, full=full)
 
 
-def load_vcs_with_quotas(*, include_zero: bool) -> list:
-    """Discover Singularity VCs and fetch their quotas — shared CLI helper.
-
-    Drives the spinner, exits with a friendly error if discovery returns
-    nothing, and populates ``vc.quotas`` on each :class:`VCInfo`. Used by
-    both ``aj quota --sing`` and ``aj sku list``.
-    """
+def _show_sing_quotas(show_all: bool, *, full: bool = False) -> None:
+    """Discover VCs, fetch quotas, hand off to the display layer."""
     from azure_jobs.core.az_client import AzureARMClient
-    from azure_jobs.core.sku.discovery import discover_virtual_clusters
-    from azure_jobs.core.sku.quotas import fetch_all_vc_quotas
-    from azure_jobs.utils.ui import console, error
+    from azure_jobs.utils.ui import console, error, show_sing_quota_table
 
     arm = AzureARMClient()
     with console.status(
         "[bold cyan]Discovering virtual clusters…[/bold cyan]", spinner="dots"
     ):
-        vcs = discover_virtual_clusters(arm_client=arm)
-        arm.ensure_token()
-        if not vcs:
-            error("No Singularity virtual clusters found")
-            console.print(
-                "  Make sure you are logged in (`az login`) and have access to VCs"
-            )
-            raise SystemExit(1)
-        fetch_all_vc_quotas(vcs, include_zero=include_zero, arm_client=arm)
-    return vcs
-
-
-def _show_sing_quotas(show_all: bool, *, full: bool = False) -> None:
-    """Discover VCs, fetch quotas, hand off to the display layer."""
-    from azure_jobs.utils.ui import show_sing_quota_table
-
-    show_sing_quota_table(load_vcs_with_quotas(include_zero=show_all), full=full)
+        vcs = arm.vc.quota.list(include_zero=show_all)
+    if not vcs:
+        error("No Singularity virtual clusters found")
+        console.print(
+            "  Make sure you are logged in (`az login`) and have access to VCs"
+        )
+        raise SystemExit(1)
+    show_sing_quota_table(vcs, full=full)
 
 
 def _show_aml_quotas(show_all: bool) -> None:
     """Discover AML workspaces, fetch computes, hand off to the display layer."""
     from azure_jobs.core.aml import fetch_aml_computes_all_workspaces
-    from azure_jobs.core.az_client import AzureARMClient
+    from azure_jobs.core.az_client import AzureARMClient, WorkspaceInfo
     from azure_jobs.utils.ui import (
         console,
         error,
@@ -91,12 +75,12 @@ def _show_aml_quotas(show_all: bool) -> None:
     )
 
     arm = AzureARMClient()
-    failures: list[tuple[dict, BaseException]] = []
+    failures: list[tuple[WorkspaceInfo, BaseException]] = []
     with console.status(
         "[bold cyan]Discovering AML workspaces…[/bold cyan]", spinner="dots"
     ):
         try:
-            workspaces = arm.list_ml_workspaces()
+            workspaces = arm.workspace.list()
         except Exception as exc:
             error(f"Could not discover workspaces: {exc}")
             raise SystemExit(1)
@@ -120,7 +104,7 @@ def _show_aml_quotas(show_all: bool) -> None:
             f"Skipped {len(failures)} workspace(s) (run with AJ_DEBUG=1 for details)"
         )
     ws_computes = [(ws, clusters) for ws, clusters in results if clusters or show_all]
-    ws_computes.sort(key=lambda x: x[0].get("name", ""))
+    ws_computes.sort(key=lambda x: x[0].name)
 
     if not ws_computes:
         warning("No AML compute clusters found in any workspace")

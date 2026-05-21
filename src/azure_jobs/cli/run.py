@@ -8,7 +8,6 @@ import click
 from azure_jobs.cli import main
 from azure_jobs.cli.runner import submit_and_record
 from azure_jobs.core.config import (
-    AJWorkspace,
     ensure_experiment,
     get_defaults,
     get_experiment,
@@ -25,7 +24,7 @@ from azure_jobs.core.submit import (
 )
 from azure_jobs.core.template import Template
 from azure_jobs.utils.naming import resolve_name
-from azure_jobs.utils.ui import show_dry_run_result, show_submission_preview, warning
+from azure_jobs.utils.ui import show_dry_run_result, show_submission_preview
 
 __all__ = ["resolve_name"]
 
@@ -103,11 +102,6 @@ def run(
         raise click.ClickException(str(exc)) from exc
 
     save_defaults(template=template_name, nodes=nodes_int, processes=gpn_int)
-    # Submission MUST NOT read aj ws / local CLI config — workspace coords
-    # are template-owned (target.workspace_subscription_id / _resource_group
-    # / workspace_name). Pass an empty AJWorkspace so build_submit_request
-    # has no fallback.
-    workspace = AJWorkspace()
     experiment = get_experiment() or "aj" if dry_run else ensure_experiment()
 
     try:
@@ -118,7 +112,6 @@ def run(
             sku=sku_resolved,
             user_command=command,
             user_args=args,
-            workspace=workspace,
             template_name=template_name,
             experiment=experiment,
             nodes=nodes_int,
@@ -133,15 +126,6 @@ def run(
             raise click.ClickException(
                 "amlt CLI not available or no .amltconfig in current directory."
             )
-    else:
-        try:
-            _resolve_or_warn_sing_target_coords(
-                request,
-                template_name=template_name,
-                dry_run=dry_run,
-            )
-        except AJError as exc:
-            raise click.ClickException(str(exc)) from exc
 
     if dry_run or amlt:
         materialise_submission(request, dry_run=dry_run)
@@ -190,39 +174,3 @@ def _load_template(template: str | None) -> tuple[Template, str]:
     if not tmpl.jobs:
         raise click.ClickException("Template missing 'jobs' section")
     return tmpl, template
-
-
-def _resolve_or_warn_sing_target_coords(
-    request,
-    *,
-    template_name: str,
-    dry_run: bool,
-) -> None:
-    """Resolve missing Singularity VC coordinates, or warn during dry-run."""
-    if request.service != "sing":
-        return
-    if request.sing.vc_subscription_id and request.sing.vc_resource_group:
-        return
-
-    if dry_run:
-        warning(
-            f"Template '{template_name}' omits target.subscription_id/resource_group; "
-            "aj will discover the Singularity VC via Azure Resource Graph at submit time. "
-            "Add both fields to skip that lookup."
-        )
-        return
-
-    from azure_jobs.core.sku import resolve_virtual_cluster
-
-    vc = resolve_virtual_cluster(
-        request.compute,
-        subscription_id=request.sing.vc_subscription_id,
-        resource_group=request.sing.vc_resource_group,
-    )
-    request.sing.vc_subscription_id = vc.subscription_id
-    request.sing.vc_resource_group = vc.resource_group
-    warning(
-        f"Template '{template_name}' omits target.subscription_id/resource_group; "
-        f"discovered subscription_id={vc.subscription_id}, "
-        f"resource_group={vc.resource_group}. Add both fields to skip this lookup."
-    )

@@ -49,7 +49,7 @@ def _fetch_sing_images() -> list[dict]:
     log = logging.getLogger(__name__)
     with AzureARMClient() as arm:
         try:
-            subs = arm.list_subscriptions()
+            subs = arm.subscriptions.list()
         except Exception:
             log.debug("list_subscriptions failed", exc_info=True)
             return []

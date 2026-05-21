@@ -248,7 +248,6 @@ def job_logs(job_id: str) -> None:
     JOB_ID can be the short aj ID or the full Azure job name.
     """
     from azure_jobs.core.az_client import create_rest_client
-    from azure_jobs.core.logs.download import download_job_logs
     from azure_jobs.utils.ui import (
         console,
         emit_json,
@@ -296,11 +295,7 @@ def job_logs(job_id: str) -> None:
         return
 
     with console.status("[bold cyan]Downloading logs…[/bold cyan]", spinner="dots"):
-        content, error_msg = download_job_logs(
-            azure_name,
-            status=status,
-            rest_client=client,
-        )
+        content, error_msg = client.logs.download(azure_name)
 
     if json_mode:
         emit_json(

@@ -42,17 +42,17 @@ def _build_environment(request: SubmitRequest, client: AzureMLClient) -> str:
 
     # Reuse existing environment if available
     try:
-        cached = client.resources.get_environment_version(env_name, version)
+        cached = client.environments.get(env_name, version)
         if cached:
-            return cached.get("id", "")
+            return cached.id
     except Exception:
         log.debug("Environment %s:%s not cached, creating new", env_name, version)
 
     try:
-        registered = client.resources.create_or_update_environment(
+        registered = client.environments.create_or_update(
             env_name, version, image
         )
-        return registered.get("id", "")
+        return registered.id
     except Exception:
         log.debug("Failed to register environment, using inline", exc_info=True)
     return ""

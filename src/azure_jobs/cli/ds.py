@@ -21,7 +21,7 @@ def ds_list(ws_name: str | None) -> None:
 
     client = create_rest_client(ws_name=ws_name)
     with console.status("[bold cyan]Fetching datastores…[/bold cyan]", spinner="dots"):
-        stores = client.resources.list_datastores()
+        stores = client.datastores.list()
     show_datastores_table(stores)
 
 
@@ -40,7 +40,7 @@ def ds_show(name: str, ws_name: str | None) -> None:
     with console.status(
         f"[bold cyan]Fetching '{name}'…[/bold cyan]", spinner="dots"
     ):
-        ds = client.resources.get_datastore(name)
+        ds = client.datastores.get(name)
     if not ds:
         warning(f"Datastore '{name}' not found")
         return

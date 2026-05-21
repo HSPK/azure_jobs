@@ -6,7 +6,7 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from ..models import SubmitRequest
-from .environment import _SING_IMAGE_PREFIX
+from .image import _SING_IMAGE_PREFIX
 
 if TYPE_CHECKING:
     from azure_jobs.core.az_client import AzureMLClient

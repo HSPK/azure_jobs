@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from azure_jobs.core.config import AJWorkspace
@@ -14,17 +15,17 @@ from azure_jobs.core.submit import (
     build_submit_request,
     render_amlt_config,
 )
-from azure_jobs.core.submit.native.compute import (
+from azure_jobs.core.submit.native.image import (
+    _SING_DUMMY_IMAGE,
+    _build_environment,
+)
+from azure_jobs.core.submit.native.storage import _build_storage_mounts
+from azure_jobs.core.submit.native.target import (
     _build_identity,
     _build_resources,
     _resolve_compute,
     _resolve_sing_identity,
 )
-from azure_jobs.core.submit.native.environment import (
-    _SING_DUMMY_IMAGE,
-    _build_environment,
-)
-from azure_jobs.core.submit.native.storage import _build_storage_mounts
 from azure_jobs.core.template import Template
 
 
@@ -33,17 +34,14 @@ def _make_request(
     *,
     name: str = "test-job",
     sku: str | None = None,
-    workspace: AJWorkspace | None = None,
+    workspace: AJWorkspace | None = None,  # accepted but ignored — kept so older test sites keep compiling
     **kwargs,
 ) -> SubmitRequest:
     """Helper to build SubmitRequest from dict config for testing.
 
     Calls build_submit_request and returns the request object.
     """
-    if workspace is None:
-        workspace = AJWorkspace(
-            subscription_id="s", resource_group="r", workspace_name="w"
-        )
+    del workspace  # build_submit_request no longer takes a workspace
     if sku is None:
         sku = conf.get("jobs", [{}])[0].get("sku", "default")
 
@@ -55,7 +53,6 @@ def _make_request(
         sku=sku,
         user_command="echo test",
         user_args=(),
-        workspace=workspace,
         nodes=1,
         processes_per_node=1,
         **kwargs,
@@ -231,9 +228,7 @@ class TestSubmitMocked:
             "azure_jobs.core.submit.native.orchestrate._get_rest_client"
         ) as mock_factory:
             mock_client = mock_factory.return_value
-            mock_client.resources.get_environment_version.return_value = {
-                "id": "env-id-1"
-            }
+            mock_client.environments.get.return_value = SimpleNamespace(id="env-id-1")
             mock_client.blob.upload_code.return_value = "code-id-1"
             mock_client.jobs.create_or_update.return_value = mock_returned
             result = submit(request)
@@ -286,9 +281,7 @@ class TestSubmitMocked:
             "azure_jobs.core.submit.native.orchestrate._get_rest_client"
         ) as mock_factory:
             mock_client = mock_factory.return_value
-            mock_client.resources.get_environment_version.return_value = {
-                "id": "env-id"
-            }
+            mock_client.environments.get.return_value = SimpleNamespace(id="env-id")
             mock_client.blob.upload_code.return_value = "code-id"
             mock_client.jobs.create_or_update.return_value = mock_returned
             submit(request, on_event=on_event)
@@ -502,25 +495,23 @@ class TestBuildEnvironment:
         )
         client = MagicMock()
         # Simulate no cached environment
-        client.resources.get_environment_version.return_value = None
-        client.resources.create_or_update_environment.return_value = {
-            "id": "env-arm-id"
-        }
+        client.environments.get.return_value = None
+        client.environments.create_or_update.return_value = SimpleNamespace(id="env-arm-id")
         env_id = _build_environment(r, client)
         assert env_id == "env-arm-id"
         # Check that the dummy image was passed
-        call_args = client.resources.create_or_update_environment.call_args
+        call_args = client.environments.create_or_update.call_args
         assert call_args.args[2] == _SING_DUMMY_IMAGE  # image arg
 
     def test_regular_image_unchanged(self):
         """Non-sing images should be used as-is."""
         r = SubmitRequest(name="j", service="aml", image="pytorch:2.0")
         client = MagicMock()
-        client.resources.get_environment_version.return_value = None
-        client.resources.create_or_update_environment.return_value = {"id": "env-id"}
+        client.environments.get.return_value = None
+        client.environments.create_or_update.return_value = SimpleNamespace(id="env-id")
         env_id = _build_environment(r, client)
         assert env_id == "env-id"
-        call_args = client.resources.create_or_update_environment.call_args
+        call_args = client.environments.create_or_update.call_args
         assert call_args.args[2] == "pytorch:2.0"
 
     def test_registry_prepended(self):
@@ -531,10 +522,10 @@ class TestBuildEnvironment:
             image_registry="docker.io",
         )
         client = MagicMock()
-        client.resources.get_environment_version.return_value = None
-        client.resources.create_or_update_environment.return_value = {"id": "env-id"}
+        client.environments.get.return_value = None
+        client.environments.create_or_update.return_value = SimpleNamespace(id="env-id")
         _build_environment(r, client)
-        call_args = client.resources.create_or_update_environment.call_args
+        call_args = client.environments.create_or_update.call_args
         assert call_args.args[2] == "docker.io/pytorch:2.0"
 
 
@@ -635,12 +626,12 @@ class TestBuildStorageMounts:
             },
         )
         client = MagicMock()
-        client.resources.get_datastore.return_value = None  # not found
+        client.datastores.get.return_value = None  # not found
         outputs, poc, env = _build_storage_mounts(r, client)
 
         # Datastore should have been created with deterministic hash-based name
-        client.resources.get_or_create_datastore.assert_called_once()
-        call_kwargs = client.resources.get_or_create_datastore.call_args
+        client.datastores.get_or_create.assert_called_once()
+        call_kwargs = client.datastores.get_or_create.call_args
         from azure_jobs.core.submit.native.storage import _datastore_name
 
         expected_ds = _datastore_name(
@@ -675,13 +666,13 @@ class TestBuildStorageMounts:
             },
         )
         client = MagicMock()
-        client.resources.get_datastore.return_value = {
+        client.datastores.get.return_value = {
             "name": "ds_deadbeef"
         }  # already exists
         outputs, poc, env = _build_storage_mounts(r, client)
 
         # get_or_create_datastore is called (it handles get/create internally)
-        client.resources.get_or_create_datastore.assert_called_once()
+        client.datastores.get_or_create.assert_called_once()
         assert "data" in outputs
 
 

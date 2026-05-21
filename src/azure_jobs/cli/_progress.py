@@ -53,14 +53,14 @@ def fetch_jobs_all_ws_with_progress(
     from azure_jobs.core.az_client import AzureARMClient
     from azure_jobs.utils.ui import console, warning
 
-    failures: list[tuple[dict[str, Any], BaseException]] = []
+    failures: list[tuple[Any, BaseException]] = []
     done = 0
 
     with console.status(
         "[bold cyan]Discovering workspaces…[/bold cyan]", spinner="dots"
     ) as st:
         arm = AzureARMClient()
-        workspaces = arm.list_ml_workspaces()
+        workspaces = arm.workspace.list()
         arm.ensure_token()
         if not workspaces:
             warning("No workspaces found")
@@ -77,13 +77,13 @@ def fetch_jobs_all_ws_with_progress(
                 f"{ws_name}…[/bold cyan]"
             )
 
-        def _on_fail(ws: dict[str, Any], exc: BaseException) -> None:
+        def _on_fail(ws: Any, exc: BaseException) -> None:
             nonlocal done
             done += 1
             failures.append((ws, exc))
             log.debug(
                 "Skipping workspace %s",
-                ws.get("name", ""),
+                ws.name,
                 exc_info=(type(exc), exc, exc.__traceback__),
             )
 
@@ -96,7 +96,7 @@ def fetch_jobs_all_ws_with_progress(
         )
 
     if failures:
-        names = [ws.get("name", "") for ws, _ in failures[:3]]
+        names = [ws.name for ws, _ in failures[:3]]
         warning(
             f"Skipped {len(failures)} workspace(s): {', '.join(names)}"
             + (" …" if len(failures) > 3 else "")

@@ -22,11 +22,6 @@ class Target:
     subscription_id: str = ""
     resource_group: str = ""
     workspace_name: str = ""
-    # Workspace coordinates — required for sing where target.subscription_id /
-    # target.resource_group are the VC's, not the workspace's. For other
-    # services, leave these blank and use subscription_id / resource_group.
-    workspace_subscription_id: str = ""
-    workspace_resource_group: str = ""
 
     # Volcano / Kubernetes-specific target fields. Ignored by other backends.
     namespace: str = ""

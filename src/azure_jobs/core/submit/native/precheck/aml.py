@@ -37,8 +37,8 @@ def check_aml_compute(
             title="AML compute check skipped (missing workspace fields)",
         )
 
-    raw = _cached_aml_compute(arm_client, sub, rg, ws, name, refresh=refresh)
-    if raw is None:
+    info = _cached_aml_compute(arm_client, sub, rg, ws, name, refresh=refresh)
+    if info is None:
         return CheckResult(
             severity="error",
             title=(f"AML compute '{name}' not found in workspace '{ws}' (rg '{rg}')"),
@@ -49,17 +49,10 @@ def check_aml_compute(
             ],
         )
 
-    props = raw.get("properties", {}) or {}
-    compute_props = props.get("properties", {}) or {}
-    state = props.get("provisioningState", "")
-    vm_size = (
-        compute_props.get("vmSize")
-        or compute_props.get("properties", {}).get("vmSize", "")
-        or ""
-    )
     detail = []
-    if vm_size:
-        detail.append(f"vmSize: {vm_size}")
+    if info.vm_size:
+        detail.append(f"vmSize: {info.vm_size}")
+    state = info.provisioning_state
     if state and state.lower() not in ("succeeded", "running"):
         return CheckResult(
             severity="warn",

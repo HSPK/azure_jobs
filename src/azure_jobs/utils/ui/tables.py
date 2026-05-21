@@ -192,24 +192,16 @@ def show_cloud_jobs_table(
 # ────────────────────────────────────────────────────────────────────────
 
 
-def show_environments_table(envs: list[dict[str, Any]]) -> None:
+def show_environments_table(envs: list[Any]) -> None:
     """Display Azure ML environments as a TableView."""
-    rows = []
-    for env in envs:
-        props = env.get("properties", {})
-        name = env.get("name", "")
-        is_curated = (
-            "curated"
-            if props.get("isArchived") is False and name.startswith("AzureML")
-            else "custom"
-        )
-        rows.append(
-            {
-                "name": name,
-                "latest_version": props.get("latestVersion", ""),
-                "type": is_curated,
-            }
-        )
+    rows = [
+        {
+            "name": env.name,
+            "latest_version": env.latest_version,
+            "type": "curated" if env.is_curated else "custom",
+        }
+        for env in envs
+    ]
     view = TableView(
         title="Environments",
         rows=rows,
@@ -225,23 +217,20 @@ def show_environments_table(envs: list[dict[str, Any]]) -> None:
 
 def show_environment_versions_table(
     name: str,
-    versions: list[dict[str, Any]],
+    versions: list[Any],
     *,
     last: int = 10,
 ) -> None:
     """Display environment versions as a TableView."""
     rows = []
     for v in versions[:last]:
-        props = v.get("properties", {})
-        sys_data = v.get("systemData", {}) or {}
-        created_raw = sys_data.get("createdAt", "")
         rows.append(
             {
-                "version": v.get("name", ""),
-                "image": props.get("image", ""),
-                "os": props.get("osType", ""),
-                "created_at": created_raw,
-                "created": format_time(created_raw[:19]) if created_raw else "",
+                "version": v.version,
+                "image": v.image,
+                "os": v.os_type,
+                "created_at": v.created_at,
+                "created": format_time(v.created_at[:19]) if v.created_at else "",
             }
         )
     view = TableView(
@@ -264,21 +253,18 @@ def show_environment_versions_table(
 # ────────────────────────────────────────────────────────────────────────
 
 
-def show_datastores_table(stores: list[dict[str, Any]]) -> None:
+def show_datastores_table(stores: list[Any]) -> None:
     """Display Azure ML datastores as a TableView."""
-    rows = []
-    for ds in stores:
-        props = ds.get("properties", {})
-        rows.append(
-            {
-                "name": ds.get("name", ""),
-                "type": props.get("datastoreType", ""),
-                "account": props.get("accountName", ""),
-                "container": props.get("containerName", "")
-                or props.get("fileSystemName", ""),
-                "is_default": bool(props.get("isDefault")),
-            }
-        )
+    rows = [
+        {
+            "name": ds.name,
+            "type": ds.datastore_type,
+            "account": ds.account_name,
+            "container": ds.container_name or ds.file_system_name,
+            "is_default": ds.is_default,
+        }
+        for ds in stores
+    ]
     view = TableView(
         title="Datastores",
         rows=rows,
@@ -299,26 +285,23 @@ def show_datastores_table(stores: list[dict[str, Any]]) -> None:
     render_table(view)
 
 
-def show_datastore_detail(ds: dict[str, Any]) -> None:
+def show_datastore_detail(ds: Any) -> None:
     """Display a single datastore's details as a DetailView."""
-    props = ds.get("properties", {}) or {}
-    sys_data = ds.get("systemData", {}) or {}
-    name = ds.get("name", "")
     data = {
-        "name": name,
-        "type": props.get("datastoreType", ""),
-        "account": props.get("accountName", ""),
-        "container": props.get("containerName", ""),
-        "file_system": props.get("fileSystemName", ""),
-        "endpoint": props.get("endpoint", ""),
-        "protocol": props.get("protocol", ""),
-        "is_default": bool(props.get("isDefault")),
-        "description": props.get("description", ""),
-        "created_at": sys_data.get("createdAt", ""),
-        "modified_at": sys_data.get("lastModifiedAt", ""),
+        "name": ds.name,
+        "type": ds.datastore_type,
+        "account": ds.account_name,
+        "container": ds.container_name,
+        "file_system": ds.file_system_name,
+        "endpoint": ds.endpoint,
+        "protocol": ds.protocol,
+        "is_default": ds.is_default,
+        "description": ds.description,
+        "created_at": ds.created_at,
+        "modified_at": ds.modified_at,
     }
     view = DetailView(
-        title=f"Datastore: {name}",
+        title=f"Datastore: {ds.name}",
         data=data,
         fields=[
             DetailField(key="name", label="Name"),
@@ -375,22 +358,21 @@ def show_sing_images_table(images: list[dict[str, Any]]) -> None:
     render_table(view)
 
 
-def show_uai_table(identities: list[dict[str, Any]]) -> None:
+def show_uai_table(identities: list[Any]) -> None:
     """Display user-assigned managed identities as a TableView.
 
-    Rows come from :meth:`AzureARMClient.list_user_assigned_identities`.
-    The full ARM ID (``id``) is what goes into
-    ``_AZUREML_SINGULARITY_JOB_UAI``; it is shown verbatim in its own
-    column so users can copy it directly.
+    Rows come from :meth:`AzureARMClient.identity.list`. The full ARM ID
+    (``id``) is what goes into ``_AZUREML_SINGULARITY_JOB_UAI``; it is shown
+    verbatim in its own column so users can copy it directly.
     """
     rows = [
         {
-            "name": uai.get("name", ""),
-            "resource_group": uai.get("resourceGroup", ""),
-            "subscription_id": uai.get("subscriptionId", ""),
-            "location": uai.get("location", ""),
-            "client_id": uai.get("clientId", ""),
-            "id": uai.get("id", ""),
+            "name": uai.name,
+            "resource_group": uai.resource_group,
+            "subscription_id": uai.subscription_id,
+            "location": uai.location,
+            "client_id": uai.client_id,
+            "id": uai.id,
         }
         for uai in identities
     ]
@@ -410,21 +392,20 @@ def show_uai_table(identities: list[dict[str, Any]]) -> None:
     render_table(view)
 
 
-def show_storage_accounts_table(accounts: list[dict[str, Any]]) -> None:
+def show_storage_accounts_table(accounts: list[Any]) -> None:
     """Display Azure storage accounts as a TableView.
 
-    Rows come from :meth:`AzureARMClient.list_storage_accounts`. The
-    ``Name`` column is the value that goes into ``storage_account_name``
-    in storage templates.
+    Rows come from :meth:`AzureARMClient.storage.list`. The ``Name`` column
+    is the value that goes into ``storage_account_name`` in storage templates.
     """
     rows = [
         {
-            "name": sa.get("name", ""),
-            "resource_group": sa.get("resourceGroup", ""),
-            "location": sa.get("location", ""),
-            "kind": sa.get("kind", ""),
-            "sku": sa.get("sku", ""),
-            "subscription_id": sa.get("subscriptionId", ""),
+            "name": sa.name,
+            "resource_group": sa.resource_group,
+            "location": sa.location,
+            "kind": sa.kind,
+            "sku": sa.sku,
+            "subscription_id": sa.subscription_id,
         }
         for sa in accounts
     ]

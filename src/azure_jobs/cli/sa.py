@@ -27,7 +27,7 @@ def sa_list() -> None:
         "[bold cyan]Discovering storage accounts…[/bold cyan]", spinner="dots"
     ):
         try:
-            accounts = arm.list_storage_accounts()
+            accounts = arm.storage.list()
         except Exception as exc:
             error(f"Could not list storage accounts: {exc}")
             raise SystemExit(1) from exc

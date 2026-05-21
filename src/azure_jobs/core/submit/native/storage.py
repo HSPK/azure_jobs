@@ -46,7 +46,7 @@ def _build_storage_mounts(
         mount_dir = mount_cfg.mount_dir or f"/mnt/{mount_name}"
         ds_name = _datastore_name(account, container, mount_name, mount_dir)
 
-        client.resources.get_or_create_datastore(
+        client.datastores.get_or_create(
             name=ds_name,
             account_name=account,
             container_name=container,
