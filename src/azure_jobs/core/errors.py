@@ -14,7 +14,7 @@ Categories:
 * :class:`RestError`         — Azure REST API returned 4xx/5xx; carries
                                ``status_code`` and ``azure_code``.
 * :class:`SubmissionError`   — backend submission body failed.
-* :class:`QuotaError`        — VC quota / AML compute precheck failed.
+* :class:`QuotaError`        — VC quota / AML compute validation failed.
 * :class:`BackendError`      — no submission backend registered for a
                                service / dispatch failed.
 
@@ -55,7 +55,7 @@ class WorkspaceError(AJError):
 class SkuResolveError(AJError):
     """SKU shorthand doesn't resolve to an instance type.
 
-    Raised by :func:`azure_jobs.core.sku.resolve_sku` when a range-dict
+    Raised by :func:`azure_jobs.core.submit.native.sku.resolve_sku` when a range-dict
     template has no matching range for the requested node count, or when
     the template type is unsupported.
     """
@@ -99,7 +99,7 @@ class SubmissionError(AJError):
 
 
 class QuotaError(AJError):
-    """VC quota / AML compute precheck failed."""
+    """VC quota / AML compute validation failed."""
 
 
 class BackendError(AJError):

@@ -6,7 +6,6 @@ from typing import Callable
 
 from ..dispatch import register_backend
 from ..models import SubmitEvent, SubmitRequest, SubmitResult
-from .precheck import CheckResult, check_aml_compute, check_singularity, precheck
 
 
 def submit_via_native(
@@ -31,10 +30,4 @@ register_backend("aml", submit_via_native, label="Azure ML")
 register_backend("sing", submit_via_native, label="Singularity")
 
 
-__all__ = [
-    "submit_via_native",
-    "precheck",
-    "CheckResult",
-    "check_aml_compute",
-    "check_singularity",
-]
+__all__ = ["submit_via_native"]

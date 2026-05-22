@@ -1,19 +1,16 @@
-"""Azure ML (AML) target-specific catalogs and fetchers.
+"""Azure ML (AML) target-specific catalogs.
 
-Mirrors :mod:`azure_jobs.core.sku` for the Singularity target service:
+Mirrors :mod:`azure_jobs.core.submit.native.sku` for the Singularity target service:
 
-* :mod:`.vm_gpu`   — VM size → GPU info, loaded from ``vm_gpu.yaml``.
-* :mod:`.computes` — parallel fan-out to list every workspace's
-  ``AmlCompute`` cluster.
+* :mod:`.vm_gpu` — VM size → GPU info, loaded from ``vm_gpu.yaml``.
 
-Functions here are UI-free; ``aj quota --aml`` is the only CLI caller.
+Compute discovery and fan-out now lives in
+:mod:`azure_jobs.core.az_client.arm.compute` (``arm.compute.list_all``).
 """
 
-from .computes import fetch_aml_computes_all_workspaces
 from .vm_gpu import AML_VM_GPU, vm_sku_label
 
 __all__ = [
     "AML_VM_GPU",
     "vm_sku_label",
-    "fetch_aml_computes_all_workspaces",
 ]

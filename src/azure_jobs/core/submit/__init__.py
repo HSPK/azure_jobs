@@ -2,8 +2,7 @@
 
 The package is organized into three backend subpackages:
 
-* :mod:`azure_jobs.core.submit.native` — native AJ REST submission and
-  pre-flight checks.
+* :mod:`azure_jobs.core.submit.native` — native AJ REST submission.
 * :mod:`azure_jobs.core.submit.amlt` — submission via the external ``amlt``
   CLI.
 * :mod:`azure_jobs.core.submit.volcano` — submission to Volcano on Kubernetes.
@@ -40,17 +39,11 @@ from .models import (
     SubmitResult,
     VolcanoOpts,
 )
-from .native import (
-    CheckResult,
-    check_aml_compute,
-    check_singularity,
-    precheck,
-    submit_via_native,
-)
+from .native import submit_via_native
 from .native.orchestrate import submit
 from .record import SubmissionRecord, log_record, read_records
 from .render import render_amlt_config
-from .native.coords import resolve_request
+from .native.coords import resolve_target
 from .volcano import submit_via_volcano
 
 __all__ = [
@@ -64,13 +57,9 @@ __all__ = [
     "submit",
     "submit_via",
     "build_submit_request",
-    "resolve_request",
+    "resolve_target",
     "materialise_submission",
     "render_amlt_config",
-    "CheckResult",
-    "check_aml_compute",
-    "check_singularity",
-    "precheck",
     "amlt_available",
     "clean_config_for_amlt",
     "extract_portal_url",
