@@ -230,9 +230,7 @@ base:
 config:
   target:
     name: <VC_NAME>                     # Singularity virtual cluster
-    workspace_name: <WORKSPACE>         # override aj_config.json if needed
-    subscription_id: <SUBSCRIPTION_ID>
-    resource_group: <RESOURCE_GROUP>
+    workspace_name: <WORKSPACE>
   _extra:
     processes: 1
   jobs:
@@ -249,11 +247,6 @@ config:
 >
 > In the SKU string, `{nodes}` / `{processes}` are filled in from
 > `-n` / `-p` at submit time.
->
-> **`<WORKSPACE>` / `<SUBSCRIPTION_ID>` / `<RESOURCE_GROUP>`** — set
-> them here, or omit them and put workspace defaults in
-> `.azure_jobs/aj_config.json` (run `aj init` once to generate one).
-> Inspect or browse with:
 >
 > ```bash
 > aj ws show                               # currently active workspace
