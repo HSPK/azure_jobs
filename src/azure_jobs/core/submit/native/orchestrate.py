@@ -93,18 +93,13 @@ def _submit_impl(
             )
         )
 
+    # ── Phase 1: read-only resolution & validation ───────────────────
     _status("resolve", "Resolving Azure coordinates…")
     arm = AzureARMClient()
     vc = resolve_target(request, arm_client=arm)
 
     _status("auth", "Authenticating…")
     client = _get_rest_client(request)
-
-    _status("environment", "Preparing environment…")
-    env_id = _build_environment(request, client)
-
-    _status("storage", f"Configuring {len(request.storage)} storage mount(s)…")
-    outputs, poc_props, dataref_env = _build_storage_mounts(request, client)
 
     _status("command", "Building command…")
     distribution = _build_distribution(request)
@@ -113,7 +108,6 @@ def _submit_impl(
     resources = _build_resources(
         request, client=arm, compute_id=compute, on_log=_status, vc=vc
     )
-    env_vars = _build_env_vars(request, dataref_env)
 
     identity_client_id = ""
     if request.service == "sing":
@@ -122,9 +116,16 @@ def _submit_impl(
 
     runner_script = generate_runner_script(request, identity_client_id)
     extra_files: dict[str, str | bytes] = {RUNNER_FILENAME: runner_script}
-
     code_root = request.code_dir or os.getcwd()
     extra_files.update(_collect_ssh_files(code_root, emit))
+
+    # ── Phase 2: remote writes (env → storage → blob → submit) ───────
+    _status("environment", "Preparing environment…")
+    env_id = _build_environment(request, client)
+
+    _status("storage", f"Configuring {len(request.storage)} storage mount(s)…")
+    outputs, poc_props, dataref_env = _build_storage_mounts(request, client)
+    env_vars = _build_env_vars(request, dataref_env)
 
     _status("code", "Uploading code…")
     code_id = client.blob.upload_code(
