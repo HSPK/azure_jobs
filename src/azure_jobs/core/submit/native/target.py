@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
+from ...errors import SkuResolveError
 from ..models import SubmitRequest
 from .image import _SING_IMAGE_PREFIX
 
@@ -52,7 +53,9 @@ def _resolve_compute(request: SubmitRequest) -> str:
 
 def _build_resources(
     request: SubmitRequest,
-    compute_id: str = "",
+    compute_id: str,
+    vc: Any,
+    client: AzureMLClient,
     on_log: Any = None,
 ) -> dict[str, Any] | None:
     """Build the ``resources`` dict for Singularity targets.
@@ -60,30 +63,58 @@ def _build_resources(
     AML targets return *None* (no special resources needed).
     Resolves amlt SKU shorthand (e.g. ``1xC1``, ``1x80G8-A100-NvLink``)
     to actual Singularity instance type names via the Singularity API.
+
+    Pass ``vc`` (a :class:`VCInfo` already fetched upstream) to skip
+    the inner VC lookup inside :func:`match_instance_type`.
     """
     if request.service != "sing":
         return None
 
-    arm_id = compute_id or _resolve_compute(request)
-
-    from azure_jobs.core.sku import resolve_instance_type
+    from .sku import match_instance_type
 
     sku = request.sku
     if on_log:
         on_log(f"Resolving SKU {sku}\u2026")
 
-    instance_names = resolve_instance_type(
+    requested_tier = request.sla_tier or "Premium"
+    match = match_instance_type(
         sku,
-        vc_subscription_id=request.sing.vc_subscription_id or request.subscription_id,
-        vc_resource_group=request.sing.vc_resource_group or request.resource_group,
-        vc_name=request.compute,
+        client=client,
+        nodes=request.nodes,
+        gpus_per_node=request.gpus_per_node,
+        vc=vc,
+        tier=requested_tier,
     )
-    if instance_names:
-        instance_types = [f"Singularity.{n}" for n in instance_names]
-    else:
-        stripped = sku.strip()
-        stripped = stripped.split("x", 1)[-1] if "x" in stripped else stripped
-        instance_types = [f"Singularity.{stripped}"]
+    if match.effective_tier != requested_tier:
+        log.warning(
+            "VC '%s' has no %s quota for SKU '%s'; auto-downgraded SLA tier to %s.",
+            request.compute,
+            requested_tier,
+            sku,
+            match.effective_tier,
+        )
+        if on_log:
+            on_log(
+                f"SLA tier downgraded: {requested_tier} → {match.effective_tier} "
+                f"(no {requested_tier} quota on VC '{request.compute}')"
+            )
+        request.sla_tier = match.effective_tier
+
+    if not match.nvlink_satisfied:
+        log.warning(
+            "VC '%s' has no NVLink-enabled instance type matching SKU '%s'; "
+            "falling back to non-NVLink rows.",
+            request.compute,
+            sku,
+        )
+        if on_log:
+            on_log(
+                f"NVLink unavailable on VC '{request.compute}' for SKU '{sku}' — "
+                "using non-NVLink instance types."
+            )
+
+    instance_types = [f"Singularity.{n.short_name}" for n in match.instances]
+    request.matched_instances = [n.shorthand for n in match.instances][:4]
 
     # For amlt-sing/ images, pass the alias so Singularity resolves at runtime
     image_version = ""
@@ -102,7 +133,7 @@ def _build_resources(
                 "slaTier": request.sla_tier,
                 "Priority": request.priority,
                 "EnableAzmlInt": False,
-                "VirtualClusterArmId": arm_id,
+                "VirtualClusterArmId": compute_id,
                 "tensorboardLogDirectory": "/scratch/outputs",
             }
         }

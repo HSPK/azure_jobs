@@ -21,7 +21,7 @@ from azure_jobs.core.az_client import AzureARMClient
 
 from ...errors import AJError, parse_exception_message
 from ..models import SubmitEvent, SubmitRequest, SubmitResult
-from .coords import resolve_request
+from .coords import resolve_target
 from .image import _build_environment
 from .job_body import _build_env_vars, _build_job_body, _build_tags
 from .runner import RUNNER_FILENAME, generate_runner_script
@@ -95,7 +95,7 @@ def _submit_impl(
 
     _status("resolve", "Resolving Azure coordinates…")
     arm = AzureARMClient()
-    resolve_request(request, arm_client=arm)
+    vc = resolve_target(request, arm_client=arm)
 
     _status("auth", "Authenticating…")
     client = _get_rest_client(request)
@@ -110,7 +110,9 @@ def _submit_impl(
     distribution = _build_distribution(request)
     identity = _build_identity(request)
     compute = _resolve_compute(request)
-    resources = _build_resources(request, compute_id=compute, on_log=_status)
+    resources = _build_resources(
+        request, client=arm, compute_id=compute, on_log=_status, vc=vc
+    )
     env_vars = _build_env_vars(request, dataref_env)
 
     identity_client_id = ""
@@ -148,12 +150,9 @@ def _submit_impl(
     )
     returned_job = client.jobs.create_or_update(request.name, job_body)
 
-    portal_url = (
-        ((returned_job.get("properties") or {}).get("services") or {})
-        .get("Studio", {})
-        .get("endpoint")
-        or ""
-    )
+    portal_url = ((returned_job.get("properties") or {}).get("services") or {}).get(
+        "Studio", {}
+    ).get("endpoint") or ""
     azure_name = returned_job.get("name", "") or request.name
     _status("done", f"Job {azure_name} submitted")
 

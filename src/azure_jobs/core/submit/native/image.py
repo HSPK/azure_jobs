@@ -49,9 +49,7 @@ def _build_environment(request: SubmitRequest, client: AzureMLClient) -> str:
         log.debug("Environment %s:%s not cached, creating new", env_name, version)
 
     try:
-        registered = client.environments.create_or_update(
-            env_name, version, image
-        )
+        registered = client.environments.create_or_update(env_name, version, image)
         return registered.id
     except Exception:
         log.debug("Failed to register environment, using inline", exc_info=True)

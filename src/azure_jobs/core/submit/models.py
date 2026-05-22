@@ -103,6 +103,14 @@ class SubmitRequest:
 
     service: str = "aml"
 
+    # Resolved Singularity instance type short names (e.g.
+    # ``["ND96amrs_A100_v4", "ND96asr_v4"]``). Populated by
+    # :func:`azure_jobs.core.submit.native.target._build_resources`
+    # for sing jobs; empty for AML/Volcano. Surfaced in the post-submit
+    # result panel + JSON envelope so users can see exactly which
+    # instance types Azure was asked to schedule.
+    matched_instances: list[str] = field(default_factory=list)
+
     # Path to the rendered submission YAML on disk (set by the CLI after
     # writing). Lets backends that consume the YAML directly (e.g. amlt)
     # find it via the request alone.
