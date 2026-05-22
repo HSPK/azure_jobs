@@ -1,19 +1,17 @@
-"""``aj template init`` — interactive wizard for authoring a new leaf template.
+"""``aj template init`` — interactive wizard for authoring leaf templates.
 
-The wizard always picks from live Azure data — no "create from
-scratch" branches, no filename prompts. Components are auto-named
-from the picked resource:
+The wizard picks account / environment / storage / workspace from live
+Azure data, then auto-generates one leaf per (VC, accelerator,
+GPU memory) combination with non-zero quota visible to the account.
 
 * account     → ``account/<sanitised-uai-name>.yaml``
 * storage     → ``storage/default.yaml`` (append mounts)
 * environment → ``environment/sing.yaml`` (Singularity only)
-* template    → ``template/<leaf-name>.yaml`` (the file ``-t`` selects)
+* template    → ``template/{vc}_{accelerator}_{memory}.yaml`` (one per quota)
 
 Plus two zero-config bases auto-created if missing:
 ``template/base.yaml`` (code upload rules) and
 ``environment/base.yaml`` (sla / priority / shm defaults).
-
-Order: account → environment → storage → target → SKU → workspace → leaf name.
 """
 
 from __future__ import annotations
@@ -29,7 +27,7 @@ from rich.table import Table
 
 from azure_jobs.core import const
 
-_STEPS = 7
+_STEPS = 4
 
 
 # ────────────────────────────────────────────────────────────────────────
@@ -220,49 +218,89 @@ def _pick_storage() -> str:
     return "storage.default"
 
 
-def _pick_target() -> dict[str, str]:
-    """Discover Singularity VCs and let the user pick one."""
+# ────────────────────────────────────────────────────────────────────────
+# quota-driven leaf generation
+# ────────────────────────────────────────────────────────────────────────
+
+
+def _sku_for(accelerator: str, gpu_memory: int) -> str:
+    """SKU shorthand parsed by :class:`SkuSpec.parse`."""
+    if gpu_memory > 0:
+        return f"{{nodes}}x{gpu_memory}G{{processes}}-{accelerator}"
+    return "{nodes}xC{processes}"
+
+
+def _generate_leaves(
+    *,
+    base_refs: list[str],
+    workspace: dict[str, str],
+    force: bool,
+) -> list[dict[str, str]]:
+    """Fetch user quota and write one leaf per (vc, accelerator, memory).
+
+    Returns the list of leaves written / skipped for the summary table.
+    """
     from azure_jobs.core.az_client import AzureARMClient
-    from azure_jobs.utils.ui import console, warning
+    from azure_jobs.utils.ui import console, error, warning
 
     with console.status(
-        "[bold cyan]Discovering virtual clusters…[/bold cyan]", spinner="dots"
+        "[bold cyan]Fetching quota across visible subscriptions…[/bold cyan]",
+        spinner="dots",
     ):
         try:
-            vcs = AzureARMClient().vc.list()
+            vcs = AzureARMClient().vc.quota.list()
         except Exception as exc:
-            warning(f"Could not discover VCs: {exc}")
-            vcs = []
+            error(f"Could not fetch VC quota: {exc}")
+            raise SystemExit(1) from exc
 
-    if not vcs:
-        return {"name": click.prompt("  Target name")}
+    rows: list[dict[str, str]] = []
+    seen: set[tuple[str, str, int]] = set()
 
-    rows = [
-        {
-            "_label": f"[bold]{vc.name}[/bold]   [dim]{vc.resource_group}[/dim]",
-            "vc": vc,
-        }
-        for vc in vcs
-    ]
-    vc = _pick_row("Target VC", rows)["vc"]
-    return {"name": vc.name}
+    for vc in vcs:
+        for sq in vc.quotas:
+            ul = sq.user_limit
+            if not (ul and ul.limit > 0):
+                continue
+            if not sq.accelerator or sq.gpu_memory <= 0:
+                continue
+            key = (vc.name, sq.accelerator, sq.gpu_memory)
+            if key in seen:
+                continue
+            seen.add(key)
 
+            leaf_name = f"{vc.name}_{sq.accelerator}_{sq.gpu_memory}"
+            leaf_path = const.AJ_TEMPLATE_HOME / f"{leaf_name}.yaml"
+            status = "wrote"
+            if leaf_path.exists() and not force:
+                status = "skipped"
+            else:
+                leaf = {
+                    "base": list(base_refs),
+                    "config": {
+                        "target": {
+                            "name": vc.name,
+                            "workspace_name": workspace["workspace_name"],
+                        },
+                        "jobs": [{"sku": _sku_for(sq.accelerator, sq.gpu_memory)}],
+                    },
+                }
+                _write_yaml(leaf_path, leaf)
+            rows.append(
+                {
+                    "leaf": leaf_name,
+                    "vc": vc.name,
+                    "accelerator": sq.accelerator,
+                    "memory": str(sq.gpu_memory),
+                    "status": status,
+                }
+            )
 
-_SKU_SUGGESTIONS = [
-    "{nodes}x40G{processes}-A100",
-    "{nodes}x80G{processes}-A100",
-    "{nodes}x80G{processes}-H100",
-    "{nodes}x141G{processes}-H200",
-]
-
-
-def _pick_sku() -> str:
-    rows = [{"_label": f"[bold]{s}[/bold]", "sku": s} for s in _SKU_SUGGESTIONS]
-    rows.append({"_label": "[italic]custom (type your own)[/italic]", "sku": None})
-    picked = _pick_row("SKU pattern", rows)
-    if picked["sku"]:
-        return picked["sku"]
-    return click.prompt("  Custom SKU string")
+    if not rows:
+        warning(
+            "No quota with user_limit > 0 found — no leaves generated. "
+            "Run `aj quota list` to inspect."
+        )
+    return rows
 
 
 # ────────────────────────────────────────────────────────────────────────
@@ -409,8 +447,10 @@ def _intro() -> None:
     console.print(
         Panel.fit(
             "[bold]aj template init[/bold]\n"
-            "[dim]Interactive wizard for creating a new leaf template.[/dim]\n\n"
-            "Steps: [cyan]account · environment · storage · target · sku · workspace · name[/cyan]",
+            "[dim]Interactive wizard for bootstrapping leaf templates.[/dim]\n\n"
+            "Steps: [cyan]account · environment · storage · workspace[/cyan]\n"
+            "[dim]Then one leaf is auto-generated per (VC, accelerator, memory) "
+            "combo with positive user quota.[/dim]",
             border_style="cyan",
             padding=(1, 4),
         )
@@ -423,30 +463,48 @@ def _summary(
     env_ref: str,
     image: str,
     storage_ref: str,
-    target: dict[str, str],
-    sku: str,
     workspace: dict[str, str],
+    leaves: list[dict[str, str]],
 ) -> None:
     from azure_jobs.utils.ui import console
 
-    table = Table(show_header=False, box=None, pad_edge=False)
-    table.add_column(style="dim")
-    table.add_column(style="bold")
-    table.add_row("Account", account_ref)
-    table.add_row("Environment", f"{env_ref}  [dim]({image})[/dim]")
-    table.add_row("Storage", storage_ref)
-    table.add_row("Target", target.get("name", "?"))
-    table.add_row("SKU", sku)
-    table.add_row(
+    meta = Table(show_header=False, box=None, pad_edge=False)
+    meta.add_column(style="dim")
+    meta.add_column(style="bold")
+    meta.add_row("Account", account_ref)
+    meta.add_row("Environment", f"{env_ref}  [dim]({image})[/dim]")
+    meta.add_row("Storage", storage_ref)
+    meta.add_row(
         "Workspace",
         f"{workspace['workspace_name']}  [dim]({workspace['resource_group']})[/dim]",
     )
     console.print()
-    console.print(Panel(table, title="[bold]Summary[/bold]", border_style="green"))
+    console.print(
+        Panel(meta, title="[bold]Shared components[/bold]", border_style="green")
+    )
+
+    if not leaves:
+        return
+
+    table = Table(title="Generated leaves", show_lines=False)
+    table.add_column("Leaf", style="bold")
+    table.add_column("VC", style="cyan")
+    table.add_column("Accel")
+    table.add_column("Mem (GB)", justify="right")
+    table.add_column("Status", style="dim")
+    for r in leaves:
+        table.add_row(r["leaf"], r["vc"], r["accelerator"], r["memory"], r["status"])
+    console.print(table)
 
 
 def run_wizard(leaf_name: str | None, *, force: bool) -> None:
     from azure_jobs.utils.ui import console, info, success, warning
+
+    if leaf_name:
+        warning(
+            f"Positional name '{leaf_name}' ignored — leaves are auto-named "
+            "{vc}_{accelerator}_{memory}.yaml."
+        )
 
     _intro()
 
@@ -471,58 +529,36 @@ def run_wizard(leaf_name: str | None, *, force: bool) -> None:
     )
     storage_ref = _pick_storage()
 
-    _step(4, "Target (virtual cluster)", "Which Singularity VC this leaf submits to.")
-    target = _pick_target()
-
-    _step(
-        5,
-        "SKU",
-        "Per-node instance type — `{nodes}` / `{processes}` are filled in at submit.",
-    )
-    sku = _pick_sku()
-
-    _step(6, "Workspace", "The Azure ML workspace that owns this leaf's runs.")
+    _step(4, "Workspace", "The Azure ML workspace that owns these leaves' runs.")
     workspace = _pick_workspace()
 
-    _step(
-        7,
-        "Leaf name",
-        "The name you'll pass to `aj run -t <name>` and the filename under .azure_jobs/template/.",
+    info("Auto-generating one leaf per (VC, accelerator, memory) with positive quota…")
+    leaves = _generate_leaves(
+        base_refs=["base", account_ref, storage_ref, env_ref],
+        workspace=workspace,
+        force=force,
     )
-    leaf_name = leaf_name or click.prompt("  Leaf name (e.g. vca100, h100)")
-    leaf_path = const.AJ_TEMPLATE_HOME / f"{leaf_name}.yaml"
-    if leaf_path.exists() and not force:
-        if not click.confirm(f"  {leaf_path} exists — overwrite?", default=False):
-            warning("Aborted.")
-            return
-
-    leaf = {
-        "base": ["base", account_ref, storage_ref, env_ref],
-        "config": {
-            "target": {
-                **target,
-                "workspace_name": workspace["workspace_name"],
-            },
-            "_extra": {"nodes": 1, "processes": 1},
-            "jobs": [{"sku": sku}],
-        },
-    }
-    _write_yaml(leaf_path, leaf)
 
     _summary(
         account_ref=account_ref,
         env_ref=env_ref,
         image=image,
         storage_ref=storage_ref,
-        target=target,
-        sku=sku,
         workspace=workspace,
+        leaves=leaves,
     )
-    success(f"Wrote {leaf_path}")
-    console.print()
-    info("Try it:")
-    console.print(f"  [bold cyan]aj template show {leaf_name}[/bold cyan]")
-    console.print(f"  [bold cyan]aj template validate {leaf_name}[/bold cyan]")
+    if leaves:
+        wrote = sum(1 for r in leaves if r["status"] == "wrote")
+        skipped = len(leaves) - wrote
+        msg = f"Generated {wrote} leaf template(s)"
+        if skipped:
+            msg += f"; {skipped} already existed (use -f to overwrite)"
+        success(msg + ".")
+        console.print()
+        first = leaves[0]["leaf"]
+        info("Try one:")
+        console.print(f"  [bold cyan]aj template show {first}[/bold cyan]")
+        console.print(f"  [bold cyan]aj template validate {first}[/bold cyan]")
     console.print(
         f"  [bold cyan]aj run -t {leaf_name} -d -n 1 -p 1 echo hello[/bold cyan]"
     )

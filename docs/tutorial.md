@@ -23,8 +23,6 @@ Verify:
 aj --version
 ```
 
-![aj version command](assets/aj_version.png)
-
 ### Authenticate
 
 `aj` uses the standard Azure credential chain. A one-time `az login` is
@@ -322,18 +320,20 @@ aj template init
 
 ![aj template init wizard](assets/aj_template_init.png)
 
-It walks through seven steps and writes the same files §2.1–§2.5 produced
-manually:
+It walks through four shared picks and then auto-generates one leaf per
+(VC, accelerator, GPU memory) combination with positive user quota:
 
 | Step | What you pick |
 |------|---------------|
 | 1 · Account | A managed identity (from `aj uai list`) |
 | 2 · Environment | A Singularity image (from `aj image list`) |
 | 3 · Storage | Storage account + container + mount path |
-| 4 · Target | A Singularity VC (from `aj quota list`) |
-| 5 · SKU | One of the standard `{nodes}x…-A100/H100/H200` patterns |
-| 6 · Workspace | The Azure ML workspace that owns this leaf's runs |
-| 7 · Name | The leaf filename (what `-t <name>` selects) |
+| 4 · Workspace | The Azure ML workspace that owns these leaves' runs |
+
+Leaves are then written to
+`.azure_jobs/template/{vc}_{accelerator}_{memory}.yaml` — one per
+quota slice visible to your account. Pass `-f` to overwrite existing
+files.
 
 ---
 

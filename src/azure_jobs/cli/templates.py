@@ -29,11 +29,12 @@ def template_list() -> None:
     "-f", "--force", is_flag=True, help="Overwrite an existing leaf template"
 )
 def template_init(name: str | None, force: bool) -> None:
-    """Interactively author a new leaf template.
+    """Interactively author leaf templates.
 
-    Walks through account / storage / environment / target / SKU,
-    reusing existing component files or creating new ones from live
-    Azure data. Writes the leaf to ``.azure_jobs/template/<name>.yaml``.
+    Walks through account / storage / environment / workspace using live
+    Azure data, then auto-generates one leaf per (VC, accelerator, GPU
+    memory) combination with positive user quota at
+    ``.azure_jobs/template/{vc}_{accelerator}_{memory}.yaml``.
     """
     from azure_jobs.cli._template_init import run_wizard
     from azure_jobs.utils.ui import get_output_mode, show_command_result
