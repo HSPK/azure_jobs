@@ -146,6 +146,33 @@ class VCQuotaAPI(ArmNamespace):
             vc.quotas = parse_managed_quotas(vc.raw, include_zero=include_zero)
         return vcs
 
+    def get_by_name(self, name: str) -> VCInfo:
+        """Resolve a single Singularity VC by name (with parsed quotas).
+
+        Lists every visible subscription's VCs, then narrows to the
+        requested name. Raises :class:`ConfigError` when missing or
+        ambiguous.
+        """
+        if not name:
+            raise ConfigError("Singularity virtual cluster name is required.")
+        matches = [vc for vc in self.list(include_zero=True) if vc.name == name]
+        if not matches:
+            raise ConfigError(
+                f"Singularity virtual cluster '{name}' was not found in "
+                "any subscription visible to this account. Run "
+                "`aj quota list` to discover accessible VCs."
+            )
+        if len(matches) > 1:
+            choices = "; ".join(
+                f"{vc.name} in {vc.resource_group} ({vc.subscription_id})"
+                for vc in matches[:5]
+            )
+            raise ConfigError(
+                f"Singularity virtual cluster name '{name}' is ambiguous: "
+                f"{choices}."
+            )
+        return matches[0]
+
 
 class VirtualClustersAPI(ArmNamespace):
     def __init__(self, client) -> None:  # type: ignore[no-untyped-def]
@@ -191,11 +218,19 @@ class VirtualClustersAPI(ArmNamespace):
             name = r.get("name", "")
             if not name:
                 continue
+            locations: list[str] = []
+            if with_raw:
+                locs = (
+                    (r.get("properties", {}) or {}).get("managed", {}) or {}
+                ).get("locations") or []
+                if isinstance(locs, list):
+                    locations = [str(loc) for loc in locs if loc]
             vcs.append(
                 VCInfo(
                     name=name,
                     resource_group=r.get("resourceGroup", ""),
                     subscription_id=r.get("subscriptionId", ""),
+                    locations=locations,
                     raw=r if with_raw else {},
                 )
             )

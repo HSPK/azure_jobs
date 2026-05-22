@@ -25,6 +25,7 @@ from ..auth import TIMEOUT_STANDARD, AuthSession, raise_for_rest_error
 from .compute import ComputesAPI
 from .graph import ResourceGraphAPI
 from .identity import IdentitiesAPI
+from .instance_types import InstanceTypeInfo, InstanceTypesAPI
 from .models import (
     SLA_TIERS,
     ComputeInfo,
@@ -53,6 +54,7 @@ class AzureARMClient(AuthSession):
         self.workspace = WorkspacesAPI(self)
         self.identity = IdentitiesAPI(self)
         self.storage = StoragesAPI(self)
+        self.instance_types = InstanceTypesAPI(self)
 
     # ---- raw HTTP -----------------------------------------------------------
 
@@ -82,6 +84,8 @@ __all__ = [
     "ComputeInfo",
     "ComputesAPI",
     "IdentitiesAPI",
+    "InstanceTypeInfo",
+    "InstanceTypesAPI",
     "ManagedIdentityInfo",
     "ResourceGraphAPI",
     "SLA_TIERS",

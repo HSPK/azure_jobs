@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from azure_jobs.core.errors import NETWORK_LIKE_ERRORS
+from azure_jobs.core.errors import NETWORK_LIKE_ERRORS, ConfigError
 
 from .models import WorkspaceInfo
 from ._base import ArmNamespace
@@ -41,6 +41,27 @@ class WorkspacesAPI(ArmNamespace):
             for r in rows
             if r.get("name")
         ]
+
+    def get(self, name: str) -> WorkspaceInfo:
+        """Resolve a single workspace by name across visible subscriptions.
+
+        Raises :class:`ConfigError` when missing or ambiguous.
+        """
+        if not name:
+            raise ConfigError("workspace name is required")
+        matches = [ws for ws in self.list() if ws.name == name]
+        if not matches:
+            raise ConfigError(
+                f"AML workspace '{name}' was not found in any subscription "
+                "visible to this account."
+            )
+        if len(matches) > 1:
+            choices = "; ".join(
+                f"{ws.name} in {ws.resource_group} ({ws.subscription_id})"
+                for ws in matches[:5]
+            )
+            raise ConfigError(f"AML workspace name '{name}' is ambiguous: {choices}.")
+        return matches[0]
 
 
 __all__ = ["WorkspacesAPI"]
