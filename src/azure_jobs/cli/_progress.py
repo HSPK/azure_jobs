@@ -73,8 +73,7 @@ def fetch_jobs_all_ws_with_progress(
             nonlocal done
             done += 1
             st.update(
-                f"[bold cyan]Fetching jobs ({done}/{total}) "
-                f"{ws_name}…[/bold cyan]"
+                f"[bold cyan]Fetching jobs ({done}/{total}) {ws_name}…[/bold cyan]"
             )
 
         def _on_fail(ws: Any, exc: BaseException) -> None:

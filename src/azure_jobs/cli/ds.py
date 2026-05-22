@@ -37,9 +37,7 @@ def ds_show(name: str, ws_name: str | None) -> None:
     from azure_jobs.utils.ui import console, show_datastore_detail, warning
 
     client = create_rest_client(ws_name=ws_name)
-    with console.status(
-        f"[bold cyan]Fetching '{name}'…[/bold cyan]", spinner="dots"
-    ):
+    with console.status(f"[bold cyan]Fetching '{name}'…[/bold cyan]", spinner="dots"):
         ds = client.datastores.get(name)
     if not ds:
         warning(f"Datastore '{name}' not found")

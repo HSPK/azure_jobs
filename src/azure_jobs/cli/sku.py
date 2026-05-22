@@ -20,8 +20,34 @@ def sku_list(show_all: bool) -> None:
     Shows instance types, GPU specs, amlt-style shorthand, and quota for
     each instance family available on the discovered virtual clusters.
     """
-    from azure_jobs.utils.ui import show_sku_table
+    from azure_jobs.core.az_client import AzureARMClient
+    from azure_jobs.utils.ui import console, error, show_sku_table
 
-    from .quota import load_vcs_with_quotas
+    arm = AzureARMClient()
+    with console.status(
+        "[bold cyan]Discovering virtual clusters…[/bold cyan]", spinner="dots"
+    ):
+        vcs = arm.vc.quota.list(include_zero=show_all)
+    if not vcs:
+        error("No Singularity virtual clusters found")
+        console.print(
+            "  Make sure you are logged in (`az login`) and have access to VCs"
+        )
+        raise SystemExit(1)
 
-    show_sku_table(load_vcs_with_quotas(include_zero=show_all))
+    # Catalog is per-region; gather one row per VC region.
+    catalog: list = []
+    seen_names: set[str] = set()
+    seen_regions: set[str] = set()
+    for vc in vcs:
+        region = vc.region
+        if not region or region in seen_regions:
+            continue
+        seen_regions.add(region)
+        for info in arm.instance_types.list(region):
+            if info.name in seen_names:
+                continue
+            seen_names.add(info.name)
+            catalog.append(info)
+
+    show_sku_table(vcs, catalog=catalog)

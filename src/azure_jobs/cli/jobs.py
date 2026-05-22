@@ -94,8 +94,8 @@ def job_list(
     ws_name: str | None,
 ) -> None:
     """List recent jobs in the cloud workspace."""
-    from azure_jobs.core.jobs import fetch_jobs
     from azure_jobs.core.az_client import create_rest_client
+    from azure_jobs.core.jobs import fetch_jobs
     from azure_jobs.utils.ui import console, show_cloud_jobs_table
 
     client = create_rest_client(ws_name=ws_name)
@@ -112,9 +112,7 @@ def job_list(
 
         def _on_progress(matched: int, scanned: int) -> None:
             suffix = f" ({scanned} scanned)" if filtering else ""
-            st.update(
-                f"[bold cyan]Fetching… {matched}/{last} jobs{suffix}[/bold cyan]"
-            )
+            st.update(f"[bold cyan]Fetching… {matched}/{last} jobs{suffix}[/bold cyan]")
 
         jobs = fetch_jobs(
             client,
@@ -132,8 +130,8 @@ def job_list(
 
 def _fetch_and_show_job(job_id: str, ws_name: str | None = None) -> None:
     """Resolve *job_id*, fetch via REST, and display details."""
-    from azure_jobs.core.errors import RestError
     from azure_jobs.core.az_client import create_rest_client
+    from azure_jobs.core.errors import RestError
     from azure_jobs.utils.ui import console, error, show_job_detail
 
     name = resolve_short_id(job_id)
@@ -389,11 +387,7 @@ def job_stats(
         show_workspace_stats_table,
     )
 
-    cutoff = (
-        datetime.now(timezone.utc) - timedelta(days=days)
-        if days
-        else None
-    )
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days) if days else None
     max_jobs = last if last is not None else 10000
 
     if all_ws:

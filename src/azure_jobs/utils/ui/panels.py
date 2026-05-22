@@ -31,6 +31,7 @@ def _request_payload(request: SubmitRequest) -> dict[str, Any]:
         "service": request.service,
         "compute": request.compute,
         "sku": request.sku,
+        "matched_instances": list(request.matched_instances),
         "nodes": request.nodes,
         "gpus_per_node": request.gpus_per_node,
         "processes_per_node": request.processes_per_node,
@@ -119,6 +120,8 @@ def show_submission_preview(
     details.add_column(style="value")
     details.add_row("Image", esc(request.image or "-"))
     details.add_row("Registry", esc(request.image_registry or "-"))
+    if request.matched_instances:
+        details.add_row("Matched", esc(", ".join(request.matched_instances)))
     details.add_row("Code", esc(request.code_dir or "."))
     details.add_row("Workspace", esc(request.workspace_name or "-"))
     details.add_row("Resource Group", esc(request.resource_group or "-"))
@@ -243,6 +246,8 @@ def _render_submission_result_rich(
         grid.add_row("Compute", esc(request.compute))
     if request.sku:
         grid.add_row("SKU", esc(request.sku))
+    if request.matched_instances:
+        grid.add_row("Matched", esc(", ".join(request.matched_instances)))
     if request.nodes:
         total_processes = request.nodes * (request.processes_per_node or 1)
         grid.add_row(

@@ -65,7 +65,6 @@ def _show_sing_quotas(show_all: bool, *, full: bool = False) -> None:
 
 def _show_aml_quotas(show_all: bool) -> None:
     """Discover AML workspaces, fetch computes, hand off to the display layer."""
-    from azure_jobs.core.aml import fetch_aml_computes_all_workspaces
     from azure_jobs.core.az_client import AzureARMClient, WorkspaceInfo
     from azure_jobs.utils.ui import (
         console,
@@ -93,10 +92,9 @@ def _show_aml_quotas(show_all: bool) -> None:
             )
             raise SystemExit(1)
 
-        results = fetch_aml_computes_all_workspaces(
+        results = arm.compute.list_all(
             workspaces=workspaces,
             on_workspace_failure=lambda ws, exc: failures.append((ws, exc)),
-            arm_client=arm,
         )
 
     if failures:

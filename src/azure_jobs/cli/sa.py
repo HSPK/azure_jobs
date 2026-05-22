@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import click
-
 from azure_jobs.cli import main
 
 
