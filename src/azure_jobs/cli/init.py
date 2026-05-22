@@ -1,4 +1,4 @@
-"""``aj init`` — initialise project and set up amlt configuration."""
+"""aj init — initialise project and set up amlt configuration."""
 
 from __future__ import annotations
 
@@ -13,30 +13,19 @@ from azure_jobs.cli import main
 if TYPE_CHECKING:
     from azure_jobs.core.config import AJWorkspace
 
-
 def _confirm_step(name: str, force: bool) -> bool:
-    """In force mode, ask if user wants to redo this step."""
     if not force:
         return True
     return click.confirm(f"  Reconfigure {name}?", default=True)
-
 
 @main.group(invoke_without_command=True)
 @click.option("-f", "--force", is_flag=True, help="Re-run all steps (with skip option)")
 @click.pass_context
 def init(ctx: click.Context, force: bool) -> None:
-    """Initialise aj project directory.
-
-    Sets up .azure_jobs/ structure, configures workspace and experiment
-    interactively if not already set.
-
-    Use ``aj init amlt`` to additionally set up amlt integration.
-    Use -f to re-run all steps (each step can be skipped).
-    """
+    """Initialise aj project directory."""
     from azure_jobs.utils.ui import get_output_mode, show_command_result
 
     if get_output_mode() == "json":
-        # Interactive setup is not appropriate for agent consumers.
         show_command_result(
             "init",
             status="failed",
@@ -45,21 +34,17 @@ def init(ctx: click.Context, force: bool) -> None:
         raise SystemExit(1)
 
     if ctx.invoked_subcommand is not None:
-        # Subcommand (e.g. 'aj init amlt') will handle its own logic
         ctx.ensure_object(dict)
         ctx.obj["force"] = force
         return
 
     _init_aj(force)
 
-
 def _init_aj(force: bool) -> None:
-    """Core aj initialisation: templates, workspace, experiment."""
     from azure_jobs.core import const
     from azure_jobs.core.config import get_workspace_config, read_config, write_config
     from azure_jobs.utils.ui import dim, info, success, warning
 
-    # 1. Templates
     if not const.AJ_HOME.exists():
         repo_url = click.prompt(
             "Template repo URL (e.g. user/repo or git@github.com:…)",
@@ -80,7 +65,6 @@ def _init_aj(force: bool) -> None:
     else:
         info(".azure_jobs/ already exists — skipping template pull")
 
-    # 2. Workspace
     ws = get_workspace_config()
     need_ws = not ws or not ws.workspace_name
     if need_ws or (force and _confirm_step("workspace", force)):
@@ -96,7 +80,6 @@ def _init_aj(force: bool) -> None:
             f"(rg={ws.resource_group}, sub={ws.subscription_id[:8]}…)"
         )
 
-    # 3. Experiment
     cfg = read_config()
     need_exp = not cfg.experiment
     if need_exp or (force and _confirm_step("experiment", force)):
@@ -108,22 +91,16 @@ def _init_aj(force: bool) -> None:
 
     success("aj initialised ✓")
 
-
 @init.command("amlt")
 @click.option("-f", "--force", is_flag=True, help="Re-run all steps (with skip option)")
 @click.pass_context
 def init_amlt(ctx: click.Context, force: bool) -> None:
-    """Set up amlt integration (project + workspace registration).
-
-    Creates .amltconfig and prints workspace registration commands.
-    Requires amlt to be installed (``pipx install amlt``).
-    """
+    """Set up amlt integration (project + workspace registration)."""
     from pathlib import Path
 
     from azure_jobs.core.config import get_workspace_config
     from azure_jobs.utils.ui import console, dim, error, info, success
 
-    # Inherit -f from parent if set
     parent_force = (ctx.parent and ctx.parent.obj or {}).get("force", False)
     force = force or parent_force
 
@@ -137,7 +114,6 @@ def init_amlt(ctx: click.Context, force: bool) -> None:
         error("Workspace not configured. Run [bold]aj init[/bold] first.")
         return
 
-    # 1. Check existing .amltconfig
     has_amltconfig = Path(".amltconfig").exists()
     if has_amltconfig:
         import json
@@ -155,7 +131,6 @@ def init_amlt(ctx: click.Context, force: bool) -> None:
             success("amlt configured ✓")
             return
 
-    # 2. Query workspace for default storage account
     with console.status(
         "[bold cyan]Querying workspace storage…[/bold cyan]", spinner="dots"
     ):
@@ -179,7 +154,6 @@ def init_amlt(ctx: click.Context, force: bool) -> None:
 
     dim(f"Storage account: {storage_account}")
 
-    # 3. Create amlt project
     import secrets
 
     default_project_name = f"project-{secrets.token_hex(3)}"
@@ -207,13 +181,10 @@ def init_amlt(ctx: click.Context, force: bool) -> None:
     if result.stdout.strip():
         dim(result.stdout.strip())
 
-    # 4. Print workspace registration commands
     _print_amlt_workspace_commands(ws)
     success("amlt configured ✓")
 
-
 def _print_amlt_workspace_commands(aj_ws: "AJWorkspace") -> None:
-    """Print amlt workspace add commands for the user to run manually."""
     from azure_jobs.core.config import detect_workspaces
     from azure_jobs.utils.ui import info
 
@@ -243,9 +214,7 @@ def _print_amlt_workspace_commands(aj_ws: "AJWorkspace") -> None:
             )
     click.echo()
 
-
 def _setup_workspace() -> "AJWorkspace | None":
-    """Interactive workspace setup — detect subscription, list workspaces, pick one."""
     from azure_jobs.core.config import (
         AJWorkspace,
         detect_subscription,
@@ -288,9 +257,7 @@ def _setup_workspace() -> "AJWorkspace | None":
     write_config(cfg)
     return ws
 
-
 def _default_experiment_name() -> str:
-    """Derive a default experiment name from the current directory."""
     from pathlib import Path
 
     return Path.cwd().name.replace(" ", "_").lower()

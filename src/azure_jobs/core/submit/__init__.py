@@ -1,19 +1,4 @@
-"""Azure ML job submission engine — pure REST, no ``azure-ai-ml`` SDK.
-
-The package is organized into three backend subpackages:
-
-* :mod:`azure_jobs.core.submit.native` — native AJ REST submission.
-* :mod:`azure_jobs.core.submit.amlt` — submission via the external ``amlt``
-  CLI.
-* :mod:`azure_jobs.core.submit.volcano` — submission to Volcano on Kubernetes.
-
-Shared data models and config rendering live at the top level
-(:mod:`.models`, :mod:`.config`). The most common entry points are
-re-exported here so callers can simply do::
-
-    from azure_jobs.core.submit import SubmitRequest, submit
-    from azure_jobs.core.submit import build_submit_request
-"""
+"""Azure ML job submission engine — pure REST, no azure-ai-ml SDK."""
 
 from .amlt import (
     amlt_available,
@@ -66,11 +51,9 @@ __all__ = [
     "submit_via_amlt",
     "submit_via_volcano",
     "submit_via_native",
-    # Submission record (local jobs.jsonl)
     "SubmissionRecord",
     "log_record",
     "read_records",
-    # Registry primitives — for backend authors
     "BackendEntry",
     "register_backend",
     "get_backend",

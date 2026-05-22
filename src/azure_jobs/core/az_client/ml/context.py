@@ -16,12 +16,7 @@ from ..auth import (
     raise_for_rest_error,
 )
 
-
 def _data_scope_from_url(data_plane_base: str) -> str:
-    """Derive the OAuth scope for a data-plane URL.
-
-    Falls back to the public ``ML_SCOPE`` when the URL is empty or unparseable.
-    """
     if not data_plane_base:
         return ML_SCOPE
     host = urlparse(data_plane_base).hostname or ""
@@ -33,14 +28,8 @@ def _data_scope_from_url(data_plane_base: str) -> str:
         scope_host = "ml.azure.com"
     return f"https://{scope_host}/.default"
 
-
 class RestContext(AuthSession):
-    """Shared session, credentials, and workspace state.
-
-    Passed by reference to every workspace-scoped sub-API
-    (jobs, resources, blob, run history) so they share the same
-    HTTP session, ARM/data-plane token caches, and workspace metadata.
-    """
+    """Shared session, credentials, and workspace state."""
 
     def __init__(
         self,
@@ -61,8 +50,6 @@ class RestContext(AuthSession):
         self.data_plane_base: str = ""
         self._ws_cache: dict[str, Any] | None = None
 
-    # ---- data-plane auth ----------------------------------------------------
-
     def ensure_data_token(self) -> str:
         """Get auth token for the data plane (ml.azure.com scope)."""
         if self._data_token.is_fresh():
@@ -72,8 +59,6 @@ class RestContext(AuthSession):
         token, expires = fetch_token(scope)
         self._data_token.update(token, expires)
         return token
-
-    # ---- workspace metadata -------------------------------------------------
 
     def get_workspace(self) -> dict[str, Any]:
         """Fetch full workspace details (cached for the client's lifetime)."""
@@ -98,15 +83,8 @@ class RestContext(AuthSession):
         self.data_plane_base = disc
         return self._location
 
-    # ---- shared low-level helpers used by multiple sub-APIs ----------------
-
     def list_datastore_secrets(self, name: str) -> dict[str, Any]:
-        """Return credentials/SAS for a workspace datastore.
-
-        Lives on the context (rather than ``ResourcesAPI``) because both
-        ``ResourcesAPI`` and ``BlobAPI`` need it; placing it here avoids
-        cross-API imports.
-        """
+        """Return credentials/SAS for a workspace datastore."""
         self.ensure_token()
         url = (
             f"{self.base}/datastores/{quote(name, safe='')}"

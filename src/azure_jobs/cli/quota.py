@@ -1,4 +1,4 @@
-"""``aj quota`` — view compute quota and availability."""
+"""aj quota — view compute quota and availability."""
 
 from __future__ import annotations
 
@@ -10,11 +10,9 @@ from . import main
 
 log = logging.getLogger(__name__)
 
-
 @main.group(name="quota")
 def quota_group() -> None:
     """View compute quota and availability."""
-
 
 @quota_group.command(name="list")
 @click.option("--aml", "backend", flag_value="aml", help="Show AML workspace quotas")
@@ -33,19 +31,13 @@ def quota_group() -> None:
     help="Include Resource Group + Subscription columns (Singularity only)",
 )
 def quota_list(backend: str, show_all: bool, full: bool) -> None:
-    """List compute quotas.
-
-    By default discovers all Singularity virtual clusters and shows their quotas.
-    Use --aml for Azure ML workspace quotas.
-    """
+    """List compute quotas."""
     if backend == "aml":
         _show_aml_quotas(show_all)
     else:
         _show_sing_quotas(show_all, full=full)
 
-
 def _show_sing_quotas(show_all: bool, *, full: bool = False) -> None:
-    """Discover VCs, fetch quotas, hand off to the display layer."""
     from azure_jobs.core.az_client import AzureARMClient
     from azure_jobs.utils.ui import console, error, show_sing_quota_table
 
@@ -62,9 +54,7 @@ def _show_sing_quotas(show_all: bool, *, full: bool = False) -> None:
         raise SystemExit(1)
     show_sing_quota_table(vcs, full=full)
 
-
 def _show_aml_quotas(show_all: bool) -> None:
-    """Discover AML workspaces, fetch computes, hand off to the display layer."""
     from azure_jobs.core.az_client import AzureARMClient, WorkspaceInfo
     from azure_jobs.utils.ui import (
         console,

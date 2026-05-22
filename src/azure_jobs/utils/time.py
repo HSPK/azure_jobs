@@ -1,9 +1,4 @@
-"""Unified time utilities for Azure Jobs.
-
-All times from Azure ML are UTC.  This module converts them to
-a configurable display timezone (default ``Asia/Shanghai``) and
-provides shared duration formatting.
-"""
+"""Unified time utilities for Azure Jobs."""
 
 from __future__ import annotations
 
@@ -14,13 +9,8 @@ _DEFAULT_TZ = "Asia/Shanghai"
 
 _tz_cache: dict[str, Any] = {}
 
-
 def resolve_tz(name: str) -> Any:
-    """Resolve a timezone name to a ``tzinfo`` object.
-
-    Tries ``zoneinfo`` (Python 3.9+), then falls back to a fixed UTC+8
-    offset for the default ``Asia/Shanghai`` zone.
-    """
+    """Resolve a timezone name to a tzinfo object."""
     if name in _tz_cache:
         return _tz_cache[name]
     try:
@@ -37,13 +27,10 @@ def resolve_tz(name: str) -> Any:
     _tz_cache[name] = tz
     return tz
 
-
 _display_tz_name: str | None = None
-
 
 def get_display_tz() -> Any:
     return resolve_tz(get_display_tz_name())
-
 
 def get_display_tz_name() -> str:
     global _display_tz_name
@@ -54,16 +41,13 @@ def get_display_tz_name() -> str:
         _display_tz_name = tz if tz else _DEFAULT_TZ
     return _display_tz_name
 
-
 _DISPLAY_FMT = "%Y-%m-%d %H:%M:%S"
-
 
 def format_time(utc_str: str) -> str:
     """Convert a UTC time string to the display timezone."""
     if not utc_str:
         return ""
     try:
-        # ISO 8601 first (carries timezone info).
         dt = datetime.fromisoformat(utc_str)
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
@@ -72,9 +56,8 @@ def format_time(utc_str: str) -> str:
             dt = datetime.strptime(utc_str, _DISPLAY_FMT)
             dt = dt.replace(tzinfo=timezone.utc)
         except ValueError:
-            return utc_str  # unparseable
+            return utc_str
     return dt.astimezone(get_display_tz()).strftime(_DISPLAY_FMT)
-
 
 def time_ago(iso_str: str) -> str:
     """Convert an ISO 8601 / UTC timestamp to a human-readable relative time."""
@@ -103,7 +86,6 @@ def time_ago(iso_str: str) -> str:
     except (ValueError, TypeError):
         return str(iso_str)[:10]
 
-
 def format_duration(seconds: int) -> str:
     """Format seconds into a human-readable duration string."""
     if seconds >= 3600:
@@ -112,9 +94,8 @@ def format_duration(seconds: int) -> str:
         return f"{seconds // 60}m {seconds % 60}s"
     return f"{seconds}s"
 
-
 def parse_utc(s: str) -> datetime:
-    """Parse a UTC time string with ``T`` or space separator."""
+    """Parse a UTC time string with T or space separator."""
     s = s.strip()
     for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
         try:
@@ -126,7 +107,6 @@ def parse_utc(s: str) -> datetime:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt
 
-
 def calc_duration_secs(start_utc: str, end_utc: str) -> int | None:
     """Return the number of seconds between two UTC time strings, or *None*."""
     if not start_utc or not end_utc:
@@ -135,7 +115,6 @@ def calc_duration_secs(start_utc: str, end_utc: str) -> int | None:
         return int((parse_utc(end_utc) - parse_utc(start_utc)).total_seconds())
     except (ValueError, TypeError):
         return None
-
 
 def calc_duration(start_utc: str, end_utc: str) -> str:
     """Duration between two UTC time strings, or elapsed time when running."""
@@ -148,7 +127,6 @@ def calc_duration(start_utc: str, end_utc: str) -> str:
             return format_duration(int((t1 - t0).total_seconds()))
         except ValueError:
             return ""
-    # Running job — show elapsed time.
     try:
         t0 = parse_utc(start_utc)
         elapsed = int((datetime.now(timezone.utc) - t0).total_seconds())

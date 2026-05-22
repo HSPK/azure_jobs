@@ -1,21 +1,4 @@
-"""Azure Resource Manager client — workspace-agnostic operations.
-
-Composes one namespace per resource family, mirroring
-:class:`azure_jobs.core.az_client.AzureMLClient`::
-
-    arm = AzureARMClient()
-    arm.subscriptions.list()                          -> list[str]
-    arm.graph.query(query, subs)                      -> list[dict]
-    arm.vc.list(...)                                  -> list[VCInfo]
-    arm.vc.get(name, ...)                             -> VCInfo
-    arm.compute.list(sub, rg, ws)                     -> list[ComputeInfo]
-    arm.compute.get(sub, rg, ws, name)                -> ComputeInfo
-    arm.workspace.list(...)                           -> list[WorkspaceInfo]
-    arm.identity.list(...)                            -> list[ManagedIdentityInfo]
-    arm.storage.list(...)                             -> list[StorageAccountInfo]
-
-Every namespace returns dataclasses defined in :mod:`.models`.
-"""
+"""Azure Resource Manager client — workspace-agnostic operations."""
 
 from __future__ import annotations
 
@@ -41,7 +24,6 @@ from .subscriptions import SubscriptionsAPI
 from .vc import VCQuotaAPI, VirtualClustersAPI, parse_managed_quotas
 from .workspace import WorkspacesAPI
 
-
 class AzureARMClient(AuthSession):
     """Lightweight authenticated client for Azure Resource Manager APIs."""
 
@@ -55,8 +37,6 @@ class AzureARMClient(AuthSession):
         self.identity = IdentitiesAPI(self)
         self.storage = StoragesAPI(self)
         self.instance_types = InstanceTypesAPI(self)
-
-    # ---- raw HTTP -----------------------------------------------------------
 
     def get(self, url: str, *, timeout: int = TIMEOUT_STANDARD) -> dict[str, Any]:
         """Authenticated GET, returns parsed JSON."""
@@ -77,7 +57,6 @@ class AzureARMClient(AuthSession):
         resp = self.session.post(url, json=json_body, timeout=timeout)
         raise_for_rest_error(resp)
         return resp.json()
-
 
 __all__ = [
     "AzureARMClient",

@@ -1,8 +1,4 @@
-"""Interactive workspace detection + ``resolve_workspace`` lookup.
-
-Uses :mod:`.az_cli` for the actual ``az`` shell-out and :mod:`.prompts`
-for the (stdlib) terminal interaction.
-"""
+"""Interactive workspace detection + resolve_workspace lookup."""
 
 from __future__ import annotations
 
@@ -13,13 +9,8 @@ from .az_cli import detect_subscription, detect_workspaces
 from .models import AJWorkspace
 from .store import read_config, write_config
 
-
 def pick_workspace(workspaces: list[dict[str, str]]) -> dict[str, str] | None:
-    """Let the user pick a workspace from a detected list.
-
-    Returns a dict with ``name`` and ``resource_group``, or *None* if the
-    user wants to enter values manually.
-    """
+    """Let the user pick a workspace from a detected list."""
     prompts._echo()
     prompts._echo("  Detected Azure ML workspaces:")
     prompts._echo()
@@ -34,9 +25,7 @@ def pick_workspace(workspaces: list[dict[str, str]]) -> dict[str, str] | None:
         return workspaces[choice - 1]
     return None
 
-
 def _ensure_subscription_id(workspace: AJWorkspace) -> bool:
-    """Detect or prompt for ``subscription_id``. Mutates *workspace* in-place."""
     if workspace.subscription_id:
         return False
     az_info = detect_subscription()
@@ -56,9 +45,7 @@ def _ensure_subscription_id(workspace: AJWorkspace) -> bool:
         workspace.subscription_id = prompts._prompt("  Subscription ID")
     return True
 
-
 def _ensure_resource_group_and_workspace(workspace: AJWorkspace) -> bool:
-    """Detect or prompt for ``resource_group`` and ``workspace_name``. Mutates in-place."""
     need_rg = not workspace.resource_group
     need_ws = not workspace.workspace_name
     if not need_rg and not need_ws:
@@ -79,7 +66,6 @@ def _ensure_resource_group_and_workspace(workspace: AJWorkspace) -> bool:
         )
         return True
 
-    # Manual fallback
     changed = False
     if need_rg:
         prompts._echo()
@@ -93,16 +79,8 @@ def _ensure_resource_group_and_workspace(workspace: AJWorkspace) -> bool:
             changed = True
     return changed
 
-
 def get_workspace_config() -> AJWorkspace:
-    """Return workspace details, auto-detecting + prompting as needed.
-
-    Detection order:
-    1. ``subscription_id`` — from ``az account show``.
-    2. ``resource_group`` + ``workspace_name`` — from
-       ``az resource list`` of ML workspaces; user picks from a list.
-    3. Manual prompt fallback for anything that can't be detected.
-    """
+    """Return workspace details, auto-detecting + prompting as needed."""
     config = read_config()
     workspace = config.workspace
 
@@ -118,15 +96,8 @@ def get_workspace_config() -> AJWorkspace:
 
     return workspace
 
-
 def resolve_workspace(name: str | None = None) -> AJWorkspace:
-    """Return a workspace, optionally looking up *name* by detection.
-
-    * ``name=None`` → current config (via :func:`get_workspace_config`).
-    * ``name="my-ws"`` → discover workspaces in the current subscription
-      and pick the one matching *name*. Falls back to overriding
-      ``workspace_name`` in the existing config if detection fails.
-    """
+    """Return a workspace, optionally looking up *name* by detection."""
     if name is None:
         return get_workspace_config()
 
@@ -148,7 +119,6 @@ def resolve_workspace(name: str | None = None) -> AJWorkspace:
                 workspace_name=w["name"],
             )
 
-    # Fallback: use current resource_group with the given name
     rg = ws.resource_group
     if rg:
         return AJWorkspace(

@@ -1,4 +1,4 @@
-"""``arm.identity`` — user-assigned managed identity discovery."""
+"""arm.identity — user-assigned managed identity discovery."""
 
 from __future__ import annotations
 
@@ -6,7 +6,6 @@ from azure_jobs.core.errors import NETWORK_LIKE_ERRORS
 
 from .models import ManagedIdentityInfo
 from ._base import ArmNamespace
-
 
 class IdentitiesAPI(ArmNamespace):
     def list(
@@ -46,6 +45,5 @@ class IdentitiesAPI(ArmNamespace):
             for r in rows
             if r.get("name")
         ]
-
 
 __all__ = ["IdentitiesAPI"]

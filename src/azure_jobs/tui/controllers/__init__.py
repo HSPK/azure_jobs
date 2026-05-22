@@ -1,9 +1,4 @@
-"""Behaviour controllers for the TUI dashboard.
-
-Each controller is a plain class holding a reference to the App as
-``self.app`` (the *context*). State lives on the App; controllers just
-operate on it.
-"""
+"""Behaviour controllers for the TUI dashboard."""
 
 from __future__ import annotations
 

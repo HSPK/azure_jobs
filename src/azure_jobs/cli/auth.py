@@ -1,4 +1,4 @@
-"""``aj auth`` — check and manage Azure authentication status."""
+"""aj auth — check and manage Azure authentication status."""
 
 from __future__ import annotations
 
@@ -6,11 +6,9 @@ import subprocess
 
 from . import main
 
-
 @main.group(name="auth")
 def auth_group() -> None:
     """Check and manage Azure authentication."""
-
 
 @auth_group.command(name="status")
 def auth_status() -> None:
@@ -52,10 +50,9 @@ def auth_status() -> None:
         credential_missing_pkg=cred_missing_pkg,
     )
 
-
 @auth_group.command(name="login")
 def auth_login() -> None:
-    """Open Azure CLI login (delegates to ``az login``)."""
+    """Open Azure CLI login (delegates to az login)."""
     from azure_jobs.utils.ui import console, get_output_mode, show_command_result
 
     if get_output_mode() != "json":
@@ -63,8 +60,6 @@ def auth_login() -> None:
     try:
         from azure_jobs.core.config import find_az
 
-        # In JSON mode, suppress az's interactive output (it's noisy and
-        # browser-driven; agents likely already authed).
         kwargs = (
             {"capture_output": True, "text": True}
             if get_output_mode() == "json"
@@ -87,10 +82,9 @@ def auth_login() -> None:
         )
         raise SystemExit(1)
 
-
 @auth_group.command(name="logout")
 def auth_logout() -> None:
-    """Sign out of Azure CLI (delegates to ``az logout``)."""
+    """Sign out of Azure CLI (delegates to az logout)."""
     from azure_jobs.utils.ui import console, get_output_mode, show_command_result
 
     try:

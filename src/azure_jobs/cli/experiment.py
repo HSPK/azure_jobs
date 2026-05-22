@@ -1,4 +1,4 @@
-"""``aj exp`` — experiment listing commands."""
+"""aj exp — experiment listing commands."""
 
 from __future__ import annotations
 
@@ -9,11 +9,9 @@ import click
 
 from azure_jobs.cli import main
 
-
 @main.group(name="exp")
 def exp_group() -> None:
     """List and inspect experiments."""
-
 
 @exp_group.command(name="list")
 @click.option(
@@ -46,12 +44,7 @@ def exp_list(
     all_ws: bool,
     ws_name: str | None,
 ) -> None:
-    """List experiments in the current workspace.
-
-    Scans recent jobs and groups them by experiment, showing job counts,
-    success rate, and GPU hours per experiment. Uses the same aggregation
-    as ``aj job stats``.
-    """
+    """List experiments in the current workspace."""
     from azure_jobs.cli._progress import (
         fetch_jobs_all_ws_with_progress,
         fetch_jobs_with_progress,
@@ -86,7 +79,6 @@ def exp_list(
         title=f"Experiments  ({scope})",
     )
 
-
 @exp_group.command(name="show")
 @click.argument("name")
 @click.option(
@@ -98,10 +90,7 @@ def exp_list(
 )
 @click.option("--ws", "ws_name", default=None, help="Workspace name override")
 def exp_show(name: str, last: int, ws_name: str | None) -> None:
-    """Show recent jobs for a specific experiment.
-
-    NAME is the experiment name (case-sensitive).
-    """
+    """Show recent jobs for a specific experiment."""
     from azure_jobs.core.az_client import create_rest_client
     from azure_jobs.utils.ui import console, show_cloud_jobs_table, warning
 

@@ -1,4 +1,4 @@
-"""Workspace datastore management (``client.datastores``)."""
+"""Workspace datastore management (client.datastores)."""
 
 from __future__ import annotations
 
@@ -14,14 +14,8 @@ from ..auth import (
 from .context import RestContext
 from .models import DatastoreInfo
 
-
 class DatastoresAPI:
-    """Datastore CRUD scoped to a workspace.
-
-    Returns :class:`DatastoreInfo` dataclasses; only :meth:`list_secrets`
-    keeps a raw-dict return because it's a credentials payload (SAS
-    tokens, account keys) consumed verbatim by :class:`BlobAPI`.
-    """
+    """Datastore CRUD scoped to a workspace."""
 
     def __init__(self, ctx: RestContext) -> None:
         self._ctx = ctx
@@ -33,7 +27,7 @@ class DatastoresAPI:
         return [DatastoreInfo.from_rest(r) for r in self._paged_get(url)]
 
     def get(self, name: str) -> DatastoreInfo | None:
-        """Get a datastore by name, or ``None`` if not found."""
+        """Get a datastore by name, or None if not found."""
         self._ctx.ensure_token()
         url = (
             f"{self._ctx.base}/datastores/{quote(name, safe='')}"
@@ -99,8 +93,6 @@ class DatastoresAPI:
         """Return credentials/SAS for a datastore (delegates to context)."""
         return self._ctx.list_datastore_secrets(name)
 
-    # ---- internals ----------------------------------------------------------
-
     def _paged_get(self, url: str) -> list[dict[str, Any]]:
         results: list[dict[str, Any]] = []
         next_url: str | None = url
@@ -111,6 +103,5 @@ class DatastoresAPI:
             results.extend(data.get("value", []))
             next_url = data.get("nextLink")
         return results
-
 
 __all__ = ["DatastoresAPI"]

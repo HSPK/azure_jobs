@@ -1,4 +1,4 @@
-"""Volcano submission entry point: build → upload code → ``kubectl create``."""
+"""Volcano submission entry point: build → upload code → kubectl create."""
 
 from __future__ import annotations
 
@@ -14,19 +14,12 @@ from ..models import SubmitEvent, SubmitRequest, SubmitResult
 from .config import build_volcano_config_from_request, build_volcano_job
 from .upload import upload_code_to_pvc
 
-
 def submit_via_volcano(
     request: SubmitRequest,
     *,
     on_event: Callable[[SubmitEvent], None] | None = None,
 ) -> SubmitResult:
-    """Submit a job to Kubernetes via Volcano.
-
-    Mirrors :func:`azure_jobs.core.submit.submit_via_native`'s contract:
-    takes a :class:`SubmitRequest` and a single structured ``on_event``
-    callback, returns a :class:`SubmitResult`. ``result.note`` carries
-    the ``kubectl create`` stdout for callers that want to display it.
-    """
+    """Submit a job to Kubernetes via Volcano."""
     emit = on_event or (lambda _ev: None)
 
     if not shutil.which("kubectl"):
@@ -41,7 +34,6 @@ def submit_via_volcano(
     job_spec = build_volcano_job(cfg)
     namespace = job_spec["metadata"]["namespace"]
 
-    # Upload code to PVC if configured
     if cfg.code_dir and cfg.pvc_name and cfg.pvc_mount_dir:
         ok = upload_code_to_pvc(cfg, namespace=namespace, on_event=emit)
         if not ok:
@@ -55,7 +47,6 @@ def submit_via_volcano(
 
     emit(SubmitEvent(kind="submit", detail="kubectl create"))
 
-    # Write to temp file and apply
     job_yaml = yaml.dump(job_spec, default_flow_style=False)
     with tempfile.NamedTemporaryFile(
         mode="w", suffix=".yaml", prefix="aj-volcano-", delete=False

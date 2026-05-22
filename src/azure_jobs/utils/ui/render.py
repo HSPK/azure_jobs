@@ -1,31 +1,4 @@
-"""Table display middleware.
-
-Commands construct a :class:`TableView` (plain data + column spec) and
-call :func:`render_table`. The renderer picks the output format — Rich
-for terminals, JSON for ``AJ_OUTPUT=json`` / ``aj --json …`` — so the
-same data shape powers human display and machine pipelines.
-
-Cell values in ``rows`` must stay raw (no Rich markup, no pre-rendered
-icons) — JSON output ships them as-is. Visual encoding lives on the
-:class:`Column`:
-
-* ``type="text"``   — plain string (default).
-* ``type="status"`` — value mapped to icon + colour via
-                      :attr:`icon_map` / :attr:`style_map` (or the
-                      Azure ML defaults).
-* ``type="url"``    — wrapped via :func:`short_portal_url` for Rich;
-                      JSON ships the raw URL.
-* ``type="number"`` — right-justified by default.
-
-Set :attr:`Column.link_key` to wrap a cell as a Rich link whose URL
-comes from another field on the same row (e.g. display name + portal
-URL). The link disappears in JSON output; the URL stays accessible
-via the source field.
-
-Set :attr:`Column.format` to an arbitrary ``(value, row) -> str``
-callable for Rich-only cell formatting (e.g. "(default)" suffixes,
-custom number formatting). Never invoked in JSON mode.
-"""
+"""Table display middleware."""
 
 from __future__ import annotations
 
@@ -40,10 +13,9 @@ from rich.table import Table
 OutputMode = Literal["rich", "json"]
 ColumnType = Literal["text", "status", "url", "number"]
 
-
 @dataclass
 class Column:
-    """Column spec for :class:`TableView`."""
+    """Column spec for :class:TableView."""
 
     key: str
     header: str = ""
@@ -52,24 +24,16 @@ class Column:
     justify: Literal["left", "right", "center"] = "left"
     no_wrap: bool = False
     max_width: int | None = None
-    overflow: str = ""  # "" | "ellipsis" | "fold"
-    # For type="status": override the Azure ML icon/style defaults.
+    overflow: str = ""
     icon_map: dict[str, str] | None = None
     style_map: dict[str, str] | None = None
-    # If set, wrap the rendered cell in a Rich [link] whose URL is read
-    # from row[link_key]. JSON output ignores this — the URL stays
-    # accessible via the source field.
     link_key: str = ""
-    # Optional Rich-only cell formatter: ``(value, row) -> str``.
-    # When set, replaces the default ``str(value)`` for the Rich
-    # backend. JSON ships the raw value unchanged.
     format: Callable[[Any, dict[str, Any]], str] | None = None
 
     def display_header(self) -> str:
         if self.header:
             return self.header
         return self.key.replace("_", " ").title()
-
 
 @dataclass
 class TableView:
@@ -80,10 +44,6 @@ class TableView:
     title: str = ""
     empty_message: str = "No rows"
     metadata: dict[str, Any] = field(default_factory=dict)
-    # Optional row-field name; when consecutive rows have different
-    # values for this field, the Rich renderer inserts a section
-    # divider. JSON output adds ``section_by`` to ``metadata`` so
-    # consumers can group themselves.
     section_by: str = ""
 
     def to_dict(self) -> dict[str, Any]:
@@ -98,10 +58,9 @@ class TableView:
             "metadata": meta,
         }
 
-
 @dataclass
 class DetailField:
-    """Field spec for :class:`DetailView` (one label / value row)."""
+    """Field spec for :class:DetailView (one label / value row)."""
 
     key: str
     label: str = ""
@@ -112,7 +71,6 @@ class DetailField:
         if self.label:
             return self.label
         return self.key.replace("_", " ").title()
-
 
 @dataclass
 class DetailView:
@@ -131,25 +89,19 @@ class DetailView:
             "metadata": self.metadata,
         }
 
-
-# Process-wide output mode. Overridden by AJ_OUTPUT env var or
-# set_output_mode() (typically called once from the CLI ``--json`` flag).
 _OUTPUT_MODE: OutputMode = "rich"
-
 
 def set_output_mode(mode: OutputMode) -> None:
     """Set the process-wide output mode."""
     global _OUTPUT_MODE
     _OUTPUT_MODE = mode
 
-
 def get_output_mode() -> OutputMode:
-    """Return the current output mode. ``AJ_OUTPUT`` env var wins."""
+    """Return the current output mode."""
     env = os.getenv("AJ_OUTPUT", "").strip().lower()
     if env in ("json", "rich"):
         return env  # type: ignore[return-value]
     return _OUTPUT_MODE
-
 
 def render_table(view: TableView) -> None:
     """Render *view* in the current output mode."""
@@ -158,7 +110,6 @@ def render_table(view: TableView) -> None:
         return
     _render_rich(view)
 
-
 def render_detail(view: DetailView) -> None:
     """Render a key-value detail panel in the current output mode."""
     if get_output_mode() == "json":
@@ -166,19 +117,11 @@ def render_detail(view: DetailView) -> None:
         return
     _render_detail_rich(view)
 
-
 def emit_json(payload: dict[str, Any]) -> None:
-    """Write *payload* as a JSON envelope to stdout.
-
-    Used by ``show_command_result`` and ad-hoc CLI exits where neither
-    a ``TableView`` nor a ``DetailView`` fits (free-form data, raw API
-    responses, log content, etc.). No-op outside JSON mode — callers
-    keep their existing Rich code for the human path.
-    """
+    """Write *payload* as a JSON envelope to stdout."""
     if get_output_mode() != "json":
         return
     sys.stdout.write(json.dumps(payload, indent=2, default=str) + "\n")
-
 
 def show_command_result(
     action: str,
@@ -187,14 +130,7 @@ def show_command_result(
     message: str = "",
     **fields: Any,
 ) -> None:
-    """Emit a uniform side-effect envelope.
-
-    Used by commands whose primary purpose is a state change rather than
-    presenting data (e.g. ``aj ws set``, ``aj job cancel``,
-    ``aj auth logout``). JSON mode writes a structured payload; Rich
-    mode is silent — the caller's existing ``success``/``warning``/
-    ``error`` Rich messages remain the human UX.
-    """
+    """Emit a uniform side-effect envelope."""
     if get_output_mode() != "json":
         return
     payload: dict[str, Any] = {
@@ -206,7 +142,6 @@ def show_command_result(
         payload["message"] = message
     payload.update(fields)
     sys.stdout.write(json.dumps(payload, indent=2, default=str) + "\n")
-
 
 def _render_rich(view: TableView) -> None:
     from .console import print_table, warning
@@ -245,7 +180,6 @@ def _render_rich(view: TableView) -> None:
         cells = [_format_cell(row.get(c.key), c, row) for c in view.columns]
         table.add_row(*cells)
     print_table(table)
-
 
 def _render_detail_rich(view: DetailView) -> None:
     from rich.panel import Panel
@@ -291,15 +225,7 @@ def _render_detail_rich(view: DetailView) -> None:
         console.print(grid)
     console.print()
 
-
 def _format_cell(value: Any, col: Column, row: dict[str, Any]) -> str:
-    """Render a single cell value for the Rich backend.
-
-    JSON output never goes through this — it ships the raw value as-is
-    in ``row[col.key]``. A column-level ``format`` callable is always
-    invoked when set (so it can decide how to handle empty values);
-    type-based rendering only applies when no ``format`` is provided.
-    """
     if col.format is not None:
         return col.format(value, row)
     if value in (None, ""):
@@ -325,7 +251,6 @@ def _format_cell(value: Any, col: Column, row: dict[str, Any]) -> str:
         if url:
             rendered = f"[link={url}]{rendered}[/link]"
     return rendered
-
 
 __all__ = [
     "Column",

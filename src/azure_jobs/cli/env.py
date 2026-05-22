@@ -1,4 +1,4 @@
-"""``aj env`` — environment listing commands."""
+"""aj env — environment listing commands."""
 
 from __future__ import annotations
 
@@ -6,11 +6,9 @@ import click
 
 from azure_jobs.cli import main
 
-
 @main.group(name="env")
 def env_group() -> None:
     """List and inspect Azure ML environments."""
-
 
 @env_group.command(name="list")
 @click.option("--ws", "ws_name", default=None, help="Workspace name override")
@@ -26,7 +24,6 @@ def env_list(ws_name: str | None) -> None:
         envs = client.environments.list()
     show_environments_table(envs)
 
-
 @env_group.command(name="show")
 @click.argument("name")
 @click.option(
@@ -38,10 +35,7 @@ def env_list(ws_name: str | None) -> None:
 )
 @click.option("--ws", "ws_name", default=None, help="Workspace name override")
 def env_show(name: str, last: int, ws_name: str | None) -> None:
-    """Show versions of an environment.
-
-    NAME is the environment name (case-sensitive).
-    """
+    """Show versions of an environment."""
     from azure_jobs.core.az_client import create_rest_client
     from azure_jobs.utils.ui import console, show_environment_versions_table
 

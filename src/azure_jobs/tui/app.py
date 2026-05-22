@@ -1,14 +1,4 @@
-"""Interactive TUI dashboard for Azure Jobs.
-
-:class:`AjDashboard` is the *root context*. It owns three controllers
-(:class:`JobsController`, :class:`LogsController`,
-:class:`WorkspaceController`) — each pairs a state dataclass with its
-behaviour. The App itself contains no flat state.
-
-The App body holds: ``compose`` / ``on_mount``, Textual event handlers,
-action handlers (one-line delegations to controllers) and a couple of
-cross-cutting actions (help, quit, focus).
-"""
+"""Interactive TUI dashboard for Azure Jobs."""
 
 from __future__ import annotations
 
@@ -30,7 +20,6 @@ from azure_jobs.tui.helpers import get_page_size, safe_close
 from azure_jobs.tui.state import JobsState, LogsState, Widgets, WorkspaceState
 
 log = logging.getLogger(__name__)
-
 
 class AjDashboard(App):
     """Azure Jobs interactive dashboard (root context)."""
@@ -56,8 +45,6 @@ class AjDashboard(App):
         Binding("escape", "escape", "Help"),
         Binding("right", "next_page", "Next"),
         Binding("left", "prev_page", "Prev"),
-        # Vim-style scrolling for the info pane (active in Info view only;
-        # the LogViewer owns the same keys when Logs is focused).
         Binding("h", "info_scroll('left')", show=False),
         Binding("j", "info_scroll('down')", show=False),
         Binding("k", "info_scroll('up')", show=False),
@@ -80,20 +67,16 @@ class AjDashboard(App):
     ) -> None:
         super().__init__(**kwargs)
         self._mouse = mouse
-        # Widget bag (filled in on_mount).
         self.widgets = Widgets()
-        # Controllers — each owns its state dataclass.
         ps = page_size if page_size is not None else get_page_size()
         self.jobs = JobsController(self, JobsState(page_size=ps))
         self.logs = LogsController(self, LogsState())
         self.workspace = WorkspaceController(self, WorkspaceState())
 
     def run(self, *args: Any, **kwargs: Any) -> Any:
-        """Run the app, defaulting ``mouse`` to the value passed to ``__init__``."""
+        """Run the app, defaulting mouse to the value passed to __init__."""
         kwargs.setdefault("mouse", self._mouse)
         return super().run(*args, **kwargs)
-
-    # ---- compose / mount ----------------------------------------------------
 
     def compose(self) -> ComposeResult:
         with Horizontal():
@@ -131,8 +114,6 @@ class AjDashboard(App):
         self.jobs.fetcher.show_info_loading("Loading jobs…")
         self.jobs.fetcher.init_fetch()
 
-    # ---- cross-cutting actions ---------------------------------------------
-
     def action_quit(self) -> None:
         safe_close(self.logs.stream, "stop_streaming")
         rest = self.workspace.state.rest_client
@@ -142,20 +123,13 @@ class AjDashboard(App):
         self.exit()
 
     def action_escape(self) -> None:
-        # Esc first closes the search bar (and clears the query) if it's
-        # open; otherwise it opens the help screen.
         if self.jobs.filters.close_search_bar(clear=True):
             self.jobs.view.refresh()
             return
         self.push_screen(HelpScreen())
 
     def action_dismiss(self) -> None:
-        # Textual's modal-dismiss convention. Some screen stacks route
-        # Esc here instead of to the named binding; keep parity with
-        # ``action_escape`` so the behaviour is identical either way.
         self.action_escape()
-
-    # ---- action delegations -------------------------------------------------
 
     def action_refresh(self) -> None:
         self.jobs.fetcher.action_refresh()
@@ -203,12 +177,7 @@ class AjDashboard(App):
         self.jobs.view.action_prev_page()
 
     def action_info_scroll(self, direction: str) -> None:
-        """Scroll the info pane via a vim-style key.
-
-        Only active when the right pane is in Info mode — in Logs mode the
-        :class:`LogViewer` is focused and owns these bindings directly.
-        Returns silently if the search bar has focus so typing isn't eaten.
-        """
+        """Scroll the info pane via a vim-style key."""
         if self.logs.state.view_mode != "info":
             return
         focused = self.focused
@@ -230,8 +199,6 @@ class AjDashboard(App):
         }.get(direction)
         if action is not None:
             action()
-
-    # ---- Textual event handlers --------------------------------------------
 
     def on_input_changed(self, event: Input.Changed) -> None:
         self.jobs.filters.on_input_changed(event)

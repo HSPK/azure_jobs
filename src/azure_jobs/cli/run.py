@@ -28,7 +28,6 @@ from azure_jobs.utils.ui import show_dry_run_result, show_submission_preview
 
 __all__ = ["resolve_name"]
 
-
 @main.command(
     context_settings={
         "ignore_unknown_options": True,
@@ -78,15 +77,7 @@ def run(
     dry_run: bool,
     amlt: bool,
 ) -> None:
-    """Submit a job to Azure ML using a template.
-
-    Loads the named template, resolves its ``base`` inheritance chain,
-    merges configs, applies CLI overrides (``-n``/``-p``), uploads code,
-    registers the environment, and submits via the registered backend
-    for the template's ``target.service`` (or amlt with ``--amlt``).
-
-    Use ``-d`` to inspect the assembled config without submitting.
-    """
+    """Submit a job to Azure ML using a template."""
     tmpl, template_name = _load_template(template)
 
     sid = uuid.uuid4().hex[:8]
@@ -152,9 +143,7 @@ def run(
         backend_label=entry.label,
     )
 
-
 def _load_template(template: str | None) -> tuple[Template, str]:
-    """Resolve the template name (with default fallback) and load it."""
     from azure_jobs.core import const
 
     if template is None:

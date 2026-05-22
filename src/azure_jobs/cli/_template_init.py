@@ -1,10 +1,4 @@
-"""``aj template init`` — interactive wizard for authoring leaf templates.
-
-Picks account / environment / storage / workspace from live Azure
-data, then auto-generates one leaf per (VC, accelerator, GPU memory)
-with positive user quota at
-``template/{vc}_{accelerator}_{memory}.yaml``.
-"""
+"""aj template init — interactive wizard for authoring leaf templates."""
 
 from __future__ import annotations
 
@@ -21,12 +15,6 @@ from azure_jobs.core import const
 
 _STEPS = 4
 
-
-# ────────────────────────────────────────────────────────────────────────
-# UI primitives
-# ────────────────────────────────────────────────────────────────────────
-
-
 def _step(num: int, title: str, hint: str = "") -> None:
     from azure_jobs.utils.ui import console
 
@@ -36,9 +24,7 @@ def _step(num: int, title: str, hint: str = "") -> None:
     if hint:
         console.print(f"     [dim]{hint}[/dim]")
 
-
 def _pick_row(prompt: str, rows: list[Any]) -> Any:
-    """Render a numbered list, return the selected row item."""
     from azure_jobs.utils.ui import console
 
     console.print()
@@ -55,26 +41,16 @@ def _pick_row(prompt: str, rows: list[Any]) -> Any:
         pass
     raise click.ClickException(f"Invalid selection: {raw}")
 
-
 def _write_yaml(path: Path, data: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(yaml.safe_dump(data, sort_keys=False, allow_unicode=True))
 
-
 _SAFE_NAME = re.compile(r"[^a-z0-9._-]+")
-
 
 def _sanitise(name: str) -> str:
     return _SAFE_NAME.sub("-", name.lower()).strip("-") or "default"
 
-
-# ────────────────────────────────────────────────────────────────────────
-# component pickers — each returns the dotted base-ref for the leaf
-# ────────────────────────────────────────────────────────────────────────
-
-
 def _pick_account() -> str:
-    """Pick a managed identity, write ``account/<name>.yaml``."""
     from azure_jobs.core.az_client import AzureARMClient
     from azure_jobs.utils.ui import console, dim, warning
 
@@ -114,13 +90,7 @@ def _pick_account() -> str:
     dim(f"  → wrote {path}")
     return f"account.{name}"
 
-
 def _pick_environment() -> tuple[str, str]:
-    """Pick a Singularity image, write ``environment/sing.yaml``.
-
-    Returns ``(base_ref, image_label)`` so the summary panel can show
-    which image was chosen.
-    """
     from azure_jobs.cli.images import _fetch_sing_images
     from azure_jobs.utils.ui import console, dim, warning
 
@@ -163,9 +133,7 @@ def _pick_environment() -> tuple[str, str]:
     dim(f"  → wrote {path}")
     return "environment.sing", image
 
-
 def _pick_storage() -> str:
-    """Pick one or more blob mounts, write ``storage/default.yaml``."""
     from azure_jobs.core.az_client import AzureARMClient
     from azure_jobs.utils.ui import console, dim, info, warning
 
@@ -209,17 +177,10 @@ def _pick_storage() -> str:
     dim(f"  → wrote {path}")
     return "storage.default"
 
-
-# ────────────────────────────────────────────────────────────────────────
-# quota-driven leaf generation
-# ────────────────────────────────────────────────────────────────────────
-
-
 def _sku_for(accelerator: str, gpu_memory: int) -> str:
     if gpu_memory > 0:
         return f"{{nodes}}x{gpu_memory}G{{processes}}-{accelerator}"
     return "{nodes}xC{processes}"
-
 
 def _generate_leaves(
     *,
@@ -227,7 +188,6 @@ def _generate_leaves(
     workspace: dict[str, str],
     force: bool,
 ) -> list[dict[str, str]]:
-    """Write one leaf per (vc, accel, mem); return rows for the summary."""
     from azure_jobs.core.az_client import AzureARMClient
     from azure_jobs.utils.ui import console, error, warning
 
@@ -290,12 +250,6 @@ def _generate_leaves(
         )
     return rows
 
-
-# ────────────────────────────────────────────────────────────────────────
-# base files
-# ────────────────────────────────────────────────────────────────────────
-
-
 def _pick_workspace() -> dict[str, str]:
     from azure_jobs.core.az_client import AzureARMClient
     from azure_jobs.utils.ui import console, error
@@ -334,7 +288,6 @@ def _pick_workspace() -> dict[str, str]:
         "subscription_id": ws.subscription_id,
     }
 
-
 _INSTALL_SH = """\
 echo "Installing dependencies and setting up environment..."
 
@@ -356,9 +309,7 @@ $SUDO cp $HOME/.local/bin/uvx /usr/local/bin
 uv python install 3.10
 """
 
-
 def _ensure_install_sh() -> None:
-    """Drop a default ``install.sh`` under ``.azure_jobs/scripts/`` if missing."""
     from azure_jobs.utils.ui import dim
 
     p = const.AJ_HOME / "scripts" / "install.sh"
@@ -368,7 +319,6 @@ def _ensure_install_sh() -> None:
     p.write_text(_INSTALL_SH, encoding="utf-8")
     p.chmod(0o755)
     dim(f"  → wrote {p}")
-
 
 def _ensure_environment_base() -> None:
     p = const.AJ_HOME / "environment" / "base.yaml"
@@ -389,7 +339,6 @@ def _ensure_environment_base() -> None:
         },
     }
     _write_yaml(p, data)
-
 
 def _ensure_template_base() -> None:
     p = const.AJ_TEMPLATE_HOME / "base.yaml"
@@ -415,12 +364,6 @@ def _ensure_template_base() -> None:
     }
     _write_yaml(p, data)
 
-
-# ────────────────────────────────────────────────────────────────────────
-# top-level wizard
-# ────────────────────────────────────────────────────────────────────────
-
-
 def _intro() -> None:
     from azure_jobs.utils.ui import console
 
@@ -436,7 +379,6 @@ def _intro() -> None:
             padding=(1, 4),
         )
     )
-
 
 def _summary(
     *,
@@ -476,7 +418,6 @@ def _summary(
     for r in leaves:
         table.add_row(r["leaf"], r["vc"], r["accelerator"], r["memory"], r["status"])
     console.print(table)
-
 
 def run_wizard(leaf_name: str | None, *, force: bool) -> None:
     from azure_jobs.utils.ui import console, info, success, warning

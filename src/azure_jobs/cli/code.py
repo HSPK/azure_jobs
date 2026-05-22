@@ -1,4 +1,4 @@
-"""``aj code`` — inspect what gets uploaded with the next submission."""
+"""aj code — inspect what gets uploaded with the next submission."""
 
 from __future__ import annotations
 
@@ -12,18 +12,11 @@ from azure_jobs.core import const
 from azure_jobs.utils.fs import compute_code_hash, read_ignore_file, walk_code
 from azure_jobs.utils.ui import info, warning
 
-
 @main.group(name="code")
 def code_group() -> None:
     """Inspect the code upload payload."""
 
-
 def _resolve_ignore_patterns(template: str | None, code_dir: Path) -> list[str]:
-    """Merge template ``code.ignore`` with ``.codeignore`` / ``.amltignore``.
-
-    Mirrors :func:`azure_jobs.core.submit.config.build_submit_request` so
-    ``aj code stats`` reflects exactly what a real submission would upload.
-    """
     template_ignore: list[str] = []
     if template:
         from azure_jobs.core.template import ConfigError, Template, read_conf
@@ -45,7 +38,6 @@ def _resolve_ignore_patterns(template: str | None, code_dir: Path) -> list[str]:
             seen.add(pat)
             out.append(pat)
     return out
-
 
 @code_group.command(name="stats")
 @click.option(
@@ -79,14 +71,7 @@ def code_stats(
     top: int,
     list_all: bool,
 ) -> None:
-    """Show file count, total size, and content hash for the next upload.
-
-    The hash is the same digest the native backend uses for blob-storage
-    dedup and is bit-for-bit identical to what the volcano backend would
-    upload (volcano does not inject extra files, so the result matches
-    its tar archive content). For native, the registered code asset hash
-    additionally mixes in the synthetic runner script.
-    """
+    """Show file count, total size, and content hash for the next upload."""
     from azure_jobs.utils.ui import show_code_stats
 
     base = Path(code_dir or os.getcwd()).resolve()

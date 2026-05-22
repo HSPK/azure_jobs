@@ -1,8 +1,4 @@
-"""Volcano/Kubernetes job submission backend.
-
-Generates a Volcano Job YAML and submits via ``kubectl create``.
-No Python kubernetes-client dependency — uses kubectl directly.
-"""
+"""Volcano/Kubernetes job submission backend."""
 
 from __future__ import annotations
 

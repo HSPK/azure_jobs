@@ -5,14 +5,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-
 def resolve_name(command: str, sid: str) -> str:
-    """Build a job name from environment, cwd, command, and session id.
-
-    Honors ``AJ_NAME`` if set; otherwise derives a name from the current
-    working directory plus the script stem (when the command's last token
-    points to an existing file).
-    """
+    """Build a job name from environment, cwd, command, and session id."""
     name = os.getenv("AJ_NAME", None)
     if name is None:
         name = Path.cwd().name

@@ -11,17 +11,14 @@ from azure_jobs.core import const
 from azure_jobs.core.config import get_defaults, read_config
 from azure_jobs.utils.ui import console, info, show_template_table, success, warning
 
-
 @main.group(name="template")
 def template_group() -> None:
     """Manage job templates."""
-
 
 @template_group.command(name="list")
 def template_list() -> None:
     """List available templates."""
     _show_templates()
-
 
 @template_group.command(name="init")
 @click.argument("name", type=str, required=False, default=None)
@@ -29,13 +26,7 @@ def template_list() -> None:
     "-f", "--force", is_flag=True, help="Overwrite an existing leaf template"
 )
 def template_init(name: str | None, force: bool) -> None:
-    """Interactively author leaf templates.
-
-    Walks through account / storage / environment / workspace using live
-    Azure data, then auto-generates one leaf per (VC, accelerator, GPU
-    memory) combination with positive user quota at
-    ``.azure_jobs/template/{vc}_{accelerator}_{memory}.yaml``.
-    """
+    """Interactively author leaf templates."""
     from azure_jobs.cli._template_init import run_wizard
     from azure_jobs.utils.ui import get_output_mode, show_command_result
 
@@ -49,7 +40,6 @@ def template_init(name: str | None, force: bool) -> None:
 
     run_wizard(name, force=force)
 
-
 @template_group.command(name="pull")
 @click.argument("repo_id", type=str, required=False, default=None)
 @click.option(
@@ -61,7 +51,6 @@ def template_pull(repo_id: str | None, force: bool) -> None:
 
     _do_pull(repo_id, force)
 
-
 @template_group.command(name="push")
 @click.option("-m", "--message", default=None, help="Commit message")
 def template_push(message: str | None) -> None:
@@ -69,7 +58,6 @@ def template_push(message: str | None) -> None:
     from azure_jobs.cli.pull import _do_push
 
     _do_push(message)
-
 
 @template_group.command(name="show")
 @click.argument("name", type=str)
@@ -118,7 +106,6 @@ def template_show(name: str) -> None:
 
     console.print()
     console.print(Syntax(output, "yaml", theme="monokai", line_numbers=False))
-
 
 @template_group.command(name="validate")
 @click.argument("name", type=str, required=False, default=None)
@@ -171,7 +158,6 @@ def template_validate(name: str | None) -> None:
     if invalid:
         raise SystemExit(1)
 
-
 @template_group.command(name="diff")
 def template_diff() -> None:
     """Show local changes compared to the remote repository."""
@@ -203,12 +189,9 @@ def template_diff() -> None:
     console.print()
     console.print(Syntax(diff_text, "diff", theme="monokai", line_numbers=False))
 
-
 _DIFF_EXCLUDE = {".git", "aj_config.json", "submission", "record.jsonl"}
 
-
 def _clone_remote(repo_id: str, dst: str) -> None:
-    """Shallow-clone *repo_id* into *dst* with a spinner."""
     try:
         with console.status(
             "[bold cyan]Fetching remote…[/bold cyan]", spinner="dots"
@@ -224,9 +207,7 @@ def _clone_remote(repo_id: str, dst: str) -> None:
             f"Failed to clone remote: {exc.stderr.strip()}"
         ) from exc
 
-
 def _collect_diff_files(root: Path) -> dict[str, Path]:
-    """Walk *root* and return ``{relative_posix_path: absolute_path}``."""
     files: dict[str, Path] = {}
     for p in root.rglob("*"):
         if not p.is_file():
@@ -237,11 +218,9 @@ def _collect_diff_files(root: Path) -> dict[str, Path]:
         files[rel.as_posix()] = p
     return files
 
-
 def _unified_diff_lines(
     rel: str, a_path: Path | None, b_path: Path | None
 ) -> list[str]:
-    """Render a unified diff between *a_path* (remote) and *b_path* (local)."""
     import difflib
 
     a_lines = (
@@ -263,9 +242,7 @@ def _unified_diff_lines(
         )
     )
 
-
 def _compute_remote_diff(repo_id: str) -> str:
-    """Shallow-clone *repo_id* and return a unified diff vs. ``AJ_HOME``."""
     import filecmp
     import tempfile
 
@@ -289,7 +266,6 @@ def _compute_remote_diff(repo_id: str) -> str:
                 diff_output.extend(_unified_diff_lines(key, None, ll))
         return "".join(diff_output)
 
-
 def _show_templates() -> None:
     if not const.AJ_TEMPLATE_HOME.exists():
         warning(f"No templates found in {const.AJ_TEMPLATE_HOME}")
@@ -309,9 +285,6 @@ def _show_templates() -> None:
         extra = conf.get("_extra", {})
         base = raw.get("base", None)
         if isinstance(base, list):
-            # Strip the common "base" entry and show short labels
-            # e.g. ["base", "account.drl", "environment.ath200", "storage.x"]
-            #   → "drl · ath200 · x"
             parts = [b.split(".")[-1] for b in base if b != "base"]
             base = " · ".join(parts) if parts else "base"
         sku: str | dict = ""

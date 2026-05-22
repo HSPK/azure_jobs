@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-
 def trunc(s: str, maxlen: int) -> str:
     """Truncate *s* with an ellipsis in the middle if longer than *maxlen*."""
     if len(s) <= maxlen:

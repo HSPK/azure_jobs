@@ -1,9 +1,4 @@
-"""amlt-style YAML rendering for a :class:`SubmitRequest`.
-
-The output dict is consumable by ``amlt run`` (after ``yaml.dump``) and
-is also shown in the dry-run preview. Values are recursively
-``$``-escaped to match amlt's variable convention.
-"""
+"""amlt-style YAML rendering for a :class:SubmitRequest."""
 
 from __future__ import annotations
 
@@ -13,21 +8,12 @@ from typing import Any
 
 from .models import SubmitRequest
 
-# Variable names left untouched (no ``$`` → ``$$`` escape) inside string
-# values rendered for amlt. Add a name here to allowlist a new amlt-side
-# template variable.
 _AMLT_PASSTHROUGH_VARS: frozenset[str] = frozenset({"CONFIG_DIR"})
 _AMLT_DOLLAR_RE = re.compile(
     r"\$\$|\$(?!(?:" + "|".join(_AMLT_PASSTHROUGH_VARS) + r")\b)"
 )
 
-
 def _escape_amlt_dollars(value: Any) -> Any:
-    """Recursively escape ``$`` for AMLT.
-
-    Preserves any pre-existing ``$$`` and any variable name listed in
-    :data:`_AMLT_PASSTHROUGH_VARS`.
-    """
     if isinstance(value, dict):
         return {k: _escape_amlt_dollars(v) for k, v in value.items()}
     if isinstance(value, list):
@@ -38,7 +24,6 @@ def _escape_amlt_dollars(value: Any) -> Any:
             value,
         )
     return value
-
 
 def render_amlt_config(request: SubmitRequest) -> dict[str, Any]:
     """Reconstruct an amlt-style config dict from a SubmitRequest for display/save."""

@@ -7,7 +7,6 @@ from typing import TYPE_CHECKING, Any
 
 from ..models import SubmitRequest
 
-
 def _datastore_name(
     account: str, container: str, mount_name: str, mount_dir: str
 ) -> str:
@@ -16,23 +15,13 @@ def _datastore_name(
     ).hexdigest()[:8]
     return f"ds_{digest}"
 
-
 if TYPE_CHECKING:
     from azure_jobs.core.az_client import AzureMLClient
-
 
 def _build_storage_mounts(
     request: SubmitRequest,
     client: AzureMLClient,
 ) -> tuple[dict[str, Any], dict[str, str], dict[str, str]]:
-    """Set up storage mounts via workspace datastores.
-
-    Creates or reuses datastores in the workspace, then builds output dicts
-    and PathOnCompute properties that Singularity needs to mount storage.
-
-    Returns:
-        (outputs, path_on_compute_properties, datareference_env_vars)
-    """
     outputs: dict[str, Any] = {}
     path_on_compute: dict[str, str] = {}
     dataref_env: dict[str, str] = {}
@@ -53,7 +42,6 @@ def _build_storage_mounts(
             description=f"Created by aj for {mount_name}",
         )
 
-        # Short-form URI — the long ARM-style azureml:// is rejected by Singularity
         uri = f"azureml://datastores/{ds_name}/paths/"
 
         outputs[mount_name] = {

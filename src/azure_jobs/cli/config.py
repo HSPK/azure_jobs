@@ -1,4 +1,4 @@
-"""``aj config`` — view and set tool-wide configuration."""
+"""aj config — view and set tool-wide configuration."""
 
 from __future__ import annotations
 
@@ -6,21 +6,14 @@ import click
 
 from . import main
 
-
 @main.group(name="config")
 def config_group() -> None:
     """View and set aj configuration."""
 
-
 @config_group.command(name="timezone")
 @click.argument("tz", required=False)
 def config_timezone(tz: str | None) -> None:
-    """Get or set the display timezone.
-
-    Without arguments, prints the current timezone.
-    With a timezone name (e.g. Asia/Shanghai, UTC, US/Eastern),
-    saves it to aj_config.json.
-    """
+    """Get or set the display timezone."""
     from azure_jobs.core.config import read_config, write_config
     from azure_jobs.utils.ui import (
         console,
@@ -63,15 +56,10 @@ def config_timezone(tz: str | None) -> None:
         "config.timezone", status="ok", message=f"Timezone set to {tz}", value=tz
     )
 
-
 @config_group.command(name="experiment")
 @click.argument("name", required=False)
 def config_experiment(name: str | None) -> None:
-    """Get or set the experiment name.
-
-    Without arguments, prints the current experiment.
-    With a name, saves it to aj_config.json.
-    """
+    """Get or set the experiment name."""
     from azure_jobs.core.config import get_experiment, read_config, write_config
     from azure_jobs.utils.ui import (
         console,
@@ -106,7 +94,6 @@ def config_experiment(name: str | None) -> None:
         message=f"Experiment set to {name.strip()}",
         value=name.strip(),
     )
-
 
 @config_group.command(name="show")
 def config_show() -> None:

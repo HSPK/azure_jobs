@@ -1,34 +1,4 @@
-"""REST I/O for the jobs pane: pagination, refresh, single-job re-fetch.
-
-Design pattern (refactored)
----------------------------
-This module owns *all* network calls for the jobs pane. The public surface
-is intentionally small (``init_fetch``, ``fetch_next_page``, ``load``,
-``merge_batch``, ``fetch_single``, ``action_refresh``); each method is a
-thin scheduler that hands work to a typed routine running through one
-robust core.
-
-Three pieces of machinery make this safe under concurrency:
-
-1. **Session token** (``state.session_seq``).
-   Every "logical session" — the initial load, a workspace switch, a manual
-   ``load()`` reset — bumps the seq. Workers capture it on entry; if the
-   value moved by the time they want to merge results, the results are
-   silently discarded. This eliminates the entire family of "stale worker
-   corrupts new state" races.
-
-2. **Typed status enum** (``state.load_status``).
-   Replaces a bare ``fetching`` boolean. The view uses the enum to render
-   distinct hints (initial load / page fetch / refresh / error) without
-   guessing from disjoint flags. ``state.fetching`` is kept in sync purely
-   for backward-compat with external callers and tests.
-
-3. **Safe-render boundary** (``helpers.safe_set`` / ``safe_notify``).
-   Every UI message that interpolates user-controlled text (REST error
-   messages, workspace names, …) goes through this boundary. A stray
-   ``[`` in the input no longer crashes the renderer with ``MarkupError``;
-   it falls back to plain text.
-"""
+"""REST I/O for the jobs pane: pagination, refresh, single-job re-fetch."""
 
 from __future__ import annotations
 
@@ -47,25 +17,19 @@ from azure_jobs.tui.state import JobsState, LoadStatus
 
 log = logging.getLogger(__name__)
 
-
 class JobsFetcher(Controller[JobsState]):
     """Owns all REST client interaction for the job list."""
 
-    # ---- status helpers -----------------------------------------------------
-
     def _set_status(self, status: LoadStatus, *, error: str = "") -> None:
-        """Centralised status transition. ``fetching`` is derived."""
         st = self.state
         st.load_status = status
         st.last_error = error
 
     def _bump_session(self) -> int:
-        """Invalidate every in-flight worker; return the new seq."""
         self.state.session_seq += 1
         return self.state.session_seq
 
     def _show_loading(self, msg: str) -> None:
-        """Render *msg* (already markup-safe or escaped) into the info panel."""
         self.hide_info_loading()
         self.render_info(msg)
 
@@ -93,30 +57,20 @@ class JobsFetcher(Controller[JobsState]):
             self.app.workspace.state.rest_client = create_rest_client(ws)
             return True
         except Exception as exc:
-            err = short_error(exc, limit=80)  # markup-safe
+            err = short_error(exc, limit=80)
             self.notify(f"Auth failed: {err}", severity="error")
             self._show_loading(f"[red]Auth failed:[/red] {err}")
             self._set_status(LoadStatus.ERROR, error=err)
             return False
 
-    # ---- worker plumbing ----------------------------------------------------
-
     @staticmethod
     def _is_active(worker: Any, st: JobsState, seq: int) -> bool:
-        """True if the worker's session token still matches and it isn't cancelled."""
         return (not worker.is_cancelled) and st.session_seq == seq
 
-    # ---- initial load -------------------------------------------------------
-
     def init_fetch(self) -> None:
-        """First load after app start (or after workspace switch).
-
-        Bumps the session token so any prior worker's results get dropped.
-        """
+        """First load after app start (or after workspace switch)."""
         seq = self._bump_session()
         self._set_status(LoadStatus.LOADING_INITIAL)
-        # Group `fetch_init` is exclusive within itself but does not block
-        # `fetch_page` workers — ``session_seq`` already protects state.
         self.spawn(lambda: self._do_init_fetch(seq), group="fetch_init")
 
     def _do_init_fetch(self, seq: int) -> None:
@@ -143,8 +97,6 @@ class JobsFetcher(Controller[JobsState]):
         )
         self._fetch_one_page(seq, status=LoadStatus.LOADING_INITIAL)
 
-    # ---- single-page fetch (used for both initial + auto-prefetch) ----------
-
     def fetch_next_page(self) -> None:
         """Schedule a single server-page fetch in the background."""
         st = self.state
@@ -152,19 +104,12 @@ class JobsFetcher(Controller[JobsState]):
             return
         seq = st.session_seq
         self._set_status(LoadStatus.LOADING_PAGE)
-        # Separate group so a manual right-arrow press never cancels an
-        # in-flight initial load.
         self.spawn(
             lambda: self._fetch_one_page(seq, status=LoadStatus.LOADING_PAGE),
             group="fetch_page",
         )
 
     def _fetch_one_page(self, seq: int, *, status: LoadStatus) -> None:
-        """Fetch exactly one server page and merge it into ``all_jobs``.
-
-        ``seq`` is captured at scheduling time; any later session reset
-        (workspace switch, ``load()``) makes this worker's results inert.
-        """
         app = self.app
         st = self.state
         worker = get_current_worker()
@@ -179,15 +124,12 @@ class JobsFetcher(Controller[JobsState]):
         except Exception as exc:
             log.exception("jobs.list_page failed")
             if self._is_active(worker, st, seq):
-                err = short_error(exc)  # already markup-safe
+                err = short_error(exc)
                 app.call_from_thread(self._show_loading, err)
                 app.call_from_thread(self._set_status, LoadStatus.ERROR, error=err)
             return
         if not self._is_active(worker, st, seq):
-            # Stale: a workspace switch / reset happened mid-flight.
             return
-        # Hand off to UI thread; pointer advance happens there too so the
-        # cursor never moves without a successful merge in the same tick.
         app.call_from_thread(self._on_page_fetched, seq, batch, next_link)
 
     def _on_page_fetched(
@@ -203,17 +145,8 @@ class JobsFetcher(Controller[JobsState]):
         st.has_more = next_link is not None
         self.merge_batch(batch)
 
-    # ---- batch merge --------------------------------------------------------
-
     def merge_batch(self, batch: list[dict[str, Any]]) -> None:
-        """Append *batch* to ``all_jobs`` (dedup by name) and refresh view.
-
-        Internal: callers are expected to have validated ``session_seq``
-        already. Direct invocations from tests bypass that check (they
-        don't bump the seq), which is fine; production callers go
-        through :meth:`_on_page_fetched` / :meth:`_on_refresh_done`,
-        which gate on seq.
-        """
+        """Append *batch* to all_jobs (dedup by name) and refresh view."""
         st = self.state
         for j in batch:
             name = j.get("name")
@@ -223,10 +156,7 @@ class JobsFetcher(Controller[JobsState]):
             st.job_idx[name] = len(st.all_jobs) - 1
         self._set_status(LoadStatus.IDLE)
         view = self.app.jobs.view
-        # First refresh: rebuilds ``st.pages`` from the merged jobs.
         view.refresh(restore_selection=not st.pending_advance)
-        # Honour a pending right-arrow press: now that we know the new page
-        # count, advance and repaint so the keypress doesn't get swallowed.
         if st.pending_advance:
             st.pending_advance = False
             if st.current_page + 1 < len(st.pages):
@@ -234,10 +164,7 @@ class JobsFetcher(Controller[JobsState]):
                 view.refresh()
 
     def load(self, jobs: list[dict[str, Any]]) -> None:
-        """Direct injection used by tests + restart paths.
-
-        Resets pagination *and* invalidates any in-flight worker.
-        """
+        """Direct injection used by tests + restart paths."""
         self._bump_session()
         st = self.state
         st.all_jobs = list(jobs)
@@ -247,8 +174,6 @@ class JobsFetcher(Controller[JobsState]):
         st.next_link = None
         self._set_status(LoadStatus.IDLE)
         self.app.jobs.view.refresh()
-
-    # ---- single-job refresh -------------------------------------------------
 
     def fetch_single(self, job: dict[str, Any]) -> None:
         seq = self.state.session_seq
@@ -287,8 +212,6 @@ class JobsFetcher(Controller[JobsState]):
                     self.app.jobs.view.show_info(updated)
                 break
 
-    # ---- incremental refresh (manual r) -------------------------------------
-
     def action_refresh(self) -> None:
         if self.app.workspace.state.rest_client is None:
             safe_notify(self.app, "No workspace configured", severity="warning")
@@ -311,7 +234,7 @@ class JobsFetcher(Controller[JobsState]):
         except Exception as exc:
             log.exception("refresh failed")
             if self._is_active(worker, st, seq):
-                err = short_error(exc)  # markup-safe
+                err = short_error(exc)
                 app.call_from_thread(safe_notify, app, err, severity="error")
                 app.call_from_thread(self._set_status, LoadStatus.ERROR, error=err)
             return

@@ -1,4 +1,4 @@
-"""Volcano backend config: ``VolcanoConfig`` + Volcano Job YAML builder."""
+"""Volcano backend config: VolcanoConfig + Volcano Job YAML builder."""
 
 from __future__ import annotations
 
@@ -13,17 +13,12 @@ from . import constants as C
 
 _DISTRIBUTED_PREAMBLE = Path(__file__).parent / "distributed_preamble.sh"
 
-
 def _load_distributed_preamble(nodes: int) -> list[str]:
-    """Return the Volcano distributed-env preamble, with ``{WORLD_SIZE_DEFAULT}``
-    substituted, as individual script lines."""
     text = _DISTRIBUTED_PREAMBLE.read_text()
     text = text.replace("{WORLD_SIZE_DEFAULT}", str(nodes))
     return text.splitlines()
 
-
 def _kubectl_namespace(context: str = "") -> str:
-    """Detect namespace from current kubectl context. Falls back to 'default'."""
     try:
         cmd = [
             "kubectl",
@@ -43,7 +38,6 @@ def _kubectl_namespace(context: str = "") -> str:
     except Exception:
         return "default"
 
-
 @dataclass
 class VolcanoConfig:
     """Configuration for a Volcano job submission."""
@@ -51,7 +45,7 @@ class VolcanoConfig:
     name: str
     namespace: str = ""
     queue: str = "default"
-    context: str = ""  # kubectl context (empty = current)
+    context: str = ""
     nodes: int = 1
     gpus_per_node: int = C.DEFAULT_GPUS_PER_NODE
     cpus_per_node: int = C.DEFAULT_CPUS_PER_NODE
@@ -67,23 +61,15 @@ class VolcanoConfig:
     labels: dict[str, str] = field(default_factory=dict)
     code_dir: str = ""
     code_ignore: list[str] = field(default_factory=list)
-    # PVC mount (from AMLT_PERSISTENT_VOLUME_*)
     pvc_name: str = ""
     pvc_mount_dir: str = ""
 
-
 def build_volcano_config_from_request(request: SubmitRequest) -> VolcanoConfig:
-    """Translate a :class:`SubmitRequest` into a VolcanoConfig.
-
-    Volcano-specific fields come from ``request.volcano``; PVC info is
-    read from the AMLT-convention ``AMLT_PERSISTENT_VOLUME_*`` env vars.
-    """
+    """Translate a :class:SubmitRequest into a VolcanoConfig."""
     vol = request.volcano
     container_args = request.container_args or {}
     env_vars = dict(request.env_vars)
 
-    # Backends always upload from ``request.code_dir`` (resolved to cwd
-    # by ``build_submit_request`` unless the caller overrides it).
     code_dir = request.code_dir or os.getcwd()
 
     pvc_name = env_vars.get("AMLT_PERSISTENT_VOLUME_NAME", "")
@@ -117,7 +103,6 @@ def build_volcano_config_from_request(request: SubmitRequest) -> VolcanoConfig:
         pvc_mount_dir=pvc_mount_dir,
     )
 
-
 def build_volcano_job(cfg: VolcanoConfig) -> dict[str, Any]:
     """Build a Volcano Job spec dict from config."""
     job_name = cfg.name.lower().replace("_", "-")[: C.JOB_NAME_MAX_LEN]
@@ -131,8 +116,6 @@ def build_volcano_job(cfg: VolcanoConfig) -> dict[str, Any]:
 
     script_lines: list[str] = []
     if code_path:
-        # Copy the shared PVC code asset into a pod-local emptyDir so
-        # runtime writes don't hit shared storage.
         run_wd = f"{C.WORKDIR_MOUNT_PATH}/{cfg.name}/wd"
         script_lines.extend(
             [
@@ -145,9 +128,6 @@ def build_volcano_job(cfg: VolcanoConfig) -> dict[str, Any]:
         )
     if cfg.setup_commands:
         script_lines.extend(cfg.setup_commands)
-    # Volcano-specific: distributed env fallback (RANK/WORLD_SIZE/MASTER_*)
-    # is set right before the user command so any setup_commands above can
-    # still override the defaults if desired.
     script_lines.extend(_load_distributed_preamble(cfg.nodes))
     script_lines.extend(cfg.command)
     script = "\n".join(script_lines)
@@ -242,7 +222,6 @@ def build_volcano_job(cfg: VolcanoConfig) -> dict[str, Any]:
             "containers": [container],
         }
 
-        # Multi-node: one pod per physical host.
         if cfg.nodes > 1:
             pod_spec["affinity"] = {
                 "podAntiAffinity": {
@@ -259,7 +238,6 @@ def build_volcano_job(cfg: VolcanoConfig) -> dict[str, Any]:
 
         return pod_spec
 
-    # All tasks run the same script; VC_* env vars differentiate roles.
     tasks: list[dict[str, Any]] = []
     tasks.append(
         {
@@ -287,7 +265,6 @@ def build_volcano_job(cfg: VolcanoConfig) -> dict[str, Any]:
             }
         )
 
-    # Namespace: explicit > kubectl context > "default".
     namespace = cfg.namespace or _kubectl_namespace(cfg.context)
 
     job_spec: dict[str, Any] = {

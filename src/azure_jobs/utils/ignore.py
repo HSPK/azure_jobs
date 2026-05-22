@@ -1,26 +1,4 @@
-"""Gitignore-style pattern matching.
-
-Implements a fast subset of git's ignore semantics:
-
-* ``#`` introduces a comment (escape with ``\\#``).
-* Trailing ``/`` constrains a pattern to directories only.
-* Leading ``/`` anchors to the root of the walk; an internal ``/`` likewise
-  anchors. Patterns without any ``/`` match a basename anywhere.
-* ``*`` matches zero or more characters, but never ``/``.
-* ``?`` matches a single character, never ``/``.
-* ``[abc]`` / ``[!abc]`` character classes.
-* ``**`` matches zero or more path components. Recognized forms are
-  ``**/foo``, ``foo/**``, ``foo/**/bar`` (the most common shapes used in
-  ``.gitignore``).
-* ``!`` prefix negates a previous match (last-match-wins).
-
-Each user pattern is translated to a Python ``re.Pattern`` exactly once at
-construction time. The match path uses two pre-compiled alternation
-regexes (basename rules + anchored path rules) plus an ``frozenset`` of
-literal basenames, giving O(1) (in pattern count) checks per file/dir.
-The slow per-rule path is only used when a pattern set contains
-negations.
-"""
+"""Gitignore-style pattern matching."""
 
 from __future__ import annotations
 
@@ -29,31 +7,23 @@ from typing import Iterable
 
 __all__ = ["IgnoreMatcher", "compile_ignore"]
 
-
 _GLOB_META = re.compile(r"[*?\[]")
 
-
 def _translate(pat: str) -> str:
-    """Translate a gitignore glob to a regex body (no anchors)."""
     out: list[str] = []
     i = 0
     n = len(pat)
     while i < n:
         c = pat[i]
         if c == "*":
-            # Detect ``**`` and its surrounding slashes.
             if i + 1 < n and pat[i + 1] == "*":
-                # ``/**/`` -> zero-or-more components (the slashes are
-                # consumed by the regex translation directly).
                 if i + 2 < n and pat[i + 2] == "/":
                     out.append("(?:.*/)?")
                     i += 3
                     continue
-                # Trailing ``**`` matches anything (including slashes).
                 out.append(".*")
                 i += 2
                 continue
-            # Single ``*`` — no slash crossing.
             out.append("[^/]*")
             i += 1
             continue
@@ -86,9 +56,7 @@ def _translate(pat: str) -> str:
         i += 1
     return "".join(out)
 
-
 class _Rule:
-    """A single compiled ignore rule (used only on the negation slow path)."""
 
     __slots__ = ("regex", "negate", "dir_only")
 
@@ -97,10 +65,7 @@ class _Rule:
         self.negate = negate
         self.dir_only = dir_only
 
-
 def _parse(line: str) -> tuple[str, bool, bool, bool] | None:
-    """Parse a raw line. Return ``(body, anchored, dir_only, negate)`` or
-    ``None`` if the line is empty / a comment."""
     s = line.strip()
     if not s or s.startswith("#"):
         return None
@@ -122,27 +87,16 @@ def _parse(line: str) -> tuple[str, bool, bool, bool] | None:
         anchored = "/" in s
     return s, anchored, dir_only, negate
 
-
 def _build_regex(body: str, anchored: bool) -> re.Pattern[str]:
-    """Build the final compiled regex for a parsed pattern."""
     rx = _translate(body)
     if anchored:
         full = r"\A" + rx + r"\Z"
     else:
-        # Match either at the start of the rel-path or right after a ``/``.
         full = r"(?:\A|/)" + rx + r"\Z"
     return re.compile(full)
 
-
 class IgnoreMatcher:
-    """Compiled gitignore-style matcher.
-
-    Construction is ``O(P)`` in the number of patterns; ``match()`` is
-    ``O(1)`` per call when no negation patterns are present (one set
-    membership test plus two combined-regex searches). With negations the
-    matcher falls back to a per-rule scan that is still ``O(P)`` but
-    rarely a bottleneck because typical pattern sets are small.
-    """
+    """Compiled gitignore-style matcher."""
 
     __slots__ = (
         "_rules",
@@ -172,11 +126,6 @@ class IgnoreMatcher:
         self._has_negation = has_negation
         self._empty = not parsed
 
-        # ---- compute negation "scope" prefixes for safe directory pruning.
-        # A negation rule can only re-include paths under its literal
-        # prefix (the substring up to the first glob metacharacter). For
-        # basename-only negations (no anchoring slash) the prefix could
-        # match anywhere, so pruning is universally unsafe.
         negate_prefixes: list[str] = []
         negate_anywhere = False
         for body, anchored, _dir_only, negate in parsed:
@@ -192,7 +141,6 @@ class IgnoreMatcher:
         self._negate_anywhere = negate_anywhere
 
         if has_negation:
-            # Slow path: keep individual rules so last-match-wins works.
             self._rules = [
                 _Rule(_build_regex(body, anchored), negate, dir_only)
                 for body, anchored, dir_only, negate in parsed
@@ -205,9 +153,6 @@ class IgnoreMatcher:
             self._path_dir_re = None
             return
 
-        # Fast path: bucket by (anchored?, dir_only?) and merge into one
-        # alternation regex per bucket. Literal basename patterns become
-        # a frozenset for hash lookup.
         lit_files: set[str] = set()
         lit_dirs: set[str] = set()
         bn_any: list[str] = []
@@ -217,12 +162,9 @@ class IgnoreMatcher:
 
         for body, anchored, dir_only, _ in parsed:
             if not anchored and not _GLOB_META.search(body):
-                # Literal basename pattern (e.g. ``__pycache__``).
                 if dir_only:
                     lit_dirs.add(body)
                 else:
-                    # Files: the same name can also match a dir of that name
-                    # (rare but legal). Track both so dir pruning works.
                     lit_files.add(body)
                     lit_dirs.add(body)
                 continue
@@ -254,20 +196,16 @@ class IgnoreMatcher:
         return not self._empty
 
     def match(self, rel: str, is_dir: bool = False) -> bool:
-        """Return ``True`` if *rel* (forward-slash, no leading ``/``) is
-        ignored. *is_dir* is required for correct ``dir/`` handling."""
+        """Return True if *rel* (forward-slash, no leading /) is ignored."""
         if self._empty:
             return False
         if self._has_negation:
             return self._match_slow(rel, is_dir)
 
-        # ---- fast path -----------------------------------------------------
-        # Basename literal check: scan path components in O(depth).
         lit_dirs = self._literal_dirs
         lit_files = self._literal_files
         if lit_dirs or lit_files:
             parts = rel.split("/")
-            # Any ancestor-dir name in lit_dirs => ignored.
             for comp in parts[:-1]:
                 if comp in lit_dirs:
                     return True
@@ -300,30 +238,21 @@ class IgnoreMatcher:
 
     @property
     def has_negation(self) -> bool:
-        """True if any pattern is a ``!`` negation. Disables dir pruning."""
+        """True if any pattern is a !"""
         return self._has_negation
 
     def prune_safe_for(self, dir_rel: str) -> bool:
-        """Return ``True`` if pruning *dir_rel*'s subtree won't drop a
-        file that a negation rule would re-include.
-
-        Used by directory walkers: when this returns ``False``, the dir
-        must be descended into even if :meth:`match` reports it as
-        ignored, because a deeper path may match a ``!`` rule.
-        """
+        """Return True if pruning *dir_rel*'s subtree won't drop a file that a…."""
         if not self._has_negation:
             return True
         if self._negate_anywhere:
-            # A basename-only negation can re-include something anywhere.
             return False
         prefix = dir_rel + "/" if dir_rel else ""
         for p in self._negate_prefixes:
-            # Negation prefix lands inside (or equal to) dir_rel's subtree.
             if p == dir_rel or (prefix and p.startswith(prefix)):
                 return False
         return True
 
-
 def compile_ignore(patterns: Iterable[str]) -> IgnoreMatcher:
-    """Convenience: build an :class:`IgnoreMatcher` from a pattern list."""
+    """Convenience: build an :class:IgnoreMatcher from a pattern list."""
     return IgnoreMatcher(patterns)

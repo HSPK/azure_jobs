@@ -1,4 +1,4 @@
-"""Top-level dataclasses for ``aj_config.json``."""
+"""Top-level dataclasses for aj_config.json."""
 
 from __future__ import annotations
 
@@ -7,13 +7,11 @@ from typing import Any
 
 from azure_jobs.utils.dataclass_utils import dataclass_from_dict, remove_empty_values
 
-
 @dataclass
 class AJDefaults:
     template: str | None = None
     nodes: int | None = None
     processes: int | None = None
-
 
 @dataclass
 class AJWorkspace:
@@ -21,13 +19,11 @@ class AJWorkspace:
     resource_group: str = ""
     workspace_name: str = ""
 
-
 @dataclass
 class AJDashboard:
     """Dashboard configuration."""
 
     page_size: int = 20
-
 
 @dataclass
 class AJConfig:
@@ -37,7 +33,7 @@ class AJConfig:
     workspace: AJWorkspace = field(default_factory=AJWorkspace)
     experiment: str = ""
     repo_id: str = ""
-    timezone: str = ""  # e.g., "America/New_York"
+    timezone: str = ""
     dashboard: AJDashboard = field(default_factory=AJDashboard)
 
     @staticmethod

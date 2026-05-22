@@ -1,9 +1,4 @@
-"""Modal screens for the TUI dashboard.
-
-Layout/border styling lives in ``dashboard.tcss`` (selectors
-``ModalScreen`` and ``ModalScreen > Vertical``); modal classes here only
-set their own width/height tweaks.
-"""
+"""Modal screens for the TUI dashboard."""
 
 from __future__ import annotations
 
@@ -17,7 +12,6 @@ from textual.containers import Vertical
 from textual.screen import ModalScreen
 from textual.widgets import OptionList, Static
 from textual.widgets.option_list import Option
-
 
 class ConfirmCancel(ModalScreen[bool]):
     """Modal dialog asking the user to confirm job cancellation."""
@@ -54,16 +48,8 @@ class ConfirmCancel(ModalScreen[bool]):
     def action_cancel_dialog(self) -> None:
         self.dismiss(False)
 
-
 class PickerModal(ModalScreen["str | None"]):
-    """Keyboard-first picker.
-
-    Returns the selected value (string), or ``None`` if the user
-    cancelled (Esc). Callers must handle ``None`` explicitly.
-
-    Number keys 1–9 select the corresponding row. Arrow keys + Enter
-    work the standard way.
-    """
+    """Keyboard-first picker."""
 
     CSS = """
     PickerModal > Vertical {
@@ -95,7 +81,6 @@ class PickerModal(ModalScreen["str | None"]):
         current: str = "",
         **kwargs: Any,
     ) -> None:
-        """items: list of (value, label) pairs. First should be ("", "All")."""
         super().__init__(**kwargs)
         self._title = title
         self._items = items
@@ -130,7 +115,6 @@ class PickerModal(ModalScreen["str | None"]):
 
     def action_cancel_picker(self) -> None:
         self.dismiss(None)
-
 
 class HelpScreen(ModalScreen[None]):
     """Help / keybinding reference overlay triggered by ESC."""

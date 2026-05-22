@@ -37,10 +37,8 @@ _BLOB_API_VERSION = "2024-11-04"
 _STORAGE_API_VERSION = "2023-01-01"
 _MAX_UPLOAD_WORKERS = 16
 
-
 @dataclass
 class _StorageInfo:
-    """Default-blob-store coordinates discovered from a workspace."""
 
     account_name: str = ""
     container: str = ""
@@ -51,10 +49,8 @@ class _StorageInfo:
     def resolved(self) -> bool:
         return bool(self.account_name)
 
-
 @dataclass
 class _Credentials:
-    """Per-call credentials for blob I/O.  At most one auth mode is set."""
 
     bearer: str = ""
     sas_token: str = ""
@@ -71,34 +67,21 @@ class _Credentials:
     def from_bearer(cls, token: str) -> "_Credentials":
         return cls(bearer=token)
 
-
 class BlobAPI:
-    """Blob storage and code asset operations scoped to an Azure ML workspace.
-
-    Uses streaming reads (``Path``-based) to avoid loading large code trees
-    into memory, and reuses the workspace ``RestContext.session`` for blob
-    I/O so connection pooling and retry policy apply consistently.
-    """
+    """Blob storage and code asset operations scoped to an Azure ML workspace."""
 
     def __init__(self, ctx: RestContext) -> None:
         self._ctx = ctx
-        self._storage = _StorageInfo()  # cached on first call
-        # Cache for STORAGE_SCOPE bearer token — shared across the upload
-        # thread pool to avoid N parallel ``AzureCliCredential().get_token``
-        # calls when ``listSecrets`` is unavailable or shared key is denied.
+        self._storage = _StorageInfo()
         self._storage_token = _TokenCache()
 
     def _ensure_storage_token(self) -> str:
-        """Return a cached bearer token for ``https://storage.azure.com``."""
         if not self._storage_token.is_fresh():
             token, expires = fetch_token(STORAGE_SCOPE)
             self._storage_token.update(token, expires)
         return self._storage_token.token
 
-    # ---- workspace storage discovery ----------------------------------------
-
     def _ensure_default_storage(self) -> _StorageInfo:
-        """Resolve the workspace default blob store; cache for reuse."""
         if self._storage.resolved:
             return self._storage
         ws = self._ctx.get_workspace()
@@ -125,7 +108,6 @@ class BlobAPI:
         return self._storage
 
     def _shared_key_allowed(self, storage_arm: str) -> bool:
-        """Return whether the workspace storage account allows shared key auth."""
         if not storage_arm:
             return True
         url = f"{MGMT}{storage_arm}?api-version={_STORAGE_API_VERSION}"
@@ -141,7 +123,6 @@ class BlobAPI:
         return allow is not False
 
     def _resolve_credentials(self, storage_arm: str) -> _Credentials:
-        """Pick the best available credentials for blob upload."""
         if self._shared_key_allowed(storage_arm):
             try:
                 secrets = self._ctx.list_datastore_secrets("workspaceblobstore")
@@ -153,8 +134,6 @@ class BlobAPI:
 
         return _Credentials.from_bearer(self._ensure_storage_token())
 
-    # ---- code upload --------------------------------------------------------
-
     def upload_code(
         self,
         code_dir: str,
@@ -162,20 +141,7 @@ class BlobAPI:
         extra_files: dict[str, str | bytes] | None = None,
         on_progress: Any = None,
     ) -> str:
-        """Upload code files to workspace blob store and register as code asset.
-
-        Args:
-            code_dir: Local directory to upload.
-            ignore_patterns: Glob patterns to exclude.
-            extra_files: Extra files to inject into the code root.
-                Keys are relative paths, values are str or bytes content.
-            on_progress: Optional callback
-                ``(completed, total, skipped, current) -> None``.
-
-        Returns the ARM resource ID of the created code version.
-        """
-        # Index files by path on disk + bytes for synthetic ones.
-        # Streaming Path-based upload keeps peak memory low.
+        """Upload code files to workspace blob store and register as code asset."""
         files, in_memory = self._index_files(code_dir, ignore_patterns, extra_files)
         code_hash = compute_code_hash(files, in_memory)
 
@@ -198,7 +164,6 @@ class BlobAPI:
         ignore_patterns: list[str] | None,
         extra_files: dict[str, str | bytes] | None,
     ) -> tuple[list[CodeFile], dict[str, bytes]]:
-        """Walk *code_dir* and split into on-disk files and in-memory blobs."""
         files = walk_code(code_dir, ignore_patterns)
         in_memory: dict[str, bytes] = {}
         if extra_files:
@@ -218,7 +183,6 @@ class BlobAPI:
         creds: _Credentials,
         on_progress: Any,
     ) -> None:
-        """Upload all files concurrently, skipping ones that already exist."""
 
         def _blob_url(rel: str) -> str:
             return (
@@ -252,7 +216,6 @@ class BlobAPI:
                     on_progress(completed, total, skipped, rel)
 
     def _register_code_version(self, code_hash: str, storage: _StorageInfo) -> str:
-        """Register the uploaded files as an Azure ML code version asset."""
         self._ctx.ensure_token()
         code_name = "aj-code"
         code_version = str(int(code_hash[:7], 16) + 1)
@@ -271,15 +234,7 @@ class BlobAPI:
         raise_for_rest_error(resp)
         return resp.json().get("id", "")
 
-    # ---- low-level blob I/O -------------------------------------------------
-
     def _blob_exists(self, blob_url: str, creds: _Credentials) -> bool:
-        """HEAD a blob to check existence (used for dedup before upload).
-
-        Returns ``False`` (i.e. "please upload") on network errors so the
-        caller still tries; the upload PUT will surface the real failure.
-        Logs at WARNING since this means a possibly-redundant upload.
-        """
         headers: dict[str, str] = {"x-ms-version": _BLOB_API_VERSION}
         if creds.bearer:
             headers["Authorization"] = f"Bearer {creds.bearer}"
@@ -303,7 +258,6 @@ class BlobAPI:
         creds: _Credentials,
         content_type: str = "application/octet-stream",
     ) -> None:
-        """Upload bytes via SAS, shared key, or bearer; fall back to bearer on key reject."""
         resp = self._put_blob(blob_url, data, content_type, creds)
 
         if (
@@ -325,7 +279,6 @@ class BlobAPI:
         content_type: str,
         creds: _Credentials,
     ) -> requests.Response:
-        """Issue a single PUT (no fallback); returns the raw Response."""
         headers: dict[str, str] = {
             "x-ms-blob-type": "BlockBlob",
             "x-ms-version": _BLOB_API_VERSION,

@@ -19,51 +19,28 @@ from azure_jobs.utils.ui import (
 
 _SHORTHAND_RE = r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
 
-
 def resolve_repo_url(repo_id: str) -> str:
-    """Expand shorthand ``user/repo`` to a full git SSH URL."""
+    """Expand shorthand user/repo to a full git SSH URL."""
     import re
 
     if re.match(_SHORTHAND_RE, repo_id):
         return f"git@github.com:{repo_id}.git"
     return repo_id
 
-
 # Paths that hold local-only state and must never be touched by pull/push.
-# ``aj_config.json`` and ``record.jsonl`` are user/machine state;
-# ``submission/`` and ``logs/`` are generated artifacts.
 _LOCAL_ONLY = {"aj_config.json", "record.jsonl", "submission", "logs"}
 
-
 def _is_local_only(rel: Path) -> bool:
-    """Return True if *rel* points inside a local-only path."""
     return any(part in _LOCAL_ONLY for part in rel.parts)
 
-
 def _git(*args: str, cwd: str | Path | None = None) -> subprocess.CompletedProcess:
-    """Run a ``git`` subcommand, capturing output and raising on failure."""
     cmd: list[str] = ["git"]
     if cwd is not None:
         cmd.extend(["-C", str(cwd)])
     cmd.extend(args)
     return subprocess.run(cmd, check=True, capture_output=True, text=True)
 
-
 def _do_pull(repo_id: str | None, force: bool) -> None:
-    """Sync template files from a git remote into ``AJ_HOME``.
-
-    Pull is an *incremental sync* — it never touches local-only paths
-    (``aj_config.json``, ``record.jsonl``, ``submission/``, ``logs/``)
-    and never writes back to the config file. Pass *repo_id* explicitly
-    each time, or pre-populate ``aj_config.json`` once.
-
-    Without ``--force``: copies/overwrites every remote file into
-    ``AJ_HOME``, leaves extra local files alone.
-
-    With ``--force``: additionally removes local files (outside
-    ``_LOCAL_ONLY``) that are absent from the remote — useful when a
-    template was renamed or deleted upstream.
-    """
     config = read_config()
     if repo_id is None or not repo_id:
         repo_id = config.repo_id
@@ -107,10 +84,6 @@ def _do_pull(repo_id: str | None, force: bool) -> None:
 
     removed = 0
     if force:
-        # Drop local files that aren't in the remote, but only inside
-        # directories the remote actually populated — this prevents
-        # ``aj pull -f`` from clobbering arbitrary files if AJ_HOME was
-        # mistakenly pointed at a non-aj directory.
         for parent_rel in remote_dirs:
             local_dir = const.AJ_HOME / parent_rel
             if not local_dir.is_dir():
@@ -140,9 +113,7 @@ def _do_pull(repo_id: str | None, force: bool) -> None:
         files_removed=removed,
     )
 
-
 def _do_push(message: str | None) -> None:
-    """Core push logic shared by template push and top-level alias."""
     if not const.AJ_HOME.exists():
         raise click.ClickException("No AJ home found. Run `aj pull` first.")
 

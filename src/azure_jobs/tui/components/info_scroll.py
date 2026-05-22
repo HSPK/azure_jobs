@@ -1,15 +1,9 @@
-"""Scrollable container for the Info pane with vim-style navigation.
-
-Mirrors :class:`LogViewer`'s key bindings (``hjkl``/``gG``/``Ctrl+d``/
-``Ctrl+u``) so the user gets the same scrolling experience whether the
-right pane is showing job info or live log output.
-"""
+"""Scrollable container for the Info pane with vim-style navigation."""
 
 from __future__ import annotations
 
 from textual.binding import Binding
 from textual.containers import VerticalScroll
-
 
 class InfoScroll(VerticalScroll):
     """VerticalScroll subclass with vim-style navigation."""

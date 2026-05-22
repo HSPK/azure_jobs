@@ -1,24 +1,9 @@
-"""Dataclasses returned by Azure ML workspace-scoped APIs.
-
-ARM-side dataclasses live in :mod:`azure_jobs.core.az_client.arm.models`;
-this module owns the structured shapes returned by ML data plane (jobs,
-environments, datastores) so callers can use ``info.name`` instead of
-``raw["name"]`` for stable fields.
-
-:class:`JobInfo` continues to live in :mod:`.extract` as a TypedDict —
-converting it to a dataclass would touch the entire CLI / TUI / stats
-code path, so it's tracked as a separate follow-up.
-
-Each dataclass keeps a ``raw`` field carrying the original REST payload,
-so detail views and other consumers that need fields outside the typed
-surface don't have to round-trip through the API.
-"""
+"""Dataclasses returned by Azure ML workspace-scoped APIs."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any
-
 
 @dataclass
 class EnvironmentInfo:
@@ -33,7 +18,7 @@ class EnvironmentInfo:
     is_archived: bool = False
     is_curated: bool = False
     created_at: str = ""
-    id: str = ""  # full ARM resource ID
+    id: str = ""
     raw: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
@@ -57,7 +42,6 @@ class EnvironmentInfo:
             raw=raw,
         )
 
-
 @dataclass
 class DatastoreInfo:
     """An Azure ML datastore."""
@@ -73,7 +57,7 @@ class DatastoreInfo:
     description: str = ""
     created_at: str = ""
     modified_at: str = ""
-    id: str = ""  # full ARM resource ID
+    id: str = ""
     raw: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
@@ -95,6 +79,5 @@ class DatastoreInfo:
             id=raw.get("id", "") or "",
             raw=raw,
         )
-
 
 __all__ = ["EnvironmentInfo", "DatastoreInfo"]

@@ -1,4 +1,4 @@
-"""Workspace environment management (``client.environments``)."""
+"""Workspace environment management (client.environments)."""
 
 from __future__ import annotations
 
@@ -14,14 +14,8 @@ from ..auth import (
 from .context import RestContext
 from .models import EnvironmentInfo
 
-
 class EnvironmentsAPI:
-    """Environment CRUD scoped to a workspace.
-
-    Methods follow the namespace pattern used by :class:`AzureARMClient` —
-    ``list/get/list_versions/create_or_update`` — and return
-    :class:`EnvironmentInfo` dataclasses instead of raw dicts.
-    """
+    """Environment CRUD scoped to a workspace."""
 
     def __init__(self, ctx: RestContext) -> None:
         self._ctx = ctx
@@ -33,12 +27,7 @@ class EnvironmentsAPI:
         return [EnvironmentInfo.from_rest(r) for r in self._paged_get(url)]
 
     def list_versions(self, name: str) -> list[EnvironmentInfo]:
-        """List versions for an environment container, newest first.
-
-        REST returns each row's ``name`` set to the version string; we
-        patch the dataclass so ``info.name`` is the container name and
-        ``info.version`` is the version string.
-        """
+        """List versions for an environment container, newest first."""
         self._ctx.ensure_token()
         url = (
             f"{self._ctx.base}/environments/{quote(name, safe='')}"
@@ -54,7 +43,7 @@ class EnvironmentsAPI:
         return out
 
     def get(self, name: str, version: str) -> EnvironmentInfo | None:
-        """Get a specific environment version, or ``None`` if not found."""
+        """Get a specific environment version, or None if not found."""
         self._ctx.ensure_token()
         url = (
             f"{self._ctx.base}/environments/{quote(name, safe='')}"
@@ -89,8 +78,6 @@ class EnvironmentsAPI:
         info.name = name
         return info
 
-    # ---- internals ----------------------------------------------------------
-
     def _paged_get(self, url: str) -> list[dict[str, Any]]:
         results: list[dict[str, Any]] = []
         next_url: str | None = url
@@ -101,6 +88,5 @@ class EnvironmentsAPI:
             results.extend(data.get("value", []))
             next_url = data.get("nextLink")
         return results
-
 
 __all__ = ["EnvironmentsAPI"]

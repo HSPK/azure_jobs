@@ -1,10 +1,4 @@
-"""Stats display builders — experiments / compute / workspace / user / overview.
-
-Consumes the plain-dict outputs of :mod:`azure_jobs.utils.stats` (which
-are JSON-friendly bags of counts + GPU-seconds + queue-second samples)
-and builds :class:`TableView` / :class:`DetailView` for the middleware
-to render in Rich or JSON mode.
-"""
+"""Stats display builders — experiments / compute / workspace / user / overview."""
 
 from __future__ import annotations
 
@@ -15,25 +9,15 @@ from azure_jobs.utils.time import format_duration
 
 from .render import Column, DetailField, DetailView, TableView, render_detail, render_table
 
-
 def _success_rate_str(row: dict[str, Any]) -> str:
     pct = row.get("success_rate_pct")
     return f"{pct:.0f}%" if pct is not None else "—"
-
 
 def _gpu_hours_str(row: dict[str, Any]) -> str:
     secs = row.get("gpu_secs", 0) or 0
     return fmt_gpu_hours(secs) if secs else "—"
 
-
 def _stats_to_rows(stats: dict[str, dict[str, Any]], *, name_key: str) -> list[dict[str, Any]]:
-    """Flatten ``{group_name: stats_dict}`` into a sorted row list.
-
-    Computed values are pre-included as fields (``success_rate_pct``,
-    ``gpu_hours``, ``queue_avg_secs``, ``queue_p50_secs``,
-    ``queue_max_secs``) so JSON consumers don't have to recompute and
-    column keys stay unique.
-    """
     rows: list[dict[str, Any]] = []
     for name, es in sorted(stats.items(), key=lambda x: x[1].get("gpu_secs", 0), reverse=True):
         completed = es.get("completed", 0) or 0
@@ -63,9 +47,7 @@ def _stats_to_rows(stats: dict[str, dict[str, Any]], *, name_key: str) -> list[d
         )
     return rows
 
-
 def _status_columns() -> list[Column]:
-    """Shared Active / Queued / Completed / Failed columns."""
     return [
         Column(key="total", header="Jobs", justify="right"),
         Column(key="active", header="▶", justify="right", style="cyan"),
@@ -73,7 +55,6 @@ def _status_columns() -> list[Column]:
         Column(key="completed", header="✓", justify="right", style="green"),
         Column(key="failed", header="✗", justify="right", style="red"),
     ]
-
 
 def _rate_column() -> Column:
     return Column(
@@ -83,7 +64,6 @@ def _rate_column() -> Column:
         format=lambda _v, row: _success_rate_str(row),
     )
 
-
 def _gpu_hours_column() -> Column:
     return Column(
         key="gpu_hours",
@@ -91,7 +71,6 @@ def _gpu_hours_column() -> Column:
         justify="right",
         format=lambda _v, row: _gpu_hours_str(row),
     )
-
 
 def _show_grouped_stats(
     stats: dict[str, dict[str, Any]],
@@ -102,8 +81,6 @@ def _show_grouped_stats(
     empty_message: str,
     extra_columns: tuple[Column, ...] = (),
 ) -> None:
-    """Shared renderer for ``show_*_stats_table`` — name + status counts
-    + optional extras + GPU hours."""
     rows = _stats_to_rows(stats, name_key=name_key)
     view = TableView(
         title=title,
@@ -117,7 +94,6 @@ def _show_grouped_stats(
         ],
     )
     render_table(view)
-
 
 def show_experiment_stats_table(
     stats: dict[str, dict[str, Any]],
@@ -133,7 +109,6 @@ def show_experiment_stats_table(
         empty_message="No experiments found",
         extra_columns=(_rate_column(),),
     )
-
 
 def show_compute_stats_table(
     stats: dict[str, dict[str, Any]],
@@ -163,7 +138,6 @@ def show_compute_stats_table(
         ),
     )
 
-
 def show_workspace_stats_table(
     stats: dict[str, dict[str, Any]],
     *,
@@ -178,7 +152,6 @@ def show_workspace_stats_table(
         empty_message="No workspaces found",
         extra_columns=(_rate_column(),),
     )
-
 
 def show_user_stats_table(
     stats: dict[str, dict[str, Any]],
@@ -195,9 +168,8 @@ def show_user_stats_table(
         extra_columns=(_rate_column(),),
     )
 
-
 def show_stats_overview(summary: OverallSummary, *, scope: str) -> None:
-    """Top-of-page overview panel for ``aj job stats``."""
+    """Top-of-page overview panel for aj job stats."""
     gpu_secs = summary.get("gpu_secs", []) or []
     queue = summary.get("queue_secs", []) or []
     total = summary.get("total", 0)

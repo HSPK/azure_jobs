@@ -21,11 +21,8 @@ from azure_jobs.tui.state import WorkspaceState
 
 log = logging.getLogger(__name__)
 
-
 class WorkspaceController(Controller[WorkspaceState]):
     """Workspace pick/switch behaviour."""
-
-    # ---- workspace / client -------------------------------------------------
 
     def ensure_workspace(self) -> AJWorkspace | None:
         st = self.state
@@ -49,8 +46,6 @@ class WorkspaceController(Controller[WorkspaceState]):
             )
         else:
             target.update("[dim]Not configured[/dim]")
-
-    # ---- selector flow ------------------------------------------------------
 
     def pick(self) -> None:
         """Open workspace picker (detects workspaces on first call)."""
@@ -106,7 +101,7 @@ class WorkspaceController(Controller[WorkspaceState]):
 
     def _on_picked(self, value: str | None) -> None:
         if value is None:
-            return  # cancelled
+            return
         cur_name = self.state.current.workspace_name if self.state.current else ""
         if value == cur_name or not value:
             return
@@ -122,9 +117,6 @@ class WorkspaceController(Controller[WorkspaceState]):
             return
         ws = st.available[idx]
 
-        # Stop log streaming first (it may reference the old REST client).
-        # Single facade call replaces the previous reach into
-        # ``app.logs.{buffer,stream}`` and private state fields.
         app.logs.on_workspace_switching()
 
         st.current = AJWorkspace(
@@ -134,11 +126,8 @@ class WorkspaceController(Controller[WorkspaceState]):
         )
         old_client = st.rest_client
         st.rest_client = None
-        # close() shuts down a requests.Session; no network I/O, safe on
-        # the UI thread.
         safe_close(old_client)
 
-        # Reset jobs state for the new workspace and start initial fetch.
         app.jobs.reset()
 
         self.update_label()

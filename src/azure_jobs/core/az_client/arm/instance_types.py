@@ -1,21 +1,4 @@
-"""``arm.instance_types`` — Singularity instance type catalog.
-
-Live catalog of Singularity instance types per Azure region. Replaces
-the hand-maintained ``families.yaml`` that used to mirror amlt's
-``sing_instance_fallback.json``.
-
-Endpoint::
-
-    GET /subscriptions/{sub}
-        /providers/Microsoft.MachineLearningServices
-        /locations/{region}/instanceTypeSeries
-        ?api-version=2021-03-01-preview
-
-The ``instanceTypeSeriesId`` field joins directly to the ``id`` on each
-``SeriesQuota`` returned by :meth:`arm.vc.quota.list`, so quota + catalog
-together give us everything :func:`azure_jobs.core.submit.native.sku.match_instance_type`
-needs.
-"""
+"""arm.instance_types — Singularity instance type catalog."""
 
 from __future__ import annotations
 
@@ -28,9 +11,6 @@ from ._base import ArmNamespace
 
 API_VERSION = "2021-03-01-preview"
 
-# Description strings look like:
-#   "Accelerator: NVIDIA H100 80GB GPU x 8, NVLink, IB, vCPU: 92, ..."
-#   "vCPU: 16, Memory GiB: 128, ..."
 _DESC_ACCEL_RE = re.compile(
     r"\b(?:NVIDIA|AMD)\s+(?:NC\s+|ND\s+)?([A-Za-z0-9]+)(?:\s+(\d+)\s*GB)?",
     re.IGNORECASE,
@@ -53,25 +33,19 @@ _DEFAULT_GPU_MEMORY = {
     "K80": 12,
 }
 
-
 @dataclass
 class InstanceTypeInfo:
-    """One Singularity instance type (e.g. ``Singularity.ND96r_H100_v5``).
+    """One Singularity instance type (e.g."""
 
-    ``accelerator`` / ``gpu_memory_gb`` / ``nvlink`` / ``infiniband`` are
-    derived once from ``description`` at parse time so callers don't have
-    to re-grep the string.
-    """
-
-    name: str  # e.g. "Singularity.ND96r_H100_v5"
-    series_id: str  # e.g. "NDH100v5" — joins to SeriesQuota.series
+    name: str
+    series_id: str
     num_gpus: int = 0
     num_cores: int = 0
     memory_gib: int = 0
-    scratch_gib: int = 0  # Local SSD scratch storage, in GiB
+    scratch_gib: int = 0
     description: str = ""
-    accelerator: str = ""  # e.g. "H100", "A100", "MI300X", "CPU"
-    gpu_memory_gb: int = 0  # 0 for CPU-only
+    accelerator: str = ""
+    gpu_memory_gb: int = 0
     nvlink: bool = False
     infiniband: bool = False
 
@@ -81,18 +55,12 @@ class InstanceTypeInfo:
 
     @property
     def short_name(self) -> str:
-        """Name without the ``Singularity.`` prefix."""
+        """Name without the Singularity."""
         return self.name.removeprefix("Singularity.")
 
     @property
     def shorthand(self) -> str:
-        """Render this row as the amlt SKU shorthand it satisfies.
-
-        Examples:
-
-        * GPU:  ``80G8-A100-NvLink`` (mem, gpu count, accel, nvlink flag)
-        * CPU:  ``C16`` (core count)
-        """
+        """Render this row as the amlt SKU shorthand it satisfies."""
         if self.is_cpu:
             return f"C{self.num_cores}" if self.num_cores else "C"
         parts = []
@@ -106,10 +74,7 @@ class InstanceTypeInfo:
             parts.append("NvLink")
         return "-".join(parts)
 
-
 def _parse_description(desc: str, num_gpus: int) -> tuple[str, int, bool, bool]:
-    """Pull ``(accelerator, gpu_memory_gb, nvlink, infiniband)`` from
-    a catalog row's ``description`` string."""
     accel = ""
     gpu_mem = 0
     if num_gpus > 0:
@@ -128,7 +93,6 @@ def _parse_description(desc: str, num_gpus: int) -> tuple[str, int, bool, bool]:
         bool(_DESC_NVLINK_RE.search(desc)),
         bool(_DESC_IB_RE.search(desc)),
     )
-
 
 def _row_to_info(row: dict) -> InstanceTypeInfo:
     num_gpus = int(row.get("numberOfGPUs") or 0)
@@ -149,12 +113,10 @@ def _row_to_info(row: dict) -> InstanceTypeInfo:
         infiniband=ib,
     )
 
-
 _VARIANT_SUFFIX_RE = re.compile(r"-n\d+$")
 
-
 class InstanceTypesAPI(ArmNamespace):
-    """``arm.instance_types`` — Singularity instance type catalog per region."""
+    """arm.instance_types — Singularity instance type catalog per region."""
 
     def list(
         self,
@@ -162,12 +124,7 @@ class InstanceTypesAPI(ArmNamespace):
         *,
         subscription_id: str = "",
     ) -> list[InstanceTypeInfo]:
-        """List every Singularity instance type available in *location*.
-
-        Any subscription works (the catalog is the same per region); when
-        ``subscription_id`` is omitted the first visible one is used.
-        Returns ``[]`` on auth/network failure or an unknown location.
-        """
+        """List every Singularity instance type available in *location*."""
         if not location:
             return []
         if not subscription_id:
@@ -195,6 +152,5 @@ class InstanceTypesAPI(ArmNamespace):
             for row in data.get("value", [])
             if not _VARIANT_SUFFIX_RE.search(row.get("name", ""))
         ]
-
 
 __all__ = ["InstanceTypeInfo", "InstanceTypesAPI"]

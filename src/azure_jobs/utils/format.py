@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-
 def format_size(n: int) -> str:
-    """Format a byte count as a short human string (e.g. ``42.0 MB``)."""
+    """Format a byte count as a short human string (e.g."""
     units = ("B", "KB", "MB", "GB", "TB")
     size = float(n)
     for unit in units:

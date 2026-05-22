@@ -17,9 +17,8 @@ from ..models import SubmitEvent
 from . import constants as C
 from .config import VolcanoConfig
 
-
 def write_filelist(selected: list[CodeFile]) -> str:
-    """Write a NUL-separated list of relpaths for ``tar --null -T``."""
+    """Write a NUL-separated list of relpaths for tar --null -T."""
     fd = tempfile.NamedTemporaryFile(
         mode="wb", prefix="aj-upload-list-", suffix=".lst", delete=False
     )
@@ -28,7 +27,6 @@ def write_filelist(selected: list[CodeFile]) -> str:
             f.write(cf.rel.encode("utf-8"))
             f.write(b"\x00")
     return fd.name
-
 
 def stream_tar(
     *,
@@ -41,7 +39,7 @@ def stream_tar(
     total_files: int,
     emit: Callable[[SubmitEvent], None],
 ) -> subprocess.CompletedProcess[str]:
-    """Stream ``tar c`` into ``kubectl exec tar x``, emitting per-file events."""
+    """Stream tar c into kubectl exec tar x, emitting per-file events."""
     tar_proc = subprocess.Popen(
         [
             "tar",
@@ -108,7 +106,6 @@ def stream_tar(
         tar_proc.wait()
         drainer.join(timeout=C.STDERR_DRAIN_JOIN_TIMEOUT)
 
-
 def upload_files_to_pvc(
     *,
     src_dir: Path,
@@ -123,13 +120,7 @@ def upload_files_to_pvc(
     status_kind: str = "code",
     label: str = "Files",
 ) -> bool:
-    """Upload ``files`` (relative to ``src_dir``) into ``dest_dir`` on a PVC.
-
-    Spins up a transient busybox pod with ``kubectl apply``, waits for it,
-    streams a tar archive of exactly ``files`` into ``kubectl exec tar x``,
-    then deletes the pod. ``status_kind`` and ``label`` shape the user-facing
-    progress events. Returns ``True`` on success.
-    """
+    """Upload files (relative to src_dir) into dest_dir on a PVC."""
     emit = on_event or (lambda _ev: None)
 
     def status(kind: str, detail: str) -> None:
@@ -260,21 +251,13 @@ def upload_files_to_pvc(
             timeout=C.KUBECTL_DELETE_TIMEOUT,
         )
 
-
 def upload_code_to_pvc(
     cfg: VolcanoConfig,
     *,
     namespace: str,
     on_event: Callable[[SubmitEvent], None] | None = None,
 ) -> bool:
-    """Upload local code to PVC via a transient kubectl-managed pod.
-
-    ``walk_code`` is the single source of truth for the file set: it
-    honors built-in defaults (``__pycache__``, ``.git``, ``.venv``,
-    ``node_modules``, ``.azure_jobs/`` metadata) plus user patterns
-    (template ``code.ignore`` + ``.codeignore`` / ``.amltignore``). The
-    list is fed to ``tar --null -T`` so the archive matches the count.
-    """
+    """Upload local code to PVC via a transient kubectl-managed pod."""
     if not cfg.code_dir or not cfg.pvc_name or not cfg.pvc_mount_dir:
         return False
 

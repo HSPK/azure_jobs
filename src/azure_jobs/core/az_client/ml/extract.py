@@ -6,9 +6,6 @@ from typing import Any, TypedDict
 
 from azure_jobs.utils.time import calc_duration, calc_duration_secs, format_time
 
-# Field names that ``extract_rest_job`` always populates (even if to empty
-# string / None / 1).  Used by the post-extract assertion below to catch
-# silent drift the next time someone refactors the extractor.
 _REQUIRED_FIELDS = frozenset(
     {
         "name",
@@ -39,19 +36,8 @@ _REQUIRED_FIELDS = frozenset(
     }
 )
 
-
 class JobInfo(TypedDict, total=False):
-    """Lightweight, display-oriented view of an Azure ML job.
-
-    Returned by :func:`extract_rest_job`. ``total=False`` because every
-    consumer uses ``.get(key, default)`` to tolerate evolving Azure ML
-    REST responses; converting to a strict ``@dataclass`` is a planned
-    follow-up that touches the TUI / CLI / stats consumers.
-
-    Until then, :func:`extract_rest_job` asserts post-build that every
-    name in :data:`_REQUIRED_FIELDS` is present so renames blow up at
-    the extraction boundary instead of silently degrading consumers.
-    """
+    """Lightweight, display-oriented view of an Azure ML job."""
 
     name: str
     display_name: str
@@ -79,14 +65,8 @@ class JobInfo(TypedDict, total=False):
     sla_tier: str
     processes_per_node: int
 
-
 def parse_azure_error_dict(err: dict | str | None) -> str:
-    """Walk Azure's nested ``innerError`` chain and return the most
-    specific human-readable message.
-
-    Accepts either the raw ``error`` sub-dict (with ``code``, ``message``,
-    ``innerError``) or a plain string. Returns ``""`` for ``None``/empty.
-    """
+    """Walk Azure's nested innerError chain and return the most specific…."""
     if not err:
         return ""
     if isinstance(err, dict):
@@ -103,13 +83,11 @@ def parse_azure_error_dict(err: dict | str | None) -> str:
         return msg or code or str(err)
     return str(err)
 
-
 def trim_arm_id(arm_id: str) -> str:
     """Extract the trailing name segment from an ARM resource ID."""
     if "/" in arm_id:
         return arm_id.rstrip("/").rsplit("/", 1)[-1]
     return arm_id
-
 
 def extract_rest_job(raw: dict[str, Any]) -> JobInfo:
     """Convert a REST API job JSON object → lightweight display dict."""
@@ -118,7 +96,6 @@ def extract_rest_job(raw: dict[str, Any]) -> JobInfo:
 
     name = raw.get("name", "")
 
-    # Timing
     start = inner_props.get("StartTimeUtc", "")
     end = inner_props.get("EndTimeUtc", "")
     duration = calc_duration(start, end)
@@ -126,7 +103,6 @@ def extract_rest_job(raw: dict[str, Any]) -> JobInfo:
     start_display = format_time(start)
     end_display = format_time(end)
 
-    # Queue time (created → started)
     queue_time = ""
     queue_secs: int | None = None
     sys_data = raw.get("systemData", {}) or {}
@@ -135,38 +111,29 @@ def extract_rest_job(raw: dict[str, Any]) -> JobInfo:
         queue_time = calc_duration(created_raw[:19], start)
         queue_secs = calc_duration_secs(created_raw[:19], start)
 
-    # Compute — trim ARM ID to short name
     compute = trim_arm_id(props.get("computeId", "") or "")
 
-    # Tags — filter out internal AML system tags
     tags = props.get("tags", {}) or {}
     tags = {k: v for k, v in tags.items() if not k.startswith("_aml_system_")}
     tags_str = ", ".join(f"{k}={v}" for k, v in tags.items()) if tags else ""
 
-    # Environment — trim ARM ID and strip version suffix
     env_str = trim_arm_id(props.get("environmentId", "") or "")
     if ":" in env_str:
         env_str = env_str.rsplit(":", 1)[0]
 
-    # Created (sys_data already extracted above for queue_time)
     created = format_time(created_raw[:19]) if created_raw else ""
 
-    # Created by (user)
     created_by = sys_data.get("createdBy", "") or ""
 
-    # Error
     error_msg = parse_azure_error_dict(props.get("error", None))
 
-    # Portal URL
     services = props.get("services", {}) or {}
     studio = services.get("Studio", {}) or {}
     portal_url = studio.get("endpoint", "") or ""
 
-    # Resources — extract instance type, nodes, SLA tier
     resources = props.get("resources", {}) or {}
     aisc = (resources.get("properties") or {}).get("AISuperComputer", {}) or {}
     instance_type = aisc.get("instanceType", "") or ""
-    # Strip "Singularity." prefix and comma-separated alternatives
     if instance_type:
         instance_type = instance_type.split(",")[0].strip()
         if instance_type.startswith("Singularity."):
@@ -174,7 +141,6 @@ def extract_rest_job(raw: dict[str, Any]) -> JobInfo:
     nodes = resources.get("instanceCount", 1) or aisc.get("instanceCount", 1)
     sla_tier = aisc.get("slaTier", "") or ""
 
-    # Distribution — process count
     dist = props.get("distribution", {}) or {}
     processes_per_node = dist.get("processCountPerInstance", 0) or 0
 
@@ -205,8 +171,6 @@ def extract_rest_job(raw: dict[str, Any]) -> JobInfo:
         "sla_tier": sla_tier,
         "processes_per_node": processes_per_node,
     }
-    # Catch silent drift early — if a future refactor drops a field,
-    # consumers shouldn't have to discover it via a missing UI cell.
     missing = _REQUIRED_FIELDS - result.keys()
     assert not missing, f"extract_rest_job dropped fields: {sorted(missing)}"
     return result

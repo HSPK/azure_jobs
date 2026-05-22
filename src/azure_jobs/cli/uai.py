@@ -1,4 +1,4 @@
-"""``aj uai`` — list user-assigned managed identities."""
+"""aj uai — list user-assigned managed identities."""
 
 from __future__ import annotations
 
@@ -6,11 +6,9 @@ import click
 
 from azure_jobs.cli import main
 
-
 @main.group(name="uai")
 def uai_group() -> None:
     """List user-assigned managed identities."""
-
 
 @uai_group.command(name="list")
 @click.option(
@@ -20,13 +18,7 @@ def uai_group() -> None:
     help="Show the full table (name, RG, location, client ID, ARM ID).",
 )
 def uai_list(full: bool) -> None:
-    """List user-assigned managed identities across accessible subscriptions.
-
-    Default output is one ARM ID per line — the exact value that goes
-    into ``_AZUREML_SINGULARITY_JOB_UAI`` in your account template.
-    Use ``--full`` for the detailed table, or ``--json`` for structured
-    output.
-    """
+    """List user-assigned managed identities across accessible subscriptions."""
     from azure_jobs.core.az_client import AzureARMClient
     from azure_jobs.utils.ui import console, error, get_output_mode, show_uai_table
 

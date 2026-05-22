@@ -1,11 +1,4 @@
-"""Quota & SKU display builders — Singularity VCs and AML compute clusters.
-
-These tables share the same grouped-by-VC / grouped-by-workspace
-structure: the first row of each group carries the group label;
-subsequent rows leave it blank; a section divider sits between groups.
-JSON consumers get every row's group field populated and a
-``section_by`` hint in metadata for client-side grouping.
-"""
+"""Quota & SKU display builders — Singularity VCs and AML compute clusters."""
 
 from __future__ import annotations
 
@@ -13,29 +6,19 @@ from typing import Any, Callable
 
 from .render import Column, TableView, render_table
 
-# ────────────────────────────────────────────────────────────────────────
-# Shared VC-grouped quota helpers (sing quotas + sku list)
-# ────────────────────────────────────────────────────────────────────────
-
-
 _SLA_TIERS_DEFAULT: tuple[str, ...] = ("Premium", "Standard", "Basic")
 _TIER_COLOURS = {"Premium": "green", "Standard": "yellow", "Basic": "bright_red"}
 
-
 def _fmt_used_limit(used: int | None, limit: int) -> str:
-    """Rich-only ``used/limit`` cell, colour-coded like amlt."""
     if limit == 0:
         return "[dim]·[/dim]"
     u = str(used) if used is not None else "?"
     colour = "green" if (used or 0) < limit else "red"
     return f"[{colour}]{u}[/{colour}][dim]/[/dim][yellow]{limit}[/yellow]"
 
-
 def _active_tiers_and_user_limit(
     vcs: list[Any], sla_tiers: tuple[str, ...]
 ) -> tuple[list[str], bool]:
-    """Inspect VC quotas to figure out which SLA-tier columns to render
-    and whether at least one series has an user-level cap (cross-tier)."""
     active: list[str] = []
     has_user_limit = False
     for vc in vcs:
@@ -46,9 +29,7 @@ def _active_tiers_and_user_limit(
             has_user_limit = True
     return active, has_user_limit
 
-
 def _tier_row_fields(sq: Any, active_tiers: list[str]) -> dict[str, Any]:
-    """Per-row ``tier_<Tier>_used`` / ``tier_<Tier>_limit`` slots."""
     out: dict[str, Any] = {}
     for tier in active_tiers:
         tq = sq.tiers.get(tier) if sq is not None else None
@@ -56,22 +37,16 @@ def _tier_row_fields(sq: Any, active_tiers: list[str]) -> dict[str, Any]:
         out[f"tier_{tier}_limit"] = tq.limit if tq else 0
     return out
 
-
 def _empty_tier_row_fields(active_tiers: list[str]) -> dict[str, Any]:
     return {f"tier_{tier}_used": None for tier in active_tiers} | {
         f"tier_{tier}_limit": 0 for tier in active_tiers
     }
 
-
 def _vc_label_fmt(value: Any, row: dict[str, Any]) -> str:
-    """Show the VC name on the first row of each group only."""
     return value if row.get("vc_first") else ""
 
-
 def _vc_first_fmt(value: Any, row: dict[str, Any]) -> str:
-    """Show VC-level metadata on the first row of each group only."""
     return str(value or "") if row.get("vc_first") else ""
-
 
 def _make_tier_fmt(tier: str) -> Callable[[Any, dict[str, Any]], str]:
     def _fmt(_v: Any, row: dict[str, Any]) -> str:
@@ -81,13 +56,10 @@ def _make_tier_fmt(tier: str) -> Callable[[Any, dict[str, Any]], str]:
 
     return _fmt
 
-
 def _user_limit_fmt(v: Any, _row: dict[str, Any]) -> str:
     return f"[cyan]{v}[/cyan]" if v else "[dim]·[/dim]"
 
-
 def _tier_columns(active_tiers: list[str], *, has_user_limit: bool) -> list[Column]:
-    """Build the dynamic tail of tier columns (+ optional user-quota column)."""
     cols: list[Column] = []
     for tier in active_tiers:
         colour = _TIER_COLOURS.get(tier, "white")
@@ -112,7 +84,6 @@ def _tier_columns(active_tiers: list[str], *, has_user_limit: bool) -> list[Colu
         )
     return cols
 
-
 def _render_vc_grouped(
     *,
     title: str,
@@ -122,7 +93,6 @@ def _render_vc_grouped(
     active_tiers: list[str],
     has_user_limit: bool,
 ) -> None:
-    """Build a TableView with a section_by=vc grouping and render it."""
     view = TableView(
         title=title,
         rows=rows,
@@ -133,26 +103,13 @@ def _render_vc_grouped(
     )
     render_table(view)
 
-
-# ────────────────────────────────────────────────────────────────────────
-# Singularity quotas (aj quota --sing)
-# ────────────────────────────────────────────────────────────────────────
-
-
 def show_sing_quota_table(
     vcs: list[Any],
     *,
     sla_tiers: tuple[str, ...] = _SLA_TIERS_DEFAULT,
     full: bool = False,
 ) -> None:
-    """Display Singularity VC quotas grouped by VC.
-
-    Each VC has been pre-populated with ``vc.quotas`` (a list of
-    :class:`SeriesQuota`). Active SLA tiers are derived from the data,
-    and an extra ``Quota`` column appears only when at least one series
-    has an user-level cap (cross-tier). Pass ``full=True`` to include the
-    Resource Group + Subscription columns (hidden by default).
-    """
+    """Display Singularity VC quotas grouped by VC."""
     active_tiers, has_user_limit = _active_tiers_and_user_limit(vcs, sla_tiers)
 
     rows: list[dict[str, Any]] = []
@@ -257,21 +214,7 @@ def show_sing_quota_table(
         has_user_limit=has_user_limit,
     )
 
-
-# ────────────────────────────────────────────────────────────────────────
-# Singularity SKUs (aj sku list)
-# ────────────────────────────────────────────────────────────────────────
-
-
 def _series_to_sku_rows(sq: Any, catalog: list[Any]) -> list[dict[str, Any]]:
-    """Convert one ``SeriesQuota`` into 1+ SKU rows (one per instance variant).
-
-    *catalog* is the live Singularity instance-type list for the VC's
-    region — see :meth:`AzureARMClient.instance_types.list`. Rows
-    matching ``sq.series`` are surfaced as displayable SKU rows; if no
-    catalog row matches we fall back to a single synthetic row built
-    from the quota payload alone.
-    """
     series = sq.series
     out: list[dict[str, Any]] = []
 
@@ -325,8 +268,6 @@ def _series_to_sku_rows(sq: Any, catalog: list[Any]) -> list[dict[str, Any]]:
             )
         return out
 
-    # No catalog entry — fall back to whatever the API gave us through
-    # ``sq.accelerator`` / ``sq.gpu_memory`` (parsed from the friendly name).
     gpu_model = sq.accelerator or ""
     is_cpu = gpu_model == "CPU"
     out.append(
@@ -344,24 +285,13 @@ def _series_to_sku_rows(sq: Any, catalog: list[Any]) -> list[dict[str, Any]]:
     )
     return out
 
-
 def show_sku_table(
     vcs: list[Any],
     *,
     catalog: list[Any] | None = None,
     sla_tiers: tuple[str, ...] = _SLA_TIERS_DEFAULT,
 ) -> None:
-    """Display Singularity SKUs grouped by VC.
-
-    *catalog* is the live Singularity instance-type list (see
-    :meth:`AzureARMClient.instance_types.list`). When omitted, rows fall
-    back to a single placeholder line per series — useful in offline /
-    test contexts.
-
-    Same active-tier detection as :func:`show_sing_quota_table`. Each
-    SKU row is one instance variant (CPU sizes or per-GPU-count GPU
-    instances).
-    """
+    """Display Singularity SKUs grouped by VC."""
     active_tiers, has_user_limit = _active_tiers_and_user_limit(vcs, sla_tiers)
     cat = list(catalog or [])
 
@@ -466,19 +396,12 @@ def show_sku_table(
         has_user_limit=has_user_limit,
     )
 
-
-# ────────────────────────────────────────────────────────────────────────
-# AML compute clusters (aj quota --aml)
-# ────────────────────────────────────────────────────────────────────────
-
-
 def _portal_compute_url(sub: str, rg: str, ws: str, cluster: str) -> str:
     return (
         f"https://ml.azure.com/compute/{cluster}/details"
         f"?wsid=/subscriptions/{sub}/resourceGroups/{rg}"
         f"/providers/Microsoft.MachineLearningServices/workspaces/{ws}"
     )
-
 
 def _fmt_nodes(
     idle: int,
@@ -489,7 +412,6 @@ def _fmt_nodes(
     w_busy: int = 1,
     w_total: int = 1,
 ) -> str:
-    """Format the Nodes cell with alignment and conditional dimming."""
     if max_nodes == 0:
         return "[dim]0/0[/dim]"
     i_s = str(idle).rjust(w_idle)
@@ -503,7 +425,6 @@ def _fmt_nodes(
     )
     busy_part = f"[cyan]{b_s}[/cyan] busy" if busy > 0 else f"[dim]{b_s} busy[/dim]"
     return f"{idle_part} {busy_part} [dim]/{t_s}[/dim]"
-
 
 def show_aml_quota_table(ws_computes: list[tuple[Any, list[Any]]]) -> None:
     """Display AML compute clusters grouped by workspace."""
@@ -553,7 +474,6 @@ def show_aml_quota_table(ws_computes: list[tuple[Any, list[Any]]]) -> None:
                 }
             )
 
-    # First-of-group flag for the workspace column.
     prev_ws = None
     for row in rows:
         row["workspace_first"] = row["workspace"] != prev_ws

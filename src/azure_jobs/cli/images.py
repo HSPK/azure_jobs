@@ -4,11 +4,9 @@ import click
 
 from azure_jobs.cli import main
 
-
 @main.group(name="image")
 def image_group() -> None:
     """Manage Singularity base images."""
-
 
 @image_group.command(name="list")
 @click.option(
@@ -19,11 +17,7 @@ def image_group() -> None:
     help="Filter images by name (e.g. 'torch2.7', 'cuda12')",
 )
 def image_list(query: str | None) -> None:
-    """List available Singularity base images.
-
-    Queries the Singularity API for curated images that can be used
-    in environment.sing.yaml with the amlt-sing/ prefix.
-    """
+    """List available Singularity base images."""
     from azure_jobs.utils.ui import console, show_sing_images_table
 
     with console.status("[bold cyan]Fetching base images…[/bold cyan]", spinner="dots"):
@@ -39,9 +33,7 @@ def image_list(query: str | None) -> None:
 
     show_sing_images_table(images)
 
-
 def _fetch_sing_images() -> list[dict]:
-    """Fetch Singularity base images via Azure ARM REST API."""
     import logging
 
     from azure_jobs.core.az_client import AzureARMClient
@@ -69,9 +61,7 @@ def _fetch_sing_images() -> list[dict]:
                 continue
     return []
 
-
 def _parse_images(raw_images: list[dict]) -> list[dict]:
-    """Parse raw Singularity API response into structured image list."""
     images = []
     for entry in raw_images:
         names = entry.get("names", [])

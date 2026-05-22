@@ -1,11 +1,4 @@
-"""Table renderers — local records, cloud jobs, templates, resources.
-
-These helpers construct a :class:`TableView` (or :class:`DetailView`)
-and delegate to :func:`render_table` / :func:`render_detail`, so passing
-``--json`` to ``aj`` emits the same data as a JSON document instead of
-a Rich table. Cell values stay raw; icon/style mapping lives on each
-:class:`Column`.
-"""
+"""Table renderers — local records, cloud jobs, templates, resources."""
 
 from __future__ import annotations
 
@@ -36,7 +29,6 @@ _LOCAL_STATUS_ICON = {
     "failed": "✗",
     "cancelled": "○",
 }
-
 
 def show_template_table(
     templates: list[dict[str, Any]],
@@ -73,7 +65,6 @@ def show_template_table(
         metadata={"default_template": default_template} if default_template else {},
     )
     render_table(view)
-
 
 def show_jobs_table(records: list[dict[str, Any]]) -> None:
     """Display local job records as a TableView."""
@@ -136,7 +127,6 @@ def show_jobs_table(records: list[dict[str, Any]]) -> None:
     )
     render_table(view)
 
-
 def show_cloud_jobs_table(
     jobs: list[dict[str, Any]],
     *,
@@ -186,12 +176,6 @@ def show_cloud_jobs_table(
     )
     render_table(view)
 
-
-# ────────────────────────────────────────────────────────────────────────
-# Environments
-# ────────────────────────────────────────────────────────────────────────
-
-
 def show_environments_table(envs: list[Any]) -> None:
     """Display Azure ML environments as a TableView."""
     rows = [
@@ -213,7 +197,6 @@ def show_environments_table(envs: list[Any]) -> None:
         ],
     )
     render_table(view)
-
 
 def show_environment_versions_table(
     name: str,
@@ -247,12 +230,6 @@ def show_environment_versions_table(
     )
     render_table(view)
 
-
-# ────────────────────────────────────────────────────────────────────────
-# Datastores
-# ────────────────────────────────────────────────────────────────────────
-
-
 def show_datastores_table(stores: list[Any]) -> None:
     """Display Azure ML datastores as a TableView."""
     rows = [
@@ -283,7 +260,6 @@ def show_datastores_table(stores: list[Any]) -> None:
         ],
     )
     render_table(view)
-
 
 def show_datastore_detail(ds: Any) -> None:
     """Display a single datastore's details as a DetailView."""
@@ -323,12 +299,6 @@ def show_datastore_detail(ds: Any) -> None:
     )
     render_detail(view)
 
-
-# ────────────────────────────────────────────────────────────────────────
-# Singularity images
-# ────────────────────────────────────────────────────────────────────────
-
-
 def show_sing_images_table(images: list[dict[str, Any]]) -> None:
     """Display Singularity base images as a TableView."""
     rows = []
@@ -357,14 +327,8 @@ def show_sing_images_table(images: list[dict[str, Any]]) -> None:
     )
     render_table(view)
 
-
 def show_uai_table(identities: list[Any]) -> None:
-    """Display user-assigned managed identities as a TableView.
-
-    Rows come from :meth:`AzureARMClient.identity.list`. The full ARM ID
-    (``id``) is what goes into ``_AZUREML_SINGULARITY_JOB_UAI``; it is shown
-    verbatim in its own column so users can copy it directly.
-    """
+    """Display user-assigned managed identities as a TableView."""
     rows = [
         {
             "name": uai.name,
@@ -391,13 +355,8 @@ def show_uai_table(identities: list[Any]) -> None:
     )
     render_table(view)
 
-
 def show_storage_accounts_table(accounts: list[Any]) -> None:
-    """Display Azure storage accounts as a TableView.
-
-    Rows come from :meth:`AzureARMClient.storage.list`. The ``Name`` column
-    is the value that goes into ``storage_account_name`` in storage templates.
-    """
+    """Display Azure storage accounts as a TableView."""
     rows = [
         {
             "name": sa.name,
@@ -423,12 +382,6 @@ def show_storage_accounts_table(accounts: list[Any]) -> None:
         metadata={"count": len(rows)},
     )
     render_table(view)
-
-
-# ────────────────────────────────────────────────────────────────────────
-# Azure auth status
-# ────────────────────────────────────────────────────────────────────────
-
 
 def show_auth_status(
     *,
@@ -498,12 +451,6 @@ def show_auth_status(
     )
     render_detail(view)
 
-
-# ────────────────────────────────────────────────────────────────────────
-# Code upload preview (aj code stats)
-# ────────────────────────────────────────────────────────────────────────
-
-
 def show_code_stats(
     *,
     code_dir: str,
@@ -515,11 +462,7 @@ def show_code_stats(
     top: int = 10,
     list_all: bool = False,
 ) -> None:
-    """Display the next submission's upload payload — summary + file table.
-
-    *files* items must expose ``size`` (int) and ``rel`` (str). Pure
-    detail+table emission so the same data shape powers Rich and JSON.
-    """
+    """Display the next submission's upload payload — summary + file table."""
     summary = DetailView(
         title="Code Upload Preview",
         data={

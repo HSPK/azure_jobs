@@ -1,11 +1,4 @@
-"""``arm.vc`` — Singularity virtual cluster discovery + name resolution.
-
-The default :meth:`VirtualClustersAPI.list` returns coords-only rows.
-For parsed quotas, use :meth:`VirtualClustersAPI.quota.list` (i.e.
-``arm.vc.quota.list(...)``), which threads ``with_raw=True`` through
-the Resource Graph query and parses each row into :class:`SeriesQuota`
-records via :func:`parse_managed_quotas`.
-"""
+"""arm.vc — Singularity virtual cluster discovery + name resolution."""
 
 from __future__ import annotations
 
@@ -16,10 +9,6 @@ from azure_jobs.core.errors import NETWORK_LIKE_ERRORS, ConfigError
 
 from ._base import ArmNamespace
 from .models import SeriesQuota, VCInfo
-
-# ---------------------------------------------------------------------------
-# Quota payload parsing
-# ---------------------------------------------------------------------------
 
 _GPU_NAME_RE = re.compile(
     r"\b(?:NVIDIA|AMD)\s+([A-Za-z0-9]+)(?:\s+(\d+)\s*GB)?\s+GPUs?\b",
@@ -40,9 +29,7 @@ _DEFAULT_GPU_MEMORY = {
     "V100": 16,
 }
 
-
 def _parse_quota_name(name: str) -> tuple[str, int]:
-    """Best-effort ``(accelerator, gpu_memory_gb)`` from a quota's ``name``."""
     if not name:
         return "", 0
     m = _GPU_NAME_RE.search(name)
@@ -55,9 +42,7 @@ def _parse_quota_name(name: str) -> tuple[str, int]:
         return "CPU", 0
     return "", 0
 
-
 def _infer_accelerator_from_series(series: str) -> str:
-    """Last-resort series-name heuristic when the API gave us no friendly ``name``."""
     s = series.upper().replace("_", "")
     for model in ("MI300X", "MI200", "H200", "H100", "A100", "A10", "T4", "V100"):
         if model in s:
@@ -66,20 +51,12 @@ def _infer_accelerator_from_series(series: str) -> str:
         return "CPU"
     return ""
 
-
 def parse_managed_quotas(
     raw: dict[str, Any],
     *,
     include_zero: bool = False,
 ) -> list[SeriesQuota]:
-    """Parse a VC's raw ARM/Resource-Graph payload into :class:`SeriesQuota`.
-
-    Merges ``properties.managed.defaultGroupPolicyOverallQuotas`` and the
-    regioned ``properties.managed.quotas`` — matching ``amlt target info
-    sing``. Each series's ``accelerator`` and ``gpu_memory`` are filled
-    once from the friendliest ``name`` string seen across its items, with
-    a series-name heuristic + default-memory map as last resorts.
-    """
+    """Parse a VC's raw ARM/Resource-Graph payload into :class:SeriesQuota."""
     managed = (raw.get("properties") or {}).get("managed") or {}
 
     raw_items: list[dict[str, Any]] = []
@@ -118,14 +95,8 @@ def parse_managed_quotas(
         results = [s for s in results if s.has_any_quota()]
     return results
 
-
-# ---------------------------------------------------------------------------
-# Namespaces
-# ---------------------------------------------------------------------------
-
-
 class VCQuotaAPI(ArmNamespace):
-    """``arm.vc.quota`` — parsed-quota view over Singularity VCs."""
+    """arm.vc.quota — parsed-quota view over Singularity VCs."""
 
     def list(
         self,
@@ -133,11 +104,7 @@ class VCQuotaAPI(ArmNamespace):
         *,
         include_zero: bool = False,
     ) -> list[VCInfo]:
-        """List Singularity VCs with parsed quotas attached.
-
-        Calls :meth:`VirtualClustersAPI.list` with ``with_raw=True`` and
-        runs :func:`parse_managed_quotas` on each ``VCInfo.raw`` payload.
-        """
+        """List Singularity VCs with parsed quotas attached."""
         vcs = self._client.vc.list(
             subscription_ids=subscription_ids,
             with_raw=True,
@@ -147,12 +114,7 @@ class VCQuotaAPI(ArmNamespace):
         return vcs
 
     def get_by_name(self, name: str) -> VCInfo:
-        """Resolve a single Singularity VC by name (with parsed quotas).
-
-        Lists every visible subscription's VCs, then narrows to the
-        requested name. Raises :class:`ConfigError` when missing or
-        ambiguous.
-        """
+        """Resolve a single Singularity VC by name (with parsed quotas)."""
         if not name:
             raise ConfigError("Singularity virtual cluster name is required.")
         matches = [vc for vc in self.list(include_zero=True) if vc.name == name]
@@ -173,7 +135,6 @@ class VCQuotaAPI(ArmNamespace):
             )
         return matches[0]
 
-
 class VirtualClustersAPI(ArmNamespace):
     def __init__(self, client) -> None:  # type: ignore[no-untyped-def]
         super().__init__(client)
@@ -185,13 +146,7 @@ class VirtualClustersAPI(ArmNamespace):
         *,
         with_raw: bool = False,
     ) -> list[VCInfo]:
-        """List Singularity VCs across every subscription the user can see.
-
-        When ``with_raw`` is true, the projection clause is dropped so each
-        Resource Graph row carries the full resource payload (including
-        ``properties.managed.*``); the row is stashed on ``VCInfo.raw``
-        for downstream consumers (e.g. :func:`parse_managed_quotas`).
-        """
+        """List Singularity VCs across every subscription the user can see."""
         if not subscription_ids:
             try:
                 subscription_ids = self._client.subscriptions.list()
@@ -243,11 +198,7 @@ class VirtualClustersAPI(ArmNamespace):
         subscription_id: str = "",
         resource_group: str = "",
     ) -> VCInfo:
-        """Resolve a Singularity VC name to its ARM coordinates.
-
-        ``subscription_id`` and ``resource_group`` are optional filters.
-        Ambiguous names raise :class:`ConfigError`.
-        """
+        """Resolve a Singularity VC name to its ARM coordinates."""
         if not name:
             raise ConfigError("Singularity target is missing 'target.name'.")
 
@@ -283,6 +234,5 @@ class VirtualClustersAPI(ArmNamespace):
                 "Set target.subscription_id or target.resource_group in the template."
             )
         return matches[0]
-
 
 __all__ = ["VirtualClustersAPI", "VCQuotaAPI", "parse_managed_quotas"]

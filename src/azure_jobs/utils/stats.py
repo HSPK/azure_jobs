@@ -1,8 +1,4 @@
-"""Shared aggregation and rendering helpers for job statistics.
-
-Used by ``aj job stats`` (full breakdown across experiment/compute/user/
-workspace) and ``aj exp list`` (per-experiment summary).
-"""
+"""Shared aggregation and rendering helpers for job statistics."""
 
 from __future__ import annotations
 
@@ -20,7 +16,6 @@ STATUS_RUNNING = {
 }
 STATUS_QUEUED = {"Queued"}
 
-
 def median(vals: list[int]) -> int:
     """Return the median of a list of ints (0 if empty)."""
     if not vals:
@@ -31,14 +26,12 @@ def median(vals: list[int]) -> int:
         return (s[mid - 1] + s[mid]) // 2
     return s[mid]
 
-
 def fmt_gpu_hours(secs: int) -> str:
     """Format seconds as a compact GPU-hour string."""
     h = secs / 3600
     if h >= 100:
         return f"{h:,.0f}h"
     return f"{h:,.1f}h"
-
 
 def _new_bucket() -> dict[str, Any]:
     return {
@@ -54,15 +47,7 @@ def _new_bucket() -> dict[str, Any]:
         "latest_created": "",
     }
 
-
 def _accumulate(bucket: dict[str, Any], j: dict[str, Any]) -> None:
-    """Fold one job *j* into *bucket*.
-
-    Shared body of every ``aggregate_by_*`` helper: increments status
-    counters, sums GPU-seconds (terminal + multi-node aware), collects
-    queue samples, and tracks the newest job's status/timestamp (assumes
-    callers iterate newest-first).
-    """
     bucket["total"] += 1
     st = j.get("status", "")
     if st == "Completed":
@@ -86,7 +71,6 @@ def _accumulate(bucket: dict[str, Any], j: dict[str, Any]) -> None:
         bucket["latest_status"] = st
         bucket["latest_created"] = j.get("created", "")
 
-
 def _aggregate_by(
     jobs: list[dict[str, Any]],
     key_fn: Any,
@@ -98,39 +82,22 @@ def _aggregate_by(
         _accumulate(out[key], j)
     return out
 
-
 def aggregate_by_experiment(jobs: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
-    """Group jobs by experiment and compute summary stats per group.
-
-    Returns a mapping ``experiment_name -> stats`` where stats includes
-    counts by status, GPU-hours, queue samples, and latest job metadata.
-    Jobs with no experiment fall under ``"Default"``.
-    """
+    """Group jobs by experiment and compute summary stats per group."""
     return _aggregate_by(jobs, lambda j: j.get("experiment"), default="Default")
 
-
 def _compute_key(j: dict[str, Any]) -> str:
-    """Bucket key for the "By Compute" table.
-
-    Singularity jobs share a virtual cluster name across many SKUs, so
-    we bucket by ``"<vc> (<instance_type>)"`` whenever ``instance_type``
-    is populated (Azure ML only sets it for Singularity / AISuperComputer
-    jobs). Other computes are keyed by name alone.
-    """
     comp = j.get("compute") or "unknown"
     inst = j.get("instance_type") or ""
     return f"{comp} ({inst})" if inst else comp
-
 
 def aggregate_by_compute(jobs: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     """Group jobs by compute target (VC + SKU for Singularity)."""
     return _aggregate_by(jobs, _compute_key)
 
-
 def aggregate_by_workspace(jobs: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
-    """Group jobs by their ``_workspace`` tag (set by multi-WS fetch)."""
+    """Group jobs by their _workspace tag (set by multi-WS fetch)."""
     return _aggregate_by(jobs, lambda j: j.get("_workspace"))
-
 
 def aggregate_by_user(jobs: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     """Group jobs by submitter, stripping the email domain."""
@@ -141,9 +108,8 @@ def aggregate_by_user(jobs: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
 
     return _aggregate_by(jobs, _user)
 
-
 class OverallSummary(TypedDict):
-    """Result of :func:`compute_overall_summary`."""
+    """Result of :func:compute_overall_summary."""
 
     total: int
     completed: int
@@ -153,7 +119,6 @@ class OverallSummary(TypedDict):
     queued: int
     gpu_secs: list[int]
     queue_secs: list[int]
-
 
 def compute_overall_summary(jobs: list[dict[str, Any]]) -> OverallSummary:
     """Compute totals and global GPU/queue stats over *jobs*."""

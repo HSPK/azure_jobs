@@ -13,9 +13,7 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-
 def _build_distribution(request: SubmitRequest) -> dict[str, Any] | None:
-    """Build distribution config for multi-node jobs as a plain dict."""
     if request.nodes <= 1 and request.processes_per_node <= 1:
         return None
 
@@ -24,14 +22,7 @@ def _build_distribution(request: SubmitRequest) -> dict[str, Any] | None:
         "processCountPerInstance": request.processes_per_node,
     }
 
-
 def _resolve_compute(request: SubmitRequest) -> str:
-    """Return the compute target reference as a fully-qualified ARM ID.
-
-    For AML: ``/subscriptions/.../workspaces/{ws}/computes/{name}``.
-    For Singularity: ``/subscriptions/.../virtualclusters/{name}`` (using the
-    VC's own subscription/resource group when distinct from the workspace).
-    """
     if request.service == "sing":
         sub = request.sing.vc_subscription_id or request.subscription_id
         rg = request.sing.vc_resource_group or request.resource_group
@@ -49,7 +40,6 @@ def _resolve_compute(request: SubmitRequest) -> str:
         f"/computes/{request.compute}"
     )
 
-
 def _build_resources(
     request: SubmitRequest,
     compute_id: str,
@@ -57,15 +47,6 @@ def _build_resources(
     client: AzureMLClient,
     on_log: Any = None,
 ) -> dict[str, Any] | None:
-    """Build the ``resources`` dict for Singularity targets.
-
-    AML targets return *None* (no special resources needed).
-    Resolves amlt SKU shorthand (e.g. ``1xC1``, ``1x80G8-A100-NvLink``)
-    to actual Singularity instance type names via the Singularity API.
-
-    Pass ``vc`` (a :class:`VCInfo` already fetched upstream) to skip
-    the inner VC lookup inside :func:`match_instance_type`.
-    """
     if request.service != "sing":
         return None
 
@@ -115,7 +96,6 @@ def _build_resources(
     instance_types = [f"Singularity.{n.short_name}" for n in match.instances]
     request.matched_instances = [n.shorthand for n in match.instances][:4]
 
-    # For amlt-sing/ images, pass the alias so Singularity resolves at runtime
     image_version = ""
     image = request.image or ""
     if image.startswith(_SING_IMAGE_PREFIX):
@@ -143,17 +123,10 @@ def _build_resources(
         )
     return res
 
-
 def _resolve_sing_identity(
     request: SubmitRequest,
     client: AzureMLClient,
 ) -> str | None:
-    """Return the UAI ``clientId`` for ``_AZUREML_SINGULARITY_JOB_UAI``.
-
-    Raises :class:`ConfigError` (with the workspace's actually-attached UAIs)
-    when the requested UAI is missing — same outcome as the server-side
-    rejection, just earlier.
-    """
     if request.service != "sing":
         return None
 
@@ -178,9 +151,7 @@ def _resolve_sing_identity(
         "Attach it (Portal → workspace → Identity) or pick another workspace."
     )
 
-
 def _build_identity(request: SubmitRequest) -> dict[str, str] | None:
-    """Identity block for AML jobs; ``None`` for Singularity (unsupported)."""
     if request.service == "sing":
         return None
 

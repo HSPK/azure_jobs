@@ -1,12 +1,4 @@
-"""``arm.compute`` — Azure ML compute target listing and lookup.
-
-Note: Azure Resource Graph does **not** index the
-``microsoft.machinelearningservices/workspaces/computes`` child resource
-type (only top-level ``workspaces`` / ``virtualclusters`` / etc. are
-indexed), so there's no batch equivalent of :meth:`graph.query` for
-computes. :meth:`ComputesAPI.list_all` provides parallel fan-out over
-visible workspaces as the next-best approximation.
-"""
+"""arm.compute — Azure ML compute target listing and lookup."""
 
 from __future__ import annotations
 
@@ -23,9 +15,7 @@ log = logging.getLogger(__name__)
 WorkspaceDoneCallback = Callable[[str, int], None]
 WorkspaceFailureCallback = Callable[[WorkspaceInfo, BaseException], None]
 
-
 def _parse_node_counts(props: dict[str, Any]) -> tuple[int, int, int]:
-    """Extract ``(idle, busy, max_nodes)`` from ARM compute properties."""
     scale = props.get("scaleSettings", {}) or {}
     max_nodes = scale.get("maxNodeCount", 0) or 0
     state = props.get("nodeStateCounts", {}) or {}
@@ -36,7 +26,6 @@ def _parse_node_counts(props: dict[str, Any]) -> tuple[int, int, int]:
     )
     idle = state.get("idleNodeCount") or 0
     return idle, busy, max_nodes
-
 
 def _row_to_info(
     raw: dict[str, Any],
@@ -64,7 +53,6 @@ def _row_to_info(
         nodes_busy=busy,
         nodes_max=nmax,
     )
-
 
 class ComputesAPI(ArmNamespace):
     def list(
@@ -116,17 +104,7 @@ class ComputesAPI(ArmNamespace):
         max_workers: int = 8,
         aml_only: bool = True,
     ) -> list[tuple[WorkspaceInfo, list[ComputeInfo]]]:
-        """Return ``[(workspace, [compute, ...]), ...]`` across visible workspaces.
-
-        Resource Graph does not index ``workspaces/computes`` child
-        resources, so this fans out :meth:`list` over each workspace in
-        parallel. Failures are dropped from the result and surfaced via
-        *on_workspace_failure*.
-
-        ``aml_only`` keeps the legacy behaviour (filter to
-        ``AmlCompute`` clusters); pass ``False`` to include other types
-        (compute instances, attached compute).
-        """
+        """Return [(workspace, [compute, ...]), ...] across visible workspaces."""
         from azure_jobs.utils.concurrent import parallel_each
 
         if workspaces is None:
@@ -165,12 +143,7 @@ class ComputesAPI(ArmNamespace):
         return successes
 
     def get_workspace(self, compute_name: str) -> WorkspaceInfo:
-        """Find the AML workspace that owns *compute_name*.
-
-        Lists every visible workspace's computes and picks the one
-        whose clusters include *compute_name*. Raises :class:`ConfigError`
-        when missing or ambiguous.
-        """
+        """Find the AML workspace that owns *compute_name*."""
         if not compute_name:
             raise ConfigError("compute name is required")
         owners: dict[tuple[str, str, str], WorkspaceInfo] = {}
@@ -195,6 +168,5 @@ class ComputesAPI(ArmNamespace):
                 "disambiguate."
             )
         return next(iter(owners.values()))
-
 
 __all__ = ["ComputesAPI"]

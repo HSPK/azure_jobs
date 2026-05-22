@@ -20,15 +20,12 @@ from .run_history import RunHistoryAPI
 
 log = logging.getLogger(__name__)
 
-
 class JobsAPI:
     """Job management operations scoped to an Azure ML workspace."""
 
     def __init__(self, ctx: RestContext) -> None:
         self._ctx = ctx
         self._run_history = RunHistoryAPI(ctx)
-
-    # ---- job creation -------------------------------------------------------
 
     def create_or_update(
         self,
@@ -42,8 +39,6 @@ class JobsAPI:
         raise_for_rest_error(resp)
         return resp.json()
 
-    # ---- list jobs ----------------------------------------------------------
-
     def list_page(
         self,
         next_link: str | None = None,
@@ -53,11 +48,7 @@ class JobsAPI:
         job_type: str = "",
         tag: str = "",
     ) -> tuple[list[JobInfo], str | None]:
-        """Fetch one server page of jobs.
-
-        Returns ``(jobs, next_link)`` where *next_link* is ``None`` when
-        there are no more pages.
-        """
+        """Fetch one server page of jobs."""
         self._ctx.ensure_token()
         if next_link:
             url = self._patch_top(next_link, top)
@@ -82,7 +73,6 @@ class JobsAPI:
         job_type: str,
         tag: str,
     ) -> str:
-        """Build the initial list URL with server-side query parameters."""
         params: list[tuple[str, str]] = [
             ("api-version", API_VERSION),
             ("listViewType", list_view_type),
@@ -97,13 +87,10 @@ class JobsAPI:
 
     @staticmethod
     def _patch_top(url: str, top: int) -> str:
-        """Ensure ``$top=<top>`` in a server-returned nextLink URL."""
         if RE_TOP_SEARCH.search(url):
             return RE_TOP_SUB.sub(rf"\g<1>{top}", url)
         sep = "&" if "?" in url else "?"
         return f"{url}{sep}$top={top}"
-
-    # ---- single job ---------------------------------------------------------
 
     def get(self, name: str) -> JobInfo:
         """Fetch a single job by name, enriched with error from Run History."""
@@ -113,20 +100,15 @@ class JobsAPI:
         raise_for_rest_error(resp)
         job = extract_rest_job(resp.json())
 
-        # Management plane doesn't return error details — fetch from Run History.
         if job.get("status") == "Failed" and not job.get("error"):
             error = self._run_history.get_run_error(name)
             if error:
                 job["error"] = error
         return job
 
-    # ---- logs (delegated to Run History) ------------------------------------
-
     def get_run_log_urls(self, name: str) -> dict[str, str]:
-        """Return ``{log_path: signed_url}`` for the job's log files."""
+        """Return {log_path: signed_url} for the job's log files."""
         return self._run_history.get_log_urls(name)
-
-    # ---- cancel -------------------------------------------------------------
 
     def cancel(self, name: str) -> None:
         """Cancel a job via REST API (POST, returns 202 Accepted)."""

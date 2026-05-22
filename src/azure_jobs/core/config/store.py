@@ -1,4 +1,4 @@
-"""``aj_config.json`` read / write with an mtime-based cache."""
+"""aj_config.json read / write with an mtime-based cache."""
 
 from __future__ import annotations
 
@@ -9,14 +9,10 @@ from typing import Any
 from .. import const
 from .models import AJConfig
 
-# (mtime, parsed-dict) — invalidated by file change or explicit write.
-# Lock for parallel SDK / TUI / pytest-xdist callers.
 _config_cache: tuple[float, dict[str, Any]] | None = None
 _config_lock = threading.Lock()
 
-
 def _read_config_dict() -> dict[str, Any]:
-    """Read ``aj_config.json`` as a raw dict; ``{}`` when missing."""
     global _config_cache
     if not const.AJ_CONFIG.exists():
         with _config_lock:
@@ -31,16 +27,14 @@ def _read_config_dict() -> dict[str, Any]:
         _config_cache = (mtime, data)
     return data
 
-
 def read_config() -> AJConfig:
-    """Read ``aj_config.json`` as an :class:`AJConfig` (mtime-cached)."""
+    """Read aj_config.json as an :class:AJConfig (mtime-cached)."""
     return AJConfig.from_dict(_read_config_dict())
 
-
 def write_config(config: AJConfig) -> None:
-    """Write :class:`AJConfig` to ``aj_config.json`` with pretty indentation."""
+    """Write :class:AJConfig to aj_config.json with pretty indentation."""
     global _config_cache
     const.AJ_CONFIG.parent.mkdir(parents=True, exist_ok=True)
     const.AJ_CONFIG.write_text(json.dumps(config.to_dict(), indent=2) + "\n")
     with _config_lock:
-        _config_cache = None  # invalidate cache
+        _config_cache = None

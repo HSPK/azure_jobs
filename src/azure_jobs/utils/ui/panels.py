@@ -21,10 +21,7 @@ from .render import emit_json, get_output_mode
 if TYPE_CHECKING:
     from azure_jobs.core.submit import SubmissionRecord, SubmitRequest, SubmitResult
 
-
 def _request_payload(request: SubmitRequest) -> dict[str, Any]:
-    """JSON-friendly snapshot of a ``SubmitRequest`` — shared by submission
-    result/dry-run envelopes so they carry the same shape."""
     return {
         "template_name": request.template_name,
         "experiment": request.expr_name,
@@ -48,24 +45,12 @@ def _request_payload(request: SubmitRequest) -> dict[str, Any]:
         "command": list(request.command),
     }
 
-
 def show_submission_preview(
     request: SubmitRequest,
     *,
     dry_run: bool = False,
 ) -> None:
-    """Display a job preview.
-
-    Rich mode shows the existing two-column panel. JSON mode is silent —
-    the final ``submission_result`` envelope (or :func:`show_dry_run_result`
-    for ``-d``) carries everything an agent needs without producing a
-    duplicate envelope here.
-
-    The rendered amlt-style YAML path is read from
-    ``request.submission_path`` and only shown when populated (amlt
-    backend / dry-run); native backends submit straight from the
-    in-memory request and have no on-disk config to surface.
-    """
+    """Display a job preview."""
     if get_output_mode() == "json":
         return
 
@@ -149,7 +134,6 @@ def show_submission_preview(
     )
     console.print()
 
-
 def show_submission_result(
     rec: SubmissionRecord,
     result: SubmitResult,
@@ -157,15 +141,7 @@ def show_submission_result(
     display_name: str,
     backend_label: str = "",
 ) -> None:
-    """Emit the post-submit result.
-
-    JSON mode writes a structured ``{kind: "submission_result", …}``
-    envelope to stdout. Rich mode renders a green/red result panel
-    mirroring :func:`show_submission_preview` so the human gets the
-    same shape of summary they saw before the submit.
-    Caller is responsible for any non-zero exit on failure — this is a
-    pure presentation step.
-    """
+    """Emit the post-submit result."""
     request = rec.request
     payload = {
         "kind": "submission_result",
@@ -185,15 +161,8 @@ def show_submission_result(
         return
     _render_submission_result_rich(payload, request)
 
-
 def show_dry_run_result(request: SubmitRequest) -> None:
-    """Emit a dry-run envelope (JSON mode only).
-
-    Mirrors :func:`show_submission_result` so agent consumers can route
-    uniformly on ``kind=submission_result`` and check ``status="dry_run"``
-    for the no-side-effect path. Rich mode is silent — the preview panel
-    already showed the human everything they need.
-    """
+    """Emit a dry-run envelope (JSON mode only)."""
     if get_output_mode() != "json":
         return
     from azure_jobs.core.submit import render_amlt_config
@@ -215,11 +184,9 @@ def show_dry_run_result(request: SubmitRequest) -> None:
         }
     )
 
-
 def _render_submission_result_rich(
     payload: dict[str, Any], request: SubmitRequest
 ) -> None:
-    """Render the post-submit result as a Rich panel."""
     failed = payload["status"] == "failed"
     icon = "✗" if failed else "✓"
     icon_style = "bold red" if failed else "bold green"
@@ -264,7 +231,6 @@ def _render_submission_result_rich(
         if msg:
             grid.add_row("Error", f"[red]{esc(msg)}[/red]")
     elif payload["note"] and not payload["portal_url"]:
-        # e.g. ``kubectl create`` output for Volcano
         grid.add_row("Note", esc(payload["note"]))
 
     console.print()
@@ -277,7 +243,6 @@ def _render_submission_result_rich(
         )
     )
     console.print()
-
 
 def show_job_status(job_status: Any) -> None:
     """Display job status as a Rich panel or JSON envelope."""
@@ -335,7 +300,6 @@ def show_job_status(job_status: Any) -> None:
     )
     console.print()
 
-
 def build_job_info_lines(
     job: dict[str, Any],
     *,
@@ -344,10 +308,7 @@ def build_job_info_lines(
     cmd_max: int = 70,
     portal_link: bool = True,
 ) -> list[str]:
-    """Build section-based info lines for a job dict.
-
-    Shared by ``show_job_detail`` (CLI panels) and ``info_block`` (TUI).
-    """
+    """Build section-based info lines for a job dict."""
     lines: list[str] = []
     W = label_width
 
@@ -454,7 +415,6 @@ def build_job_info_lines(
         )
 
     return lines
-
 
 def show_job_detail(job: dict[str, Any]) -> None:
     """Display detailed cloud job info as a Rich panel or JSON envelope."""

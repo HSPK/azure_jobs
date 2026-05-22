@@ -1,4 +1,4 @@
-"""``arm.workspace`` — Azure ML workspace discovery via Resource Graph."""
+"""arm.workspace — Azure ML workspace discovery via Resource Graph."""
 
 from __future__ import annotations
 
@@ -6,7 +6,6 @@ from azure_jobs.core.errors import NETWORK_LIKE_ERRORS, ConfigError
 
 from .models import WorkspaceInfo
 from ._base import ArmNamespace
-
 
 class WorkspacesAPI(ArmNamespace):
     def list(
@@ -43,10 +42,7 @@ class WorkspacesAPI(ArmNamespace):
         ]
 
     def get(self, name: str) -> WorkspaceInfo:
-        """Resolve a single workspace by name across visible subscriptions.
-
-        Raises :class:`ConfigError` when missing or ambiguous.
-        """
+        """Resolve a single workspace by name across visible subscriptions."""
         if not name:
             raise ConfigError("workspace name is required")
         matches = [ws for ws in self.list() if ws.name == name]
@@ -62,6 +58,5 @@ class WorkspacesAPI(ArmNamespace):
             )
             raise ConfigError(f"AML workspace name '{name}' is ambiguous: {choices}.")
         return matches[0]
-
 
 __all__ = ["WorkspacesAPI"]

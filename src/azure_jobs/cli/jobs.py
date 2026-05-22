@@ -1,10 +1,4 @@
-"""``aj job`` — view, query, cancel, and analyse Azure ML jobs.
-
-All command bodies are thin wrappers around :mod:`azure_jobs.core.jobs`
-(data fetching), :mod:`azure_jobs.utils.stats` (aggregation + rich
-tables), and :mod:`azure_jobs.utils.ui` (console / rich rendering).
-This module owns nothing but Click bindings and progress display.
-"""
+"""aj job — view, query, cancel, and analyse Azure ML jobs."""
 
 from __future__ import annotations
 
@@ -26,19 +20,11 @@ from azure_jobs.utils.ui import show_jobs_table
 
 log = logging.getLogger(__name__)
 
-# Statuses where no log content is available yet (job hasn't started).
 _NO_LOG_STATUSES = frozenset({"Queued", "NotStarted", "Provisioning", "Preparing"})
-
-
-# ────────────────────────────────────────────────────────────────────────
-# Group + commands
-# ────────────────────────────────────────────────────────────────────────
-
 
 @main.group(name="job")
 def job_group() -> None:
     """View and manage Azure ML jobs."""
-
 
 @job_group.command(name="list")
 @click.option(
@@ -127,9 +113,7 @@ def job_list(
 
     show_cloud_jobs_table(jobs)
 
-
 def _fetch_and_show_job(job_id: str, ws_name: str | None = None) -> None:
-    """Resolve *job_id*, fetch via REST, and display details."""
     from azure_jobs.core.az_client import create_rest_client
     from azure_jobs.core.errors import RestError
     from azure_jobs.utils.ui import console, error, show_job_detail
@@ -149,35 +133,23 @@ def _fetch_and_show_job(job_id: str, ws_name: str | None = None) -> None:
 
     show_job_detail(job)
 
-
 @job_group.command(name="show")
 @click.argument("name")
 @click.option("--ws", "ws_name", default=None, help="Workspace name override")
 def job_show(name: str, ws_name: str | None) -> None:
-    """Show detailed info for a job.
-
-    NAME can be the short aj ID (e.g. f8e7eb32) or the full Azure job name.
-    """
+    """Show detailed info for a job."""
     _fetch_and_show_job(name, ws_name=ws_name)
-
 
 @job_group.command(name="status")
 @click.argument("job_id")
 def job_status(job_id: str) -> None:
-    """Query the status of a submitted job.
-
-    JOB_ID can be the short aj ID (e.g. f8e7eb32) or the full Azure job name.
-    """
+    """Query the status of a submitted job."""
     _fetch_and_show_job(job_id)
-
 
 @job_group.command(name="cancel")
 @click.argument("job_id")
 def job_cancel(job_id: str) -> None:
-    """Cancel a running job.
-
-    JOB_ID can be the short aj ID or the full Azure job name.
-    """
+    """Cancel a running job."""
     from azure_jobs.core.az_client import create_rest_client
     from azure_jobs.utils.ui import (
         console,
@@ -236,15 +208,10 @@ def job_cancel(job_id: str) -> None:
             current_status=final,
         )
 
-
 @job_group.command(name="logs")
 @click.argument("job_id")
 def job_logs(job_id: str) -> None:
-    """Show logs from a job.
-
-    Downloads log files directly (fast, works for running jobs too).
-    JOB_ID can be the short aj ID or the full Azure job name.
-    """
+    """Show logs from a job."""
     from azure_jobs.core.az_client import create_rest_client
     from azure_jobs.utils.ui import (
         console,
@@ -333,12 +300,6 @@ def job_logs(job_id: str) -> None:
     if not content and not error_msg:
         console.print("[dim]No logs available for this job.[/dim]")
 
-
-# ────────────────────────────────────────────────────────────────────────
-# Fetch helpers (Rich progress wrappers — see cli/_progress.py)
-# ────────────────────────────────────────────────────────────────────────
-
-
 @job_group.command(name="stats")
 @click.option(
     "-n",
@@ -416,18 +377,11 @@ def job_stats(
     if len(user_stats) > 1:
         show_user_stats_table(user_stats)
 
-
-# ────────────────────────────────────────────────────────────────────────
-# Local-record listing (`aj list`)
-# ────────────────────────────────────────────────────────────────────────
-
-
 def _show_local_records(
     last: int,
     template: str | None,
     status: str | None,
 ) -> None:
-    """Display local submission records."""
     records = read_records(last=last * 3 if (template or status) else last)
     if template:
         records = [r for r in records if r.get("template") == template]
@@ -435,7 +389,6 @@ def _show_local_records(
         records = [r for r in records if r.get("status") == status.lower()]
     records = records[:last]
     show_jobs_table(records)
-
 
 @main.command(name="list")
 @click.option(

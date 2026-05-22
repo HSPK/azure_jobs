@@ -1,9 +1,4 @@
-"""Template + CLI args → :class:`SubmitRequest` translation.
-
-This is the canonical entry point that wraps a user's amlt-style
-template, CLI overrides, and workspace context into a normalised
-:class:`SubmitRequest` consumed by every submission backend.
-"""
+"""Template + CLI args → :class:SubmitRequest translation."""
 
 from __future__ import annotations
 
@@ -22,17 +17,14 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-# Setup commands prepended to every job (env bootstrap independent of user code).
 _PRELUDE_COMMANDS: tuple[str, ...] = (
     "[ -f /tmp/.aj_ssh_env ] && source /tmp/.aj_ssh_env",
     "export PATH=$HOME/.local/bin:$PATH",
 )
 
-
 def _normalize_storage(
     storage_dict: dict[str, object],
 ) -> dict[str, StorageMount]:
-    """Coerce template storage entries into :class:`StorageMount` instances."""
     storage: dict[str, StorageMount] = {}
     for k, v in storage_dict.items():
         if isinstance(v, StorageMount):
@@ -47,18 +39,14 @@ def _normalize_storage(
             raise TypeError(f"Unsupported storage entry for '{k}': {type(v).__name__}")
     return storage
 
-
 def _normalize_template_commands(raw: object) -> list[str]:
-    """Coerce template ``job.command`` into a list of strings."""
     if isinstance(raw, str):
         return [raw]
     if isinstance(raw, list):
         return list(raw)
     return []
 
-
 def _merge_env(user_env: dict[str, str], aj_env: dict[str, str]) -> dict[str, str]:
-    """Merge AJ_* env over user-supplied env, warning on collisions."""
     overrides = sorted(k for k in aj_env if k in user_env)
     if overrides:
         log.warning(
@@ -68,7 +56,6 @@ def _merge_env(user_env: dict[str, str], aj_env: dict[str, str]) -> dict[str, st
     merged = dict(user_env)
     merged.update(aj_env)
     return merged
-
 
 def build_submit_request(
     template: Template,
@@ -86,14 +73,7 @@ def build_submit_request(
     code_dir: str | None = None,
     description: str = "",
 ) -> SubmitRequest:
-    """Build a SubmitRequest from a template + submission parameters.
-
-    ``gpus_per_node`` drives SKU resolution and ``AJ_GPUS_PER_NODE``;
-    ``processes_per_node`` is the launcher process count
-    (e.g. ``torchrun --nproc-per-node``) and is independent of GPU count.
-    ``description`` defaults to the experiment name when blank — the
-    experiment is usually the most stable human identifier for the run.
-    """
+    """Build a SubmitRequest from a template + submission parameters."""
     target = template.target
     env = template.environment
     job = template.jobs[0] if template.jobs else None
@@ -143,8 +123,6 @@ def build_submit_request(
         vc_resource_group=target.resource_group if service == "sing" else "",
     )
     if service == "sing":
-        # target.{subscription_id,resource_group} are the VC's, not the
-        # workspace's; workspace coords are resolved at submit time.
         sub_id = ""
         rg = ""
     else:

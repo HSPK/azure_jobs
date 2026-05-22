@@ -1,16 +1,4 @@
-"""Azure ML compute cluster fetch helpers.
-
-Pure, UI-free building blocks used by ``aj quota --aml``:
-
-* discover workspaces (delegated to the caller or :class:`AzureARMClient`),
-* parallel fan-out across workspaces to list each one's ``AmlCompute`` clusters
-  (Azure Resource Graph does not index the ``workspaces/computes`` child
-  resource type, so there's no batch equivalent of :meth:`graph.query`),
-* callback-based progress reporting so the CLI can drive a Rich spinner
-  without coupling this module to Rich.
-
-Functions here never print and never call ``click`` / ``rich``.
-"""
+"""Azure ML compute cluster fetch helpers."""
 
 from __future__ import annotations
 
@@ -28,7 +16,6 @@ WorkspaceDoneCallback = Callable[[str, int], None]
 WorkspaceFailureCallback = Callable[[WorkspaceInfo, BaseException], None]
 """``on_workspace_failure(workspace, exc)`` — fired per failed workspace."""
 
-
 def fetch_aml_computes_all_workspaces(
     *,
     workspaces: list[WorkspaceInfo] | None = None,
@@ -37,16 +24,7 @@ def fetch_aml_computes_all_workspaces(
     arm_client: AzureARMClient | None = None,
     max_workers: int = 8,
 ) -> list[tuple[WorkspaceInfo, list[ComputeInfo]]]:
-    """Return ``[(workspace, [aml_compute, ...]), ...]`` across every workspace.
-
-    Discovers workspaces via ARM when *workspaces* is None. Non-``AmlCompute``
-    items (e.g. instances, attached compute) are filtered out so callers don't
-    need to repeat the predicate.
-
-    Failed workspaces are dropped from the result and surfaced via
-    *on_workspace_failure*. Callbacks fire from the orchestrating thread,
-    making Rich ``console.status.update`` safe without extra synchronisation.
-    """
+    """Return [(workspace, [aml_compute, ...]), ...] across every workspace."""
 
     if arm_client is None:
         arm_client = AzureARMClient()

@@ -8,7 +8,6 @@ from azure_jobs.tui.controllers.logs._shared import NO_LOG_STATUSES
 from azure_jobs.tui.helpers import icon_style
 from azure_jobs.tui.state import LogsState
 
-
 class LogsView(Controller[LogsState]):
     """Owns the right-pane Info/Logs toggle, header, and log file picker."""
 
@@ -22,8 +21,6 @@ class LogsView(Controller[LogsState]):
             ind.remove_class("hidden")
         else:
             ind.add_class("hidden")
-
-    # ---- view switching -----------------------------------------------------
 
     def switch_to_view(self) -> None:
         """Show the log pane (shared by multiple actions)."""
@@ -87,17 +84,12 @@ class LogsView(Controller[LogsState]):
         job = jobs_st.filtered[jobs_st.selected_idx]
         name = job.get("name", "")
 
-        # Same job: just flip view, preserve buffer + streaming.
-        # We do NOT auto-resume after a manual ``L`` stop here — the user
-        # explicitly stopped streaming, so respect that on plain view
-        # switches. ``toggle_stream`` is the (only) path that re-starts.
         if name == st.job:
             self.switch_to_view()
             if not st.streaming and st.line_count == 0:
                 self.begin_stream(job, name)
             return
 
-        # Different job: capture outgoing, load incoming snapshot.
         self.app.logs.switch_to_job(name)
         self.switch_to_view()
         self.begin_stream(job, name)
@@ -123,8 +115,6 @@ class LogsView(Controller[LogsState]):
             st.loading = False
             self.update_header()
             return
-        # Show a centered spinner while the worker resolves the file list,
-        # signed URL, and initial tail bytes (typically 0.5–2s).
         st.loading = True
         self.set_loading_overlay(True)
         self.update_header()
@@ -149,13 +139,7 @@ class LogsView(Controller[LogsState]):
         self.app.notify(f"Auto-scroll {'ON' if st.auto_scroll else 'OFF'}", timeout=2)
 
     def on_job_changed(self, new_name: str) -> None:
-        """Called when the user navigates to a different row in the jobs list.
-
-        We *don't* eagerly tear down log state — we just save a snapshot
-        of the outgoing job and (if logs are visible) re-render for the
-        new job. If the user is on the info view, we leave streaming
-        alone until they press ``l``.
-        """
+        """Called when the user navigates to a different row in the jobs list."""
         st = self.state
         if not new_name or new_name == st.job:
             return
@@ -165,8 +149,6 @@ class LogsView(Controller[LogsState]):
         if st.streaming and st.job and st.job != new_name:
             self.app.logs.buffer.capture()
             self.app.logs.stream.stop_streaming()
-
-    # ---- log file picker ----------------------------------------------------
 
     def pick_file(self) -> None:
         st = self.state
@@ -186,9 +168,6 @@ class LogsView(Controller[LogsState]):
             app.logs.stream.stop_streaming()
         st.current_file = chosen
         st.line_count = 0
-        # Reset the byte window — the new file has its own size/offsets, and
-        # any LogViewer.backfill() that fires before _render_initial repopulates
-        # them would otherwise read from the previous file's offsets.
         st.head_offset = 0
         st.total_size = 0
         snap = app.logs.buffer.snapshot_for(st.job)

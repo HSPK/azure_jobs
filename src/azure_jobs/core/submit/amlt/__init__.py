@@ -1,4 +1,4 @@
-"""AMLT backend — submit a :class:`SubmitRequest` via the external ``amlt`` CLI."""
+"""AMLT backend — submit a :class:SubmitRequest via the external amlt CLI."""
 
 from __future__ import annotations
 
@@ -13,19 +13,16 @@ import yaml
 from ..dispatch import register_backend
 from ..models import SubmitEvent, SubmitRequest, SubmitResult
 
-
 def amlt_available() -> bool:
     """Check if amlt CLI is installed and a project is configured."""
     if not shutil.which("amlt"):
         return False
     return Path(".amltconfig").exists()
 
-
 def clean_config_for_amlt(fp: Path) -> None:
     """Rewrite a submission YAML to be amlt-compatible."""
     conf = yaml.safe_load(fp.read_text()) or {}
 
-    # Strip aj-only target fields (VC subscription/rg used by direct REST path)
     target = conf.get("target")
     if isinstance(target, dict):
         for key in ("subscription_id", "resource_group"):
@@ -33,14 +30,12 @@ def clean_config_for_amlt(fp: Path) -> None:
 
     text = yaml.dump(conf, default_flow_style=False)
 
-    # Escape $ -> $$ for amlt, preserving existing $$ and $CONFIG_DIR
     text = re.sub(
         r"\$\$|\$(?!CONFIG_DIR\b)",
         lambda m: m.group() if len(m.group()) == 2 else "$$",
         text,
     )
     fp.write_text(text)
-
 
 def extract_portal_url(output: str) -> str:
     """Extract Azure portal URL from amlt run output, if present."""
@@ -52,20 +47,12 @@ def extract_portal_url(output: str) -> str:
                     return token
     return ""
 
-
 def submit_via_amlt(
     request: SubmitRequest,
     *,
     on_event: Callable[[SubmitEvent], None] | None = None,
 ) -> SubmitResult:
-    """Submit a job via the external ``amlt run`` CLI.
-
-    Reads the rendered submission YAML from ``request.submission_path``
-    (set by :func:`azure_jobs.core.submit.materialise_submission`) and
-    invokes ``amlt run <yaml> <experiment> -y``. Each line of amlt
-    output is forwarded as a ``log`` event so the caller can render it
-    above any spinner.
-    """
+    """Submit a job via the external amlt run CLI."""
     emit = on_event or (lambda _ev: None)
     job_name = request.name
     experiment = request.expr_name
@@ -129,13 +116,9 @@ def submit_via_amlt(
         emit(SubmitEvent(kind="error", detail=msg))
         return SubmitResult(job_name=job_name, status="failed", error=msg)
     except (OSError, subprocess.SubprocessError) as exc:
-        # spawn/IO failures (FileNotFoundError, PermissionError, etc.)
         msg = str(exc)
         emit(SubmitEvent(kind="error", detail=msg))
         return SubmitResult(job_name=job_name, status="failed", error=msg)
 
-
-# Registered under a synthetic "amlt" service. The CLI's ``--amlt`` flag
-# rewrites ``request.service`` to this name before dispatch.
 register_backend("amlt", submit_via_amlt, label="amlt")
 

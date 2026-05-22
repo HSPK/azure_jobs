@@ -1,4 +1,4 @@
-"""``aj ws`` — workspace management commands."""
+"""aj ws — workspace management commands."""
 
 from __future__ import annotations
 
@@ -7,14 +7,11 @@ import click
 from azure_jobs.cli import main
 from azure_jobs.core.errors import AJError
 
-
 @main.group(name="ws")
 def ws_group() -> None:
     """Manage Azure ML workspaces."""
 
-
 def _ensure_workspaces() -> tuple[dict[str, str], list[dict[str, str]]]:
-    """Detect subscription and list workspaces, raising on failure."""
     from azure_jobs.core.config import detect_subscription, detect_workspaces
     from azure_jobs.utils.ui import console
 
@@ -29,7 +26,6 @@ def _ensure_workspaces() -> tuple[dict[str, str], list[dict[str, str]]]:
         raise click.ClickException("No ML workspaces found in this subscription")
 
     return sub, workspaces
-
 
 @ws_group.command(name="list")
 def ws_list() -> None:
@@ -77,15 +73,10 @@ def ws_list() -> None:
         )
     render_table(view)
 
-
 @ws_group.command(name="show")
 @click.argument("name", required=False)
 def ws_show(name: str | None) -> None:
-    """Show workspace details.
-
-    Without arguments, shows the currently configured workspace.
-    With NAME, looks up that workspace in the subscription.
-    """
+    """Show workspace details."""
     from rich.panel import Panel
     from rich.table import Table
 
@@ -146,15 +137,10 @@ def ws_show(name: str | None) -> None:
     )
     console.print()
 
-
 @ws_group.command(name="set")
 @click.argument("name", required=False)
 def ws_set(name: str | None) -> None:
-    """Set the active workspace.
-
-    Without arguments, opens an interactive picker.
-    With NAME, sets the workspace by exact name.
-    """
+    """Set the active workspace."""
     from azure_jobs.core.config import (
         AJWorkspace,
         pick_workspace,

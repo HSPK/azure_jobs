@@ -15,54 +15,39 @@ from urllib3.util.retry import Retry
 
 log = logging.getLogger(__name__)
 
-# ---- Endpoints & API versions -----------------------------------------------
 MGMT = "https://management.azure.com"
 API_VERSION = "2024-04-01"
 SCOPE = "https://management.azure.com/.default"
 ML_SCOPE = "https://ml.azure.com/.default"
 STORAGE_SCOPE = "https://storage.azure.com/.default"
 
-# ---- Timeouts (seconds) -----------------------------------------------------
-TIMEOUT_QUICK = 15  # GET single resource / HEAD
-TIMEOUT_STANDARD = 30  # GET list / PUT
-TIMEOUT_LONG = 60  # job create
-TIMEOUT_UPLOAD = 120  # blob upload
+TIMEOUT_QUICK = 15
+TIMEOUT_STANDARD = 30
+TIMEOUT_LONG = 60
+TIMEOUT_UPLOAD = 120
 
-# ---- Retry policy -----------------------------------------------------------
-# Retries on transient ARM/storage errors (429, 500, 502, 503, 504).
-# PUT/POST are included because the Azure ML/ARM operations we issue are
-# idempotent by resource name: ``PUT /jobs/{name}`` is a create-or-update,
-# and ``POST /jobs/{name}/cancel`` re-cancelling an already-cancelled job
-# is a no-op. Both safely tolerate the rare 502/504 double-delivery case
-# that ``urllib3.Retry`` defends against by excluding them by default.
+# Retried writes are safe for the idempotent AML/ARM calls we make.
 _RETRY_TOTAL = 3
-_RETRY_BACKOFF = 0.5  # 0.5s, 1s, 2s
+_RETRY_BACKOFF = 0.5
 _RETRY_STATUS = (429, 500, 502, 503, 504)
 _RETRY_METHODS = frozenset(("GET", "HEAD", "PUT", "POST", "DELETE"))
 
-# ---- Run history log path prefixes ------------------------------------------
 LOG_PREFIXES = ("logs/", "user_logs/", "azureml-logs/")
 
-# ---- Pagination $top regex --------------------------------------------------
 RE_TOP_SEARCH = re.compile(r"[\$%24]top=")
 RE_TOP_SUB = re.compile(r"([\$%24]top=)\d+")
 
-# ---- typing.Self backport ---------------------------------------------------
 if sys.version_info >= (3, 11):
     from typing import Self  # type: ignore[attr-defined]
 else:  # pragma: no cover
     Self = TypeVar("Self", bound="AuthSession")  # type: ignore[assignment]
 
-
 def make_retry_session() -> requests.Session:
-    """Return a fresh ``requests.Session`` with retry/backoff on 429/5xx."""
+    """Return a fresh requests.Session with retry/backoff on 429/5xx."""
     session = requests.Session()
     retry = Retry(
         total=_RETRY_TOTAL,
         backoff_factor=_RETRY_BACKOFF,
-        # Bounded random jitter prevents thundering-herd when multiple
-        # parallel workers (e.g. cross-workspace fan-out, blob upload
-        # pool) hit the same ARM/storage throttle simultaneously.
         backoff_jitter=0.3,
         status_forcelist=_RETRY_STATUS,
         allowed_methods=_RETRY_METHODS,
@@ -74,18 +59,10 @@ def make_retry_session() -> requests.Session:
     session.mount("http://", adapter)
     return session
 
-
-# ---- Token cache ------------------------------------------------------------
-_REFRESH_LEEWAY = 60  # seconds before expiry to proactively refresh
-
+_REFRESH_LEEWAY = 60
 
 @dataclass(slots=True)
 class _TokenCache:
-    """Bearer token + expiry, with proactive-refresh check.
-
-    Used by both ARM (``AuthSession``) and the workspace data plane
-    (``RestContext``) — same logic, different scopes.
-    """
 
     token: str = ""
     expires_on: float = 0.0
@@ -97,25 +74,16 @@ class _TokenCache:
         self.token = token
         self.expires_on = expires_on
 
-
 def fetch_token(scope: str) -> tuple[str, float]:
-    """Acquire a token for *scope* via ``AzureCliCredential``."""
+    """Acquire a token for *scope* via AzureCliCredential."""
     from azure.identity import AzureCliCredential
 
     tok = AzureCliCredential().get_token(scope)
     return tok.token, tok.expires_on
 
-
-# ---- Workspace coordinates --------------------------------------------------
-
-
 @dataclass(frozen=True, slots=True)
 class WorkspaceCoords:
-    """Immutable identifier for an Azure ML workspace.
-
-    Replaces the ``(subscription_id, resource_group, workspace_name)``
-    triplet that used to be threaded through ARM/data-plane URLs.
-    """
+    """Immutable identifier for an Azure ML workspace."""
 
     subscription_id: str
     resource_group: str
@@ -141,16 +109,8 @@ class WorkspaceCoords:
             f"/workspaces/{self.workspace_name}"
         )
 
-
 def raise_for_rest_error(resp: requests.Response) -> None:
-    """Raise :class:`azure_jobs.core.errors.RestError` on 4xx/5xx, else return.
-
-    Parses Azure's ``{"error": {"code": "...", "message": "..."}}``
-    envelope when present so the raised exception carries both the
-    HTTP status code and the Azure ``error.code`` for typed handling
-    by callers (e.g. ``if exc.status_code == 404`` /
-    ``if exc.azure_code == "Throttled"``).
-    """
+    """Raise :class:azure_jobs.core.errors.RestError on 4xx/5xx, else return."""
     if resp.status_code < 400:
         return
     azure_code = ""
@@ -173,13 +133,8 @@ def raise_for_rest_error(resp: requests.Response) -> None:
         response=resp,
     )
 
-
 class AuthSession:
-    """Base class providing an authenticated ``requests.Session``.
-
-    Subclasses (or composers) get token caching + auto-refresh, plus
-    transparent retry on 429/5xx via :func:`make_retry_session`.
-    """
+    """Base class providing an authenticated requests.Session."""
 
     def __init__(self) -> None:
         self._arm_token = _TokenCache()

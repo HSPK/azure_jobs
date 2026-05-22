@@ -13,7 +13,6 @@ from azure_jobs.tui.controllers.jobs._shared import short_error
 from azure_jobs.tui.helpers import TERMINAL_STATUSES, kv, safe_notify
 from azure_jobs.tui.state import JobsState
 
-
 class JobsCancel(Controller[JobsState]):
     """Cancel-job action: confirm modal + REST cancel worker."""
 

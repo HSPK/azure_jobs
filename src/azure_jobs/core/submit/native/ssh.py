@@ -1,13 +1,4 @@
-"""SSH key shipping for native AML / Singularity submissions.
-
-By default ``aj`` ships the user's ``~/.ssh`` whitelist (private keys,
-config, known_hosts) so jobs can clone private repos or hop to known
-hosts without prompting. Behaviour can be opted-out per-call via
-``AJ_SHIP_SSH=0`` (or ``false``/``no``/``off``).
-
-Keeping this in its own module decouples the orchestrator from
-filesystem details and makes "should we ship X?" easy to test.
-"""
+"""SSH key shipping for native AML / Singularity submissions."""
 
 from __future__ import annotations
 
@@ -26,24 +17,13 @@ _SSH_WHITELIST = frozenset(
 )
 _FALSY = frozenset({"0", "false", "no", "off"})
 
-
 def _ssh_disabled() -> bool:
     return os.getenv(_SSH_OPT_OUT_ENV, "").strip().lower() in _FALSY
-
 
 def _collect_ssh_files(
     code_dir: str,
     on_event: Callable[[SubmitEvent], None],
 ) -> dict[str, bytes]:
-    """Collect ``.ssh`` files to ship with the code upload.
-
-    Behaviour:
-
-    * If ``<code_dir>/.ssh`` exists, do nothing (user vendored their own).
-    * Else if ``AJ_SHIP_SSH=0`` (opt-out), ship only an empty
-      ``.ssh/.keep`` so the directory exists on the remote worker.
-    * Else copy a whitelist of files from ``~/.ssh`` (default).
-    """
     code_path = Path(code_dir).resolve()
     if (code_path / ".ssh").is_dir():
         return {}

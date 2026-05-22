@@ -1,4 +1,4 @@
-"""Template YAML loader + recursive ``base`` inheritance resolver."""
+"""Template YAML loader + recursive base inheritance resolver."""
 
 from __future__ import annotations
 
@@ -11,16 +11,8 @@ import yaml
 from .. import const
 from ..errors import ConfigError
 
-
 def merge_confs(*data: Any) -> Any:
-    """Recursively merge dicts, lists, or scalars.
-
-    - Dicts: merged recursively by key.
-    - Lists where any element is a dict: merged element-wise by index
-      (positions absent in one list inherit from the other).
-    - Lists of pure scalars: concatenated.
-    - Scalars: last value wins (deep-copied).
-    """
+    """Recursively merge dicts, lists, or scalars."""
     filtered: list[Any] = [d for d in data if d is not None]
     if not filtered:
         return None
@@ -47,15 +39,11 @@ def merge_confs(*data: Any) -> Any:
 
     return deepcopy(filtered[-1])
 
-
 def read_conf(
     fp: Path | str,
     _seen: frozenset[Path] | None = None,
 ) -> dict[str, Any]:
-    """Read a YAML template and recursively resolve its base chain.
-
-    Raises ``ConfigError`` on circular inheritance.
-    """
+    """Read a YAML template and recursively resolve its base chain."""
     fp = Path(fp).resolve()
     if not fp.exists():
         raise FileNotFoundError(f"Configuration file not found: {fp}")

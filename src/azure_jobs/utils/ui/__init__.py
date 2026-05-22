@@ -1,18 +1,4 @@
-"""Rich console output for the aj CLI — facade package.
-
-Imported lazily by CLI commands so ``aj --help`` stays fast.
-
-Submodules:
-
-* :mod:`.console` — ``Console`` instance, theme, log helpers
-  (``success`` / ``info`` / ``warning`` / ``error`` / ``dim``),
-  status icon/style mappings, portal-URL shortener.
-* :mod:`.tables` — local-record + cloud-job + template tables.
-* :mod:`.panels` — submission preview / job status / job detail panels.
-
-Everything below is re-exported for backward compatibility — existing
-``from azure_jobs.utils.ui import ...`` callers keep working.
-"""
+"""Rich console output for the aj CLI — facade package."""
 
 from __future__ import annotations
 
@@ -80,7 +66,6 @@ from .tables import (
 )
 
 __all__ = [
-    # Console / theme / helpers
     "console",
     "print_table",
     "success",
@@ -95,7 +80,6 @@ __all__ = [
     "status_badge",
     "short_portal_url",
     "truncate_middle",
-    # Render middleware
     "Column",
     "TableView",
     "DetailField",
@@ -106,7 +90,6 @@ __all__ = [
     "show_command_result",
     "get_output_mode",
     "set_output_mode",
-    # Tables
     "show_template_table",
     "show_jobs_table",
     "show_cloud_jobs_table",
@@ -127,7 +110,6 @@ __all__ = [
     "show_workspace_stats_table",
     "show_user_stats_table",
     "show_stats_overview",
-    # Panels
     "show_submission_preview",
     "show_submission_result",
     "show_dry_run_result",

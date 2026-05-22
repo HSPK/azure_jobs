@@ -1,9 +1,4 @@
-"""Reusable Textual UI building blocks for the dashboard.
-
-Components are pure UI: widgets and modal screens. They hold no
-application state and have no knowledge of the App — controllers wire
-them together.
-"""
+"""Reusable Textual UI building blocks for the dashboard."""
 
 from azure_jobs.tui.components.info_scroll import InfoScroll
 from azure_jobs.tui.components.log_viewer import LogViewer

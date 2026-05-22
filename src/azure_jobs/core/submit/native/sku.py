@@ -11,14 +11,12 @@ from azure_jobs.core.az_client.arm.models import SLA_TIERS, SeriesQuota, SlaTier
 
 from ...errors import SkuResolveError
 
-# Azure rejects mixed host families; default ambiguous shorthands to Nvidia.
 _AMD_GPUS = frozenset({"MI50", "MI100", "MI200", "MI300X"})
 _DEFAULT_REGION = "westus2"
 
-
 @dataclass
 class SkuSpec:
-    """Parsed amlt SKU shorthand (e.g. ``1x80G8-A100-NvLink``)."""
+    """Parsed amlt SKU shorthand (e.g."""
 
     num_nodes: int = 1
     gpus_per_node: int = 1
@@ -63,18 +61,16 @@ class SkuSpec:
             gpus_per_node=gpus_per_node if gpus_per_node > 0 else self.gpus_per_node,
         )
 
-
 @dataclass(frozen=True)
 class MatchedInstances:
     instances: list[InstanceTypeInfo]
     effective_tier: str
     nvlink_satisfied: bool = True
 
-
 @dataclass(frozen=True)
 class _SkuRange:
     min: int
-    max: float  # math.inf for "4+" style
+    max: float
 
     @classmethod
     def parse(cls, key: object) -> _SkuRange:
@@ -89,7 +85,6 @@ class _SkuRange:
 
     def contains(self, nodes: int) -> bool:
         return self.min <= nodes <= self.max
-
 
 def resolve_sku(sku_template: str | dict[str, str], nodes: int, processes: int) -> str:
     """Format a SKU template (string or range-keyed dict) with concrete counts."""
@@ -106,35 +101,26 @@ def resolve_sku(sku_template: str | dict[str, str], nodes: int, processes: int) 
         f"Unsupported SKU template type: {type(sku_template).__name__}."
     )
 
-
 def _tier_chain(requested: str) -> tuple[str, ...]:
     norm = (requested or "").strip().title()
     if norm in SLA_TIERS:
         return SLA_TIERS[SLA_TIERS.index(norm) :]
     return (norm, *SLA_TIERS) if norm else SLA_TIERS
 
-
 def _vendor(info: InstanceTypeInfo) -> str:
     if info.is_cpu:
         return "cpu"
     return "amd" if info.accelerator in _AMD_GPUS else "nvidia"
 
-
 def _pick_instance(
     spec: SkuSpec, rows: list[InstanceTypeInfo]
 ) -> InstanceTypeInfo | None:
-    """Return the series instance matching ``spec.gpus_per_node``.
-
-    CPU branch uses ``gpus_per_node`` as a 1-based size tier; GPU branch
-    requires an exact ``num_gpus`` match (``None`` if no row qualifies).
-    """
     if not rows:
         return None
     if spec.is_cpu:
         ordered = sorted(rows, key=lambda r: r.num_cores)
         return ordered[max(0, min(spec.gpus_per_node - 1, len(ordered) - 1))]
     return next((r for r in rows if r.num_gpus == spec.gpus_per_node), None)
-
 
 def match_instance_type(
     sku_raw: str,
@@ -145,10 +131,7 @@ def match_instance_type(
     nodes: int = 0,
     gpus_per_node: int = 0,
 ) -> MatchedInstances:
-    """Match an amlt SKU shorthand to instance types on ``vc``.
-
-    Raises :class:`SkuResolveError` with a step-specific message on no match.
-    """
+    """Match an amlt SKU shorthand to instance types on vc."""
     spec = SkuSpec.parse(sku_raw).with_counts(nodes=nodes, gpus_per_node=gpus_per_node)
     region = vc.region or _DEFAULT_REGION
 
@@ -251,6 +234,5 @@ def match_instance_type(
         effective_tier=effective_tier,
         nvlink_satisfied=nvlink_satisfied,
     )
-
 
 __all__ = ["match_instance_type", "resolve_sku", "MatchedInstances", "SkuSpec"]

@@ -1,4 +1,4 @@
-"""``aj ds`` — datastore listing commands."""
+"""aj ds — datastore listing commands."""
 
 from __future__ import annotations
 
@@ -6,11 +6,9 @@ import click
 
 from azure_jobs.cli import main
 
-
 @main.group(name="ds")
 def ds_group() -> None:
     """List and inspect Azure ML datastores."""
-
 
 @ds_group.command(name="list")
 @click.option("--ws", "ws_name", default=None, help="Workspace name override")
@@ -24,15 +22,11 @@ def ds_list(ws_name: str | None) -> None:
         stores = client.datastores.list()
     show_datastores_table(stores)
 
-
 @ds_group.command(name="show")
 @click.argument("name")
 @click.option("--ws", "ws_name", default=None, help="Workspace name override")
 def ds_show(name: str, ws_name: str | None) -> None:
-    """Show details of a datastore.
-
-    NAME is the datastore name (case-sensitive).
-    """
+    """Show details of a datastore."""
     from azure_jobs.core.az_client import create_rest_client
     from azure_jobs.utils.ui import console, show_datastore_detail, warning
 

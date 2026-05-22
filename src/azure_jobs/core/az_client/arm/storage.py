@@ -1,4 +1,4 @@
-"""``arm.storage`` — storage-account discovery via Resource Graph."""
+"""arm.storage — storage-account discovery via Resource Graph."""
 
 from __future__ import annotations
 
@@ -6,7 +6,6 @@ from azure_jobs.core.errors import NETWORK_LIKE_ERRORS
 
 from .models import StorageAccountInfo
 from ._base import ArmNamespace
-
 
 class StoragesAPI(ArmNamespace):
     def list(
@@ -44,6 +43,5 @@ class StoragesAPI(ArmNamespace):
             for r in rows
             if r.get("name")
         ]
-
 
 __all__ = ["StoragesAPI"]

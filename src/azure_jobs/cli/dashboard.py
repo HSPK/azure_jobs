@@ -1,11 +1,10 @@
-"""``aj dash`` — interactive TUI dashboard."""
+"""aj dash — interactive TUI dashboard."""
 
 from __future__ import annotations
 
 import click
 
 from azure_jobs.cli import main
-
 
 @main.command(name="dash")
 @click.option(

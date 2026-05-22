@@ -1,15 +1,4 @@
-"""Logs aggregator: composes 3 sub-controllers sharing one ``LogsState``.
-
-Sub-controllers (all share :attr:`state`):
-
-* :attr:`view` — Info/Logs toggle, header, file picker, scroll mode.
-* :attr:`buffer` — line writes, per-job snapshots, ``Ctrl+S`` save.
-* :attr:`stream` — background tail-then-poll worker + meta tick.
-
-The aggregator exposes a flat facade for the most common calls (used
-by :class:`AjDashboard` and tests) so callers don't need to know which
-sub-controller owns a method.
-"""
+"""Logs aggregator: composes 3 sub-controllers sharing one LogsState."""
 
 from __future__ import annotations
 
@@ -26,7 +15,6 @@ if TYPE_CHECKING:
 
 __all__ = ["LogsController", "LogsBuffer", "LogsStream", "LogsView"]
 
-
 class LogsController(Controller[LogsState]):
     """Aggregator: composes the three logs sub-controllers."""
 
@@ -35,8 +23,6 @@ class LogsController(Controller[LogsState]):
         self.buffer = LogsBuffer(app, state)
         self.stream = LogsStream(app, state)
         self.view = LogsView(app, state)
-
-    # ---- view facade --------------------------------------------------------
 
     def show(self) -> None:
         self.view.show()
@@ -56,8 +42,6 @@ class LogsController(Controller[LogsState]):
     def update_tab_title(self) -> None:
         self.view.update_tab_title()
 
-    # ---- buffer facade ------------------------------------------------------
-
     def write_line(self, text: str, *, error: bool = False) -> None:
         self.buffer.write_line(text, error=error)
 
@@ -70,8 +54,6 @@ class LogsController(Controller[LogsState]):
     def save_to_file(self) -> None:
         self.buffer.save_to_file()
 
-    # ---- stream facade ------------------------------------------------------
-
     def toggle_stream(self) -> None:
         self.stream.toggle_stream()
 
@@ -79,23 +61,14 @@ class LogsController(Controller[LogsState]):
         self.stream.stop_streaming()
 
     def backfill(self, *, all_remaining: bool = False) -> None:
-        """Lazy-fetch older log content (called on scroll-up / ``g``)."""
+        """Lazy-fetch older log content (called on scroll-up / g)."""
         self.stream.backfill(all_remaining=all_remaining)
 
     def update_header(self) -> None:
         """Re-render the right-pane border subtitle (delegates to view)."""
         self.view.update_header()
 
-    # ---- cross-domain facade ------------------------------------------------
-
     def _reset_stream_window(self) -> None:
-        """Stop streaming (if any) and zero the byte-window state.
-
-        Shared by :meth:`switch_to_job` and :meth:`on_workspace_switching`
-        — both paths tear down the current stream and forget the byte
-        offsets so the next ``_render_initial`` starts from a clean
-        slate.
-        """
         st = self.state
         if st.streaming:
             self.buffer.capture()
@@ -105,13 +78,7 @@ class LogsController(Controller[LogsState]):
         st.backfilling = False
 
     def switch_to_job(self, name: str, *, file: str = "") -> None:
-        """Tear down the current job's stream and prep state for *name*.
-
-        Single entry point used by :class:`LogsView` so its ``show()``
-        does not need to reach into ``buffer`` and ``stream`` directly.
-        Caller is still responsible for kicking off the new stream
-        (``begin_stream``) since that needs the job dict.
-        """
+        """Tear down the current job's stream and prep state for *name*."""
         self._reset_stream_window()
         st = self.state
         snap = st.snapshots.get(name)
@@ -120,14 +87,7 @@ class LogsController(Controller[LogsState]):
         st.current_file = file or (snap.current_file if snap else "")
 
     def on_workspace_switching(self) -> None:
-        """Tear down logs state before the workspace changes.
-
-        Single entry point that ``WorkspaceController.switch`` calls so the
-        workspace controller no longer needs to reach into ``buffer`` /
-        ``stream`` / private state fields. Also flips the right pane back
-        to the Info view so the user lands on a clean slate (the previous
-        Logs pane has no content for the new workspace's jobs).
-        """
+        """Tear down logs state before the workspace changes."""
         self._reset_stream_window()
         st = self.state
         st.snapshots.clear()
@@ -141,12 +101,7 @@ class LogsController(Controller[LogsState]):
         self.stream.start_streaming(azure_name, log_path)
 
     def restart_current_stream(self) -> None:
-        """Re-tail the currently-selected job's log (used by ``toggle_stream``).
-
-        Resolves the active row from ``JobsView`` and re-runs the same
-        path as a fresh job: switch to logs view + reset buffer + spawn
-        a new stream worker. No-op if there is no selected job.
-        """
+        """Re-tail the currently-selected job's log (used by toggle_stream)."""
         jobs_st = self.app.jobs.state
         if not (0 <= jobs_st.selected_idx < len(jobs_st.filtered)):
             return

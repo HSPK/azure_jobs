@@ -1,12 +1,4 @@
-"""Rich-progress wrappers around :mod:`azure_jobs.core.jobs`.
-
-These thin helpers belong to the CLI layer (they own console output
-and spinner rendering) but are shared between ``cli/jobs.py`` and
-``cli/experiment.py``.
-
-Kept in a module-private file (leading underscore) so they remain
-package-internal — external callers should use ``core.jobs`` directly.
-"""
+"""Rich-progress wrappers around :mod:azure_jobs.core.jobs."""
 
 from __future__ import annotations
 
@@ -17,7 +9,6 @@ from typing import Any
 from azure_jobs.core.jobs import fetch_jobs, fetch_jobs_all_workspaces
 
 log = logging.getLogger(__name__)
-
 
 def fetch_jobs_with_progress(
     n: int,
@@ -42,7 +33,6 @@ def fetch_jobs_with_progress(
                 f"[bold cyan]Fetching jobs… {matched} loaded[/bold cyan]"
             ),
         )
-
 
 def fetch_jobs_all_ws_with_progress(
     n_per_ws: int,

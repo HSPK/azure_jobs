@@ -6,30 +6,19 @@ from ..models import SubmitRequest
 
 RUNNER_FILENAME = "aj_runner.sh"
 
-
 def generate_runner_script(
     request: SubmitRequest,
     identity_client_id: str = "",
 ) -> str:
-    """Generate the aj_runner.sh script that runs inside the container.
-
-    The script handles:
-    - Identity exports (Singularity UAI)
-    - Distributed env detection (MPI → PyTorch vars)
-    - NCCL configuration
-    - Rank-0-only setup with barrier
-    - User command execution
-    """
+    """Generate the aj_runner.sh script that runs inside the container."""
     lines: list[str] = ["#!/bin/bash", "set -e", ""]
 
-    # --- Identity exports ---
     if identity_client_id:
         lines.append("# Singularity managed identity")
         lines.append(f"export DEFAULT_IDENTITY_CLIENT_ID={identity_client_id}")
         lines.append(f"export AZURE_CLIENT_ID={identity_client_id}")
         lines.append("")
 
-    # --- Distributed preamble ---
     is_distributed = request.nodes > 1 or request.processes_per_node > 1
     if is_distributed:
         lines.append("# Distributed training env detection")
@@ -59,7 +48,6 @@ def generate_runner_script(
         lines.append('export NCCL_SOCKET_IFNAME=${NCCL_SOCKET_IFNAME:-"^docker0,lo"}')
         lines.append("")
 
-    # --- Setup commands (rank-0 only for distributed) ---
     if request.setup_commands:
         if is_distributed:
             lines.append("# Setup (rank-0 only with barrier)")
@@ -84,9 +72,6 @@ def generate_runner_script(
                 lines.append(cmd)
         lines.append("")
 
-    # --- User command (with signal forwarding for graceful shutdown) ---
-    # Run user commands in a subshell with set -e, backgrounded so we can
-    # trap SIGINT/SIGTERM and forward to the process for checkpoint saving.
     lines.append("# Run with signal forwarding")
     lines.append("set +e")
     lines.append("(")

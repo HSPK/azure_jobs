@@ -1,10 +1,4 @@
-"""Render the job list, info pane and titles. Handles list events + paging.
-
-``state.pages`` is rebuilt on every :meth:`refresh` from the filtered view
-of ``state.all_jobs``. Filters thus span every fetched job, not just one
-server page. If the visible page is short and there's more on the server,
-``refresh`` schedules a background prefetch (capped by ``state.fetch_limit``).
-"""
+"""Render the job list, info pane and titles."""
 
 from __future__ import annotations
 
@@ -20,11 +14,8 @@ from azure_jobs.tui.state import JobsState
 
 log = logging.getLogger(__name__)
 
-
 class JobsView(Controller[JobsState]):
     """Job list rendering, info panel, navigation."""
-
-    # ---- core repaint -------------------------------------------------------
 
     def _apply_filters(self, jobs: list[dict[str, Any]]) -> list[dict[str, Any]]:
         st = self.state
@@ -61,23 +52,15 @@ class JobsView(Controller[JobsState]):
         *,
         restore_selection: bool = False,
     ) -> None:
-        """Repaint the job list from filtered ``all_jobs`` and re-derive pages.
-
-        ``restore_selection``: when True, try to keep the currently selected
-        job highlighted across the repaint (used after a background batch
-        merges in).
-        """
+        """Repaint the job list from filtered all_jobs and re-derive pages."""
         st = self.state
 
-        # Remember selection before we rebuild.
         if restore_selection and not restore_name:
             if 0 <= st.selected_idx < len(st.filtered):
                 restore_name = st.filtered[st.selected_idx].get("name", "")
 
-        # 1. Filter across everything fetched so far.
         all_filtered = self._apply_filters(st.all_jobs)
 
-        # 2. Re-chunk into pages of page_size.
         if all_filtered:
             st.pages = [
                 all_filtered[i : i + st.page_size]
@@ -86,11 +69,9 @@ class JobsView(Controller[JobsState]):
         else:
             st.pages = [[]]
 
-        # 3. Clamp current_page after re-chunking.
         if st.current_page >= len(st.pages):
             st.current_page = max(0, len(st.pages) - 1)
 
-        # 4. Display current page.
         st.filtered = list(st.pages[st.current_page])
 
         ol = self.app.widgets.jobs
@@ -101,7 +82,6 @@ class JobsView(Controller[JobsState]):
 
         self.update_titles()
 
-        # 5. Restore selection by name where possible.
         target_idx = 0
         if restore_name:
             for i, j in enumerate(st.filtered):
@@ -123,8 +103,6 @@ class JobsView(Controller[JobsState]):
             self.app.logs.update_tab_title()
             self._update_subtitle(None)
 
-        # 6. Auto-prefetch: if the visible page is short and we know the
-        # server has more, schedule another fetch (bounded by fetch_limit).
         self._maybe_prefetch()
 
     def _maybe_prefetch(self) -> None:
@@ -133,8 +111,6 @@ class JobsView(Controller[JobsState]):
             return
         if len(st.all_jobs) >= st.fetch_limit:
             return
-        # Only fetch more when the current page isn't full *and* we're on
-        # the last page (no point pre-loading earlier pages).
         on_last_page = st.current_page == len(st.pages) - 1
         if not on_last_page:
             return
@@ -160,15 +136,11 @@ class JobsView(Controller[JobsState]):
         if st.fetching:
             parts.append("[dim]…[/dim]")
         elif st.load_status.name == "ERROR":
-            # Visually flag error state in the pane title (in addition to
-            # the inline notification).
             err = st.last_error or "error"
             parts.append(f"[red]⚠ {err[:60]}[/red]")
         try:
             self.app.query_one("#jobs-pane").border_title = "  ".join(parts)
         except Exception as exc:
-            # Pane may not be mounted yet (early refresh during startup) or
-            # may have been torn down mid-refresh. Title is cosmetic.
             log.debug("jobs-pane title update failed: %s", exc, exc_info=True)
 
     def _update_subtitle(self, job: dict[str, Any] | None = None) -> None:
@@ -191,12 +163,7 @@ class JobsView(Controller[JobsState]):
     def show_info(self, job: dict[str, Any]) -> None:
         self._update_subtitle(job)
         self.app.logs.update_tab_title()
-        # info_block escapes user data; the safe_set boundary additionally
-        # protects against any future markup leak by falling back to plain
-        # text on parse failure.
         safe_set(self.app.widgets.info, info_block(job))
-
-    # ---- list events --------------------------------------------------------
 
     def on_option_selected(self, event: OptionList.OptionSelected) -> None:
         st = self.state
@@ -221,17 +188,12 @@ class JobsView(Controller[JobsState]):
         if job.get("status") == "Failed" and not job.get("error"):
             self.app.jobs.fetcher.fetch_single(job)
 
-    # ---- pagination ---------------------------------------------------------
-
     def action_next_page(self) -> None:
         st = self.state
         if st.current_page + 1 < len(st.pages):
             st.current_page += 1
             self.refresh()
         elif st.has_more and not st.fetching:
-            # The new page isn't here yet — mark the intent so ``merge_batch``
-            # advances as soon as the fetch completes (otherwise the user
-            # would need to press right twice).
             st.pending_advance = True
             self.app.notify("Loading next page…", timeout=2)
             self.app.jobs.fetcher.fetch_next_page()

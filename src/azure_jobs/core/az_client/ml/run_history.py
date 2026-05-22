@@ -16,7 +16,6 @@ log = logging.getLogger(__name__)
 
 _ARTIFACT_LOOKUP_WORKERS = 8
 
-
 class RunHistoryAPI:
     """Workspace data-plane operations: error details and log file URLs."""
 
@@ -24,11 +23,7 @@ class RunHistoryAPI:
         self._ctx = ctx
 
     def get_run(self, job_name: str) -> dict[str, Any]:
-        """Fetch the full Run History record for a job.
-
-        Returns ``{}`` when the run does not exist (404) or the data plane
-        is unavailable for this workspace.
-        """
+        """Fetch the full Run History record for a job."""
         self._ctx.get_location()
         if not self._ctx.data_plane_base:
             return {}
@@ -56,15 +51,11 @@ class RunHistoryAPI:
             return ""
         err = data.get("error")
         if isinstance(err, dict):
-            # Run History wraps the actual error one level deeper as ``error.error``.
             err = err.get("error", err)
         return parse_azure_error_dict(err)
 
     def get_log_urls(self, job_name: str) -> dict[str, str]:
-        """Return ``{log_path: signed_url}`` for a run.
-
-        Uses Run History's ``logFiles`` first, falls back to the Artifact API.
-        """
+        """Return {log_path: signed_url} for a run."""
         try:
             data = self.get_run(job_name)
         except (requests.RequestException, ValueError) as exc:
@@ -76,7 +67,6 @@ class RunHistoryAPI:
         return self._list_artifact_log_urls(job_name)
 
     def _list_artifact_log_urls(self, job_name: str) -> dict[str, str]:
-        """List log artifacts via the Artifact v2 API and return signed URLs."""
         self._ctx.get_location()
         if not self._ctx.data_plane_base:
             return {}

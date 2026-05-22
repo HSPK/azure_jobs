@@ -1,11 +1,4 @@
-"""Threaded fan-out helpers.
-
-* :func:`parallel_each` — the pure engine: run ``fn`` over a list in
-  parallel, deliver per-item success/failure via callbacks. Rich-free,
-  importable from :mod:`azure_jobs.core`.
-* :func:`parallel_map`  — :func:`parallel_each` + a Rich spinner. Used
-  from CLI commands that want a live progress display.
-"""
+"""Threaded fan-out helpers."""
 
 from __future__ import annotations
 
@@ -24,7 +17,6 @@ ProgressCB = Callable[[T, R, int, int], None]
 FailureCB = Callable[[T, BaseException, int, int], None]
 """``on_failure(item, exc, completed, total)`` — called per failure."""
 
-
 def parallel_each(
     items: list[T],
     fn: Callable[[T], R],
@@ -33,18 +25,7 @@ def parallel_each(
     on_failure: FailureCB | None = None,
     max_workers: int = 8,
 ) -> tuple[list[tuple[T, R]], list[tuple[T, BaseException]]]:
-    """Run ``fn(item)`` over *items* in parallel; return (successes, failures).
-
-    *fn* runs on a worker thread, so anything it touches must be
-    threadsafe. *on_done* / *on_failure* fire from the caller's thread
-    (inside :func:`concurrent.futures.as_completed`) so a Rich
-    ``console.status.update`` is the canonical use; mutating UI state
-    from there is also fine. Programming errors in *fn* surface via the
-    failure list, not by raising.
-
-    *max_workers* is capped at ``len(items)`` (with a floor of 1) so an
-    empty list doesn't spawn a useless pool.
-    """
+    """Run fn(item) over *items* in parallel; return (successes, failures)."""
     total = len(items)
     successes: list[tuple[T, R]] = []
     failures: list[tuple[T, BaseException]] = []
@@ -70,7 +51,6 @@ def parallel_each(
                     on_done(item, result, done, total)
     return successes, failures
 
-
 def parallel_map(
     items: list[T],
     fn: Callable[[T], R],
@@ -80,11 +60,7 @@ def parallel_map(
     console: Console,
     max_workers: int = 8,
 ) -> tuple[list[tuple[T, R]], list[tuple[T, BaseException]]]:
-    """:func:`parallel_each` with a Rich spinner that ticks per item.
-
-    Thin CLI-side wrapper — kept here so command modules don't each
-    re-implement the same spinner-and-counter pattern.
-    """
+    """:func:parallel_each with a Rich spinner that ticks per item."""
     total = len(items)
     with console.status(
         f"[bold cyan]{label} (0/{total})…[/bold cyan]", spinner="dots"

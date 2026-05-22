@@ -1,4 +1,4 @@
-"""Convenience accessors for the ``defaults`` and ``experiment`` sections."""
+"""Convenience accessors for the defaults and experiment sections."""
 
 from __future__ import annotations
 
@@ -8,11 +8,9 @@ from . import prompts
 from .models import AJDefaults
 from .store import read_config, write_config
 
-
 def get_defaults() -> AJDefaults:
-    """Return the ``defaults`` section as an :class:`AJDefaults` dataclass."""
+    """Return the defaults section as an :class:AJDefaults dataclass."""
     return read_config().defaults
-
 
 def save_defaults(
     *,
@@ -20,7 +18,7 @@ def save_defaults(
     nodes: int | None = None,
     processes: int | None = None,
 ) -> None:
-    """Persist default values.  Only non-None keys are written."""
+    """Persist default values."""
     config = read_config()
     if template is not None:
         config.defaults.template = template
@@ -30,18 +28,12 @@ def save_defaults(
         config.defaults.processes = processes
     write_config(config)
 
-
 def get_experiment() -> str:
     """Return the configured experiment name, or empty string if unset."""
     return read_config().experiment
 
-
 def ensure_experiment() -> str:
-    """Return experiment name, prompting the user if not yet configured.
-
-    Generates a default suggestion like ``experiment-a1b2c3d4`` and saves
-    the chosen name to ``aj_config.json``.
-    """
+    """Return experiment name, prompting the user if not yet configured."""
     name = get_experiment()
     if name:
         return name

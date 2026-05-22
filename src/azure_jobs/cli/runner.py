@@ -1,18 +1,4 @@
-"""Backend-agnostic submission runner — pure CLI presentation.
-
-Wraps any ``submit_fn(on_event) -> SubmitResult`` closure with a unified
-Live-spinner UX, persistent ``log`` lines, error handling, and record
-logging. Native, AMLT, and Volcano backends all flow through it.
-
-In JSON output mode (``aj --json`` / ``AJ_OUTPUT=json``) the spinner is
-suppressed and the final result is emitted via
-:func:`show_submission_result` — agents get a single JSON envelope on
-stdout with no interleaved Rich output.
-
-Lives under :mod:`azure_jobs.cli` (not :mod:`core.submit`) because the
-spinner, ``click.ClickException``, and ``SystemExit`` are presentation
-concerns; the pure submission logic is in :mod:`azure_jobs.core.submit`.
-"""
+"""Backend-agnostic submission runner — pure CLI presentation."""
 
 from __future__ import annotations
 
@@ -30,7 +16,6 @@ from azure_jobs.utils.ui import (
     truncate_middle,
 )
 
-
 def submit_and_record(
     submit_fn: Callable[[Callable[[SubmitEvent], None]], SubmitResult],
     rec: SubmissionRecord,
@@ -38,13 +23,7 @@ def submit_and_record(
     *,
     backend_label: str = "",
 ) -> None:
-    """Run a backend submission and emit the final result.
-
-    ``submit_fn`` takes a single ``on_event`` callback (receiving
-    :class:`SubmitEvent` records) and returns a :class:`SubmitResult`.
-    Rich mode wraps the call with a Live spinner; JSON mode passes a
-    no-op event handler and produces only the final structured result.
-    """
+    """Run a backend submission and emit the final result."""
     json_mode = get_output_mode() == "json"
 
     try:
@@ -76,7 +55,6 @@ def submit_and_record(
         msg = parse_exception_message(exc)
         rec.note = msg
         if json_mode:
-            # Build a synthetic failure result so JSON output still happens.
             synth = SubmitResult(job_name=display_name, status="failed", error=msg)
             show_submission_result(
                 rec, synth, display_name=display_name, backend_label=backend_label
@@ -86,11 +64,9 @@ def submit_and_record(
     finally:
         log_record(rec)
 
-
 def _run_with_spinner(
     submit_fn: Callable[[Callable[[SubmitEvent], None]], SubmitResult],
 ) -> SubmitResult:
-    """Rich-mode submission with Live spinner + per-event progress."""
     from rich.live import Live
     from rich.spinner import Spinner
 

@@ -1,10 +1,4 @@
-"""High-level orchestration of a single native job submission.
-
-This module wires together the smaller pieces — auth, env, storage,
-compute, command, code upload, REST submit — and emits status events
-for the CLI's live spinner. All the heavy assembly lives in sibling
-modules; ``submit`` here is a readable top-down recipe.
-"""
+"""High-level orchestration of a single native job submission."""
 
 from __future__ import annotations
 
@@ -37,12 +31,9 @@ from .target import (
 
 log = logging.getLogger(__name__)
 
-# Re-exported for tests and back-compat callers.
 __all__ = ["submit", "_get_rest_client", "_build_env_vars"]
 
-
 def _get_rest_client(request: SubmitRequest) -> AzureMLClient:
-    """Create a workspace-scoped REST client from a SubmitRequest."""
     from azure_jobs.core.az_client import AzureMLClient
 
     return AzureMLClient(
@@ -51,29 +42,21 @@ def _get_rest_client(request: SubmitRequest) -> AzureMLClient:
         workspace_name=request.workspace_name,
     )
 
-
 def submit(
     request: SubmitRequest,
     *,
     on_event: Callable[[SubmitEvent], None] | None = None,
 ) -> SubmitResult:
-    """Submit a job to Azure ML via REST API.
-
-    ``on_event`` receives :class:`SubmitEvent` records for each lifecycle
-    step, per-file upload progress, and informational log lines.
-    """
+    """Submit a job to Azure ML via REST API."""
     emit = on_event or (lambda _ev: None)
     try:
         return _submit_impl(request, emit)
     except (AJError, requests.RequestException, OSError) as exc:
-        # Backend never crashes the caller — failures become a SubmitResult.
-        # Programming errors (NameError/AttributeError/…) deliberately propagate.
         return SubmitResult(
             job_name=request.name,
             status="failed",
             error=parse_exception_message(exc),
         )
-
 
 def _submit_impl(
     request: SubmitRequest,
@@ -93,7 +76,6 @@ def _submit_impl(
             )
         )
 
-    # ── Phase 1: read-only resolution & validation ───────────────────
     _status("resolve", "Resolving Azure coordinates…")
     arm = AzureARMClient()
     vc = resolve_target(request, arm_client=arm)
@@ -119,7 +101,6 @@ def _submit_impl(
     code_root = request.code_dir or os.getcwd()
     extra_files.update(_collect_ssh_files(code_root, emit))
 
-    # ── Phase 2: remote writes (env → storage → blob → submit) ───────
     _status("environment", "Preparing environment…")
     env_id = _build_environment(request, client)
 
