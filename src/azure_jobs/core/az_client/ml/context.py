@@ -11,7 +11,7 @@ from ..auth import (
     TIMEOUT_QUICK,
     AuthSession,
     WorkspaceCoords,
-    _TokenCache,
+    TokenCache,
     fetch_token,
     raise_for_rest_error,
 )
@@ -45,7 +45,7 @@ class RestContext(AuthSession):
         )
         self.base = self.coords.arm_workspace_path
         self.scope_path = self.coords.arm_scope_path
-        self._data_token = _TokenCache()
+        self._data_token = TokenCache()
         self._location: str | None = None
         self.data_plane_base: str = ""
         self._ws_cache: dict[str, Any] | None = None

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from typing import Any
 
@@ -9,6 +10,8 @@ from azure_jobs.core.errors import NETWORK_LIKE_ERRORS, ConfigError
 
 from ._base import ArmNamespace
 from .models import SeriesQuota, VCInfo
+
+log = logging.getLogger(__name__)
 
 _GPU_NAME_RE = re.compile(
     r"\b(?:NVIDIA|AMD)\s+([A-Za-z0-9]+)(?:\s+(\d+)\s*GB)?\s+GPUs?\b",
@@ -150,7 +153,8 @@ class VirtualClustersAPI(ArmNamespace):
         if not subscription_ids:
             try:
                 subscription_ids = self._client.subscriptions.list()
-            except NETWORK_LIKE_ERRORS:
+            except NETWORK_LIKE_ERRORS as exc:
+                log.warning("VC list: subscription enumeration failed: %s", exc)
                 return []
             if not subscription_ids:
                 return []
@@ -165,7 +169,8 @@ class VirtualClustersAPI(ArmNamespace):
 
         try:
             rows = self._client.graph.query(query, subscription_ids)
-        except NETWORK_LIKE_ERRORS:
+        except NETWORK_LIKE_ERRORS as exc:
+            log.warning("VC list: Resource Graph query failed: %s", exc)
             return []
 
         vcs: list[VCInfo] = []

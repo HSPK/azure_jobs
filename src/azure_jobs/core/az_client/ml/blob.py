@@ -25,7 +25,7 @@ from ..auth import (
     TIMEOUT_QUICK,
     TIMEOUT_STANDARD,
     TIMEOUT_UPLOAD,
-    _TokenCache,
+    TokenCache,
     fetch_token,
     raise_for_rest_error,
 )
@@ -73,7 +73,7 @@ class BlobAPI:
     def __init__(self, ctx: RestContext) -> None:
         self._ctx = ctx
         self._storage = _StorageInfo()
-        self._storage_token = _TokenCache()
+        self._storage_token = TokenCache()
 
     def _ensure_storage_token(self) -> str:
         if not self._storage_token.is_fresh():

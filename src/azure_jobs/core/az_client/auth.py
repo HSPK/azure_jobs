@@ -62,7 +62,7 @@ def make_retry_session() -> requests.Session:
 _REFRESH_LEEWAY = 60
 
 @dataclass(slots=True)
-class _TokenCache:
+class TokenCache:
 
     token: str = ""
     expires_on: float = 0.0
@@ -137,7 +137,7 @@ class AuthSession:
     """Base class providing an authenticated requests.Session."""
 
     def __init__(self) -> None:
-        self._arm_token = _TokenCache()
+        self._arm_token = TokenCache()
         self.session: requests.Session = make_retry_session()
 
     def ensure_token(self) -> str:
