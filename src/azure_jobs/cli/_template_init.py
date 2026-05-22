@@ -1,17 +1,9 @@
 """``aj template init`` — interactive wizard for authoring leaf templates.
 
-The wizard picks account / environment / storage / workspace from live
-Azure data, then auto-generates one leaf per (VC, accelerator,
-GPU memory) combination with non-zero quota visible to the account.
-
-* account     → ``account/<sanitised-uai-name>.yaml``
-* storage     → ``storage/default.yaml`` (append mounts)
-* environment → ``environment/sing.yaml`` (Singularity only)
-* template    → ``template/{vc}_{accelerator}_{memory}.yaml`` (one per quota)
-
-Plus two zero-config bases auto-created if missing:
-``template/base.yaml`` (code upload rules) and
-``environment/base.yaml`` (sla / priority / shm defaults).
+Picks account / environment / storage / workspace from live Azure
+data, then auto-generates one leaf per (VC, accelerator, GPU memory)
+with positive user quota at
+``template/{vc}_{accelerator}_{memory}.yaml``.
 """
 
 from __future__ import annotations
@@ -224,7 +216,6 @@ def _pick_storage() -> str:
 
 
 def _sku_for(accelerator: str, gpu_memory: int) -> str:
-    """SKU shorthand parsed by :class:`SkuSpec.parse`."""
     if gpu_memory > 0:
         return f"{{nodes}}x{gpu_memory}G{{processes}}-{accelerator}"
     return "{nodes}xC{processes}"
@@ -236,10 +227,7 @@ def _generate_leaves(
     workspace: dict[str, str],
     force: bool,
 ) -> list[dict[str, str]]:
-    """Fetch user quota and write one leaf per (vc, accelerator, memory).
-
-    Returns the list of leaves written / skipped for the summary table.
-    """
+    """Write one leaf per (vc, accel, mem); return rows for the summary."""
     from azure_jobs.core.az_client import AzureARMClient
     from azure_jobs.utils.ui import console, error, warning
 
@@ -309,7 +297,6 @@ def _generate_leaves(
 
 
 def _pick_workspace() -> dict[str, str]:
-    """Discover AML workspaces and force the user to pick one."""
     from azure_jobs.core.az_client import AzureARMClient
     from azure_jobs.utils.ui import console, error
 
@@ -371,13 +358,7 @@ uv python install 3.10
 
 
 def _ensure_install_sh() -> None:
-    """Drop a default ``install.sh`` under ``.azure_jobs/scripts/`` if missing.
-
-    The env yaml references it via
-    ``setup: [bash .azure_jobs/scripts/install.sh]`` so it runs on the
-    cluster before the user command. Lives inside ``.azure_jobs/`` so it
-    ships with the rest of the template tree.
-    """
+    """Drop a default ``install.sh`` under ``.azure_jobs/scripts/`` if missing."""
     from azure_jobs.utils.ui import dim
 
     p = const.AJ_HOME / "scripts" / "install.sh"

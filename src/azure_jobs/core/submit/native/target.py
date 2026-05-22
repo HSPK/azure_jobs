@@ -148,20 +148,11 @@ def _resolve_sing_identity(
     request: SubmitRequest,
     client: AzureMLClient,
 ) -> str | None:
-    """Look up the Singularity UAI client_id from workspace identity config.
+    """Return the UAI ``clientId`` for ``_AZUREML_SINGULARITY_JOB_UAI``.
 
-    The ``_AZUREML_SINGULARITY_JOB_UAI`` env var specifies a User Assigned
-    Identity (UAI) resource ID.  We match it against the workspace's registered
-    UAIs to get the ``client_id``, which is exported as
-    ``DEFAULT_IDENTITY_CLIENT_ID`` and ``AZURE_CLIENT_ID`` in the job command.
-
-    Raises :class:`ConfigError` when the requested UAI is not attached to the
-    workspace — the AML control plane would reject the submission with
-    ``does not have a user-assigned identity matching '<rid>'`` anyway, so
-    we fail early with a friendlier message that lists the available UAIs.
-
-    Returns:
-        The client_id string, or None when no UAI was requested.
+    Raises :class:`ConfigError` (with the workspace's actually-attached UAIs)
+    when the requested UAI is missing — same outcome as the server-side
+    rejection, just earlier.
     """
     if request.service != "sing":
         return None
@@ -184,16 +175,12 @@ def _resolve_sing_identity(
         f"Workspace '{request.workspace_name}' does not have the user-assigned "
         f"identity '{uai_resource_id.rsplit('/', 1)[-1]}' attached. "
         f"Available UAIs: {', '.join(available)}. "
-        "Attach the identity to the workspace (Portal → workspace → Identity), "
-        "or pick a different workspace."
+        "Attach it (Portal → workspace → Identity) or pick another workspace."
     )
 
 
 def _build_identity(request: SubmitRequest) -> dict[str, str] | None:
-    """Build identity config as a plain dict.
-
-    Singularity does not support identity config — return None.
-    """
+    """Identity block for AML jobs; ``None`` for Singularity (unsupported)."""
     if request.service == "sing":
         return None
 
