@@ -18,10 +18,12 @@ class Controller(Generic[S]):
         self.state: S = state
 
     def safe_query(self, selector: str, widget_type: type["W"]) -> "W | None":
-        """Type-checked query_one returning None on NoMatches."""
+        """Type-checked query_one returning None on NoMatches/WrongType."""
+        from textual.css.query import NoMatches, WrongType
+
         try:
             return self.app.query_one(selector, widget_type)
-        except Exception:
+        except (NoMatches, WrongType):
             return None
 
     def render_info(self, hint: str) -> None:

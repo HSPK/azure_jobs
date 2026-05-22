@@ -30,10 +30,8 @@ class LogsStream(Controller[LogsState]):
         self.app.logs.restart_current_stream()
 
     def start_streaming(self, azure_name: str, log_path: str) -> None:
-        self.app.run_worker(
+        self.spawn(
             lambda: self._stream_loop(azure_name, log_path),
-            thread=True,
-            exclusive=True,
             group="stream",
         )
 

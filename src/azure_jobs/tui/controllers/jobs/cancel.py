@@ -32,10 +32,8 @@ class JobsCancel(Controller[JobsState]):
             if self.app.widgets.info:
                 self.app.widgets.info.update(kv([("", "")], hint="Cancelling…"))
             seq = self.state.session_seq
-            self.app.run_worker(
+            self.spawn(
                 lambda: self._do_cancel(job, seq),
-                thread=True,
-                exclusive=True,
                 group="cancel",
             )
 

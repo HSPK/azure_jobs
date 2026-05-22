@@ -51,12 +51,7 @@ class WorkspaceController(Controller[WorkspaceState]):
         """Open workspace picker (detects workspaces on first call)."""
         if not self.state.available:
             self.app.notify("Detecting workspaces…", timeout=3)
-            self.app.run_worker(
-                self._detect_workspaces,
-                thread=True,
-                exclusive=True,
-                group="ws-detect",
-            )
+            self.spawn(self._detect_workspaces, group="ws-detect")
         else:
             self._show_picker()
 

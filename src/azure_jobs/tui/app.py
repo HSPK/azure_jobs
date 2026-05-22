@@ -177,28 +177,7 @@ class AjDashboard(App):
         self.jobs.view.action_prev_page()
 
     def action_info_scroll(self, direction: str) -> None:
-        """Scroll the info pane via a vim-style key."""
-        if self.logs.state.view_mode != "info":
-            return
-        focused = self.focused
-        if focused is not None and focused.id == "search-input":
-            return
-        try:
-            scroller = self.query_one("#info-scroll", InfoScroll)
-        except Exception:
-            return
-        action = {
-            "left": scroller.action_scroll_left,
-            "right": scroller.action_scroll_right,
-            "down": scroller.action_scroll_down,
-            "up": scroller.action_scroll_up,
-            "home": scroller.action_jump_home,
-            "end": scroller.action_jump_end,
-            "page_down": scroller.action_page_down,
-            "page_up": scroller.action_page_up,
-        }.get(direction)
-        if action is not None:
-            action()
+        self.logs.scroll_info(direction)
 
     def on_input_changed(self, event: Input.Changed) -> None:
         self.jobs.filters.on_input_changed(event)

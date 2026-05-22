@@ -97,6 +97,31 @@ class LogsController(Controller[LogsState]):
         if st.view_mode == "logs":
             self.view.show_info()
 
+    def scroll_info(self, direction: str) -> None:
+        """Vim-style scroll dispatch for the info pane."""
+        if self.state.view_mode != "info":
+            return
+        focused = self.app.focused
+        if focused is not None and focused.id == "search-input":
+            return
+        from azure_jobs.tui.components import InfoScroll
+
+        scroller = self.safe_query("#info-scroll", InfoScroll)
+        if scroller is None:
+            return
+        action = {
+            "left": scroller.action_scroll_left,
+            "right": scroller.action_scroll_right,
+            "down": scroller.action_scroll_down,
+            "up": scroller.action_scroll_up,
+            "home": scroller.action_jump_home,
+            "end": scroller.action_jump_end,
+            "page_down": scroller.action_page_down,
+            "page_up": scroller.action_page_up,
+        }.get(direction)
+        if action is not None:
+            action()
+
     def start_streaming(self, azure_name: str, log_path: str) -> None:
         self.stream.start_streaming(azure_name, log_path)
 

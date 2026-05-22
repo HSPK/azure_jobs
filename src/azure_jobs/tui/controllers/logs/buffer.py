@@ -18,8 +18,8 @@ log = logging.getLogger(__name__)
 class LogsBuffer(Controller[LogsState]):
     """Owns line writes and per-job snapshot persistence."""
 
-    def get_or_create_snapshot(self, name: str) -> JobLogSnapshot:
-        """Return the snapshot for name, creating one on first access."""
+    def snapshot_for(self, name: str) -> JobLogSnapshot:
+        """Return the snapshot for *name*, creating one on first access."""
         snaps = self.state.snapshots
         snap = snaps.get(name)
         if snap is None:
@@ -43,13 +43,11 @@ class LogsBuffer(Controller[LogsState]):
                 oldest = next(iter(snaps))
             del snaps[oldest]
 
-    snapshot_for = get_or_create_snapshot
-
     def capture(self) -> None:
         """Save current state into the active job's snapshot."""
         if not self.state.job:
             return
-        snap = self.get_or_create_snapshot(self.state.job)
+        snap = self.snapshot_for(self.state.job)
         snap.current_file = self.state.current_file
         snap.line_count = self.state.line_count
 
