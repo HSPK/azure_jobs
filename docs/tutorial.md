@@ -322,7 +322,7 @@ aj template init
 
 ![aj template init wizard](assets/aj_template_init.png)
 
-It walks through six steps and writes the same files §2.1–§2.5 produced
+It walks through seven steps and writes the same files §2.1–§2.5 produced
 manually:
 
 | Step | What you pick |
@@ -332,7 +332,8 @@ manually:
 | 3 · Storage | Storage account + container + mount path |
 | 4 · Target | A Singularity VC (from `aj quota list`) |
 | 5 · SKU | One of the standard `{nodes}x…-A100/H100/H200` patterns |
-| 6 · Name | The leaf filename (what `-t <name>` selects) |
+| 6 · Workspace | The Azure ML workspace that owns this leaf's runs |
+| 7 · Name | The leaf filename (what `-t <name>` selects) |
 
 ---
 
