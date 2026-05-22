@@ -26,6 +26,7 @@ from azure_jobs.core.submit.native.target import (
     _resolve_compute,
     _resolve_sing_identity,
 )
+from azure_jobs.core.submit.native.sku import MatchedInstances
 from azure_jobs.core.template import Template
 
 
@@ -360,14 +361,20 @@ class TestResolveCompute:
         assert "/resourceGroups/vc-rg/" in arm
 
 
+def _info(name: str, series: str = ""):
+    from azure_jobs.core.az_client.arm import InstanceTypeInfo
+
+    return InstanceTypeInfo(name=f"Singularity.{name}", series_id=series)
+
+
 class TestBuildResources:
     def test_aml_returns_none(self):
         r = SubmitRequest(name="j", service="aml")
-        assert _build_resources(r) is None
+        assert _build_resources(r, "", None, None) is None
 
     @patch(
-        "azure_jobs.core.sku.resolve_instance_type",
-        return_value=["ND40rs_v2", "ND40s_v3"],
+        "azure_jobs.core.submit.native.sku.match_instance_type",
+        return_value=MatchedInstances([_info("ND40rs_v2"), _info("ND40s_v3")], "Premium"),
     )
     def test_sing_returns_aisupercomputer(self, mock_resolve):
         r = SubmitRequest(
@@ -380,7 +387,7 @@ class TestBuildResources:
             priority="high",
             sku="2xG1",
         )
-        res = _build_resources(r)
+        res = _build_resources(r, "/subscriptions/s/virtualclusters/vc1", None, None)
         assert "AISuperComputer" in res["properties"]
         aisc = res["properties"]["AISuperComputer"]
         assert aisc["instanceType"] == "Singularity.ND40rs_v2,Singularity.ND40s_v3"
@@ -393,7 +400,7 @@ class TestBuildResources:
         assert "virtualclusters/vc1" in aisc["VirtualClusterArmId"]
         assert mock_resolve.called
 
-    @patch("azure_jobs.core.sku.resolve_instance_type", return_value=["D2_v3"])
+    @patch("azure_jobs.core.submit.native.sku.match_instance_type", return_value=MatchedInstances([_info("D2_v3")], "Premium"))
     def test_sing_image_version_from_amlt_sing_prefix(self, mock_resolve):
         r = SubmitRequest(
             name="j",
@@ -403,11 +410,11 @@ class TestBuildResources:
             image="amlt-sing/acpt-torch2.7.1-py3.10-cuda12.6-ubuntu22.04",
             sku="1xC1",
         )
-        res = _build_resources(r)
+        res = _build_resources(r, "", None, None)
         aisc = res["properties"]["AISuperComputer"]
         assert aisc["imageVersion"] == "acpt-torch2.7.1-py3.10-cuda12.6-ubuntu22.04"
 
-    @patch("azure_jobs.core.sku.resolve_instance_type", return_value=["D2_v3"])
+    @patch("azure_jobs.core.submit.native.sku.match_instance_type", return_value=MatchedInstances([_info("D2_v3")], "Premium"))
     def test_sing_image_version_empty_for_non_sing_image(self, mock_resolve):
         r = SubmitRequest(
             name="j",
@@ -417,13 +424,22 @@ class TestBuildResources:
             image="pytorch:2.0",
             sku="1xC1",
         )
-        res = _build_resources(r)
+        res = _build_resources(r, "", None, None)
         aisc = res["properties"]["AISuperComputer"]
         assert aisc["imageVersion"] == ""
 
-    @patch("azure_jobs.core.sku.resolve_instance_type", return_value=[])
-    def test_sing_fallback_strips_node_prefix(self, mock_resolve):
-        """When API resolution fails, strip {nodes}x prefix and use raw SKU."""
+    @patch(
+        "azure_jobs.core.submit.native.sku.match_instance_type",
+        side_effect=__import__(
+            "azure_jobs.core.errors", fromlist=["SkuResolveError"]
+        ).SkuResolveError("no match"),
+    )
+    def test_sing_no_match_raises(self, mock_resolve):
+        """match_instance_type raising propagates out of _build_resources."""
+        import pytest
+
+        from azure_jobs.core.errors import SkuResolveError
+
         r = SubmitRequest(
             name="j",
             compute="vc1",
@@ -431,9 +447,8 @@ class TestBuildResources:
             sing=SingularityOpts(vc_subscription_id="s", vc_resource_group="r"),
             sku="2xC1",
         )
-        res = _build_resources(r)
-        aisc = res["properties"]["AISuperComputer"]
-        assert aisc["instanceType"] == "Singularity.C1"
+        with pytest.raises(SkuResolveError, match="no match"):
+            _build_resources(r, "", None, None)
 
 
 class TestBuildRequestSingularity:

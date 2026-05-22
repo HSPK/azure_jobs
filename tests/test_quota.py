@@ -10,12 +10,12 @@ from click.testing import CliRunner
 from azure_jobs.cli import main
 from azure_jobs.core.aml import vm_sku_label as _vm_sku_label
 from azure_jobs.core.errors import ConfigError
-from azure_jobs.core.sku import (
+from azure_jobs.core.az_client.arm import (
     SeriesQuota,
     SlaTierQuota,
     VCInfo,
+    parse_managed_quotas,
 )
-from azure_jobs.core.sku import parse_managed_quotas
 from azure_jobs.utils.ui.quota_tables import (
     _fmt_nodes,
     _portal_compute_url,
@@ -43,6 +43,7 @@ def _quota_payload(series: str, name: str) -> dict:
             }
         }
     }
+
 
 # ---------------------------------------------------------------------------
 # SlaTierQuota unit tests
@@ -88,8 +89,8 @@ class TestSeriesQuota:
     def test_set_tier_none_is_overall(self):
         sq = SeriesQuota(series="ND_A100_v4")
         sq.set_tier(None, 100, 50)
-        assert sq.overall is not None
-        assert sq.overall.limit == 100
+        assert sq.user_limit is not None
+        assert sq.user_limit.limit == 100
 
     def test_set_tier_unknown_falls_back_to_basic(self):
         sq = SeriesQuota(series="X")
@@ -112,13 +113,22 @@ class TestSeriesQuota:
         assert sq.has_any_quota()
 
     def test_accelerator_from_display_name(self):
-        sq = parse_managed_quotas(_quota_payload("NDH100v5", "Singularity NDH100v5 Series NVIDIA H100 80GB GPUs"))[0]
+        sq = parse_managed_quotas(
+            _quota_payload(
+                "NDH100v5", "Singularity NDH100v5 Series NVIDIA H100 80GB GPUs"
+            )
+        )[0]
         assert sq.accelerator == "H100"
         assert sq.gpu_memory == 80
 
     def test_accelerator_only_in_name_uses_default_memory(self):
         # "Family vCPUs" carries no GB but A100 → 80GB by default.
-        sq = parse_managed_quotas(_quota_payload("NC_A100_v4", "Singularity NC_A100_v4 Family vCPUs containing NVIDIA A100"))[0]
+        sq = parse_managed_quotas(
+            _quota_payload(
+                "NC_A100_v4",
+                "Singularity NC_A100_v4 Family vCPUs containing NVIDIA A100",
+            )
+        )[0]
         assert sq.accelerator == "A100"
         assert sq.gpu_memory == 80
 
@@ -129,7 +139,9 @@ class TestSeriesQuota:
         assert sq.gpu_memory == 80
 
     def test_accelerator_cpu_series(self):
-        sq = parse_managed_quotas(_quota_payload("Eadsv5", "Singularity Eadsv5 Family vCPUs"))[0]
+        sq = parse_managed_quotas(
+            _quota_payload("Eadsv5", "Singularity Eadsv5 Family vCPUs")
+        )[0]
         assert sq.accelerator == "CPU"
         assert sq.gpu_memory == 0
 
@@ -139,12 +151,16 @@ class TestSeriesQuota:
         assert sq.gpu_memory == 0
 
     def test_mi300x_default_memory(self):
-        sq = parse_managed_quotas(_quota_payload("ND_MI300X_v5", "Singularity ND_MI300X_v5 Family vCPUs"))[0]
+        sq = parse_managed_quotas(
+            _quota_payload("ND_MI300X_v5", "Singularity ND_MI300X_v5 Family vCPUs")
+        )[0]
         assert sq.accelerator == "MI300X"
         assert sq.gpu_memory == 192
 
     def test_mi200_default_memory(self):
-        sq = parse_managed_quotas(_quota_payload("ND_MI200_v4", "Singularity ND_MI200_v4 Family vCPUs"))[0]
+        sq = parse_managed_quotas(
+            _quota_payload("ND_MI200_v4", "Singularity ND_MI200_v4 Family vCPUs")
+        )[0]
         assert sq.accelerator == "MI200"
         assert sq.gpu_memory == 64
 

@@ -54,9 +54,7 @@ class TestFetchJobsAllWorkspaces:
 
         assert result[0]["_workspace"] == "my-ws"
 
-    def test_skips_failed_workspace_and_calls_callback(
-        self, mock_arm_cls, mock_ml_cls
-    ):
+    def test_skips_failed_workspace_and_calls_callback(self, mock_arm_cls, mock_ml_cls):
         arm = MagicMock()
         arm.workspace.list.return_value = [_make_ws("good"), _make_ws("bad")]
         mock_arm_cls.return_value = arm

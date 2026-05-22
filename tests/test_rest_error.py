@@ -6,8 +6,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from azure_jobs.core.errors import RestError
 from azure_jobs.core.az_client.auth import raise_for_rest_error
+from azure_jobs.core.errors import RestError
 
 
 def _mock_resp(status_code: int, json_body: dict | None = None, text: str = ""):

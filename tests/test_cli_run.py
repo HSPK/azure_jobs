@@ -9,7 +9,7 @@ from click.testing import CliRunner
 
 from azure_jobs.cli import main
 from azure_jobs.cli.run import resolve_name
-from azure_jobs.core.sku import resolve_sku
+from azure_jobs.core.submit.native.sku import resolve_sku
 from azure_jobs.core.submit import SubmitResult
 
 from .helpers import MINIMAL_JOB_CONF, write_template

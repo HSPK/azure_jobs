@@ -12,14 +12,30 @@ import pytest
 @pytest.fixture(autouse=True)
 def _stub_azure_resolvers():
     """Avoid hitting Azure Resource Graph / ARM during submit pipeline tests."""
+    from azure_jobs.core.az_client import VCInfo, WorkspaceInfo
+
+    fake_vc = VCInfo(
+        name="stub-vc",
+        resource_group="vc-rg",
+        subscription_id="vc-sub",
+    )
+    fake_ws = WorkspaceInfo(
+        name="ws-name",
+        resource_group="ws-rg",
+        subscription_id="ws-sub",
+    )
     with (
         patch(
-            "azure_jobs.core.submit.native.coords._resolve_sing_vc",
-            return_value=("vc-sub", "vc-rg"),
+            "azure_jobs.core.az_client.arm.vc.VCQuotaAPI.get_by_name",
+            return_value=fake_vc,
         ),
         patch(
-            "azure_jobs.core.submit.native.coords._resolve_workspace",
-            return_value=("ws-sub", "ws-rg", "ws-name"),
+            "azure_jobs.core.az_client.arm.compute.ComputesAPI.get_workspace",
+            return_value=fake_ws,
+        ),
+        patch(
+            "azure_jobs.core.az_client.arm.workspace.WorkspacesAPI.get",
+            return_value=fake_ws,
         ),
     ):
         yield
