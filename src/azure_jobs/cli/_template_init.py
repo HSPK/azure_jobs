@@ -540,6 +540,6 @@ def run_wizard(leaf_name: str | None, *, force: bool) -> None:
         info("Try one:")
         console.print(f"  [bold cyan]aj template show {first}[/bold cyan]")
         console.print(f"  [bold cyan]aj template validate {first}[/bold cyan]")
-    console.print(
-        f"  [bold cyan]aj run -t {leaf_name} -d -n 1 -p 1 echo hello[/bold cyan]"
-    )
+        console.print(
+            f"  [bold cyan]aj run -t {first} -d -n 1 -p 1 echo hello[/bold cyan]"
+        )
