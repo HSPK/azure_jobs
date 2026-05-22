@@ -5,6 +5,8 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from azure_jobs.core.config import AJWorkspace
 from azure_jobs.core.errors import parse_exception_message
 from azure_jobs.core.submit import (
@@ -591,31 +593,41 @@ class TestResolveSingIdentity:
         }
         assert _resolve_sing_identity(r, client) == "found-it"
 
-    def test_no_match_returns_none(self):
-        r = SubmitRequest(
-            name="j",
-            service="sing",
-            workspace_name="ws",
-            env_vars={"_AZUREML_SINGULARITY_JOB_UAI": "/subs/other"},
-        )
-        ml = MagicMock()
-        ws = MagicMock()
-        ws.identity.user_assigned_identities = [
-            {"resource_id": "/subs/1/rg/id", "client_id": "cid"},
-        ]
-        ml.workspaces.get.return_value = ws
-        assert _resolve_sing_identity(r, ml) is None
+    def test_no_match_raises_config_error(self):
+        from azure_jobs.core.errors import ConfigError
 
-    def test_workspace_error_returns_none(self):
         r = SubmitRequest(
             name="j",
             service="sing",
             workspace_name="ws",
-            env_vars={"_AZUREML_SINGULARITY_JOB_UAI": "/subs/1"},
+            env_vars={"_AZUREML_SINGULARITY_JOB_UAI": "/subs/other/uai/missing"},
         )
-        ml = MagicMock()
-        ml.workspaces.get.side_effect = Exception("fail")
-        assert _resolve_sing_identity(r, ml) is None
+        client = MagicMock()
+        client.get_workspace.return_value = {
+            "identity": {
+                "userAssignedIdentities": {
+                    "/subs/1/rg/Identity/providers/ManagedIdentity/uai/RL": {
+                        "clientId": "cid"
+                    },
+                }
+            }
+        }
+        with pytest.raises(ConfigError, match="does not have the user-assigned identity 'missing'"):
+            _resolve_sing_identity(r, client)
+
+    def test_no_uais_attached_raises_config_error(self):
+        from azure_jobs.core.errors import ConfigError
+
+        r = SubmitRequest(
+            name="j",
+            service="sing",
+            workspace_name="ws",
+            env_vars={"_AZUREML_SINGULARITY_JOB_UAI": "/subs/1/uai/missing"},
+        )
+        client = MagicMock()
+        client.get_workspace.return_value = {"identity": {}}
+        with pytest.raises(ConfigError, match=r"Available UAIs: \(none\)"):
+            _resolve_sing_identity(r, client)
 
 
 class TestBuildStorageMounts:

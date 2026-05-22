@@ -155,8 +155,13 @@ def _resolve_sing_identity(
     UAIs to get the ``client_id``, which is exported as
     ``DEFAULT_IDENTITY_CLIENT_ID`` and ``AZURE_CLIENT_ID`` in the job command.
 
+    Raises :class:`ConfigError` when the requested UAI is not attached to the
+    workspace — the AML control plane would reject the submission with
+    ``does not have a user-assigned identity matching '<rid>'`` anyway, so
+    we fail early with a friendlier message that lists the available UAIs.
+
     Returns:
-        The client_id string, or None if not found / not applicable.
+        The client_id string, or None when no UAI was requested.
     """
     if request.service != "sing":
         return None
@@ -165,17 +170,23 @@ def _resolve_sing_identity(
     if not uai_resource_id:
         return None
 
-    try:
-        ws = client.get_workspace()
-        identity = ws.get("identity", {})
-        uais = identity.get("userAssignedIdentities", {}) or {}
-        for rid, props in uais.items():
-            if rid.lower().rstrip("/") == uai_resource_id.lower().rstrip("/"):
-                return (props or {}).get("clientId") or None
-    except Exception:
-        log.debug("Failed to resolve Singularity identity", exc_info=True)
+    from azure_jobs.core.errors import ConfigError
 
-    return None
+    ws = client.get_workspace()
+    uais = (ws.get("identity") or {}).get("userAssignedIdentities") or {}
+    wanted = uai_resource_id.lower().rstrip("/")
+    for rid, props in uais.items():
+        if rid.lower().rstrip("/") == wanted:
+            return (props or {}).get("clientId") or None
+
+    available = sorted(rid.rsplit("/", 1)[-1] for rid in uais) or ["(none)"]
+    raise ConfigError(
+        f"Workspace '{request.workspace_name}' does not have the user-assigned "
+        f"identity '{uai_resource_id.rsplit('/', 1)[-1]}' attached. "
+        f"Available UAIs: {', '.join(available)}. "
+        "Attach the identity to the workspace (Portal → workspace → Identity), "
+        "or pick a different workspace."
+    )
 
 
 def _build_identity(request: SubmitRequest) -> dict[str, str] | None:
