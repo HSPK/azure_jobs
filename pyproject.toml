@@ -27,6 +27,9 @@ source = "vcs"
 [tool.hatch.build.hooks.vcs]
 version-file = "src/azure_jobs/_version.py"
 
+[tool.hatch.build.targets.wheel]
+packages = ["src/azure_jobs"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 

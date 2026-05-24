@@ -78,3 +78,18 @@ aj config experiment <name>
 ```
 
 `aj_config.json` lives at `.azure_jobs/aj_config.json`. Override `AJ_HOME` to relocate.
+
+## Agent skill
+
+`aj` ships a `SKILL.md` so coding agents (GitHub Copilot, Claude Code) can
+discover and call `aj` correctly. Install it once per machine:
+
+```bash
+aj skill install                 # both copilot + claude, user scope
+aj skill install -t copilot      # only one
+aj skill install -s project      # ./.copilot/skills, ./.claude/skills
+aj skill show                    # print the bundled SKILL.md
+```
+
+Targets the same conventional layout as other agent skills:
+`~/.copilot/skills/aj/SKILL.md` and `~/.claude/skills/aj/SKILL.md`.
