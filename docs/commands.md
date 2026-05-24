@@ -91,5 +91,17 @@ aj skill install -s project      # ./.copilot/skills, ./.claude/skills
 aj skill show                    # print the bundled SKILL.md
 ```
 
-Targets the same conventional layout as other agent skills:
-`~/.copilot/skills/aj/SKILL.md` and `~/.claude/skills/aj/SKILL.md`.
+Targets the conventional layout: `~/.copilot/skills/aj/SKILL.md` and
+`~/.claude/skills/aj/SKILL.md`.
+
+**Run `aj init` first.** The skill assumes `.azure_jobs/aj_config.json`
+and at least one template exist — `aj init` is interactive (picks a
+workspace) so the agent does not run it for you.
+
+Example prompt once the skill is installed:
+
+> *"Submit a single-GPU smoke-test Azure ML job on `gpu-a100` that prints
+> all `AJ_*` env vars."*
+
+The agent will write a one-liner `smoke.sh` and run
+`aj run -t gpu-a100 -n 1 -p 1 smoke.sh`.

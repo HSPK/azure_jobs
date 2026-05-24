@@ -513,3 +513,21 @@ aj dash                       # TUI dashboard
 
 For automation, pass `--json` to any command — every command emits one
 envelope with a `kind=…` discriminator, safe to pipe into `jq`.
+
+## Bonus — let an agent drive `aj`
+
+Once you've completed `aj init` for a workspace, install the bundled
+agent skill so Copilot / Claude Code can call `aj` for you:
+
+```bash
+aj skill install                   # ~/.copilot/skills + ~/.claude/skills
+```
+
+Then ask in natural language, e.g.:
+
+> *"Submit a single-GPU smoke-test Azure ML job on `gpu-a100` that
+> prints all `AJ_*` env vars."*
+
+The agent translates that into a one-line `smoke.sh` and
+`aj run -t gpu-a100 -n 1 -p 1 smoke.sh`. See
+[commands.md](commands.md#agent-skill) for details.

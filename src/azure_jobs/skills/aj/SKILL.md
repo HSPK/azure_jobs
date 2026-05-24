@@ -33,14 +33,38 @@ needed.
 
 ## How to use this skill
 
-1. Identify intent (submit / inspect / quota / template / dashboard).
-2. If a template name is needed, run `aj template list` first.
-3. Use `--json` on any command for machine-readable output:
+1. **Prerequisite — `aj init` must have already been run** in the repo
+   (creates `.azure_jobs/aj_config.json` with the active workspace, plus
+   `template/`). If `.azure_jobs/` is missing, stop and instruct the user
+   to run `aj init` themselves — it is interactive and picks a workspace,
+   so the agent must not run it.
+2. Identify intent (submit / inspect / quota / template / dashboard).
+3. If a template name is needed, run `aj template list` first.
+4. Use `--json` on any command for machine-readable output:
    ```bash
    aj job list --json | jq '.rows[] | select(.status=="Running")'
    ```
-4. Prefer the SDK (`from azure_jobs import ...`) when scripting more than
+5. Prefer the SDK (`from azure_jobs import ...`) when scripting more than
    2–3 chained commands.
+
+## Example prompts
+
+> "Submit a single-GPU smoke-test AML job on `gpu-a100` that prints all
+> `AJ_*` env vars."
+
+```bash
+cat > smoke.sh <<'EOF'
+#!/bin/bash
+env | grep ^AJ_ | sort
+EOF
+aj run -t gpu-a100 -n 1 -p 1 smoke.sh
+```
+
+> "Show me running jobs in this workspace."
+
+```bash
+aj job list -s Running
+```
 
 ## Setup
 
