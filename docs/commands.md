@@ -50,6 +50,8 @@ aj ds list                       # datastores
 aj ds show <name>
 aj image list                    # Singularity curated images
 aj exp list                      # experiments (aggregated from jobs)
+aj uai list                      # user-assigned managed identities
+aj sa list                       # storage accounts in the active subscription
 ```
 
 ## Code upload preview

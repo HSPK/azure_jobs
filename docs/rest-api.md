@@ -4,46 +4,72 @@
 
 ## Auth
 
-`AzureCliCredential` from `azure-identity`. Tokens cached, refreshed 60 s early.
+`AzureCliCredential` from `azure-identity`. Tokens cached per scope, refreshed
+60 s early.
 
 | Plane | Scope | Used for |
 |-------|-------|----------|
 | ARM | `https://management.azure.com/.default` | jobs, environments, datastores, computes, Resource Graph |
-| Data | from workspace `discoveryUrl` (`https://ml.azure.com/.default`) | Run History (logs) |
+| Data | `https://ml.azure.com/.default` (China: `*.cn`) | Run History (logs, error details) |
+| Storage | `https://storage.azure.com/.default` | Blob upload AAD fallback |
 
-China cloud auto-detected from `*.cn` URLs (scope + blob host switch).
+China cloud auto-detected from `*.cn` URLs (data-plane scope + blob host
+switch).
 
 ## Clients
 
-`core/az_client/` exposes:
+`core/az_client/` exposes two namespaced clients on top of a shared
+`AuthSession` (retry, token cache, `raise_for_rest_error`).
 
-**`AzureARMClient`** — cross-subscription:
+### `AzureARMClient` — subscription-wide
 
-| Method | Endpoint |
-|--------|----------|
-| `list_subscriptions()` | `GET /subscriptions` |
-| `resource_graph_query(query, subs)` | `POST /providers/Microsoft.ResourceGraph/resources` |
-| `vc.list(subscription_ids=None, *, with_raw=False)` | Resource Graph (`microsoft.machinelearningservices/virtualclusters`) |
-| `list_workspace_computes(sub, rg, ws)` | `GET .../workspaces/{ws}/computes` |
+| Namespace · method | Endpoint |
+|--------------------|----------|
+| `subscriptions.list()` | `GET /subscriptions` |
+| `graph.query(query, subs)` | `POST /providers/Microsoft.ResourceGraph/resources` |
+| `vc.list(sub_ids=None, *, with_raw=False)` | Resource Graph (`microsoft.machinelearningservices/virtualclusters`) |
+| `vc.get(sub, rg, name)` | `GET .../virtualClusters/{name}` |
+| `vc.quota.list()` / `vc.quota.get_by_name(name)` | Reads `properties.managedQuotas` |
+| `workspace.list()` / `workspace.get(name)` | Resource Graph |
+| `compute.list(sub, rg, ws)` / `compute.get(...)` | `GET .../workspaces/{ws}/computes` |
+| `compute.list_all(workspaces)` | Parallel fan-out |
+| `identity.list(sub, rg=None)` | User-assigned managed identities |
+| `storage.list(sub)` | Storage accounts |
+| `instance_types.list(sub, location)` | Singularity instance types |
 
-**`AzureMLClient`** — workspace-scoped (api-version `2024-04-01`). Composed of namespaces:
+`vc.list(..., with_raw=True)` additionally returns the raw GraphQL row for
+quota parsing. `parse_managed_quotas(raw)` is a pure function and lives in
+`arm/vc.py`.
+
+### `AzureMLClient` — workspace-scoped (api `2024-04-01`)
+
+Constructed with `WorkspaceCoords` (sub / rg / ws). Resolves `discoveryUrl`
+lazily on first data-plane call.
 
 ```python
 client.jobs.list(filters)                          # GET .../jobs
-client.jobs.get(name) / cancel(name)
+client.jobs.get(name)
+client.jobs.cancel(name)
 client.jobs.create_or_update(name, body)           # PUT .../jobs/{name}
+client.jobs.get_run_log_urls(name)                 # → logs.get_urls
 
 client.environments.list_versions(name)
 client.environments.create_or_update(name, ver, image)
 
-client.datastores.list() / create_or_update(...)
+client.datastores.list()
+client.datastores.create_or_update(name, body)
 client.datastores.list_secrets(name)               # SAS / account key
 
 client.blob.upload_code(code_dir, ignore_patterns, extra_files, on_progress)
 # walk_code → compute_code_hash → PUT blob → register code version
 
-client.run_history.get_log_urls(job_name)          # data plane
+client.logs.get_urls(job_name)                     # data plane (run-history)
+client.logs.tail(url, *, bytes_back=65536)
+client.logs.poll(url, *, offset)
 ```
+
+`extract.py` holds the pure REST→`JobInfo` parsers; `context.py` owns
+`RestContext` (auth + coords + dual scopes).
 
 ## Job body
 
@@ -65,6 +91,15 @@ client.run_history.get_log_urls(job_name)          # data plane
 }
 ```
 
+## Blob upload
+
+`client.blob.upload_code(...)` walks the code dir (`utils/fs.walk_code`),
+computes a content-addressed sha256, then tries credentials in order: SAS →
+shared key → AAD bearer. Shared-key is skipped if the account disables it;
+a mid-upload 403 retries once with bearer. The blob path is keyed by hash —
+identical inputs reuse the prior upload.
+
 ## Dependencies
 
-`click`, `pyyaml`, `rich`, `textual`, `azure-identity`, `requests`. Nothing else.
+`click`, `pyyaml`, `rich`, `textual`, `azure-identity`, `requests`. Nothing
+else at runtime.

@@ -23,7 +23,7 @@ from azure_jobs import (
 |--------|---------|
 | `Template.from_conf_path(path)` | Load a YAML template (resolving its `base` chain) into a `Template` |
 | `Template.from_dict(conf)` | Build a `Template` from an already-merged dict |
-| `get_workspace_config()` | Read `~/.azure_jobs/config.toml` → `AJWorkspace` |
+| `get_workspace_config()` | Read `.azure_jobs/aj_config.json` → `AJWorkspace` |
 | `build_submit_request(template, *, name, sid, sku, user_command, user_args, workspace, code_dir=None, ...)` | Translate `Template` + CLI-equivalent params → `SubmitRequest`. `code_dir` defaults to `os.getcwd()` and is the local directory backends upload from. |
 | `SubmitRequest` | Backend-agnostic, normalized job spec |
 | `submit_via_native(request, *, on_event=None)` | Submit to AML / Singularity via REST |
