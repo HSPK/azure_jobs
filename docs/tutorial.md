@@ -516,12 +516,15 @@ envelope with a `kind=…` discriminator, safe to pipe into `jq`.
 
 ## Bonus — let an agent drive `aj`
 
-Once you've completed `aj init` for a workspace, install the bundled
-agent skill so Copilot / Claude Code can call `aj` for you:
+Install the bundled agent skill so Copilot / Claude Code can call `aj`
+for you:
 
 ```bash
 aj skill install                   # ~/.copilot/skills + ~/.claude/skills
 ```
+
+Read-only commands (`aj job list`, `aj quota list`, …) work right away.
+For `aj run`, finish `aj init` first so a workspace + template exist.
 
 Then ask in natural language, e.g.:
 

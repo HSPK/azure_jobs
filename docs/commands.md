@@ -94,9 +94,10 @@ aj skill show                    # print the bundled SKILL.md
 Targets the conventional layout: `~/.copilot/skills/aj/SKILL.md` and
 `~/.claude/skills/aj/SKILL.md`.
 
-**Run `aj init` first.** The skill assumes `.azure_jobs/aj_config.json`
-and at least one template exist — `aj init` is interactive (picks a
-workspace) so the agent does not run it for you.
+**`aj init` is only needed before submitting jobs** (it registers the
+active workspace + at least one template). Read-only commands like
+`aj job list` or `aj quota list` work straight away. `aj init` is
+interactive (picks a workspace), so the agent will not run it for you.
 
 Example prompt once the skill is installed:
 

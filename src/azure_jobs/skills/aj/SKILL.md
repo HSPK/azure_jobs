@@ -33,11 +33,12 @@ needed.
 
 ## How to use this skill
 
-1. **Prerequisite — `aj init` must have already been run** in the repo
-   (creates `.azure_jobs/aj_config.json` with the active workspace, plus
-   `template/`). If `.azure_jobs/` is missing, stop and instruct the user
-   to run `aj init` themselves — it is interactive and picks a workspace,
-   so the agent must not run it.
+1. **`aj init` is only needed before `aj run`** (to register the active
+   workspace + at least one template). Read-only commands (`job list /
+   show / logs / stats`, `quota`, `sku`, `ws list`, `env list`,
+   `ds list`, `exp list`, `template list`, …) work without it. If the
+   user wants to submit and `.azure_jobs/` is missing, stop and ask them
+   to run `aj init` themselves — it is interactive (picks a workspace).
 2. Identify intent (submit / inspect / quota / template / dashboard).
 3. If a template name is needed, run `aj template list` first.
 4. Use `--json` on any command for machine-readable output:
