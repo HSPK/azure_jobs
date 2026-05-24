@@ -371,10 +371,7 @@ def _intro() -> None:
     console.print(
         Panel.fit(
             "[bold]aj template init[/bold]\n"
-            "[dim]Interactive wizard for bootstrapping leaf templates.[/dim]\n\n"
-            "Steps: [cyan]account · environment · storage · workspace[/cyan]\n"
-            "[dim]Then one leaf is auto-generated per (VC, accelerator, memory) "
-            "combo with positive user quota.[/dim]",
+            "[dim]Interactive wizard for bootstrapping leaf templates.[/dim]",
             border_style="cyan",
             padding=(1, 4),
         )
