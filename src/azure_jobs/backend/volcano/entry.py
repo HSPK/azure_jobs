@@ -10,7 +10,7 @@ from typing import Callable
 
 import yaml
 
-from ...models import SubmitEvent, SubmitRequest, SubmitResult
+from azure_jobs.job.models import SubmitEvent, SubmitRequest, SubmitResult
 from .config import build_volcano_config_from_request, build_volcano_job
 from .upload import upload_code_to_pvc
 

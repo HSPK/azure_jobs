@@ -2,16 +2,15 @@
 
 from __future__ import annotations
 
-import re
 import shutil
 import subprocess
 from pathlib import Path
 from typing import Callable
 
-import yaml
+from azure_jobs.job.models import SubmitEvent, SubmitRequest, SubmitResult
 
-from .dispatch import register_backend
-from .models import SubmitEvent, SubmitRequest, SubmitResult
+from . import register_backend
+
 
 def amlt_available() -> bool:
     """Check if amlt CLI is installed and a project is configured."""
@@ -19,23 +18,6 @@ def amlt_available() -> bool:
         return False
     return Path(".amltconfig").exists()
 
-def clean_config_for_amlt(fp: Path) -> None:
-    """Rewrite a submission YAML to be amlt-compatible."""
-    conf = yaml.safe_load(fp.read_text()) or {}
-
-    target = conf.get("target")
-    if isinstance(target, dict):
-        for key in ("subscription_id", "resource_group"):
-            target.pop(key, None)
-
-    text = yaml.dump(conf, default_flow_style=False)
-
-    text = re.sub(
-        r"\$\$|\$(?!CONFIG_DIR\b)",
-        lambda m: m.group() if len(m.group()) == 2 else "$$",
-        text,
-    )
-    fp.write_text(text)
 
 def extract_portal_url(output: str) -> str:
     """Extract Azure portal URL from amlt run output, if present."""
@@ -46,6 +28,7 @@ def extract_portal_url(output: str) -> str:
                 if token.startswith("http"):
                     return token
     return ""
+
 
 def submit_via_amlt(
     request: SubmitRequest,
@@ -120,5 +103,5 @@ def submit_via_amlt(
         emit(SubmitEvent(kind="error", detail=msg))
         return SubmitResult(job_name=job_name, status="failed", error=msg)
 
-register_backend("amlt", submit_via_amlt, label="amlt")
 
+register_backend("amlt", submit_via_amlt, label="amlt")

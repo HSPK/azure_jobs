@@ -8,7 +8,7 @@ from click.testing import CliRunner
 
 from azure_jobs.cli import main
 from azure_jobs.journal import SubmissionRecord
-from azure_jobs.submit import SubmitRequest
+from azure_jobs.job import SubmitRequest
 
 from .helpers import MINIMAL_JOB_CONF, write_template
 

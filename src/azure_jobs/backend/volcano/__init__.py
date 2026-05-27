@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from ...dispatch import register_backend
+from .. import register_backend
 from .config import (
     VolcanoConfig,
     build_volcano_config_from_request,
     build_volcano_job,
 )
-from .orchestrate import submit_via_volcano
+from .entry import submit_via_volcano
 from .upload import upload_code_to_pvc
 
 register_backend("volcano", submit_via_volcano, label="Volcano")

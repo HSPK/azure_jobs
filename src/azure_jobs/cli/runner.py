@@ -8,7 +8,7 @@ import click
 
 from azure_jobs.errors import parse_exception_message
 from azure_jobs.journal import SubmissionRecord, log_record
-from azure_jobs.submit.models import SubmitEvent, SubmitResult
+from azure_jobs.job.models import SubmitEvent, SubmitResult
 from azure_jobs.utils.ui import (
     console,
     get_output_mode,

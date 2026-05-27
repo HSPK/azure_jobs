@@ -15,13 +15,10 @@ from azure_jobs.config import (
 )
 from azure_jobs.errors import AJError
 from azure_jobs.journal import SubmissionRecord
-from azure_jobs.submit import (
-    amlt_available,
-    build_submit_request,
-    get_backend,
-    materialise_submission,
-)
-from azure_jobs.submit.native.sku import resolve_sku
+from azure_jobs.backend import get_backend
+from azure_jobs.backend.amlt import amlt_available
+from azure_jobs.backend.azureml.sku import resolve_sku
+from azure_jobs.job import build_submit_request, materialise_submission
 from azure_jobs.template import Template
 from azure_jobs.utils.naming import resolve_name
 from azure_jobs.utils.ui import show_dry_run_result, show_submission_preview

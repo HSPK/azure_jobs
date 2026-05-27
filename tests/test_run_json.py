@@ -8,7 +8,7 @@ import sys
 from unittest.mock import MagicMock
 
 from azure_jobs.journal import SubmissionRecord
-from azure_jobs.submit.models import SubmitRequest, SubmitResult
+from azure_jobs.job.models import SubmitRequest, SubmitResult
 from azure_jobs.utils.ui import (
     set_output_mode,
     show_dry_run_result,

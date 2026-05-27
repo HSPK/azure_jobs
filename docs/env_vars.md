@@ -24,7 +24,7 @@ not be renamed or removed without a major version bump.
 
 ## Source of truth
 
-These are populated in `submit/build.py:build_submit_request`. Tests
+These are populated in `job/build.py:build_submit_request`. Tests
 in `tests/test_submit.py` lock the contract.
 
 ## Example use in a training script

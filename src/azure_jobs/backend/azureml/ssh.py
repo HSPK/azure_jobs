@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 from typing import Callable
 
-from ..models import SubmitEvent
+from azure_jobs.job.models import SubmitEvent
 
 log = logging.getLogger(__name__)
 

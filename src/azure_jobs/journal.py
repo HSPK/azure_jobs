@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from . import const
-from .submit.models import SubmitRequest
+from .job.models import SubmitRequest
 
 
 @dataclass

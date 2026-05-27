@@ -14,11 +14,11 @@ if TYPE_CHECKING:
 from azure_jobs.az_client import AzureARMClient
 
 from ...errors import AJError, parse_exception_message
-from ..models import SubmitEvent, SubmitRequest, SubmitResult
-from .coords import resolve_target
+from azure_jobs.job.models import SubmitEvent, SubmitRequest, SubmitResult
+from .bootstrap import RUNNER_FILENAME, generate_runner_script
 from .image import _build_environment
-from .job_body import _build_env_vars, _build_job_body, _build_tags
-from .runner import RUNNER_FILENAME, generate_runner_script
+from .payload import _build_env_vars, _build_job_body, _build_tags
+from .workspace import resolve_target
 from .ssh import _collect_ssh_files
 from .storage import _build_storage_mounts
 from .target import (

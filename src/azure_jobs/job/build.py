@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 from azure_jobs.utils.fs import read_ignore_file
 
 from .models import AmltOpts, SingularityOpts, StorageMount, SubmitRequest, VolcanoOpts
-from .script_runner import build_user_command
+from .command import build_user_command
 
 if TYPE_CHECKING:
     from ..template import Template

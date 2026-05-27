@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
-from ..models import SubmitRequest
+from azure_jobs.job.models import SubmitRequest
 from .image import _SING_IMAGE_PREFIX
 
 if TYPE_CHECKING:

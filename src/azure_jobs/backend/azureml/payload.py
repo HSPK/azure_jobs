@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..models import SubmitRequest
-from .runner import RUNNER_FILENAME
+from azure_jobs.job.models import SubmitRequest
+from .bootstrap import RUNNER_FILENAME
 
 _SING_DEFAULT_ENV = {
     "SUDO": "sudo",

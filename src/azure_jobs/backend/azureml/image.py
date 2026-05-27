@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from ..models import SubmitRequest
+from azure_jobs.job.models import SubmitRequest
 
 if TYPE_CHECKING:
     from azure_jobs.az_client import AzureMLClient

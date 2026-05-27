@@ -11,20 +11,20 @@ except ImportError:
 
 _LAZY_ATTRS: dict[str, tuple[str, str]] = {
     "Template": ("azure_jobs.template", "Template"),
-    "StorageMount": ("azure_jobs.submit", "StorageMount"),
-    "SubmitRequest": ("azure_jobs.submit", "SubmitRequest"),
-    "SubmitResult": ("azure_jobs.submit", "SubmitResult"),
-    "SubmitEvent": ("azure_jobs.submit", "SubmitEvent"),
-    "build_submit_request": ("azure_jobs.submit", "build_submit_request"),
-    "render_amlt_config": ("azure_jobs.submit", "render_amlt_config"),
-    "materialise_submission": ("azure_jobs.submit", "materialise_submission"),
-    "submit_via": ("azure_jobs.submit", "submit_via"),
-    "submit_via_native": ("azure_jobs.submit", "submit_via_native"),
-    "submit_via_volcano": ("azure_jobs.submit", "submit_via_volcano"),
-    "submit_via_amlt": ("azure_jobs.submit", "submit_via_amlt"),
+    "StorageMount": ("azure_jobs.job", "StorageMount"),
+    "SubmitRequest": ("azure_jobs.job", "SubmitRequest"),
+    "SubmitResult": ("azure_jobs.job", "SubmitResult"),
+    "SubmitEvent": ("azure_jobs.job", "SubmitEvent"),
+    "build_submit_request": ("azure_jobs.job", "build_submit_request"),
+    "render_amlt_config": ("azure_jobs.job", "render_amlt_config"),
+    "materialise_submission": ("azure_jobs.job", "materialise_submission"),
+    "submit_via": ("azure_jobs.backend", "submit_via"),
+    "submit_via_native": ("azure_jobs.backend", "submit_via_native"),
+    "submit_via_volcano": ("azure_jobs.backend", "submit_via_volcano"),
+    "submit_via_amlt": ("azure_jobs.backend", "submit_via_amlt"),
     "submit_and_record": ("azure_jobs.cli.runner", "submit_and_record"),
-    "register_backend": ("azure_jobs.submit", "register_backend"),
-    "list_backends": ("azure_jobs.submit", "list_backends"),
+    "register_backend": ("azure_jobs.backend", "register_backend"),
+    "list_backends": ("azure_jobs.backend", "list_backends"),
     "SubmissionRecord": ("azure_jobs.journal", "SubmissionRecord"),
     "log_record": ("azure_jobs.journal", "log_record"),
     "read_records": ("azure_jobs.journal", "read_records"),
@@ -54,20 +54,22 @@ if TYPE_CHECKING:
         read_records,
         resolve_short_id,
     )
-    from azure_jobs.submit import (
+    from azure_jobs.backend import (
+        list_backends,
+        register_backend,
+        submit_via,
+        submit_via_amlt,
+        submit_via_native,
+        submit_via_volcano,
+    )
+    from azure_jobs.job import (
         StorageMount,
         SubmitEvent,
         SubmitRequest,
         SubmitResult,
         build_submit_request,
-        list_backends,
         materialise_submission,
-        register_backend,
         render_amlt_config,
-        submit_via,
-        submit_via_amlt,
-        submit_via_native,
-        submit_via_volcano,
     )
     from azure_jobs.template import Template
 

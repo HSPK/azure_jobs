@@ -7,7 +7,8 @@ src/azure_jobs/
 ├── cli/             # Click commands — thin orchestration over the sibling packages
 ├── template/        # YAML template loader, merge engine, validator
 ├── config/          # aj_config.json (workspace, defaults, dashboard)
-├── submit/          # Submission engine + backends
+├── job/             # SubmitRequest spec lifecycle: build + render + materialise
+├── backend/         # Submission backends (amlt, azureml, volcano)
 ├── az_client/       # Pure-REST Azure clients (ARM + ML)
 ├── tui/             # `aj dash` — Textual dashboard
 ├── utils/           # ui, fs, ignore, time, text, dataclass helpers
@@ -21,24 +22,28 @@ The TUI is one more consumer with its own state and controllers.
 
 ## Submission engine
 
-`submit/` decomposes into a backend-agnostic core plus two submission methods.
-The native method covers three target clusters: `aml`/`sing` share the same
-top-level files; `volcano` is its own subpackage. All build a `SubmitRequest`,
-run it, return a `SubmitResult`, and emit `SubmitEvent`s for progress UI.
+The submission engine splits into two peers: `job/` owns the pure spec
+lifecycle (data model + serialization), and `backend/` owns the three
+submission executors. Every backend self-registers under a `service` name
+(`aml`, `sing`, `amlt`, `volcano`), takes a `SubmitRequest`, returns a
+`SubmitResult`, and emits `SubmitEvent`s for progress UI.
 
 ```
-submit/
+job/                 # data + spec lifecycle, no network I/O
 ├── models.py        # SubmitRequest / SubmitResult / SubmitEvent / *Opts
 ├── build.py         # Template + CLI params → SubmitRequest
-├── script_runner.py # `.py` → `uv run`, `.sh` → `bash`
+├── command.py       # `.py` → `uv run`, `.sh` → `bash`
 ├── render.py        # SubmitRequest → amlt-style YAML
-├── materialise.py   # Write YAML to AJ_SUBMISSION_HOME; stamp submission_path
-├── dispatch.py      # Backend registry (register_backend / get_backend)
+└── materialise.py   # Write YAML to AJ_SUBMISSION_HOME; stamp submission_path
+
+backend/             # submission backends + registry
+├── __init__.py      # BackendEntry / register_backend / get_backend / submit_via
 ├── amlt.py          # Shells out to the amlt CLI
-└── native/          # We build the REST request ourselves
-    ├── __init__.py  # Service router + registers `aml`/`sing` backends
-    ├── coords.py, orchestrate.py, sku.py, target.py, …  # aml/sing shared
-    └── volcano/     # K8s Volcano target via kubectl
+├── azureml/         # Pure-REST native submit for `aml` and `sing`
+│   ├── __init__.py  # Registers aml/sing via lazy trampoline
+│   └── workspace.py, entry.py, sku.py, target.py, …
+└── volcano/         # K8s Volcano target via kubectl
+    └── entry.py, config.py, upload.py, constants.py
 ```
 
 `SubmissionRecord` and the append-only `record.jsonl` I/O live in
@@ -46,8 +51,8 @@ submit/
 
 Every backend exposes `(request, *, on_event) -> SubmitResult` and self-registers
 via `register_backend(...)` at import time. The CLI dispatches by
-`request.service` — `aml`/`sing` → native (shared files), `volcano` → native(volcano),
-`amlt` → amlt (also forced when `--amlt` is passed).
+`request.service` — `aml`/`sing` → `backend.azureml`, `volcano` →
+`backend.volcano`, `amlt` → `backend.amlt` (also forced when `--amlt` is passed).
 
 ## Submit flow
 
@@ -59,16 +64,17 @@ aj run -t gpu -n 4 -p 8 train.py
   ├─ apply -n / -p / --ppn
   ├─ build_submit_request →   SubmitRequest
   ├─ get_backend(service)
-  │     native  → resolve target → upload code → PUT /jobs/{name}
-  │              (aml/sing via shared native files, volcano via kubectl)
+  │     azureml → resolve target → upload code → PUT /jobs/{name}
+  │              (`aml`/`sing` share backend.azureml)
+  │     volcano → render manifest → upload code → kubectl apply
   │     amlt    → materialise YAML → exec amlt run
   └─ log_record() →           append SubmissionRecord to record.jsonl
 ```
 
-The native backend orders work as **read-only validation first, remote writes
-last**: resolve target → auth → command + SKU resolve → Singularity UAI
-preflight → assemble runner script and ssh files → only then register
-environment, mount storage, upload code, submit.
+The native backend (`backend.azureml`) orders work as **read-only validation
+first, remote writes last**: resolve target → auth → command + SKU resolve →
+Singularity UAI preflight → assemble runner script and ssh files → only then
+register environment, mount storage, upload code, submit.
 
 ## Code upload
 

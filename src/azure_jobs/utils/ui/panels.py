@@ -20,7 +20,7 @@ from .render import emit_json, get_output_mode
 
 if TYPE_CHECKING:
     from azure_jobs.journal import SubmissionRecord
-    from azure_jobs.submit import SubmitRequest, SubmitResult
+    from azure_jobs.job import SubmitRequest, SubmitResult
 
 def _request_payload(request: SubmitRequest) -> dict[str, Any]:
     return {
@@ -166,7 +166,7 @@ def show_dry_run_result(request: SubmitRequest) -> None:
     """Emit a dry-run envelope (JSON mode only)."""
     if get_output_mode() != "json":
         return
-    from azure_jobs.submit import render_amlt_config
+    from azure_jobs.job import render_amlt_config
 
     emit_json(
         {
