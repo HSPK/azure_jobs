@@ -1,4 +1,4 @@
-"""Persist a :class:SubmitRequest as an amlt-style YAML on disk."""
+"""Persist a :class:JobSpec as an amlt-style YAML on disk."""
 
 from __future__ import annotations
 
@@ -7,11 +7,11 @@ from pathlib import Path
 import yaml
 
 from .. import const
-from .models import SubmitRequest
-from .render import render_amlt_config
+from .spec import JobSpec
+from .render import render_amlt_yaml
 
-def materialise_submission(
-    request: SubmitRequest,
+def write_amlt_yaml(
+    request: JobSpec,
     *,
     dry_run: bool = False,
 ) -> Path:
@@ -20,7 +20,7 @@ def materialise_submission(
     submission_fp = home / f"{request.sid}.yaml"
     submission_fp.parent.mkdir(parents=True, exist_ok=True)
 
-    config = render_amlt_config(request)
+    config = render_amlt_yaml(request)
     with open(submission_fp, "w") as f:
         yaml.dump(config, f, default_flow_style=False)
 

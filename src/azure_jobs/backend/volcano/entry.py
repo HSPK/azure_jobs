@@ -10,21 +10,21 @@ from typing import Callable
 
 import yaml
 
-from azure_jobs.job.models import SubmitEvent, SubmitRequest, SubmitResult
+from azure_jobs.job.spec import JobEvent, JobSpec, JobResult
 from .config import build_volcano_config_from_request, build_volcano_job
 from .upload import upload_code_to_pvc
 
 def submit_via_volcano(
-    request: SubmitRequest,
+    request: JobSpec,
     *,
-    on_event: Callable[[SubmitEvent], None] | None = None,
-) -> SubmitResult:
+    on_event: Callable[[JobEvent], None] | None = None,
+) -> JobResult:
     """Submit a job to Kubernetes via Volcano."""
     emit = on_event or (lambda _ev: None)
 
     if not shutil.which("kubectl"):
-        emit(SubmitEvent(kind="error", detail="kubectl not found in PATH"))
-        return SubmitResult(
+        emit(JobEvent(kind="error", detail="kubectl not found in PATH"))
+        return JobResult(
             job_name=request.name,
             status="failed",
             error="kubectl not found in PATH",
@@ -38,14 +38,14 @@ def submit_via_volcano(
         ok = upload_code_to_pvc(cfg, namespace=namespace, on_event=emit)
         if not ok:
             err = "Code upload to PVC failed"
-            return SubmitResult(
+            return JobResult(
                 job_name=request.name,
                 status="failed",
                 error=err,
                 note=err,
             )
 
-    emit(SubmitEvent(kind="submit", detail="kubectl create"))
+    emit(JobEvent(kind="submit", detail="kubectl create"))
 
     job_yaml = yaml.dump(job_spec, default_flow_style=False)
     with tempfile.NamedTemporaryFile(
@@ -67,16 +67,16 @@ def submit_via_volcano(
         )
         if result.returncode == 0:
             output = result.stdout.strip()
-            emit(SubmitEvent(kind="done", detail=output[:80] if output else ""))
-            return SubmitResult(
+            emit(JobEvent(kind="done", detail=output[:80] if output else ""))
+            return JobResult(
                 job_name=request.name,
                 azure_name=request.name,
                 status="submitted",
                 note=output,
             )
         err = result.stderr.strip() or result.stdout.strip()
-        emit(SubmitEvent(kind="error", detail=err[:120]))
-        return SubmitResult(
+        emit(JobEvent(kind="error", detail=err[:120]))
+        return JobResult(
             job_name=request.name,
             status="failed",
             error=err,

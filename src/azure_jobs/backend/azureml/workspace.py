@@ -1,11 +1,11 @@
-"""Azure-side coordinate resolution for a :class:SubmitRequest."""
+"""Azure-side coordinate resolution for a :class:JobSpec."""
 
 from __future__ import annotations
 
 import logging
 from typing import TYPE_CHECKING
 
-from azure_jobs.job.models import SubmitRequest
+from azure_jobs.job.spec import JobSpec
 
 if TYPE_CHECKING:
     from ...az_client import AzureARMClient, VCInfo
@@ -23,7 +23,7 @@ def _warn_mismatch(label: str, requested: str, actual: str) -> None:
         )
 
 def resolve_target(
-    request: SubmitRequest, *, arm_client: AzureARMClient
+    request: JobSpec, *, arm_client: AzureARMClient
 ) -> VCInfo | None:
     """Resolve Azure coordinates for *request*'s compute target."""
     if request.service not in ("sing", "aml") or not request.compute:

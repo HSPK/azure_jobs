@@ -8,12 +8,12 @@ from dataclasses import dataclass
 from typing import Any
 
 from . import const
-from .job.models import SubmitRequest
+from .job.spec import JobSpec
 
 
 @dataclass
-class SubmissionRecord:
-    request: SubmitRequest
+class JobRecord:
+    request: JobSpec
     created_at: str
     status: str
     portal: str = ""
@@ -21,7 +21,7 @@ class SubmissionRecord:
     azure_name: str = ""
 
 
-def log_record(record: SubmissionRecord) -> None:
+def log_record(record: JobRecord) -> None:
     const.AJ_RECORD.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "request": record.request.to_dict(),
@@ -84,7 +84,7 @@ def _normalize_record(record: dict[str, Any]) -> dict[str, Any]:
 
 
 __all__ = [
-    "SubmissionRecord",
+    "JobRecord",
     "log_record",
     "read_records",
     "resolve_short_id",

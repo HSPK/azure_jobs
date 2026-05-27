@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from azure_jobs.job.models import SubmitRequest
+from azure_jobs.job.spec import JobSpec
 from .bootstrap import RUNNER_FILENAME
 
 _SING_DEFAULT_ENV = {
@@ -15,7 +15,7 @@ _SING_DEFAULT_ENV = {
 }
 
 def _build_env_vars(
-    request: SubmitRequest, dataref_env: dict[str, str]
+    request: JobSpec, dataref_env: dict[str, str]
 ) -> dict[str, str]:
     env_vars = dict(request.env_vars)
     if request.shm_size:
@@ -36,7 +36,7 @@ def _build_tags(tag_strings: list[str]) -> dict[str, str | None]:
     return tags
 
 def _build_job_body(
-    request: SubmitRequest,
+    request: JobSpec,
     *,
     env_id: str,
     code_id: str,

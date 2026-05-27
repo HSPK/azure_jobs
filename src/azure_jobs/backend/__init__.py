@@ -6,7 +6,7 @@ Three sibling backends are available, each self-registering at import time:
 - :mod:`azure_jobs.backend.azureml` — native REST submission to Azure ML / Singularity
 - :mod:`azure_jobs.backend.volcano` — Volcano/Kubernetes submission via ``kubectl``
 
-The CLI dispatches on :attr:`SubmitRequest.service` via :func:`submit_via`.
+The CLI dispatches on :attr:`JobSpec.service` via :func:`submit_via`.
 """
 
 from __future__ import annotations
@@ -15,9 +15,9 @@ from dataclasses import dataclass
 from typing import Callable, Optional
 
 from azure_jobs.errors import BackendError
-from azure_jobs.job.models import SubmitEvent, SubmitRequest, SubmitResult
+from azure_jobs.job.spec import JobEvent, JobSpec, JobResult
 
-SubmitFn = Callable[..., SubmitResult]
+SubmitFn = Callable[..., JobResult]
 
 
 @dataclass(frozen=True)
@@ -54,10 +54,10 @@ def list_backends() -> list[BackendEntry]:
 
 
 def submit_via(
-    request: SubmitRequest,
+    request: JobSpec,
     *,
-    on_event: Optional[Callable[[SubmitEvent], None]] = None,
-) -> SubmitResult:
+    on_event: Optional[Callable[[JobEvent], None]] = None,
+) -> JobResult:
     """Dispatch a submission to the backend registered for ``request.service``."""
     return get_backend(request.service).fn(request, on_event=on_event)
 
@@ -65,23 +65,11 @@ def submit_via(
 # Importing the three backends has the side-effect of registering them.
 from . import amlt, azureml, volcano  # noqa: E402,F401
 
-
-def submit_via_native(
-    request: SubmitRequest,
-    *,
-    on_event: Optional[Callable[[SubmitEvent], None]] = None,
-) -> SubmitResult:
-    """Back-compat alias for :func:`submit_via`.
-
-    Kept so existing callers of ``submit_via_native`` keep working after the
-    ``submit/native/`` subpackage was retired.
-    """
-    return submit_via(request, on_event=on_event)
-
-
-# Expose the per-backend entrypoint shortcuts for SDK back-compat.
+# Expose the amlt entrypoint at SDK-level: amlt is *not* dispatched via
+# ``spec.service`` (it's triggered by the ``--amlt`` CLI flag instead), so
+# callers need a direct handle. The aml/sing/volcano flows all go through
+# ``submit_via(spec)``.
 from .amlt import submit_via_amlt  # noqa: E402
-from .volcano import submit_via_volcano  # noqa: E402
 
 
 __all__ = [
@@ -91,6 +79,4 @@ __all__ = [
     "register_backend",
     "submit_via",
     "submit_via_amlt",
-    "submit_via_native",
-    "submit_via_volcano",
 ]

@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from azure_jobs.job.models import SubmitRequest
+from azure_jobs.job.spec import JobSpec
 
 RUNNER_FILENAME = "aj_runner.sh"
 
 def generate_runner_script(
-    request: SubmitRequest,
+    request: JobSpec,
     identity_client_id: str = "",
 ) -> str:
     """Generate the aj_runner.sh script that runs inside the container."""

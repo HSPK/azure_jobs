@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from azure_jobs.job.models import SubmitRequest
+from azure_jobs.job.spec import JobSpec
 from . import constants as C
 
 _DISTRIBUTED_PREAMBLE = Path(__file__).parent / "distributed_preamble.sh"
@@ -64,8 +64,8 @@ class VolcanoConfig:
     pvc_name: str = ""
     pvc_mount_dir: str = ""
 
-def build_volcano_config_from_request(request: SubmitRequest) -> VolcanoConfig:
-    """Translate a :class:SubmitRequest into a VolcanoConfig."""
+def build_volcano_config_from_request(request: JobSpec) -> VolcanoConfig:
+    """Translate a :class:JobSpec into a VolcanoConfig."""
     vol = request.volcano
     container_args = request.container_args or {}
     env_vars = dict(request.env_vars)

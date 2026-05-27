@@ -80,7 +80,7 @@ Positional args after the script are forwarded verbatim to your command.
 
 1. Resolve the template, walk the `base` chain, merge configs.
 2. Apply CLI overrides (`-n` / `-p` / `--ppn`).
-3. Build a normalized `SubmitRequest`.
+3. Build a normalized `JobSpec`.
 4. Dispatch by backend:
    - **native** — register environment (SHA-deduped) → upload code (content-addressed) → `PUT /jobs/{name}`.
    - **volcano** — render Volcano Job YAML → upload code to a PVC via `kubectl exec` + tar → `kubectl create`.
@@ -145,13 +145,13 @@ The same engine the CLI uses is exposed at the package root, so you can build an
 ```python
 from azure_jobs import (
     Template,
-    build_submit_request,
-    submit_via_native,   # also: submit_via_volcano, submit_via_amlt
+    build_job_spec,
+    submit_via,           # dispatches on spec.service; submit_via_amlt for the amlt CLI path
     get_workspace_config,
 )
 
 template = Template.from_conf_path(".azure_jobs/template/gpu.yaml")
-request = build_submit_request(
+spec = build_job_spec(
     template,
     name="my-job", sid="abc123", sku="2xA100-80GB",
     user_command="train.py", user_args=(),
@@ -159,7 +159,7 @@ request = build_submit_request(
     template_name="gpu", nodes=2, processes=8,
     code_dir="/path/to/project",  # defaults to os.getcwd()
 )
-result = submit_via_native(request)
+result = submit_via(spec)
 print(result.status, result.portal_url)
 ```
 

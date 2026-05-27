@@ -1,4 +1,4 @@
-"""Tests for aj job / aj list / SubmissionRecord (split from test_cli.py)."""
+"""Tests for aj job / aj list / JobRecord (split from test_cli.py)."""
 
 import json
 from unittest.mock import patch
@@ -7,16 +7,16 @@ import pytest
 from click.testing import CliRunner
 
 from azure_jobs.cli import main
-from azure_jobs.journal import SubmissionRecord
-from azure_jobs.job import SubmitRequest
+from azure_jobs.journal import JobRecord
+from azure_jobs.job import JobSpec
 
 from .helpers import MINIMAL_JOB_CONF, write_template
 
 
 class TestSubmissionRecord:
     def test_dataclass_fields(self):
-        rec = SubmissionRecord(
-            request=SubmitRequest(
+        rec = JobRecord(
+            request=JobSpec(
                 name="job",
                 sid="abc123",
                 template_name="gpu",

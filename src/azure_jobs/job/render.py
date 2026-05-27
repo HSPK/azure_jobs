@@ -1,4 +1,4 @@
-"""amlt-style YAML rendering for a :class:SubmitRequest."""
+"""amlt-style YAML rendering for a :class:JobSpec."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import re
 from dataclasses import asdict
 from typing import Any
 
-from .models import SubmitRequest
+from .spec import JobSpec
 
 _AMLT_PASSTHROUGH_VARS: frozenset[str] = frozenset({"CONFIG_DIR"})
 _AMLT_DOLLAR_RE = re.compile(
@@ -25,8 +25,8 @@ def _escape_amlt_dollars(value: Any) -> Any:
         )
     return value
 
-def render_amlt_config(request: SubmitRequest) -> dict[str, Any]:
-    """Reconstruct an amlt-style config dict from a SubmitRequest for display/save."""
+def render_amlt_yaml(request: JobSpec) -> dict[str, Any]:
+    """Reconstruct an amlt-style config dict from a JobSpec for display/save."""
     job: dict[str, Any] = {
         "name": request.name,
         "sku": request.sku,

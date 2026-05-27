@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 from azure_jobs.az_client import AzureARMClient
 
 from ...errors import AJError, parse_exception_message
-from azure_jobs.job.models import SubmitEvent, SubmitRequest, SubmitResult
+from azure_jobs.job.spec import JobEvent, JobSpec, JobResult
 from .bootstrap import RUNNER_FILENAME, generate_runner_script
 from .image import _build_environment
 from .payload import _build_env_vars, _build_job_body, _build_tags
@@ -33,7 +33,7 @@ log = logging.getLogger(__name__)
 
 __all__ = ["submit", "_get_rest_client", "_build_env_vars"]
 
-def _get_rest_client(request: SubmitRequest) -> AzureMLClient:
+def _get_rest_client(request: JobSpec) -> AzureMLClient:
     from azure_jobs.az_client import AzureMLClient
 
     return AzureMLClient(
@@ -43,31 +43,31 @@ def _get_rest_client(request: SubmitRequest) -> AzureMLClient:
     )
 
 def submit(
-    request: SubmitRequest,
+    request: JobSpec,
     *,
-    on_event: Callable[[SubmitEvent], None] | None = None,
-) -> SubmitResult:
+    on_event: Callable[[JobEvent], None] | None = None,
+) -> JobResult:
     """Submit a job to Azure ML via REST API."""
     emit = on_event or (lambda _ev: None)
     try:
         return _submit_impl(request, emit)
     except (AJError, requests.RequestException, OSError) as exc:
-        return SubmitResult(
+        return JobResult(
             job_name=request.name,
             status="failed",
             error=parse_exception_message(exc),
         )
 
 def _submit_impl(
-    request: SubmitRequest,
-    emit: Callable[[SubmitEvent], None],
-) -> SubmitResult:
+    request: JobSpec,
+    emit: Callable[[JobEvent], None],
+) -> JobResult:
     def _status(step: str, detail: str = "") -> None:
-        emit(SubmitEvent(kind=step, detail=detail))
+        emit(JobEvent(kind=step, detail=detail))
 
     def _on_upload(completed: int, total: int, skipped: int, current: str = "") -> None:
         emit(
-            SubmitEvent(
+            JobEvent(
                 kind="upload",
                 completed=completed,
                 total=total,
@@ -138,7 +138,7 @@ def _submit_impl(
     azure_name = returned_job.get("name", "") or request.name
     _status("done", f"Job {azure_name} submitted")
 
-    return SubmitResult(
+    return JobResult(
         job_name=request.name,
         azure_name=azure_name,
         status="submitted",

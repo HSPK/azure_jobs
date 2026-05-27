@@ -1,4 +1,4 @@
-"""Template + CLI args → :class:SubmitRequest translation."""
+"""Template + CLI args → :class:JobSpec translation."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 
 from azure_jobs.utils.fs import read_ignore_file
 
-from .models import AmltOpts, SingularityOpts, StorageMount, SubmitRequest, VolcanoOpts
+from .spec import AmltOpts, SingularityOpts, StorageMount, JobSpec, VolcanoOpts
 from .command import build_user_command
 
 if TYPE_CHECKING:
@@ -57,7 +57,7 @@ def _merge_env(user_env: dict[str, str], aj_env: dict[str, str]) -> dict[str, st
     merged.update(aj_env)
     return merged
 
-def build_submit_request(
+def build_job_spec(
     template: Template,
     *,
     name: str,
@@ -72,8 +72,8 @@ def build_submit_request(
     processes_per_node: int = 1,
     code_dir: str | None = None,
     description: str = "",
-) -> SubmitRequest:
-    """Build a SubmitRequest from a template + submission parameters."""
+) -> JobSpec:
+    """Build a JobSpec from a template + submission parameters."""
     target = template.target
     env = template.environment
     job = template.jobs[0] if template.jobs else None
@@ -145,7 +145,7 @@ def build_submit_request(
             labels=dict(target.labels),
         )
 
-    return SubmitRequest(
+    return JobSpec(
         name=name,
         sid=sid,
         description=description or experiment,

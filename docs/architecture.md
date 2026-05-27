@@ -7,7 +7,7 @@ src/azure_jobs/
 ├── cli/             # Click commands — thin orchestration over the sibling packages
 ├── template/        # YAML template loader, merge engine, validator
 ├── config/          # aj_config.json (workspace, defaults, dashboard)
-├── job/             # SubmitRequest spec lifecycle: build + render + materialise
+├── job/             # JobSpec spec lifecycle: build + render + materialise
 ├── backend/         # Submission backends (amlt, azureml, volcano)
 ├── az_client/       # Pure-REST Azure clients (ARM + ML)
 ├── tui/             # `aj dash` — Textual dashboard
@@ -25,16 +25,16 @@ The TUI is one more consumer with its own state and controllers.
 The submission engine splits into two peers: `job/` owns the pure spec
 lifecycle (data model + serialization), and `backend/` owns the three
 submission executors. Every backend self-registers under a `service` name
-(`aml`, `sing`, `amlt`, `volcano`), takes a `SubmitRequest`, returns a
-`SubmitResult`, and emits `SubmitEvent`s for progress UI.
+(`aml`, `sing`, `amlt`, `volcano`), takes a `JobSpec`, returns a
+`JobResult`, and emits `JobEvent`s for progress UI.
 
 ```
 job/                 # data + spec lifecycle, no network I/O
-├── models.py        # SubmitRequest / SubmitResult / SubmitEvent / *Opts
-├── build.py         # Template + CLI params → SubmitRequest
+├── spec.py          # JobSpec / JobResult / JobEvent / *Opts
+├── build.py         # Template + CLI params → JobSpec
 ├── command.py       # `.py` → `uv run`, `.sh` → `bash`
-├── render.py        # SubmitRequest → amlt-style YAML
-└── materialise.py   # Write YAML to AJ_SUBMISSION_HOME; stamp submission_path
+├── render.py        # JobSpec → amlt-style YAML
+└── write.py         # Write YAML to AJ_SUBMISSION_HOME; stamp submission_path
 
 backend/             # submission backends + registry
 ├── __init__.py      # BackendEntry / register_backend / get_backend / submit_via
@@ -46,10 +46,10 @@ backend/             # submission backends + registry
     └── entry.py, config.py, upload.py, constants.py
 ```
 
-`SubmissionRecord` and the append-only `record.jsonl` I/O live in
+`JobRecord` and the append-only `record.jsonl` I/O live in
 `journal.py` — local-journal state, not submission state.
 
-Every backend exposes `(request, *, on_event) -> SubmitResult` and self-registers
+Every backend exposes `(request, *, on_event) -> JobResult` and self-registers
 via `register_backend(...)` at import time. The CLI dispatches by
 `request.service` — `aml`/`sing` → `backend.azureml`, `volcano` →
 `backend.volcano`, `amlt` → `backend.amlt` (also forced when `--amlt` is passed).
@@ -62,13 +62,13 @@ aj run -t gpu -n 4 -p 8 train.py
   ├─ merge_confs()            dicts recurse; lists-of-dicts merge by index;
   │                           scalar lists concatenate; scalars last-wins
   ├─ apply -n / -p / --ppn
-  ├─ build_submit_request →   SubmitRequest
+  ├─ build_job_spec →   JobSpec
   ├─ get_backend(service)
   │     azureml → resolve target → upload code → PUT /jobs/{name}
   │              (`aml`/`sing` share backend.azureml)
   │     volcano → render manifest → upload code → kubectl apply
   │     amlt    → materialise YAML → exec amlt run
-  └─ log_record() →           append SubmissionRecord to record.jsonl
+  └─ log_record() →           append JobRecord to record.jsonl
 ```
 
 The native backend (`backend.azureml`) orders work as **read-only validation

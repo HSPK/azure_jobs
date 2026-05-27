@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 from typing import TYPE_CHECKING, Any
 
-from azure_jobs.job.models import SubmitRequest
+from azure_jobs.job.spec import JobSpec
 
 def _datastore_name(
     account: str, container: str, mount_name: str, mount_dir: str
@@ -19,7 +19,7 @@ if TYPE_CHECKING:
     from azure_jobs.az_client import AzureMLClient
 
 def _build_storage_mounts(
-    request: SubmitRequest,
+    request: JobSpec,
     client: AzureMLClient,
 ) -> tuple[dict[str, Any], dict[str, str], dict[str, str]]:
     outputs: dict[str, Any] = {}

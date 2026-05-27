@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from azure_jobs.job.models import SubmitRequest
+from azure_jobs.job.spec import JobSpec
 
 if TYPE_CHECKING:
     from azure_jobs.az_client import AzureMLClient
@@ -15,7 +15,7 @@ log = logging.getLogger(__name__)
 _SING_IMAGE_PREFIX = "amlt-sing/"
 _SING_DUMMY_IMAGE = "mcr.microsoft.com/azureml/openmpi4.1.0-ubuntu20.04:latest"
 
-def _build_environment(request: SubmitRequest, client: AzureMLClient) -> str:
+def _build_environment(request: JobSpec, client: AzureMLClient) -> str:
     if request.image_registry:
         image = f"{request.image_registry}/{request.image}"
     else:

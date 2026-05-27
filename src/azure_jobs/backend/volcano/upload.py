@@ -13,7 +13,7 @@ import yaml
 from azure_jobs.utils.format import format_size
 from azure_jobs.utils.fs import CodeFile, walk_code
 
-from azure_jobs.job.models import SubmitEvent
+from azure_jobs.job.spec import JobEvent
 from . import constants as C
 from .config import VolcanoConfig
 
@@ -37,7 +37,7 @@ def stream_tar(
     dest_dir: str,
     ctx_args: list[str],
     total_files: int,
-    emit: Callable[[SubmitEvent], None],
+    emit: Callable[[JobEvent], None],
 ) -> subprocess.CompletedProcess[str]:
     """Stream tar c into kubectl exec tar x, emitting per-file events."""
     tar_proc = subprocess.Popen(
@@ -67,7 +67,7 @@ def stream_tar(
             cur = line[2:] if line.startswith("./") else line
             completed[0] += 1
             emit(
-                SubmitEvent(
+                JobEvent(
                     kind="upload",
                     completed=completed[0],
                     total=total_files,
@@ -116,7 +116,7 @@ def upload_files_to_pvc(
     pod_name: str,
     namespace: str,
     context: str | None,
-    on_event: Callable[[SubmitEvent], None] | None = None,
+    on_event: Callable[[JobEvent], None] | None = None,
     status_kind: str = "code",
     label: str = "Files",
 ) -> bool:
@@ -124,7 +124,7 @@ def upload_files_to_pvc(
     emit = on_event or (lambda _ev: None)
 
     def status(kind: str, detail: str) -> None:
-        emit(SubmitEvent(kind=kind, detail=detail))
+        emit(JobEvent(kind=kind, detail=detail))
 
     if not files:
         status(status_kind, f"No {label.lower()} to upload")
@@ -255,7 +255,7 @@ def upload_code_to_pvc(
     cfg: VolcanoConfig,
     *,
     namespace: str,
-    on_event: Callable[[SubmitEvent], None] | None = None,
+    on_event: Callable[[JobEvent], None] | None = None,
 ) -> bool:
     """Upload local code to PVC via a transient kubectl-managed pod."""
     if not cfg.code_dir or not cfg.pvc_name or not cfg.pvc_mount_dir:

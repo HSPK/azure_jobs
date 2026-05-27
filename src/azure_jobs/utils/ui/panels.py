@@ -19,10 +19,10 @@ from .console import (
 from .render import emit_json, get_output_mode
 
 if TYPE_CHECKING:
-    from azure_jobs.journal import SubmissionRecord
-    from azure_jobs.job import SubmitRequest, SubmitResult
+    from azure_jobs.journal import JobRecord
+    from azure_jobs.job import JobSpec, JobResult
 
-def _request_payload(request: SubmitRequest) -> dict[str, Any]:
+def _request_payload(request: JobSpec) -> dict[str, Any]:
     return {
         "template_name": request.template_name,
         "experiment": request.expr_name,
@@ -47,7 +47,7 @@ def _request_payload(request: SubmitRequest) -> dict[str, Any]:
     }
 
 def show_submission_preview(
-    request: SubmitRequest,
+    request: JobSpec,
     *,
     dry_run: bool = False,
 ) -> None:
@@ -136,8 +136,8 @@ def show_submission_preview(
     console.print()
 
 def show_submission_result(
-    rec: SubmissionRecord,
-    result: SubmitResult,
+    rec: JobRecord,
+    result: JobResult,
     *,
     display_name: str,
     backend_label: str = "",
@@ -162,11 +162,11 @@ def show_submission_result(
         return
     _render_submission_result_rich(payload, request)
 
-def show_dry_run_result(request: SubmitRequest) -> None:
+def show_dry_run_result(request: JobSpec) -> None:
     """Emit a dry-run envelope (JSON mode only)."""
     if get_output_mode() != "json":
         return
-    from azure_jobs.job import render_amlt_config
+    from azure_jobs.job import render_amlt_yaml
 
     emit_json(
         {
@@ -181,12 +181,12 @@ def show_dry_run_result(request: SubmitRequest) -> None:
             "note": "",
             "error": "",
             "request": _request_payload(request),
-            "config": render_amlt_config(request),
+            "config": render_amlt_yaml(request),
         }
     )
 
 def _render_submission_result_rich(
-    payload: dict[str, Any], request: SubmitRequest
+    payload: dict[str, Any], request: JobSpec
 ) -> None:
     failed = payload["status"] == "failed"
     icon = "✗" if failed else "✓"

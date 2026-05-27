@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 from typing import Callable
 
-from azure_jobs.job.models import SubmitEvent
+from azure_jobs.job.spec import JobEvent
 
 log = logging.getLogger(__name__)
 
@@ -22,7 +22,7 @@ def _ssh_disabled() -> bool:
 
 def _collect_ssh_files(
     code_dir: str,
-    on_event: Callable[[SubmitEvent], None],
+    on_event: Callable[[JobEvent], None],
 ) -> dict[str, bytes]:
     code_path = Path(code_dir).resolve()
     if (code_path / ".ssh").is_dir():
@@ -48,7 +48,7 @@ def _collect_ssh_files(
         return {".ssh/.keep": b""}
 
     on_event(
-        SubmitEvent(
+        JobEvent(
             kind="log",
             detail=f"Shipping ~/.ssh files to remote: {', '.join(shipped)} "
             f"(disable with {_SSH_OPT_OUT_ENV}=0)",

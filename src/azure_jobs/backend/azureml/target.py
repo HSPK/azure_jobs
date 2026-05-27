@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
-from azure_jobs.job.models import SubmitRequest
+from azure_jobs.job.spec import JobSpec
 from .image import _SING_IMAGE_PREFIX
 
 if TYPE_CHECKING:
@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-def _build_distribution(request: SubmitRequest) -> dict[str, Any] | None:
+def _build_distribution(request: JobSpec) -> dict[str, Any] | None:
     if request.nodes <= 1 and request.processes_per_node <= 1:
         return None
 
@@ -22,7 +22,7 @@ def _build_distribution(request: SubmitRequest) -> dict[str, Any] | None:
         "processCountPerInstance": request.processes_per_node,
     }
 
-def _resolve_compute(request: SubmitRequest) -> str:
+def _resolve_compute(request: JobSpec) -> str:
     if request.service == "sing":
         sub = request.sing.vc_subscription_id or request.subscription_id
         rg = request.sing.vc_resource_group or request.resource_group
@@ -41,7 +41,7 @@ def _resolve_compute(request: SubmitRequest) -> str:
     )
 
 def _build_resources(
-    request: SubmitRequest,
+    request: JobSpec,
     compute_id: str,
     vc: Any,
     client: AzureMLClient,
@@ -124,7 +124,7 @@ def _build_resources(
     return res
 
 def _resolve_sing_identity(
-    request: SubmitRequest,
+    request: JobSpec,
     client: AzureMLClient,
 ) -> str | None:
     if request.service != "sing":
@@ -151,7 +151,7 @@ def _resolve_sing_identity(
         "Attach it (Portal → workspace → Identity) or pick another workspace."
     )
 
-def _build_identity(request: SubmitRequest) -> dict[str, str] | None:
+def _build_identity(request: JobSpec) -> dict[str, str] | None:
     if request.service == "sing":
         return None
 

@@ -13,9 +13,9 @@ from azure_jobs.job import (
     AmltOpts,
     SingularityOpts,
     StorageMount,
-    SubmitRequest,
-    build_submit_request,
-    render_amlt_config,
+    JobSpec,
+    build_job_spec,
+    render_amlt_yaml,
 )
 from azure_jobs.backend.azureml.image import (
     _SING_DUMMY_IMAGE,
@@ -39,17 +39,17 @@ def _make_request(
     sku: str | None = None,
     workspace: AJWorkspace | None = None,  # accepted but ignored — kept so older test sites keep compiling
     **kwargs,
-) -> SubmitRequest:
-    """Helper to build SubmitRequest from dict config for testing.
+) -> JobSpec:
+    """Helper to build JobSpec from dict config for testing.
 
-    Calls build_submit_request and returns the request object.
+    Calls build_job_spec and returns the request object.
     """
-    del workspace  # build_submit_request no longer takes a workspace
+    del workspace  # build_job_spec no longer takes a workspace
     if sku is None:
         sku = conf.get("jobs", [{}])[0].get("sku", "default")
 
     template_obj = Template.from_dict(conf)
-    return build_submit_request(
+    return build_job_spec(
         template_obj,
         name=name,
         sid="test123",
@@ -64,7 +64,7 @@ def _make_request(
 
 class TestSubmitRequest:
     def test_defaults(self):
-        r = SubmitRequest(name="test")
+        r = JobSpec(name="test")
         assert r.name == "test"
         assert r.nodes == 1
         assert r.processes_per_node == 1
@@ -72,7 +72,7 @@ class TestSubmitRequest:
         assert r.identity == "managed"
 
     def test_all_fields(self):
-        r = SubmitRequest(
+        r = JobSpec(
             name="job1",
             compute="gpu-cluster",
             nodes=4,
@@ -186,7 +186,7 @@ class TestBuildRequestFromConfig:
 
 class TestRenderAmltConfig:
     def test_escapes_dollar_signs(self):
-        request = SubmitRequest(
+        request = JobSpec(
             name="j",
             description="run $HOME",
             command=["echo $HOME"],
@@ -194,7 +194,7 @@ class TestRenderAmltConfig:
             amlt=AmltOpts(code_dir="$CONFIG_DIR/project"),
         )
 
-        conf = render_amlt_config(request)
+        conf = render_amlt_yaml(request)
         assert conf["description"] == "run $$HOME"
         assert conf["jobs"][0]["command"][0] == "echo $$HOME"
         assert (
@@ -210,7 +210,7 @@ class TestSubmitMocked:
     def test_submit_success(self):
         from azure_jobs.backend.azureml.entry import submit
 
-        request = SubmitRequest(
+        request = JobSpec(
             name="test-job",
             compute="gpu01",
             image="pytorch:2.0",
@@ -245,7 +245,7 @@ class TestSubmitMocked:
         from azure_jobs.errors import AuthError
         from azure_jobs.backend.azureml.entry import submit
 
-        request = SubmitRequest(
+        request = JobSpec(
             name="test-job",
             subscription_id="sub",
             resource_group="rg",
@@ -264,7 +264,7 @@ class TestSubmitMocked:
     def test_submit_status_callback(self):
         from azure_jobs.backend.azureml.entry import submit
 
-        request = SubmitRequest(
+        request = JobSpec(
             name="test-job",
             compute="c1",
             image="img",
@@ -317,7 +317,7 @@ class TestExtractErrorMessage:
 
 class TestResolveCompute:
     def test_aml_returns_name(self):
-        r = SubmitRequest(
+        r = JobSpec(
             name="j",
             compute="gpu01",
             service="aml",
@@ -333,7 +333,7 @@ class TestResolveCompute:
         )
 
     def test_sing_returns_arm_id(self):
-        r = SubmitRequest(
+        r = JobSpec(
             name="j",
             compute="msrresrchvc",
             service="sing",
@@ -347,7 +347,7 @@ class TestResolveCompute:
         assert "virtualclusters/msrresrchvc" in arm
 
     def test_sing_uses_vc_overrides(self):
-        r = SubmitRequest(
+        r = JobSpec(
             name="j",
             compute="vc1",
             service="sing",
@@ -371,7 +371,7 @@ def _info(name: str, series: str = ""):
 
 class TestBuildResources:
     def test_aml_returns_none(self):
-        r = SubmitRequest(name="j", service="aml")
+        r = JobSpec(name="j", service="aml")
         assert _build_resources(r, "", None, None) is None
 
     @patch(
@@ -379,7 +379,7 @@ class TestBuildResources:
         return_value=MatchedInstances([_info("ND40rs_v2"), _info("ND40s_v3")], "Premium"),
     )
     def test_sing_returns_aisupercomputer(self, mock_resolve):
-        r = SubmitRequest(
+        r = JobSpec(
             name="j",
             compute="vc1",
             service="sing",
@@ -404,7 +404,7 @@ class TestBuildResources:
 
     @patch("azure_jobs.backend.azureml.sku.match_instance_type", return_value=MatchedInstances([_info("D2_v3")], "Premium"))
     def test_sing_image_version_from_amlt_sing_prefix(self, mock_resolve):
-        r = SubmitRequest(
+        r = JobSpec(
             name="j",
             compute="vc1",
             service="sing",
@@ -418,7 +418,7 @@ class TestBuildResources:
 
     @patch("azure_jobs.backend.azureml.sku.match_instance_type", return_value=MatchedInstances([_info("D2_v3")], "Premium"))
     def test_sing_image_version_empty_for_non_sing_image(self, mock_resolve):
-        r = SubmitRequest(
+        r = JobSpec(
             name="j",
             compute="vc1",
             service="sing",
@@ -442,7 +442,7 @@ class TestBuildResources:
 
         from azure_jobs.errors import SkuResolveError
 
-        r = SubmitRequest(
+        r = JobSpec(
             name="j",
             compute="vc1",
             service="sing",
@@ -486,17 +486,17 @@ class TestBuildRequestSingularity:
 
 class TestBuildIdentity:
     def test_sing_returns_none(self):
-        r = SubmitRequest(name="j", service="sing", identity="managed")
+        r = JobSpec(name="j", service="sing", identity="managed")
         assert _build_identity(r) is None
 
     def test_aml_managed(self):
-        r = SubmitRequest(name="j", service="aml", identity="managed")
+        r = JobSpec(name="j", service="aml", identity="managed")
         result = _build_identity(r)
         assert result is not None
         assert result["identityType"] == "Managed"
 
     def test_aml_user(self):
-        r = SubmitRequest(name="j", service="aml", identity="user")
+        r = JobSpec(name="j", service="aml", identity="user")
         result = _build_identity(r)
         assert result is not None
         assert result["identityType"] == "UserIdentity"
@@ -505,7 +505,7 @@ class TestBuildIdentity:
 class TestBuildEnvironment:
     def test_sing_curated_image_uses_dummy(self):
         """amlt-sing/ images should register with dummy MCR image."""
-        r = SubmitRequest(
+        r = JobSpec(
             name="j",
             service="sing",
             image="amlt-sing/acpt-torch2.7.1-py3.10-cuda12.6-ubuntu22.04",
@@ -522,7 +522,7 @@ class TestBuildEnvironment:
 
     def test_regular_image_unchanged(self):
         """Non-sing images should be used as-is."""
-        r = SubmitRequest(name="j", service="aml", image="pytorch:2.0")
+        r = JobSpec(name="j", service="aml", image="pytorch:2.0")
         client = MagicMock()
         client.environments.get.return_value = None
         client.environments.create_or_update.return_value = SimpleNamespace(id="env-id")
@@ -532,7 +532,7 @@ class TestBuildEnvironment:
         assert call_args.args[2] == "pytorch:2.0"
 
     def test_registry_prepended(self):
-        r = SubmitRequest(
+        r = JobSpec(
             name="j",
             service="aml",
             image="pytorch:2.0",
@@ -548,15 +548,15 @@ class TestBuildEnvironment:
 
 class TestResolveSingIdentity:
     def test_non_sing_returns_none(self):
-        r = SubmitRequest(name="j", service="aml")
+        r = JobSpec(name="j", service="aml")
         assert _resolve_sing_identity(r, MagicMock()) is None
 
     def test_no_uai_env_returns_none(self):
-        r = SubmitRequest(name="j", service="sing", env_vars={})
+        r = JobSpec(name="j", service="sing", env_vars={})
         assert _resolve_sing_identity(r, MagicMock()) is None
 
     def test_matches_workspace_uai(self):
-        r = SubmitRequest(
+        r = JobSpec(
             name="j",
             service="sing",
             workspace_name="ws",
@@ -577,7 +577,7 @@ class TestResolveSingIdentity:
         assert _resolve_sing_identity(r, client) == "abc-123"
 
     def test_case_insensitive_match(self):
-        r = SubmitRequest(
+        r = JobSpec(
             name="j",
             service="sing",
             workspace_name="ws",
@@ -596,7 +596,7 @@ class TestResolveSingIdentity:
     def test_no_match_raises_config_error(self):
         from azure_jobs.errors import ConfigError
 
-        r = SubmitRequest(
+        r = JobSpec(
             name="j",
             service="sing",
             workspace_name="ws",
@@ -618,7 +618,7 @@ class TestResolveSingIdentity:
     def test_no_uais_attached_raises_config_error(self):
         from azure_jobs.errors import ConfigError
 
-        r = SubmitRequest(
+        r = JobSpec(
             name="j",
             service="sing",
             workspace_name="ws",
@@ -632,14 +632,14 @@ class TestResolveSingIdentity:
 
 class TestBuildStorageMounts:
     def test_empty_storage_returns_empty(self):
-        r = SubmitRequest(name="j")
+        r = JobSpec(name="j")
         outputs, poc, env = _build_storage_mounts(r, MagicMock())
         assert outputs == {}
         assert poc == {}
         assert env == {}
 
     def test_creates_datastore_and_output(self):
-        r = SubmitRequest(
+        r = JobSpec(
             name="j",
             subscription_id="sub1",
             resource_group="rg1",
@@ -679,7 +679,7 @@ class TestBuildStorageMounts:
         assert env["AZUREML_DATAREFERENCE_fast_shared"] == "/mnt/fast_shared"
 
     def test_reuses_existing_datastore(self):
-        r = SubmitRequest(
+        r = JobSpec(
             name="j",
             subscription_id="s",
             resource_group="r",
@@ -708,5 +708,5 @@ class TestInternalEnvKeys:
         """All keys in env_vars should be passed through to the job verbatim."""
         from azure_jobs.backend.azureml.entry import _build_env_vars
 
-        r = SubmitRequest(name="j", env_vars={"FOO": "bar"}, shm_size="")
+        r = JobSpec(name="j", env_vars={"FOO": "bar"}, shm_size="")
         assert _build_env_vars(r, {}) == {"FOO": "bar"}

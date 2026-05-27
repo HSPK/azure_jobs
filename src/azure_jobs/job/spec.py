@@ -40,7 +40,7 @@ class VolcanoOpts:
     labels: dict[str, str] = field(default_factory=dict)
 
 @dataclass
-class SubmitRequest:
+class JobSpec:
     """Normalized job spec consumed by every submission backend."""
 
     name: str
@@ -93,7 +93,7 @@ class SubmitRequest:
         return asdict(self)
 
 @dataclass
-class SubmitResult:
+class JobResult:
     job_name: str
     azure_name: str = ""
     status: str = ""
@@ -102,7 +102,7 @@ class SubmitResult:
     note: str = ""
 
 @dataclass
-class SubmitEvent:
+class JobEvent:
     """Progress event emitted by submission backends."""
 
     kind: str

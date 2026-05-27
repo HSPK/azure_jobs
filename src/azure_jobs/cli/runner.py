@@ -7,8 +7,8 @@ from typing import Callable
 import click
 
 from azure_jobs.errors import parse_exception_message
-from azure_jobs.journal import SubmissionRecord, log_record
-from azure_jobs.job.models import SubmitEvent, SubmitResult
+from azure_jobs.journal import JobRecord, log_record
+from azure_jobs.job.spec import JobEvent, JobResult
 from azure_jobs.utils.ui import (
     console,
     get_output_mode,
@@ -17,8 +17,8 @@ from azure_jobs.utils.ui import (
 )
 
 def submit_and_record(
-    submit_fn: Callable[[Callable[[SubmitEvent], None]], SubmitResult],
-    rec: SubmissionRecord,
+    submit_fn: Callable[[Callable[[JobEvent], None]], JobResult],
+    rec: JobRecord,
     display_name: str,
     *,
     backend_label: str = "",
@@ -55,7 +55,7 @@ def submit_and_record(
         msg = parse_exception_message(exc)
         rec.note = msg
         if json_mode:
-            synth = SubmitResult(job_name=display_name, status="failed", error=msg)
+            synth = JobResult(job_name=display_name, status="failed", error=msg)
             show_submission_result(
                 rec, synth, display_name=display_name, backend_label=backend_label
             )
@@ -65,8 +65,8 @@ def submit_and_record(
         log_record(rec)
 
 def _run_with_spinner(
-    submit_fn: Callable[[Callable[[SubmitEvent], None]], SubmitResult],
-) -> SubmitResult:
+    submit_fn: Callable[[Callable[[JobEvent], None]], JobResult],
+) -> JobResult:
     from rich.live import Live
     from rich.spinner import Spinner
 
@@ -75,7 +75,7 @@ def _run_with_spinner(
         def _show_spinner(text: str) -> None:
             live.update(Spinner("dots", text=f" [bold cyan]{text}[/bold cyan]"))
 
-        def _on_event(ev: SubmitEvent) -> None:
+        def _on_event(ev: JobEvent) -> None:
             if ev.kind == "log":
                 live.console.print(f"  [dim]\u00b7 {ev.detail}[/dim]")
             elif ev.kind == "upload":

@@ -1,36 +1,36 @@
 """Job specification: data model + template build + YAML serialization.
 
 Pure-data lifecycle of a job submission. No network I/O — only filesystem
-I/O is :func:`materialise_submission` writing the rendered YAML to disk.
+I/O is :func:`write_amlt_yaml` writing the rendered YAML to disk.
 The "how to actually submit" lives in :mod:`azure_jobs.backend`.
 """
 
 from __future__ import annotations
 
-from .build import build_submit_request
-from .materialise import materialise_submission
-from .models import (
+from .build import build_job_spec
+from .write import write_amlt_yaml
+from .spec import (
     AmltOpts,
     SingularityOpts,
     StorageMount,
-    SubmitEvent,
-    SubmitRequest,
-    SubmitResult,
+    JobEvent,
+    JobSpec,
+    JobResult,
     VolcanoOpts,
 )
-from .render import render_amlt_config
+from .render import render_amlt_yaml
 from .command import build_user_command
 
 __all__ = [
     "AmltOpts",
     "SingularityOpts",
     "StorageMount",
-    "SubmitEvent",
-    "SubmitRequest",
-    "SubmitResult",
+    "JobEvent",
+    "JobSpec",
+    "JobResult",
     "VolcanoOpts",
-    "build_submit_request",
+    "build_job_spec",
     "build_user_command",
-    "materialise_submission",
-    "render_amlt_config",
+    "write_amlt_yaml",
+    "render_amlt_yaml",
 ]
