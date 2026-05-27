@@ -13,7 +13,7 @@ import yaml
 from azure_jobs.utils.format import format_size
 from azure_jobs.utils.fs import CodeFile, walk_code
 
-from ..models import SubmitEvent
+from ...models import SubmitEvent
 from . import constants as C
 from .config import VolcanoConfig
 

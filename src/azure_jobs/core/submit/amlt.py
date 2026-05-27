@@ -10,8 +10,8 @@ from typing import Callable
 
 import yaml
 
-from ..dispatch import register_backend
-from ..models import SubmitEvent, SubmitRequest, SubmitResult
+from .dispatch import register_backend
+from .models import SubmitEvent, SubmitRequest, SubmitResult
 
 def amlt_available() -> bool:
     """Check if amlt CLI is installed and a project is configured."""

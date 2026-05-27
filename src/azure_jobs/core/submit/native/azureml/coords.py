@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from ..models import SubmitRequest
+from ...models import SubmitRequest
 
 if TYPE_CHECKING:
     from ...az_client import AzureARMClient, VCInfo

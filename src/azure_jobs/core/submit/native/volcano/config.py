@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from ..models import SubmitRequest
+from ...models import SubmitRequest
 from . import constants as C
 
 _DISTRIBUTED_PREAMBLE = Path(__file__).parent / "distributed_preamble.sh"

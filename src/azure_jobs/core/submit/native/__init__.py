@@ -1,23 +1,35 @@
-"""Native REST backend — direct azureml REST job submission."""
+"""Native REST submission backend — service router.
+
+Native submission means *we* build the REST request and talk to the cluster
+directly, as opposed to delegating to the ``amlt`` CLI. Three target clusters
+are supported, each in its own subpackage:
+
+- ``azureml`` for ``aml`` (Azure ML) and ``sing`` (Singularity) jobs
+- ``volcano`` for Volcano/Kubernetes jobs
+
+Importing this module triggers registration of all native backends via
+:mod:`azure_jobs.core.submit.dispatch`.
+"""
 
 from __future__ import annotations
 
 from typing import Callable
 
-from ..dispatch import register_backend
+from ..dispatch import get_backend
 from ..models import SubmitEvent, SubmitRequest, SubmitResult
+
+# Import for side-effect: each subpackage registers its backends.
+from . import azureml, volcano  # noqa: F401
+
 
 def submit_via_native(
     request: SubmitRequest,
     *,
     on_event: Callable[[SubmitEvent], None] | None = None,
 ) -> SubmitResult:
-    """Submit via the native AJ REST backend (thin alias for :func:submit)."""
-    from . import orchestrate as _orchestrate
+    """Dispatch a native submission to the right cluster client by service."""
+    return get_backend(request.service).fn(request, on_event=on_event)
 
-    return _orchestrate.submit(request, on_event=on_event)
-
-register_backend("aml", submit_via_native, label="Azure ML")
-register_backend("sing", submit_via_native, label="Singularity")
 
 __all__ = ["submit_via_native"]
+

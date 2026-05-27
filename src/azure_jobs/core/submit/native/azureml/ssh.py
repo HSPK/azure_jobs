@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 from typing import Callable
 
-from ..models import SubmitEvent
+from ...models import SubmitEvent
 
 log = logging.getLogger(__name__)
 

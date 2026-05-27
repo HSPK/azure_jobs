@@ -9,7 +9,7 @@ from dataclasses import dataclass, replace
 from azure_jobs.core.az_client import AzureARMClient, InstanceTypeInfo, VCInfo
 from azure_jobs.core.az_client.arm.models import SLA_TIERS, SeriesQuota, SlaTierQuota
 
-from ...errors import SkuResolveError
+from ....errors import SkuResolveError
 
 _AMD_GPUS = frozenset({"MI50", "MI100", "MI200", "MI300X"})
 _DEFAULT_REGION = "westus2"

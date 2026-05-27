@@ -8,7 +8,7 @@ from click.testing import CliRunner
 from azure_jobs.cli import main
 from azure_jobs.core.az_client.arm import InstanceTypeInfo, VCInfo
 from azure_jobs.core.errors import SkuResolveError
-from azure_jobs.core.submit.native.sku import (
+from azure_jobs.core.submit.native.azureml.sku import (
     SkuSpec,
     match_instance_type,
 )
