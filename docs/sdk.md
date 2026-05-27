@@ -72,7 +72,7 @@ For the dashboard's progress UI (Live spinner, upload counter, error handling, `
 
 ```python
 from azure_jobs import submit_and_record
-from azure_jobs.core.submit import SubmissionRecord
+from azure_jobs import SubmissionRecord
 
 rec = SubmissionRecord(id=request.sid, name=request.name, ...)
 submit_and_record(

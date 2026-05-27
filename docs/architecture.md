@@ -23,9 +23,10 @@ more `core/` consumer with its own state and controllers.
 
 ## Submission engine
 
-`core/submit/` decomposes into a backend-agnostic core plus three backends. All
-build a `SubmitRequest`, run it, return a `SubmitResult`, and emit `SubmitEvent`s
-for progress UI.
+`core/submit/` decomposes into a backend-agnostic core plus two submission
+methods. The native method has three target clusters as sub-clients. All build
+a `SubmitRequest`, run it, return a `SubmitResult`, and emit `SubmitEvent`s for
+progress UI.
 
 ```
 submit/
@@ -35,16 +36,20 @@ submit/
 ├── render.py        # SubmitRequest → amlt-style YAML
 ├── materialise.py   # Write YAML to AJ_SUBMISSION_HOME; stamp submission_path
 ├── dispatch.py      # Backend registry (register_backend / get_backend)
-├── record.py        # SubmissionRecord + append-only record.jsonl I/O
-├── native/          # AML + Singularity via REST
-├── volcano/         # K8s Volcano via kubectl
-└── amlt/            # Shells out to the amlt CLI
+├── amlt.py          # Shells out to the amlt CLI
+└── native/          # We build the REST request ourselves
+    ├── __init__.py  # Service router — dispatch by request.service
+    ├── azureml/     # `aml` (Azure ML) + `sing` (Singularity) targets
+    └── volcano/     # K8s Volcano target via kubectl
 ```
+
+`SubmissionRecord` and the append-only `record.jsonl` I/O live in
+`core/journal.py` — it is local-journal state, not submission state.
 
 Every backend exposes `(request, *, on_event) -> SubmitResult` and self-registers
 via `register_backend(...)` at import time. The CLI dispatches by
-`request.service` — `aml`/`sing` → native, `volcano` → volcano, `amlt` → amlt
-(also forced when `--amlt` is passed).
+`request.service` — `aml`/`sing` → native(azureml), `volcano` → native(volcano),
+`amlt` → amlt (also forced when `--amlt` is passed).
 
 ## Submit flow
 
@@ -57,7 +62,7 @@ aj run -t gpu -n 4 -p 8 train.py
   ├─ build_submit_request →   SubmitRequest
   ├─ get_backend(service)
   │     native  → resolve target → upload code → PUT /jobs/{name}
-  │     volcano → kubectl exec tar (PVC) → kubectl create
+  │              (aml/sing via azureml client, volcano via kubectl)
   │     amlt    → materialise YAML → exec amlt run
   └─ log_record() →           append SubmissionRecord to record.jsonl
 ```
