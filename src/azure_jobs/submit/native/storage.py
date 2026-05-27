@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 from typing import TYPE_CHECKING, Any
 
-from ...models import SubmitRequest
+from ..models import SubmitRequest
 
 def _datastore_name(
     account: str, container: str, mount_name: str, mount_dir: str
@@ -16,7 +16,7 @@ def _datastore_name(
     return f"ds_{digest}"
 
 if TYPE_CHECKING:
-    from azure_jobs.core.az_client import AzureMLClient
+    from azure_jobs.az_client import AzureMLClient
 
 def _build_storage_mounts(
     request: SubmitRequest,

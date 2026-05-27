@@ -6,7 +6,7 @@ import logging
 import re
 from typing import Any
 
-from azure_jobs.core.errors import NETWORK_LIKE_ERRORS, ConfigError
+from azure_jobs.errors import NETWORK_LIKE_ERRORS, ConfigError
 
 from ._base import ArmNamespace
 from .models import SeriesQuota, VCInfo

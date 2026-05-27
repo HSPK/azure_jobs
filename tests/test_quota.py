@@ -8,9 +8,9 @@ import pytest
 from click.testing import CliRunner
 
 from azure_jobs.cli import main
-from azure_jobs.core.aml import vm_sku_label as _vm_sku_label
-from azure_jobs.core.errors import ConfigError
-from azure_jobs.core.az_client.arm import (
+from azure_jobs.az_client.ml import vm_sku_label as _vm_sku_label
+from azure_jobs.errors import ConfigError
+from azure_jobs.az_client.arm import (
     SeriesQuota,
     SlaTierQuota,
     VCInfo,
@@ -203,7 +203,7 @@ _MOCK_VC_RESPONSE = {
 
 def _make_arm_client():
     """Construct a real ``AzureARMClient`` with namespaces stubbed."""
-    from azure_jobs.core.az_client import AzureARMClient
+    from azure_jobs.az_client import AzureARMClient
 
     client = AzureARMClient()
     client.subscriptions.list = MagicMock()
@@ -294,7 +294,7 @@ class TestListVirtualClusters:
 class TestQuotaListCli:
     def setup_method(self):
         self.runner = CliRunner()
-        self._arm_patcher = patch("azure_jobs.core.az_client.AzureARMClient")
+        self._arm_patcher = patch("azure_jobs.az_client.AzureARMClient")
         self.arm_cls = self._arm_patcher.start()
         self.arm = self.arm_cls.return_value
         # ``load_vcs_with_quotas`` now calls ``arm.vc.quota.list(...)`` which

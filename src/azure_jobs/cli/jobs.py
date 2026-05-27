@@ -13,8 +13,8 @@ from azure_jobs.cli._progress import (
     fetch_jobs_all_ws_with_progress,
     fetch_jobs_with_progress,
 )
-from azure_jobs.core.az_client import apply_cutoff
-from azure_jobs.core.journal import read_records, resolve_short_id
+from azure_jobs.az_client import apply_cutoff
+from azure_jobs.journal import read_records, resolve_short_id
 from azure_jobs.utils.stats import STATUS_TERMINAL
 from azure_jobs.utils.ui import show_jobs_table
 
@@ -80,7 +80,7 @@ def job_list(
     ws_name: str | None,
 ) -> None:
     """List recent jobs in the cloud workspace."""
-    from azure_jobs.core.az_client import create_rest_client
+    from azure_jobs.az_client import create_rest_client
     from azure_jobs.utils.ui import console, show_cloud_jobs_table
 
     client = create_rest_client(ws_name=ws_name)
@@ -112,8 +112,8 @@ def job_list(
     show_cloud_jobs_table(jobs)
 
 def _fetch_and_show_job(job_id: str, ws_name: str | None = None) -> None:
-    from azure_jobs.core.az_client import create_rest_client
-    from azure_jobs.core.errors import RestError
+    from azure_jobs.az_client import create_rest_client
+    from azure_jobs.errors import RestError
     from azure_jobs.utils.ui import console, error, show_job_detail
 
     name = resolve_short_id(job_id)
@@ -148,7 +148,7 @@ def job_status(job_id: str) -> None:
 @click.argument("job_id")
 def job_cancel(job_id: str) -> None:
     """Cancel a running job."""
-    from azure_jobs.core.az_client import create_rest_client
+    from azure_jobs.az_client import create_rest_client
     from azure_jobs.utils.ui import (
         console,
         get_output_mode,
@@ -210,7 +210,7 @@ def job_cancel(job_id: str) -> None:
 @click.argument("job_id")
 def job_logs(job_id: str) -> None:
     """Show logs from a job."""
-    from azure_jobs.core.az_client import create_rest_client
+    from azure_jobs.az_client import create_rest_client
     from azure_jobs.utils.ui import (
         console,
         emit_json,

@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from azure_jobs.core.errors import NETWORK_LIKE_ERRORS
+from azure_jobs.errors import NETWORK_LIKE_ERRORS
 
 from ._base import ArmNamespace
 

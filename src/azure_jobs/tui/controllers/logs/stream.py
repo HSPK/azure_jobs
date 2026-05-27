@@ -9,8 +9,8 @@ from typing import Any
 from rich.markup import escape
 from textual.worker import get_current_worker
 
-from azure_jobs.core.az_client import DEFAULT_POLL_INTERVAL, LogStreamer
-from azure_jobs.core.az_client.ml.logs import pick_default_log
+from azure_jobs.az_client import DEFAULT_POLL_INTERVAL, LogStreamer
+from azure_jobs.az_client.ml.logs import pick_default_log
 from azure_jobs.tui.controllers.base import Controller
 from azure_jobs.tui.controllers.logs._shared import LIVE_TAIL_BYTES
 from azure_jobs.tui.helpers import safe_close

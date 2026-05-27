@@ -8,7 +8,7 @@ from rich.markup import escape
 from textual.widgets import OptionList, Static
 from textual.worker import get_current_worker
 
-from azure_jobs.core.config import (
+from azure_jobs.config import (
     AJWorkspace,
     detect_subscription,
     detect_workspaces,

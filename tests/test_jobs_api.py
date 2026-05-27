@@ -1,12 +1,12 @@
-"""Tests for :class:`azure_jobs.core.az_client.ml.jobs.JobsAPI` helpers."""
+"""Tests for :class:`azure_jobs.az_client.ml.jobs.JobsAPI` helpers."""
 
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
-from azure_jobs.core.az_client.ml.jobs import JobsAPI, apply_cutoff
-from azure_jobs.core.journal import resolve_short_id
+from azure_jobs.az_client.ml.jobs import JobsAPI, apply_cutoff
+from azure_jobs.journal import resolve_short_id
 
 
 # ────────────────────────────────────────────────────────────────────────
@@ -15,7 +15,7 @@ from azure_jobs.core.journal import resolve_short_id
 
 
 def test_resolve_short_id_returns_input_when_no_match():
-    with patch("azure_jobs.core.journal.read_records", return_value=[]):
+    with patch("azure_jobs.journal.read_records", return_value=[]):
         assert resolve_short_id("abcd1234") == "abcd1234"
 
 
@@ -24,13 +24,13 @@ def test_resolve_short_id_maps_to_azure_name():
         {"id": "abcd1234", "azure_name": "my-job-uuid"},
         {"id": "other", "azure_name": "other-job"},
     ]
-    with patch("azure_jobs.core.journal.read_records", return_value=records):
+    with patch("azure_jobs.journal.read_records", return_value=records):
         assert resolve_short_id("abcd1234") == "my-job-uuid"
 
 
 def test_resolve_short_id_falls_back_when_azure_name_blank():
     records = [{"id": "abcd1234", "azure_name": ""}]
-    with patch("azure_jobs.core.journal.read_records", return_value=records):
+    with patch("azure_jobs.journal.read_records", return_value=records):
         assert resolve_short_id("abcd1234") == "abcd1234"
 
 

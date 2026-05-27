@@ -9,8 +9,8 @@ from click.testing import CliRunner
 
 from azure_jobs.cli import main
 from azure_jobs.cli.run import resolve_name
-from azure_jobs.core.submit.native.azureml.sku import resolve_sku
-from azure_jobs.core.submit import SubmitResult
+from azure_jobs.submit.native.sku import resolve_sku
+from azure_jobs.submit import SubmitResult
 
 from .helpers import MINIMAL_JOB_CONF, write_template
 
@@ -239,7 +239,7 @@ class TestRunCommand:
             job_name="test-job", status="submitted", portal_url="https://example.com"
         )
         with patch(
-            "azure_jobs.core.submit.native.azureml.orchestrate.submit", return_value=mock_result
+            "azure_jobs.submit.native.orchestrate.submit", return_value=mock_result
         ):
             result = runner.invoke(main, ["run", "echo", "hello"])
         assert result.exit_code == 0
@@ -343,7 +343,7 @@ class TestRunErrorPaths:
             job_name="test", status="failed", error="auth failed"
         )
         with patch(
-            "azure_jobs.core.submit.native.azureml.orchestrate.submit", return_value=mock_result
+            "azure_jobs.submit.native.orchestrate.submit", return_value=mock_result
         ):
             result = runner.invoke(main, ["run", "echo", "hello"])
         assert result.exit_code != 0
@@ -371,7 +371,7 @@ class TestRunErrorPaths:
             job_name="test", status="failed", error="compute not found"
         )
         with patch(
-            "azure_jobs.core.submit.native.azureml.orchestrate.submit", return_value=mock_result
+            "azure_jobs.submit.native.orchestrate.submit", return_value=mock_result
         ):
             runner.invoke(main, ["run", "echo", "hello"])
         assert aj_env["record_fp"].exists()

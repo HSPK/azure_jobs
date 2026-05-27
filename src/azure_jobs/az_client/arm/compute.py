@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Callable
 
-from azure_jobs.core.errors import ConfigError
+from azure_jobs.errors import ConfigError
 
 from .models import ComputeInfo, WorkspaceInfo
 from ._base import ArmNamespace, WorkspaceCoords

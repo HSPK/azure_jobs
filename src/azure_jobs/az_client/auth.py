@@ -110,7 +110,7 @@ class WorkspaceCoords:
         )
 
 def raise_for_rest_error(resp: requests.Response) -> None:
-    """Raise :class:azure_jobs.core.errors.RestError on 4xx/5xx, else return."""
+    """Raise :class:azure_jobs.errors.RestError on 4xx/5xx, else return."""
     if resp.status_code < 400:
         return
     azure_code = ""
@@ -124,7 +124,7 @@ def raise_for_rest_error(resp: requests.Response) -> None:
             detail += " | " + str([d.get("message", "") for d in inner])
     except (ValueError, KeyError):
         detail = (resp.text or "")[:500]
-    from azure_jobs.core.errors import RestError
+    from azure_jobs.errors import RestError
 
     raise RestError(
         f"{resp.status_code}: {detail}",

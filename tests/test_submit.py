@@ -7,9 +7,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from azure_jobs.core.config import AJWorkspace
-from azure_jobs.core.errors import parse_exception_message
-from azure_jobs.core.submit import (
+from azure_jobs.config import AJWorkspace
+from azure_jobs.errors import parse_exception_message
+from azure_jobs.submit import (
     AmltOpts,
     SingularityOpts,
     StorageMount,
@@ -17,19 +17,19 @@ from azure_jobs.core.submit import (
     build_submit_request,
     render_amlt_config,
 )
-from azure_jobs.core.submit.native.azureml.image import (
+from azure_jobs.submit.native.image import (
     _SING_DUMMY_IMAGE,
     _build_environment,
 )
-from azure_jobs.core.submit.native.azureml.storage import _build_storage_mounts
-from azure_jobs.core.submit.native.azureml.target import (
+from azure_jobs.submit.native.storage import _build_storage_mounts
+from azure_jobs.submit.native.target import (
     _build_identity,
     _build_resources,
     _resolve_compute,
     _resolve_sing_identity,
 )
-from azure_jobs.core.submit.native.azureml.sku import MatchedInstances
-from azure_jobs.core.template import Template
+from azure_jobs.submit.native.sku import MatchedInstances
+from azure_jobs.template import Template
 
 
 def _make_request(
@@ -208,7 +208,7 @@ class TestSubmitMocked:
     """Test the submit function with mocked Azure SDK."""
 
     def test_submit_success(self):
-        from azure_jobs.core.submit import submit
+        from azure_jobs.submit import submit
 
         request = SubmitRequest(
             name="test-job",
@@ -228,7 +228,7 @@ class TestSubmitMocked:
         }
 
         with patch(
-            "azure_jobs.core.submit.native.azureml.orchestrate._get_rest_client"
+            "azure_jobs.submit.native.orchestrate._get_rest_client"
         ) as mock_factory:
             mock_client = mock_factory.return_value
             mock_client.environments.get.return_value = SimpleNamespace(id="env-id-1")
@@ -242,8 +242,8 @@ class TestSubmitMocked:
         assert "portal" in result.portal_url
 
     def test_submit_auth_failure(self):
-        from azure_jobs.core.errors import AuthError
-        from azure_jobs.core.submit import submit
+        from azure_jobs.errors import AuthError
+        from azure_jobs.submit import submit
 
         request = SubmitRequest(
             name="test-job",
@@ -253,7 +253,7 @@ class TestSubmitMocked:
         )
 
         with patch(
-            "azure_jobs.core.submit.native.azureml.orchestrate._get_rest_client",
+            "azure_jobs.submit.native.orchestrate._get_rest_client",
             side_effect=AuthError("Azure CLI not logged in"),
         ):
             result = submit(request)
@@ -262,7 +262,7 @@ class TestSubmitMocked:
         assert "not logged in" in result.error
 
     def test_submit_status_callback(self):
-        from azure_jobs.core.submit import submit
+        from azure_jobs.submit import submit
 
         request = SubmitRequest(
             name="test-job",
@@ -281,7 +281,7 @@ class TestSubmitMocked:
             steps.append(ev.kind)
 
         with patch(
-            "azure_jobs.core.submit.native.azureml.orchestrate._get_rest_client"
+            "azure_jobs.submit.native.orchestrate._get_rest_client"
         ) as mock_factory:
             mock_client = mock_factory.return_value
             mock_client.environments.get.return_value = SimpleNamespace(id="env-id")
@@ -364,7 +364,7 @@ class TestResolveCompute:
 
 
 def _info(name: str, series: str = ""):
-    from azure_jobs.core.az_client.arm import InstanceTypeInfo
+    from azure_jobs.az_client.arm import InstanceTypeInfo
 
     return InstanceTypeInfo(name=f"Singularity.{name}", series_id=series)
 
@@ -375,7 +375,7 @@ class TestBuildResources:
         assert _build_resources(r, "", None, None) is None
 
     @patch(
-        "azure_jobs.core.submit.native.azureml.sku.match_instance_type",
+        "azure_jobs.submit.native.sku.match_instance_type",
         return_value=MatchedInstances([_info("ND40rs_v2"), _info("ND40s_v3")], "Premium"),
     )
     def test_sing_returns_aisupercomputer(self, mock_resolve):
@@ -402,7 +402,7 @@ class TestBuildResources:
         assert "virtualclusters/vc1" in aisc["VirtualClusterArmId"]
         assert mock_resolve.called
 
-    @patch("azure_jobs.core.submit.native.azureml.sku.match_instance_type", return_value=MatchedInstances([_info("D2_v3")], "Premium"))
+    @patch("azure_jobs.submit.native.sku.match_instance_type", return_value=MatchedInstances([_info("D2_v3")], "Premium"))
     def test_sing_image_version_from_amlt_sing_prefix(self, mock_resolve):
         r = SubmitRequest(
             name="j",
@@ -416,7 +416,7 @@ class TestBuildResources:
         aisc = res["properties"]["AISuperComputer"]
         assert aisc["imageVersion"] == "acpt-torch2.7.1-py3.10-cuda12.6-ubuntu22.04"
 
-    @patch("azure_jobs.core.submit.native.azureml.sku.match_instance_type", return_value=MatchedInstances([_info("D2_v3")], "Premium"))
+    @patch("azure_jobs.submit.native.sku.match_instance_type", return_value=MatchedInstances([_info("D2_v3")], "Premium"))
     def test_sing_image_version_empty_for_non_sing_image(self, mock_resolve):
         r = SubmitRequest(
             name="j",
@@ -431,16 +431,16 @@ class TestBuildResources:
         assert aisc["imageVersion"] == ""
 
     @patch(
-        "azure_jobs.core.submit.native.azureml.sku.match_instance_type",
+        "azure_jobs.submit.native.sku.match_instance_type",
         side_effect=__import__(
-            "azure_jobs.core.errors", fromlist=["SkuResolveError"]
+            "azure_jobs.errors", fromlist=["SkuResolveError"]
         ).SkuResolveError("no match"),
     )
     def test_sing_no_match_raises(self, mock_resolve):
         """match_instance_type raising propagates out of _build_resources."""
         import pytest
 
-        from azure_jobs.core.errors import SkuResolveError
+        from azure_jobs.errors import SkuResolveError
 
         r = SubmitRequest(
             name="j",
@@ -594,7 +594,7 @@ class TestResolveSingIdentity:
         assert _resolve_sing_identity(r, client) == "found-it"
 
     def test_no_match_raises_config_error(self):
-        from azure_jobs.core.errors import ConfigError
+        from azure_jobs.errors import ConfigError
 
         r = SubmitRequest(
             name="j",
@@ -616,7 +616,7 @@ class TestResolveSingIdentity:
             _resolve_sing_identity(r, client)
 
     def test_no_uais_attached_raises_config_error(self):
-        from azure_jobs.core.errors import ConfigError
+        from azure_jobs.errors import ConfigError
 
         r = SubmitRequest(
             name="j",
@@ -659,7 +659,7 @@ class TestBuildStorageMounts:
         # Datastore should have been created with deterministic hash-based name
         client.datastores.get_or_create.assert_called_once()
         call_kwargs = client.datastores.get_or_create.call_args
-        from azure_jobs.core.submit.native.azureml.storage import _datastore_name
+        from azure_jobs.submit.native.storage import _datastore_name
 
         expected_ds = _datastore_name(
             "fastaml123", "shared", "fast_shared", "/mnt/fast_shared"
@@ -706,7 +706,7 @@ class TestBuildStorageMounts:
 class TestInternalEnvKeys:
     def test_no_internal_env_keys_leaked(self):
         """All keys in env_vars should be passed through to the job verbatim."""
-        from azure_jobs.core.submit.native.azureml.orchestrate import _build_env_vars
+        from azure_jobs.submit.native.orchestrate import _build_env_vars
 
         r = SubmitRequest(name="j", env_vars={"FOO": "bar"}, shm_size="")
         assert _build_env_vars(r, {}) == {"FOO": "bar"}

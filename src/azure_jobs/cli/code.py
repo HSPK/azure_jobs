@@ -8,7 +8,7 @@ from pathlib import Path
 import click
 
 from azure_jobs.cli import main
-from azure_jobs.core import const
+from azure_jobs import const
 from azure_jobs.utils.fs import compute_code_hash, read_ignore_file, walk_code
 from azure_jobs.utils.ui import info, warning
 
@@ -19,7 +19,7 @@ def code_group() -> None:
 def _resolve_ignore_patterns(template: str | None, code_dir: Path) -> list[str]:
     template_ignore: list[str] = []
     if template:
-        from azure_jobs.core.template import ConfigError, Template, read_conf
+        from azure_jobs.template import ConfigError, Template, read_conf
 
         tp = const.AJ_TEMPLATE_HOME / f"{template}.yaml"
         if not tp.exists():

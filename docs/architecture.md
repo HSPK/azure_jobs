@@ -4,29 +4,27 @@
 
 ```
 src/azure_jobs/
-├── cli/             # Click commands — thin orchestration over core/
-├── core/
-│   ├── template/    # YAML template loader, merge engine, validator
-│   ├── config/      # aj_config.json (workspace, defaults, dashboard)
-│   ├── submit/      # Submission engine + backends + record.jsonl
-│   ├── az_client/   # Pure-REST Azure clients (ARM + ML)
-│   ├── aml/         # AML compute / VM-GPU helpers built on az_client
-│   ├── jobs.py      # Cross-workspace job aggregation
-│   ├── errors.py    # Typed exception hierarchy
-│   └── const.py     # Path constants (AJ_HOME-derived)
+├── cli/             # Click commands — thin orchestration over the sibling packages
+├── template/        # YAML template loader, merge engine, validator
+├── config/          # aj_config.json (workspace, defaults, dashboard)
+├── submit/          # Submission engine + backends
+├── az_client/       # Pure-REST Azure clients (ARM + ML)
 ├── tui/             # `aj dash` — Textual dashboard
-└── utils/           # ui, fs, ignore, time, text, dataclass helpers
+├── utils/           # ui, fs, ignore, time, text, dataclass helpers
+├── journal.py       # Append-only record.jsonl + short-id resolution
+├── errors.py        # Typed exception hierarchy
+└── const.py         # Path constants (AJ_HOME-derived)
 ```
 
-The CLI never reaches into ARM/ML SDKs; it goes through `core/`. The TUI is one
-more `core/` consumer with its own state and controllers.
+The CLI never reaches into ARM/ML SDKs; it goes through these sibling packages.
+The TUI is one more consumer with its own state and controllers.
 
 ## Submission engine
 
-`core/submit/` decomposes into a backend-agnostic core plus two submission
-methods. The native method has three target clusters as sub-clients. All build
-a `SubmitRequest`, run it, return a `SubmitResult`, and emit `SubmitEvent`s for
-progress UI.
+`submit/` decomposes into a backend-agnostic core plus two submission methods.
+The native method covers three target clusters: `aml`/`sing` share the same
+top-level files; `volcano` is its own subpackage. All build a `SubmitRequest`,
+run it, return a `SubmitResult`, and emit `SubmitEvent`s for progress UI.
 
 ```
 submit/
@@ -38,31 +36,31 @@ submit/
 ├── dispatch.py      # Backend registry (register_backend / get_backend)
 ├── amlt.py          # Shells out to the amlt CLI
 └── native/          # We build the REST request ourselves
-    ├── __init__.py  # Service router — dispatch by request.service
-    ├── azureml/     # `aml` (Azure ML) + `sing` (Singularity) targets
+    ├── __init__.py  # Service router + registers `aml`/`sing` backends
+    ├── coords.py, orchestrate.py, sku.py, target.py, …  # aml/sing shared
     └── volcano/     # K8s Volcano target via kubectl
 ```
 
 `SubmissionRecord` and the append-only `record.jsonl` I/O live in
-`core/journal.py` — it is local-journal state, not submission state.
+`journal.py` — local-journal state, not submission state.
 
 Every backend exposes `(request, *, on_event) -> SubmitResult` and self-registers
 via `register_backend(...)` at import time. The CLI dispatches by
-`request.service` — `aml`/`sing` → native(azureml), `volcano` → native(volcano),
+`request.service` — `aml`/`sing` → native (shared files), `volcano` → native(volcano),
 `amlt` → amlt (also forced when `--amlt` is passed).
 
 ## Submit flow
 
 ```
 aj run -t gpu -n 4 -p 8 train.py
-  ├─ read_conf()              resolve base chain (core/template/engine.py)
+  ├─ read_conf()              resolve base chain (template/engine.py)
   ├─ merge_confs()            dicts recurse; lists-of-dicts merge by index;
   │                           scalar lists concatenate; scalars last-wins
   ├─ apply -n / -p / --ppn
   ├─ build_submit_request →   SubmitRequest
   ├─ get_backend(service)
   │     native  → resolve target → upload code → PUT /jobs/{name}
-  │              (aml/sing via azureml client, volcano via kubectl)
+  │              (aml/sing via shared native files, volcano via kubectl)
   │     amlt    → materialise YAML → exec amlt run
   └─ log_record() →           append SubmissionRecord to record.jsonl
 ```
@@ -101,7 +99,7 @@ teardown uses `kubectl delete --wait=false`.
 
 ## REST client
 
-`core/az_client/` is workspace-agnostic ARM + workspace-scoped ML, split into
+`az_client/` is workspace-agnostic ARM + workspace-scoped ML, split into
 two sub-packages on top of a shared transport:
 
 ```
@@ -179,6 +177,6 @@ the active job protected from eviction.
 - **Append-only `record.jsonl`.** One submission per line.
 - **Lazy imports** in the CLI keep cold start fast; the SDK surface at the
   package root uses `__getattr__` lazy loading.
-- **Pure / impure split** throughout `core/` — template merging, REST parsing,
+- **Pure / impure split** throughout — template merging, REST parsing,
   quota parsing, SKU resolution are all functions on plain data, tested
   without I/O.

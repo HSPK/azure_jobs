@@ -49,7 +49,7 @@ def exp_list(
         fetch_jobs_all_ws_with_progress,
         fetch_jobs_with_progress,
     )
-    from azure_jobs.core.az_client import apply_cutoff
+    from azure_jobs.az_client import apply_cutoff
     from azure_jobs.utils.stats import aggregate_by_experiment
     from azure_jobs.utils.ui import show_experiment_stats_table, warning
 
@@ -91,7 +91,7 @@ def exp_list(
 @click.option("--ws", "ws_name", default=None, help="Workspace name override")
 def exp_show(name: str, last: int, ws_name: str | None) -> None:
     """Show recent jobs for a specific experiment."""
-    from azure_jobs.core.az_client import create_rest_client
+    from azure_jobs.az_client import create_rest_client
     from azure_jobs.utils.ui import console, show_cloud_jobs_table, warning
 
     client = create_rest_client(ws_name=ws_name)

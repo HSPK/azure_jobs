@@ -36,7 +36,7 @@ def image_list(query: str | None) -> None:
 def _fetch_sing_images() -> list[dict]:
     import logging
 
-    from azure_jobs.core.az_client import AzureARMClient
+    from azure_jobs.az_client import AzureARMClient
 
     log = logging.getLogger(__name__)
     with AzureARMClient() as arm:

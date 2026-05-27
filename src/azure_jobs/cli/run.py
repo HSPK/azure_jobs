@@ -7,22 +7,22 @@ import click
 
 from azure_jobs.cli import main
 from azure_jobs.cli.runner import submit_and_record
-from azure_jobs.core.config import (
+from azure_jobs.config import (
     ensure_experiment,
     get_defaults,
     get_experiment,
     save_defaults,
 )
-from azure_jobs.core.errors import AJError
-from azure_jobs.core.journal import SubmissionRecord
-from azure_jobs.core.submit import (
+from azure_jobs.errors import AJError
+from azure_jobs.journal import SubmissionRecord
+from azure_jobs.submit import (
     amlt_available,
     build_submit_request,
     get_backend,
     materialise_submission,
 )
-from azure_jobs.core.submit.native.azureml.sku import resolve_sku
-from azure_jobs.core.template import Template
+from azure_jobs.submit.native.sku import resolve_sku
+from azure_jobs.template import Template
 from azure_jobs.utils.naming import resolve_name
 from azure_jobs.utils.ui import show_dry_run_result, show_submission_preview
 
@@ -144,7 +144,7 @@ def run(
     )
 
 def _load_template(template: str | None) -> tuple[Template, str]:
-    from azure_jobs.core import const
+    from azure_jobs import const
 
     if template is None:
         template = get_defaults().template

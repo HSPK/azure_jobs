@@ -14,7 +14,7 @@ def sku_group() -> None:
 @click.option("--all", "show_all", is_flag=True, help="Include zero-quota families")
 def sku_list(show_all: bool) -> None:
     """List available SKUs on Singularity virtual clusters."""
-    from azure_jobs.core.az_client import AzureARMClient
+    from azure_jobs.az_client import AzureARMClient
     from azure_jobs.utils.ui import console, error, show_sku_table
 
     arm = AzureARMClient()

@@ -11,7 +11,7 @@ import yaml
 from rich.panel import Panel
 from rich.table import Table
 
-from azure_jobs.core import const
+from azure_jobs import const
 
 _STEPS = 4
 
@@ -51,7 +51,7 @@ def _sanitise(name: str) -> str:
     return _SAFE_NAME.sub("-", name.lower()).strip("-") or "default"
 
 def _pick_account() -> str:
-    from azure_jobs.core.az_client import AzureARMClient
+    from azure_jobs.az_client import AzureARMClient
     from azure_jobs.utils.ui import console, dim, warning
 
     with console.status(
@@ -134,7 +134,7 @@ def _pick_environment() -> tuple[str, str]:
     return "environment.sing", image
 
 def _pick_storage() -> str:
-    from azure_jobs.core.az_client import AzureARMClient
+    from azure_jobs.az_client import AzureARMClient
     from azure_jobs.utils.ui import console, dim, info, warning
 
     with console.status(
@@ -188,7 +188,7 @@ def _generate_leaves(
     workspace: dict[str, str],
     force: bool,
 ) -> list[dict[str, str]]:
-    from azure_jobs.core.az_client import AzureARMClient
+    from azure_jobs.az_client import AzureARMClient
     from azure_jobs.utils.ui import console, error, warning
 
     with console.status(
@@ -251,7 +251,7 @@ def _generate_leaves(
     return rows
 
 def _pick_workspace() -> dict[str, str]:
-    from azure_jobs.core.az_client import AzureARMClient
+    from azure_jobs.az_client import AzureARMClient
     from azure_jobs.utils.ui import console, error
 
     with console.status(

@@ -18,6 +18,7 @@ from .extract import JobInfo
 from .jobs import JobPredicate, JobsAPI, ProgressCallback, apply_cutoff
 from .logs import DEFAULT_POLL_INTERVAL, LogsAPI, LogStreamer
 from .models import DatastoreInfo, EnvironmentInfo
+from .vm_gpu import AML_VM_GPU, vm_sku_label
 
 class AzureMLClient:
     """REST client for Azure ML workspace operations."""
@@ -75,6 +76,7 @@ def create_rest_client(
     )
 
 __all__ = [
+    "AML_VM_GPU",
     "AzureMLClient",
     "BlobAPI",
     "DEFAULT_POLL_INTERVAL",
@@ -95,4 +97,5 @@ __all__ = [
     "apply_cutoff",
     "create_rest_client",
     "fetch_jobs_all_workspaces",
+    "vm_sku_label",
 ]

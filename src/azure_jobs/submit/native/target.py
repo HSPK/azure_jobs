@@ -5,11 +5,11 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
-from ...models import SubmitRequest
+from ..models import SubmitRequest
 from .image import _SING_IMAGE_PREFIX
 
 if TYPE_CHECKING:
-    from azure_jobs.core.az_client import AzureMLClient
+    from azure_jobs.az_client import AzureMLClient
 
 log = logging.getLogger(__name__)
 
@@ -134,7 +134,7 @@ def _resolve_sing_identity(
     if not uai_resource_id:
         return None
 
-    from azure_jobs.core.errors import ConfigError
+    from azure_jobs.errors import ConfigError
 
     ws = client.get_workspace()
     uais = (ws.get("identity") or {}).get("userAssignedIdentities") or {}

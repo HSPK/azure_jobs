@@ -428,7 +428,7 @@ def _fmt_nodes(
 
 def show_aml_quota_table(ws_computes: list[tuple[Any, list[Any]]]) -> None:
     """Display AML compute clusters grouped by workspace."""
-    from azure_jobs.core.aml import vm_sku_label
+    from azure_jobs.az_client.ml import vm_sku_label
 
     rows: list[dict[str, Any]] = []
     max_idle_w = max_busy_w = max_total_w = 1

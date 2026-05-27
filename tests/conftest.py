@@ -12,7 +12,7 @@ import pytest
 @pytest.fixture(autouse=True)
 def _stub_azure_resolvers():
     """Avoid hitting Azure Resource Graph / ARM during submit pipeline tests."""
-    from azure_jobs.core.az_client import VCInfo, WorkspaceInfo
+    from azure_jobs.az_client import VCInfo, WorkspaceInfo
 
     fake_vc = VCInfo(
         name="stub-vc",
@@ -26,15 +26,15 @@ def _stub_azure_resolvers():
     )
     with (
         patch(
-            "azure_jobs.core.az_client.arm.vc.VCQuotaAPI.get_by_name",
+            "azure_jobs.az_client.arm.vc.VCQuotaAPI.get_by_name",
             return_value=fake_vc,
         ),
         patch(
-            "azure_jobs.core.az_client.arm.compute.ComputesAPI.get_workspace",
+            "azure_jobs.az_client.arm.compute.ComputesAPI.get_workspace",
             return_value=fake_ws,
         ),
         patch(
-            "azure_jobs.core.az_client.arm.workspace.WorkspacesAPI.get",
+            "azure_jobs.az_client.arm.workspace.WorkspacesAPI.get",
             return_value=fake_ws,
         ),
     ):
@@ -46,21 +46,21 @@ def aj_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Create an isolated AJ_HOME directory with all sub-paths wired up."""
     home = tmp_path / ".azure_jobs"
     home.mkdir()
-    monkeypatch.setattr("azure_jobs.core.const.AJ_HOME", home)
-    monkeypatch.setattr("azure_jobs.core.const.AJ_CONFIG", home / "aj_config.json")
-    monkeypatch.setattr("azure_jobs.core.const.AJ_RECORD", home / "record.jsonl")
+    monkeypatch.setattr("azure_jobs.const.AJ_HOME", home)
+    monkeypatch.setattr("azure_jobs.const.AJ_CONFIG", home / "aj_config.json")
+    monkeypatch.setattr("azure_jobs.const.AJ_RECORD", home / "record.jsonl")
 
     template_home = home / "template"
     template_home.mkdir()
-    monkeypatch.setattr("azure_jobs.core.const.AJ_TEMPLATE_HOME", template_home)
+    monkeypatch.setattr("azure_jobs.const.AJ_TEMPLATE_HOME", template_home)
 
     submission_home = home / "submission"
     submission_home.mkdir()
-    monkeypatch.setattr("azure_jobs.core.const.AJ_SUBMISSION_HOME", submission_home)
+    monkeypatch.setattr("azure_jobs.const.AJ_SUBMISSION_HOME", submission_home)
 
     dryrun_home = home / "dryrun"
     dryrun_home.mkdir()
-    monkeypatch.setattr("azure_jobs.core.const.AJ_DRYRUN_HOME", dryrun_home)
+    monkeypatch.setattr("azure_jobs.const.AJ_DRYRUN_HOME", dryrun_home)
 
     return home
 

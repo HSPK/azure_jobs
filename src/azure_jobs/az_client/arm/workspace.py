@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from azure_jobs.core.errors import NETWORK_LIKE_ERRORS, ConfigError
+from azure_jobs.errors import NETWORK_LIKE_ERRORS, ConfigError
 
 from .models import WorkspaceInfo
 from ._base import ArmNamespace

@@ -8,7 +8,7 @@ from datetime import datetime
 
 from rich.markup import escape
 
-from azure_jobs.core.const import AJ_LOGS_HOME
+from azure_jobs.const import AJ_LOGS_HOME
 from azure_jobs.tui.controllers.base import Controller
 from azure_jobs.tui.controllers.logs._shared import MAX_BUFFER_LINES, MAX_SNAPSHOTS
 from azure_jobs.tui.state import JobLogSnapshot, LogsState

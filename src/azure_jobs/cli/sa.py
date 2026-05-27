@@ -11,7 +11,7 @@ def sa_group() -> None:
 @sa_group.command(name="list")
 def sa_list() -> None:
     """List storage accounts across accessible subscriptions."""
-    from azure_jobs.core.az_client import AzureARMClient
+    from azure_jobs.az_client import AzureARMClient
     from azure_jobs.utils.ui import console, error, show_storage_accounts_table
 
     arm = AzureARMClient()

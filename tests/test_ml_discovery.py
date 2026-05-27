@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-from azure_jobs.core.az_client import WorkspaceInfo, fetch_jobs_all_workspaces
+from azure_jobs.az_client import WorkspaceInfo, fetch_jobs_all_workspaces
 
 
 def _make_ws(name: str) -> WorkspaceInfo:
@@ -13,8 +13,8 @@ def _make_ws(name: str) -> WorkspaceInfo:
     )
 
 
-@patch("azure_jobs.core.az_client.AzureMLClient")
-@patch("azure_jobs.core.az_client.AzureARMClient")
+@patch("azure_jobs.az_client.AzureMLClient")
+@patch("azure_jobs.az_client.AzureARMClient")
 class TestFetchJobsAllWorkspaces:
     def test_returns_empty_when_no_workspaces(self, mock_arm_cls, mock_ml_cls):
         arm = MagicMock()

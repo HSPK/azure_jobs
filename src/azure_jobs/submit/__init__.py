@@ -25,8 +25,8 @@ from .models import (
     VolcanoOpts,
 )
 from .native import submit_via_native
-from .native.azureml.coords import resolve_target
-from .native.azureml.orchestrate import submit
+from .native.coords import resolve_target
+from .native.orchestrate import submit
 from .native.volcano import submit_via_volcano
 from .render import render_amlt_config
 
