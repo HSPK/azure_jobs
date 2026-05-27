@@ -7,8 +7,8 @@ from pathlib import Path
 
 import click
 
-from azure_jobs.core import const
-from azure_jobs.core.config import read_config
+from azure_jobs import const
+from azure_jobs.config import read_config
 from azure_jobs.utils.ui import (
     console,
     get_output_mode,

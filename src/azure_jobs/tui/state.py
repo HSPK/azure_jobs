@@ -6,12 +6,12 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any
 
-from azure_jobs.core.config import AJWorkspace
+from azure_jobs.config import AJWorkspace
 
 if TYPE_CHECKING:
     from textual.widgets import OptionList, Static
 
-    from azure_jobs.core.az_client import AzureMLClient, LogStreamer
+    from azure_jobs.az_client import AzureMLClient, LogStreamer
     from azure_jobs.tui.components import LogViewer
 
 class LoadStatus(str, Enum):

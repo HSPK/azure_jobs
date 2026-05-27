@@ -19,7 +19,7 @@ def uai_group() -> None:
 )
 def uai_list(full: bool) -> None:
     """List user-assigned managed identities across accessible subscriptions."""
-    from azure_jobs.core.az_client import AzureARMClient
+    from azure_jobs.az_client import AzureARMClient
     from azure_jobs.utils.ui import console, error, get_output_mode, show_uai_table
 
     arm = AzureARMClient()

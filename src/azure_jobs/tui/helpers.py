@@ -31,7 +31,7 @@ FETCH_LIMIT = 500
 def get_page_size() -> int:
     """Return dashboard page size from config, defaulting to PAGE_SIZE."""
     try:
-        from azure_jobs.core.config import read_config
+        from azure_jobs.config import read_config
 
         return read_config().dashboard.page_size
     except Exception:

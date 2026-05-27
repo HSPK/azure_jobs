@@ -7,8 +7,8 @@ import json
 import sys
 from unittest.mock import MagicMock
 
-from azure_jobs.core.submit.models import SubmitRequest, SubmitResult
-from azure_jobs.core.submit.record import SubmissionRecord
+from azure_jobs.journal import JobRecord
+from azure_jobs.job.spec import JobSpec, JobResult
 from azure_jobs.utils.ui import (
     set_output_mode,
     show_dry_run_result,
@@ -28,7 +28,7 @@ def _capture_stdout(fn) -> str:
     return buf.getvalue()
 
 
-def _make_request(**overrides) -> SubmitRequest:
+def _make_request(**overrides) -> JobSpec:
     defaults = dict(
         name="azure_jobs_abc12345",
         sid="abc12345",
@@ -44,13 +44,13 @@ def _make_request(**overrides) -> SubmitRequest:
         submission_path="/tmp/abc12345.yaml",
     )
     defaults.update(overrides)
-    return SubmitRequest(**defaults)
+    return JobSpec(**defaults)
 
 
-def _make_result(name: str = "azure_jobs_abc12345", **overrides) -> SubmitResult:
+def _make_result(name: str = "azure_jobs_abc12345", **overrides) -> JobResult:
     defaults = dict(job_name=name, status="submitted")
     defaults.update(overrides)
-    return SubmitResult(**defaults)
+    return JobResult(**defaults)
 
 
 class TestDryRunResultJson:
@@ -117,7 +117,7 @@ class TestSubmissionResultJson:
 
     def test_success_payload(self):
         req = _make_request()
-        rec = SubmissionRecord(
+        rec = JobRecord(
             request=req,
             created_at="2026-05-20T00:00:00+00:00",
             status="submitted",
@@ -156,7 +156,7 @@ class TestSubmissionResultJson:
 
     def test_failure_payload(self):
         req = _make_request()
-        rec = SubmissionRecord(
+        rec = JobRecord(
             request=req,
             created_at="2026-05-20T00:00:00+00:00",
             status="failed",
@@ -185,7 +185,7 @@ class TestSubmitAndRecordJson:
 
         set_output_mode("json")
         req = _make_request()
-        rec = SubmissionRecord(
+        rec = JobRecord(
             request=req,
             created_at="2026-05-20T00:00:00+00:00",
             status="submitted",
@@ -224,7 +224,7 @@ class TestSubmitAndRecordJson:
 
         set_output_mode("json")
         req = _make_request()
-        rec = SubmissionRecord(
+        rec = JobRecord(
             request=req,
             created_at="2026-05-20T00:00:00+00:00",
             status="submitted",

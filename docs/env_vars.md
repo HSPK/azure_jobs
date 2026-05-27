@@ -10,7 +10,7 @@ and template tracking.
 | `AJ_NAME` | `str` | `request.name` | Display name of the job (e.g. `my-project_abc12345`). |
 | `AJ_ID` | `str` (8 hex) | `request.sid` | Short aj submission ID — also used in the short-ID lookups by `aj job status <id>` / `aj job logs <id>`. |
 | `AJ_TEMPLATE` | `str` | `request.template_name` | Name of the template that produced this submission (e.g. `gpu-a100`). |
-| `AJ_SUBMIT_TIMESTAMP_UTC` | ISO 8601 | submit time | UTC timestamp at which `build_submit_request` was called. |
+| `AJ_SUBMIT_TIMESTAMP_UTC` | ISO 8601 | submit time | UTC timestamp at which `build_job_spec` was called. |
 | `AJ_NODES` | `int` (str-coerced) | CLI `-n` | Number of nodes. |
 | `AJ_PROCESSES` | `int` (str-coerced) | `nodes * gpus_per_node` | Total processes (≈ total GPUs) across the job. Convenience for `torchrun --nnodes $AJ_NODES --nproc-per-node $AJ_GPUS_PER_NODE`. |
 | `AJ_GPUS_PER_NODE` | `int` (str-coerced) | CLI `-p` / `--gpn` | GPUs per node — drives SKU resolution. |
@@ -24,7 +24,7 @@ not be renamed or removed without a major version bump.
 
 ## Source of truth
 
-These are populated in `core/submit/build.py:build_submit_request`. Tests
+These are populated in `job/build.py:build_job_spec`. Tests
 in `tests/test_submit.py` lock the contract.
 
 ## Example use in a training script

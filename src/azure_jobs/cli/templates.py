@@ -7,8 +7,8 @@ import click
 import yaml
 
 from azure_jobs.cli import main
-from azure_jobs.core import const
-from azure_jobs.core.config import get_defaults, read_config
+from azure_jobs import const
+from azure_jobs.config import get_defaults, read_config
 from azure_jobs.utils.ui import console, info, show_template_table, success, warning
 
 @main.group(name="template")
@@ -63,7 +63,7 @@ def template_push(message: str | None) -> None:
 @click.argument("name", type=str)
 def template_show(name: str) -> None:
     """Show the fully resolved config for a template."""
-    from azure_jobs.core.template import ConfigError, read_conf
+    from azure_jobs.template import ConfigError, read_conf
     from azure_jobs.utils.ui import emit_json, get_output_mode
 
     tp = const.AJ_TEMPLATE_HOME / f"{name}.yaml"
@@ -111,7 +111,7 @@ def template_show(name: str) -> None:
 @click.argument("name", type=str, required=False, default=None)
 def template_validate(name: str | None) -> None:
     """Validate template config (all templates if no name given)."""
-    from azure_jobs.core.template import validate_template
+    from azure_jobs.template import validate_template
     from azure_jobs.utils.ui import emit_json, get_output_mode
     from azure_jobs.utils.ui import error as ui_error
 

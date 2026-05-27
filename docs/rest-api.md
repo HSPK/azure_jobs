@@ -18,7 +18,7 @@ switch).
 
 ## Clients
 
-`core/az_client/` exposes two namespaced clients on top of a shared
+`az_client/` exposes two namespaced clients on top of a shared
 `AuthSession` (retry, token cache, `raise_for_rest_error`).
 
 ### `AzureARMClient` — subscription-wide

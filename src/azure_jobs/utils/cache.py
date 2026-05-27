@@ -21,7 +21,7 @@ def _safe_key(key: str) -> str:
     return cleaned or "empty"
 
 def _path(namespace: str, key: str) -> Path:
-    from azure_jobs.core import const
+    from azure_jobs import const
 
     return const.AJ_CACHE_HOME / namespace / f"{_safe_key(key)}.json"
 
@@ -51,7 +51,7 @@ def cache_set(namespace: str, key: str, value: Any) -> None:
 
 def cache_clear(namespace: str | None = None) -> int:
     """Delete cached entries; returns number of files removed."""
-    from azure_jobs.core import const
+    from azure_jobs import const
 
     root = const.AJ_CACHE_HOME / namespace if namespace else const.AJ_CACHE_HOME
     if not root.exists():

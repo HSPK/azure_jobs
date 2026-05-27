@@ -1,12 +1,10 @@
-"""Rich-progress wrappers around :mod:azure_jobs.core.jobs."""
+"""Rich-progress wrappers around the az_client job-query layer."""
 
 from __future__ import annotations
 
 import logging
 from datetime import datetime
 from typing import Any
-
-from azure_jobs.core.jobs import fetch_jobs, fetch_jobs_all_workspaces
 
 log = logging.getLogger(__name__)
 
@@ -17,7 +15,7 @@ def fetch_jobs_with_progress(
     cutoff_utc: datetime | None = None,
 ) -> list[dict[str, Any]]:
     """Single-workspace fetch wrapped with a Rich progress spinner."""
-    from azure_jobs.core.az_client import create_rest_client
+    from azure_jobs.az_client import create_rest_client
     from azure_jobs.utils.ui import console
 
     client = create_rest_client(ws_name=ws_name)
@@ -25,8 +23,7 @@ def fetch_jobs_with_progress(
         "[bold cyan]Fetching jobs…[/bold cyan]",
         spinner="dots",
     ) as st:
-        return fetch_jobs(
-            client,
+        return client.jobs.fetch(
             n,
             cutoff_utc=cutoff_utc,
             on_progress=lambda matched, scanned: st.update(
@@ -40,7 +37,10 @@ def fetch_jobs_all_ws_with_progress(
     cutoff_utc: datetime | None = None,
 ) -> list[dict[str, Any]]:
     """All-workspace parallel fetch with Rich progress + failure warnings."""
-    from azure_jobs.core.az_client import AzureARMClient
+    from azure_jobs.az_client import (
+        AzureARMClient,
+        fetch_jobs_all_workspaces,
+    )
     from azure_jobs.utils.ui import console, warning
 
     failures: list[tuple[Any, BaseException]] = []

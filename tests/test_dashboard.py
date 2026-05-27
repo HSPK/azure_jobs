@@ -50,7 +50,7 @@ def _dash(tmp_path: Path):
     """Create an AjDashboard pre-loaded with cloud job data (no Azure calls)."""
     cf = tmp_path / "aj_config.json"
     cf.write_text("{}")
-    with patch("azure_jobs.core.const.AJ_CONFIG", cf):
+    with patch("azure_jobs.const.AJ_CONFIG", cf):
         from azure_jobs.tui.app import AjDashboard
 
         app = AjDashboard(last=10)
@@ -107,7 +107,7 @@ async def test_navigate(_dash) -> None:
 async def test_empty(tmp_path: Path) -> None:
     cf = tmp_path / "aj_config.json"
     cf.write_text("{}")
-    with patch("azure_jobs.core.const.AJ_CONFIG", cf):
+    with patch("azure_jobs.const.AJ_CONFIG", cf):
         from azure_jobs.tui.app import AjDashboard
 
         app = AjDashboard(last=10)
@@ -192,7 +192,7 @@ async def test_escape_opens_help(_dash) -> None:
 @pytest.mark.asyncio
 async def test_workspace_picker(_dash) -> None:
     """w opens workspace picker when workspaces are cached."""
-    from azure_jobs.core.config import AJWorkspace
+    from azure_jobs.config import AJWorkspace
 
     async with _dash.run_test(size=(120, 30)) as pilot:
         await _load_jobs(_dash, pilot)

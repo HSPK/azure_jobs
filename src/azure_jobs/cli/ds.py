@@ -14,7 +14,7 @@ def ds_group() -> None:
 @click.option("--ws", "ws_name", default=None, help="Workspace name override")
 def ds_list(ws_name: str | None) -> None:
     """List datastores in the current workspace."""
-    from azure_jobs.core.az_client import create_rest_client
+    from azure_jobs.az_client import create_rest_client
     from azure_jobs.utils.ui import console, show_datastores_table
 
     client = create_rest_client(ws_name=ws_name)
@@ -27,7 +27,7 @@ def ds_list(ws_name: str | None) -> None:
 @click.option("--ws", "ws_name", default=None, help="Workspace name override")
 def ds_show(name: str, ws_name: str | None) -> None:
     """Show details of a datastore."""
-    from azure_jobs.core.az_client import create_rest_client
+    from azure_jobs.az_client import create_rest_client
     from azure_jobs.utils.ui import console, show_datastore_detail, warning
 
     client = create_rest_client(ws_name=ws_name)

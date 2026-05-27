@@ -11,7 +11,7 @@ from typing_extensions import TYPE_CHECKING
 from azure_jobs.cli import main
 
 if TYPE_CHECKING:
-    from azure_jobs.core.config import AJWorkspace
+    from azure_jobs.config import AJWorkspace
 
 def _confirm_step(name: str, force: bool) -> bool:
     if not force:
@@ -41,8 +41,8 @@ def init(ctx: click.Context, force: bool) -> None:
     _init_aj(force)
 
 def _init_aj(force: bool) -> None:
-    from azure_jobs.core import const
-    from azure_jobs.core.config import get_workspace_config, read_config, write_config
+    from azure_jobs import const
+    from azure_jobs.config import get_workspace_config, read_config, write_config
     from azure_jobs.utils.ui import dim, info, success, warning
 
     if not const.AJ_HOME.exists():
@@ -98,7 +98,7 @@ def init_amlt(ctx: click.Context, force: bool) -> None:
     """Set up amlt integration (project + workspace registration)."""
     from pathlib import Path
 
-    from azure_jobs.core.config import get_workspace_config
+    from azure_jobs.config import get_workspace_config
     from azure_jobs.utils.ui import console, dim, error, info, success
 
     parent_force = (ctx.parent and ctx.parent.obj or {}).get("force", False)
@@ -135,7 +135,7 @@ def init_amlt(ctx: click.Context, force: bool) -> None:
         "[bold cyan]Querying workspace storage…[/bold cyan]", spinner="dots"
     ):
         try:
-            from azure_jobs.core.az_client import create_rest_client
+            from azure_jobs.az_client import create_rest_client
 
             client = create_rest_client(workspace=ws)
             ws_info = client.get_workspace()
@@ -185,7 +185,7 @@ def init_amlt(ctx: click.Context, force: bool) -> None:
     success("amlt configured ✓")
 
 def _print_amlt_workspace_commands(aj_ws: "AJWorkspace") -> None:
-    from azure_jobs.core.config import detect_workspaces
+    from azure_jobs.config import detect_workspaces
     from azure_jobs.utils.ui import info
 
     sub = aj_ws.subscription_id
@@ -215,7 +215,7 @@ def _print_amlt_workspace_commands(aj_ws: "AJWorkspace") -> None:
     click.echo()
 
 def _setup_workspace() -> "AJWorkspace | None":
-    from azure_jobs.core.config import (
+    from azure_jobs.config import (
         AJWorkspace,
         detect_subscription,
         detect_workspaces,

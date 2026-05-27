@@ -14,7 +14,7 @@ def env_group() -> None:
 @click.option("--ws", "ws_name", default=None, help="Workspace name override")
 def env_list(ws_name: str | None) -> None:
     """List environments in the current workspace."""
-    from azure_jobs.core.az_client import create_rest_client
+    from azure_jobs.az_client import create_rest_client
     from azure_jobs.utils.ui import console, show_environments_table
 
     client = create_rest_client(ws_name=ws_name)
@@ -36,7 +36,7 @@ def env_list(ws_name: str | None) -> None:
 @click.option("--ws", "ws_name", default=None, help="Workspace name override")
 def env_show(name: str, last: int, ws_name: str | None) -> None:
     """Show versions of an environment."""
-    from azure_jobs.core.az_client import create_rest_client
+    from azure_jobs.az_client import create_rest_client
     from azure_jobs.utils.ui import console, show_environment_versions_table
 
     client = create_rest_client(ws_name=ws_name)

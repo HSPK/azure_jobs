@@ -13,7 +13,7 @@ def auth_group() -> None:
 @auth_group.command(name="status")
 def auth_status() -> None:
     """Show current Azure login status, subscription, and credential health."""
-    from azure_jobs.core.config import az_json, read_config
+    from azure_jobs.config import az_json, read_config
     from azure_jobs.utils.ui import console, show_auth_status
 
     account = az_json(["account", "show"])
@@ -58,7 +58,7 @@ def auth_login() -> None:
     if get_output_mode() != "json":
         console.print("[info]ℹ[/info] Opening Azure login…")
     try:
-        from azure_jobs.core.config import find_az
+        from azure_jobs.config import find_az
 
         kwargs = (
             {"capture_output": True, "text": True}
@@ -88,7 +88,7 @@ def auth_logout() -> None:
     from azure_jobs.utils.ui import console, get_output_mode, show_command_result
 
     try:
-        from azure_jobs.core.config import find_az
+        from azure_jobs.config import find_az
 
         result = subprocess.run(
             [find_az(), "logout"],

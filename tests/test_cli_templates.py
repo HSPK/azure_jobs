@@ -200,7 +200,7 @@ class TestTemplateDiffCommand:
             # Only git clone is subprocess now; diff uses Python difflib
             if "clone" in cmd:
                 # Create a clone dir that mirrors AJ_HOME so no diffs
-                from azure_jobs.core import const as _const
+                from azure_jobs import const as _const
 
                 dest = cmd[-1]
                 import shutil as _sh

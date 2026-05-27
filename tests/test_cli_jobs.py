@@ -1,4 +1,4 @@
-"""Tests for aj job / aj list / SubmissionRecord (split from test_cli.py)."""
+"""Tests for aj job / aj list / JobRecord (split from test_cli.py)."""
 
 import json
 from unittest.mock import patch
@@ -7,16 +7,16 @@ import pytest
 from click.testing import CliRunner
 
 from azure_jobs.cli import main
-from azure_jobs.core.submit import SubmissionRecord
-from azure_jobs.core.submit import SubmitRequest
+from azure_jobs.journal import JobRecord
+from azure_jobs.job import JobSpec
 
 from .helpers import MINIMAL_JOB_CONF, write_template
 
 
 class TestSubmissionRecord:
     def test_dataclass_fields(self):
-        rec = SubmissionRecord(
-            request=SubmitRequest(
+        rec = JobRecord(
+            request=JobSpec(
                 name="job",
                 sid="abc123",
                 template_name="gpu",
@@ -103,9 +103,9 @@ class TestJobListCommand:
         from unittest.mock import MagicMock, patch
 
         mock_client = MagicMock()
-        mock_client.jobs.list_page.return_value = ([], None)
+        mock_client.jobs.fetch.return_value = []
         with patch(
-            "azure_jobs.core.az_client.create_rest_client", return_value=mock_client
+            "azure_jobs.az_client.create_rest_client", return_value=mock_client
         ):
             runner = CliRunner()
             result = runner.invoke(main, ["job", "list"])
@@ -127,9 +127,9 @@ class TestJobListCommand:
             },
         ]
         mock_client = MagicMock()
-        mock_client.jobs.list_page.return_value = (jobs, None)
+        mock_client.jobs.fetch.return_value = jobs
         with patch(
-            "azure_jobs.core.az_client.create_rest_client", return_value=mock_client
+            "azure_jobs.az_client.create_rest_client", return_value=mock_client
         ):
             runner = CliRunner()
             result = runner.invoke(main, ["job", "list"])
@@ -161,9 +161,11 @@ class TestJobListCommand:
             },
         ]
         mock_client = MagicMock()
-        mock_client.jobs.list_page.return_value = (jobs, None)
+        mock_client.jobs.fetch.side_effect = lambda *a, **kw: [
+            j for j in jobs if kw["predicate"](j)
+        ]
         with patch(
-            "azure_jobs.core.az_client.create_rest_client", return_value=mock_client
+            "azure_jobs.az_client.create_rest_client", return_value=mock_client
         ):
             runner = CliRunner()
             result = runner.invoke(main, ["job", "list", "-s", "Failed"])
@@ -196,9 +198,11 @@ class TestJobListCommand:
             },
         ]
         mock_client = MagicMock()
-        mock_client.jobs.list_page.return_value = (jobs, None)
+        mock_client.jobs.fetch.side_effect = lambda *a, **kw: [
+            j for j in jobs if kw["predicate"](j)
+        ]
         with patch(
-            "azure_jobs.core.az_client.create_rest_client", return_value=mock_client
+            "azure_jobs.az_client.create_rest_client", return_value=mock_client
         ):
             runner = CliRunner()
             result = runner.invoke(main, ["job", "list", "-e", "exp-A"])
@@ -231,7 +235,7 @@ class TestJobStatusCommand:
             "error": "",
         }
         with patch(
-            "azure_jobs.core.az_client.create_rest_client", return_value=mock_client
+            "azure_jobs.az_client.create_rest_client", return_value=mock_client
         ):
             runner = CliRunner()
             result = runner.invoke(main, ["job", "status", "my-job-xyz"])
@@ -280,7 +284,7 @@ class TestJobStatusCommand:
             "error": "",
         }
         with patch(
-            "azure_jobs.core.az_client.create_rest_client", return_value=mock_client
+            "azure_jobs.az_client.create_rest_client", return_value=mock_client
         ):
             runner = CliRunner()
             result = runner.invoke(main, ["job", "status", "abc12345"])
@@ -316,7 +320,7 @@ class TestJobCancelCommand:
             {"name": "azure_jobs_abc12345", "status": "Canceled"},
         ]
         with mock_patch(
-            "azure_jobs.core.az_client.create_rest_client", return_value=mock_client
+            "azure_jobs.az_client.create_rest_client", return_value=mock_client
         ):
             runner = CliRunner()
             result = runner.invoke(main, ["job", "cancel", "abc12345"])
@@ -333,7 +337,7 @@ class TestJobCancelCommand:
             "status": "Completed",
         }
         with mock_patch(
-            "azure_jobs.core.az_client.create_rest_client", return_value=mock_client
+            "azure_jobs.az_client.create_rest_client", return_value=mock_client
         ):
             runner = CliRunner()
             result = runner.invoke(main, ["job", "cancel", "some-job"])
@@ -354,7 +358,7 @@ class TestJobLogsCommand:
             "portal_url": "",
         }
         with mock_patch(
-            "azure_jobs.core.az_client.create_rest_client", return_value=mock_client
+            "azure_jobs.az_client.create_rest_client", return_value=mock_client
         ):
             runner = CliRunner()
             result = runner.invoke(main, ["job", "logs", "some-job"])
@@ -375,7 +379,7 @@ class TestJobLogsCommand:
         }
         mock_client.logs.download.return_value = ("Hello from training", "")
         with mock_patch(
-            "azure_jobs.core.az_client.create_rest_client",
+            "azure_jobs.az_client.create_rest_client",
             return_value=mock_client,
         ):
             runner = CliRunner()
@@ -397,7 +401,7 @@ class TestJobLogsCommand:
         }
         mock_client.logs.download.return_value = ("Epoch 1/10 loss=0.5", "")
         with mock_patch(
-            "azure_jobs.core.az_client.create_rest_client",
+            "azure_jobs.az_client.create_rest_client",
             return_value=mock_client,
         ):
             runner = CliRunner()

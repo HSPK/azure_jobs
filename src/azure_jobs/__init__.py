@@ -10,22 +10,24 @@ except ImportError:
     __version__ = "0.0.0.dev0"
 
 _LAZY_ATTRS: dict[str, tuple[str, str]] = {
-    "Template": ("azure_jobs.core.template", "Template"),
-    "StorageMount": ("azure_jobs.core.submit", "StorageMount"),
-    "SubmitRequest": ("azure_jobs.core.submit", "SubmitRequest"),
-    "SubmitResult": ("azure_jobs.core.submit", "SubmitResult"),
-    "SubmitEvent": ("azure_jobs.core.submit", "SubmitEvent"),
-    "build_submit_request": ("azure_jobs.core.submit", "build_submit_request"),
-    "render_amlt_config": ("azure_jobs.core.submit", "render_amlt_config"),
-    "materialise_submission": ("azure_jobs.core.submit", "materialise_submission"),
-    "submit_via": ("azure_jobs.core.submit", "submit_via"),
-    "submit_via_native": ("azure_jobs.core.submit", "submit_via_native"),
-    "submit_via_volcano": ("azure_jobs.core.submit", "submit_via_volcano"),
-    "submit_via_amlt": ("azure_jobs.core.submit", "submit_via_amlt"),
+    "Template": ("azure_jobs.template", "Template"),
+    "StorageMount": ("azure_jobs.job", "StorageMount"),
+    "JobSpec": ("azure_jobs.job", "JobSpec"),
+    "JobResult": ("azure_jobs.job", "JobResult"),
+    "JobEvent": ("azure_jobs.job", "JobEvent"),
+    "build_job_spec": ("azure_jobs.job", "build_job_spec"),
+    "render_amlt_yaml": ("azure_jobs.job", "render_amlt_yaml"),
+    "write_amlt_yaml": ("azure_jobs.job", "write_amlt_yaml"),
+    "submit_via": ("azure_jobs.backend", "submit_via"),
+    "submit_via_amlt": ("azure_jobs.backend", "submit_via_amlt"),
     "submit_and_record": ("azure_jobs.cli.runner", "submit_and_record"),
-    "register_backend": ("azure_jobs.core.submit", "register_backend"),
-    "list_backends": ("azure_jobs.core.submit", "list_backends"),
-    "get_workspace_config": ("azure_jobs.core.config", "get_workspace_config"),
+    "register_backend": ("azure_jobs.backend", "register_backend"),
+    "list_backends": ("azure_jobs.backend", "list_backends"),
+    "JobRecord": ("azure_jobs.journal", "JobRecord"),
+    "log_record": ("azure_jobs.journal", "log_record"),
+    "read_records": ("azure_jobs.journal", "read_records"),
+    "resolve_short_id": ("azure_jobs.journal", "resolve_short_id"),
+    "get_workspace_config": ("azure_jobs.config", "get_workspace_config"),
 }
 
 def __getattr__(name: str):
@@ -43,40 +45,48 @@ def __dir__() -> list[str]:
 
 if TYPE_CHECKING:
     from azure_jobs.cli.runner import submit_and_record
-    from azure_jobs.core.config import get_workspace_config
-    from azure_jobs.core.submit import (
-        StorageMount,
-        SubmitEvent,
-        SubmitRequest,
-        SubmitResult,
-        build_submit_request,
+    from azure_jobs.config import get_workspace_config
+    from azure_jobs.journal import (
+        JobRecord,
+        log_record,
+        read_records,
+        resolve_short_id,
+    )
+    from azure_jobs.backend import (
         list_backends,
-        materialise_submission,
         register_backend,
-        render_amlt_config,
         submit_via,
         submit_via_amlt,
-        submit_via_native,
-        submit_via_volcano,
     )
-    from azure_jobs.core.template import Template
+    from azure_jobs.job import (
+        StorageMount,
+        JobEvent,
+        JobSpec,
+        JobResult,
+        build_job_spec,
+        write_amlt_yaml,
+        render_amlt_yaml,
+    )
+    from azure_jobs.template import Template
 
 __all__ = [
     "__version__",
     "Template",
     "StorageMount",
-    "SubmitRequest",
-    "SubmitResult",
-    "SubmitEvent",
-    "build_submit_request",
-    "render_amlt_config",
-    "materialise_submission",
+    "JobSpec",
+    "JobResult",
+    "JobEvent",
+    "build_job_spec",
+    "render_amlt_yaml",
+    "write_amlt_yaml",
     "submit_via",
     "submit_and_record",
-    "submit_via_native",
-    "submit_via_volcano",
     "submit_via_amlt",
     "register_backend",
     "list_backends",
+    "JobRecord",
+    "log_record",
+    "read_records",
+    "resolve_short_id",
     "get_workspace_config",
 ]

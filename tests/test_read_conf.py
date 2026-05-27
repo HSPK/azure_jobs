@@ -3,7 +3,7 @@ from pathlib import Path
 
 import yaml
 
-from azure_jobs.core.template import read_conf, ConfigError
+from azure_jobs.template import read_conf, ConfigError
 
 
 def write_yaml(path: Path, data: dict):

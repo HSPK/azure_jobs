@@ -35,7 +35,7 @@ def get_display_tz() -> Any:
 def get_display_tz_name() -> str:
     global _display_tz_name
     if _display_tz_name is None:
-        from azure_jobs.core.config import read_config
+        from azure_jobs.config import read_config
 
         tz = read_config().timezone
         _display_tz_name = tz if tz else _DEFAULT_TZ

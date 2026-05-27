@@ -38,7 +38,7 @@ def quota_list(backend: str, show_all: bool, full: bool) -> None:
         _show_sing_quotas(show_all, full=full)
 
 def _show_sing_quotas(show_all: bool, *, full: bool = False) -> None:
-    from azure_jobs.core.az_client import AzureARMClient
+    from azure_jobs.az_client import AzureARMClient
     from azure_jobs.utils.ui import console, error, show_sing_quota_table
 
     arm = AzureARMClient()
@@ -55,7 +55,7 @@ def _show_sing_quotas(show_all: bool, *, full: bool = False) -> None:
     show_sing_quota_table(vcs, full=full)
 
 def _show_aml_quotas(show_all: bool) -> None:
-    from azure_jobs.core.az_client import AzureARMClient, WorkspaceInfo
+    from azure_jobs.az_client import AzureARMClient, WorkspaceInfo
     from azure_jobs.utils.ui import (
         console,
         error,

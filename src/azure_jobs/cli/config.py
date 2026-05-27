@@ -14,7 +14,7 @@ def config_group() -> None:
 @click.argument("tz", required=False)
 def config_timezone(tz: str | None) -> None:
     """Get or set the display timezone."""
-    from azure_jobs.core.config import read_config, write_config
+    from azure_jobs.config import read_config, write_config
     from azure_jobs.utils.ui import (
         console,
         emit_json,
@@ -60,7 +60,7 @@ def config_timezone(tz: str | None) -> None:
 @click.argument("name", required=False)
 def config_experiment(name: str | None) -> None:
     """Get or set the experiment name."""
-    from azure_jobs.core.config import get_experiment, read_config, write_config
+    from azure_jobs.config import get_experiment, read_config, write_config
     from azure_jobs.utils.ui import (
         console,
         emit_json,
@@ -100,7 +100,7 @@ def config_show() -> None:
     """Show all configuration."""
     import json
 
-    from azure_jobs.core.config import read_config
+    from azure_jobs.config import read_config
     from azure_jobs.utils.ui import console, emit_json, get_output_mode
 
     cfg = read_config().to_dict()

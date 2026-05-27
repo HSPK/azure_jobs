@@ -5,14 +5,14 @@ from __future__ import annotations
 import click
 
 from azure_jobs.cli import main
-from azure_jobs.core.errors import AJError
+from azure_jobs.errors import AJError
 
 @main.group(name="ws")
 def ws_group() -> None:
     """Manage Azure ML workspaces."""
 
 def _ensure_workspaces() -> tuple[dict[str, str], list[dict[str, str]]]:
-    from azure_jobs.core.config import detect_subscription, detect_workspaces
+    from azure_jobs.config import detect_subscription, detect_workspaces
     from azure_jobs.utils.ui import console
 
     sub = detect_subscription()
@@ -30,7 +30,7 @@ def _ensure_workspaces() -> tuple[dict[str, str], list[dict[str, str]]]:
 @ws_group.command(name="list")
 def ws_list() -> None:
     """List Azure ML workspaces in the current subscription."""
-    from azure_jobs.core.config import read_config
+    from azure_jobs.config import read_config
     from azure_jobs.utils.ui import Column, TableView, console, get_output_mode, render_table
 
     sub, workspaces = _ensure_workspaces()
@@ -80,7 +80,7 @@ def ws_show(name: str | None) -> None:
     from rich.panel import Panel
     from rich.table import Table
 
-    from azure_jobs.core.config import read_config, resolve_workspace
+    from azure_jobs.config import read_config, resolve_workspace
     from azure_jobs.utils.ui import console, emit_json, get_output_mode, warning
 
     if name:
@@ -141,7 +141,7 @@ def ws_show(name: str | None) -> None:
 @click.argument("name", required=False)
 def ws_set(name: str | None) -> None:
     """Set the active workspace."""
-    from azure_jobs.core.config import (
+    from azure_jobs.config import (
         AJWorkspace,
         pick_workspace,
         read_config,
