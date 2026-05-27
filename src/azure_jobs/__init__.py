@@ -25,6 +25,10 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
     "submit_and_record": ("azure_jobs.cli.runner", "submit_and_record"),
     "register_backend": ("azure_jobs.core.submit", "register_backend"),
     "list_backends": ("azure_jobs.core.submit", "list_backends"),
+    "SubmissionRecord": ("azure_jobs.core.journal", "SubmissionRecord"),
+    "log_record": ("azure_jobs.core.journal", "log_record"),
+    "read_records": ("azure_jobs.core.journal", "read_records"),
+    "resolve_short_id": ("azure_jobs.core.journal", "resolve_short_id"),
     "get_workspace_config": ("azure_jobs.core.config", "get_workspace_config"),
 }
 
@@ -44,6 +48,12 @@ def __dir__() -> list[str]:
 if TYPE_CHECKING:
     from azure_jobs.cli.runner import submit_and_record
     from azure_jobs.core.config import get_workspace_config
+    from azure_jobs.core.journal import (
+        SubmissionRecord,
+        log_record,
+        read_records,
+        resolve_short_id,
+    )
     from azure_jobs.core.submit import (
         StorageMount,
         SubmitEvent,
@@ -78,5 +88,9 @@ __all__ = [
     "submit_via_amlt",
     "register_backend",
     "list_backends",
+    "SubmissionRecord",
+    "log_record",
+    "read_records",
+    "resolve_short_id",
     "get_workspace_config",
 ]

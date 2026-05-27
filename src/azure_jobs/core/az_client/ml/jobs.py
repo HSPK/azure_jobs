@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from datetime import datetime
+from typing import Any, Callable
 from urllib.parse import quote
+
+from azure_jobs.utils.time import parse_utc
 
 from ..auth import (
     API_VERSION,
@@ -19,6 +22,33 @@ from .extract import JobInfo, extract_rest_job
 from .run_history import RunHistoryAPI
 
 log = logging.getLogger(__name__)
+
+ProgressCallback = Callable[[int, int], None]
+"""``on_progress(matched, scanned)`` — called after each fetched page."""
+
+JobPredicate = Callable[[dict[str, Any]], bool]
+"""``predicate(job) -> keep?`` — client-side filter applied during fetch."""
+
+
+def _job_older_than(j: dict[str, Any], cutoff_utc: datetime) -> bool:
+    raw = j.get("created_utc", "")
+    if not raw:
+        return False
+    try:
+        return parse_utc(raw) < cutoff_utc
+    except ValueError:
+        return False
+
+
+def apply_cutoff(
+    jobs: list[dict[str, Any]],
+    cutoff_utc: datetime | None,
+) -> list[dict[str, Any]]:
+    """Drop jobs whose ``created_utc`` is strictly older than *cutoff_utc*."""
+    if cutoff_utc is None:
+        return jobs
+    return [j for j in jobs if not _job_older_than(j, cutoff_utc)]
+
 
 class JobsAPI:
     """Job management operations scoped to an Azure ML workspace."""
@@ -64,6 +94,53 @@ class JobsAPI:
         data = resp.json()
         jobs = [extract_rest_job(j) for j in data.get("value", [])]
         return jobs, data.get("nextLink")
+
+    def fetch(
+        self,
+        n: int,
+        *,
+        cutoff_utc: datetime | None = None,
+        on_progress: ProgressCallback | None = None,
+        list_view_type: str = "ActiveOnly",
+        job_type: str = "",
+        tag: str = "",
+        predicate: JobPredicate | None = None,
+        max_scan: int | None = None,
+    ) -> list[JobInfo]:
+        """Fetch up to *n* matching jobs by paging :meth:`list_page`."""
+        jobs: list[JobInfo] = []
+        next_link = None
+        scanned = 0
+
+        while len(jobs) < n and (max_scan is None or scanned < max_scan):
+            page, next_link = self.list_page(
+                next_link=next_link,
+                top=n,
+                list_view_type=list_view_type,
+                job_type=job_type,
+                tag=tag,
+            )
+            if not page:
+                break
+
+            past_cutoff = False
+            for j in page:
+                scanned += 1
+                if cutoff_utc and _job_older_than(j, cutoff_utc):
+                    past_cutoff = True
+                    break
+                if predicate is not None and not predicate(j):
+                    continue
+                jobs.append(j)
+                if len(jobs) >= n:
+                    break
+
+            if on_progress is not None:
+                on_progress(len(jobs), scanned)
+
+            if past_cutoff or not next_link:
+                break
+        return jobs[:n]
 
     def _build_list_url(
         self,
@@ -119,3 +196,12 @@ class JobsAPI:
         )
         resp = self._ctx.session.post(url, timeout=TIMEOUT_STANDARD)
         raise_for_rest_error(resp)
+
+
+__all__ = [
+    "JobsAPI",
+    "JobPredicate",
+    "ProgressCallback",
+    "apply_cutoff",
+]
+

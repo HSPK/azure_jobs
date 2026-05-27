@@ -14,14 +14,14 @@ from azure_jobs.core.config import (
     save_defaults,
 )
 from azure_jobs.core.errors import AJError
-from azure_jobs.core.submit.native.sku import resolve_sku
+from azure_jobs.core.journal import SubmissionRecord
 from azure_jobs.core.submit import (
-    SubmissionRecord,
     amlt_available,
     build_submit_request,
     get_backend,
     materialise_submission,
 )
+from azure_jobs.core.submit.native.sku import resolve_sku
 from azure_jobs.core.template import Template
 from azure_jobs.utils.naming import resolve_name
 from azure_jobs.utils.ui import show_dry_run_result, show_submission_preview

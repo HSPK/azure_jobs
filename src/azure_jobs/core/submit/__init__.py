@@ -26,7 +26,6 @@ from .models import (
 )
 from .native import submit_via_native
 from .native.orchestrate import submit
-from .record import SubmissionRecord, log_record, read_records
 from .render import render_amlt_config
 from .native.coords import resolve_target
 from .volcano import submit_via_volcano
@@ -51,9 +50,6 @@ __all__ = [
     "submit_via_amlt",
     "submit_via_volcano",
     "submit_via_native",
-    "SubmissionRecord",
-    "log_record",
-    "read_records",
     "BackendEntry",
     "register_backend",
     "get_backend",

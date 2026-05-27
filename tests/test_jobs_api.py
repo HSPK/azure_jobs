@@ -1,11 +1,12 @@
-"""Tests for the pure helpers in :mod:`azure_jobs.core.jobs`."""
+"""Tests for :class:`azure_jobs.core.az_client.ml.jobs.JobsAPI` helpers."""
 
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
-from azure_jobs.core.jobs import apply_cutoff, fetch_jobs, resolve_short_id
+from azure_jobs.core.az_client.ml.jobs import JobsAPI, apply_cutoff
+from azure_jobs.core.journal import resolve_short_id
 
 
 # ────────────────────────────────────────────────────────────────────────
@@ -14,7 +15,7 @@ from azure_jobs.core.jobs import apply_cutoff, fetch_jobs, resolve_short_id
 
 
 def test_resolve_short_id_returns_input_when_no_match():
-    with patch("azure_jobs.core.jobs.read_records", return_value=[]):
+    with patch("azure_jobs.core.journal.read_records", return_value=[]):
         assert resolve_short_id("abcd1234") == "abcd1234"
 
 
@@ -23,13 +24,13 @@ def test_resolve_short_id_maps_to_azure_name():
         {"id": "abcd1234", "azure_name": "my-job-uuid"},
         {"id": "other", "azure_name": "other-job"},
     ]
-    with patch("azure_jobs.core.jobs.read_records", return_value=records):
+    with patch("azure_jobs.core.journal.read_records", return_value=records):
         assert resolve_short_id("abcd1234") == "my-job-uuid"
 
 
 def test_resolve_short_id_falls_back_when_azure_name_blank():
     records = [{"id": "abcd1234", "azure_name": ""}]
-    with patch("azure_jobs.core.jobs.read_records", return_value=records):
+    with patch("azure_jobs.core.journal.read_records", return_value=records):
         assert resolve_short_id("abcd1234") == "abcd1234"
 
 
@@ -73,34 +74,34 @@ def test_apply_cutoff_keeps_jobs_with_unparseable_timestamp():
 
 
 # ────────────────────────────────────────────────────────────────────────
-# fetch_jobs
+# JobsAPI.fetch
 # ────────────────────────────────────────────────────────────────────────
 
 
-def _client_with_pages(pages: list[tuple[list[dict], str | None]]) -> MagicMock:
-    """Return a mock client whose ``jobs.list_page`` yields *pages* in order."""
-    client = MagicMock()
-    client.jobs.list_page.side_effect = pages
-    return client
+def _api_with_pages(pages: list[tuple[list[dict], str | None]]) -> JobsAPI:
+    """Return a JobsAPI instance whose ``list_page`` yields *pages* in order."""
+    api = JobsAPI.__new__(JobsAPI)
+    api.list_page = MagicMock(side_effect=pages)  # type: ignore[method-assign]
+    return api
 
 
-def test_fetch_jobs_stops_at_n():
+def test_fetch_stops_at_n():
     pages = [
         ([{"name": f"j{i}"} for i in range(10)], "next-token"),
         ([{"name": f"j{i}"} for i in range(10, 20)], None),
     ]
-    client = _client_with_pages(pages)
-    out = fetch_jobs(client, n=5)
+    api = _api_with_pages(pages)
+    out = api.fetch(n=5)
     assert len(out) == 5
     assert out[0]["name"] == "j0"
 
 
-def test_fetch_jobs_stops_at_empty_page():
-    client = _client_with_pages([([], None)])
-    assert fetch_jobs(client, n=10) == []
+def test_fetch_stops_at_empty_page():
+    api = _api_with_pages([([], None)])
+    assert api.fetch(n=10) == []
 
 
-def test_fetch_jobs_stops_at_cutoff():
+def test_fetch_stops_at_cutoff():
     now = datetime.now(timezone.utc)
     new = (now - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%S")
     old = (now - timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%S")
@@ -110,26 +111,26 @@ def test_fetch_jobs_stops_at_cutoff():
         {"name": "o1", "created_utc": old},
         {"name": "n3", "created_utc": new},  # never reached
     ]
-    client = _client_with_pages([(page, "next"), ([], None)])
+    api = _api_with_pages([(page, "next"), ([], None)])
     cutoff = now - timedelta(days=7)
-    out = fetch_jobs(client, n=10, cutoff_utc=cutoff)
+    out = api.fetch(n=10, cutoff_utc=cutoff)
     assert [j["name"] for j in out] == ["n1", "n2"]
     # Only one page should have been requested.
-    assert client.jobs.list_page.call_count == 1
+    assert api.list_page.call_count == 1
 
 
-def test_fetch_jobs_calls_on_progress_per_page():
+def test_fetch_calls_on_progress_per_page():
     pages = [
         ([{"name": "a"}], "next"),
         ([{"name": "b"}], None),
     ]
-    client = _client_with_pages(pages)
+    api = _api_with_pages(pages)
     progress: list[tuple[int, int]] = []
-    fetch_jobs(client, n=10, on_progress=lambda m, s: progress.append((m, s)))
+    api.fetch(n=10, on_progress=lambda m, s: progress.append((m, s)))
     assert progress == [(1, 1), (2, 2)]
 
 
-def test_fetch_jobs_predicate_filters_clientside():
+def test_fetch_predicate_filters_clientside():
     pages = [
         (
             [
@@ -140,42 +141,31 @@ def test_fetch_jobs_predicate_filters_clientside():
             None,
         )
     ]
-    client = _client_with_pages(pages)
-    out = fetch_jobs(
-        client,
-        n=10,
-        predicate=lambda j: j["status"] == "Completed",
-    )
+    api = _api_with_pages(pages)
+    out = api.fetch(n=10, predicate=lambda j: j["status"] == "Completed")
     assert [j["name"] for j in out] == ["j1", "j3"]
 
 
-def test_fetch_jobs_max_scan_caps_examination():
+def test_fetch_max_scan_caps_examination():
     pages = [
         ([{"name": f"j{i}", "status": "Failed"} for i in range(10)], "next"),
         ([{"name": f"j{i}", "status": "Completed"} for i in range(10, 20)], None),
     ]
-    client = _client_with_pages(pages)
-    out = fetch_jobs(
-        client,
+    api = _api_with_pages(pages)
+    out = api.fetch(
         n=10,
         predicate=lambda j: j["status"] == "Completed",
         max_scan=10,
     )
     # All 10 from first page scanned, none match → stop without fetching page 2.
     assert out == []
-    assert client.jobs.list_page.call_count == 1
+    assert api.list_page.call_count == 1
 
 
-def test_fetch_jobs_passes_list_view_and_filters_to_client():
-    client = _client_with_pages([([], None)])
-    fetch_jobs(
-        client,
-        n=5,
-        list_view_type="All",
-        job_type="Command",
-        tag="foo",
-    )
-    kwargs = client.jobs.list_page.call_args.kwargs
+def test_fetch_passes_list_view_and_filters_to_list_page():
+    api = _api_with_pages([([], None)])
+    api.fetch(n=5, list_view_type="All", job_type="Command", tag="foo")
+    kwargs = api.list_page.call_args.kwargs
     assert kwargs["list_view_type"] == "All"
     assert kwargs["job_type"] == "Command"
     assert kwargs["tag"] == "foo"

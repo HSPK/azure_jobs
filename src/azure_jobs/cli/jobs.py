@@ -13,8 +13,8 @@ from azure_jobs.cli._progress import (
     fetch_jobs_all_ws_with_progress,
     fetch_jobs_with_progress,
 )
-from azure_jobs.core.jobs import apply_cutoff, resolve_short_id
-from azure_jobs.core.submit import read_records
+from azure_jobs.core.az_client import apply_cutoff
+from azure_jobs.core.journal import read_records, resolve_short_id
 from azure_jobs.utils.stats import STATUS_TERMINAL
 from azure_jobs.utils.ui import show_jobs_table
 
@@ -81,7 +81,6 @@ def job_list(
 ) -> None:
     """List recent jobs in the cloud workspace."""
     from azure_jobs.core.az_client import create_rest_client
-    from azure_jobs.core.jobs import fetch_jobs
     from azure_jobs.utils.ui import console, show_cloud_jobs_table
 
     client = create_rest_client(ws_name=ws_name)
@@ -100,8 +99,7 @@ def job_list(
             suffix = f" ({scanned} scanned)" if filtering else ""
             st.update(f"[bold cyan]Fetching… {matched}/{last} jobs{suffix}[/bold cyan]")
 
-        jobs = fetch_jobs(
-            client,
+        jobs = client.jobs.fetch(
             last,
             list_view_type="All" if archived else "ActiveOnly",
             job_type=job_type or "",

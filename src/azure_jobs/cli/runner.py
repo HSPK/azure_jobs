@@ -7,7 +7,7 @@ from typing import Callable
 import click
 
 from azure_jobs.core.errors import parse_exception_message
-from azure_jobs.core.submit import SubmissionRecord, log_record
+from azure_jobs.core.journal import SubmissionRecord, log_record
 from azure_jobs.core.submit.models import SubmitEvent, SubmitResult
 from azure_jobs.utils.ui import (
     console,

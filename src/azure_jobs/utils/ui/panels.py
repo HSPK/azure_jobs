@@ -19,7 +19,8 @@ from .console import (
 from .render import emit_json, get_output_mode
 
 if TYPE_CHECKING:
-    from azure_jobs.core.submit import SubmissionRecord, SubmitRequest, SubmitResult
+    from azure_jobs.core.journal import SubmissionRecord
+    from azure_jobs.core.submit import SubmitRequest, SubmitResult
 
 def _request_payload(request: SubmitRequest) -> dict[str, Any]:
     return {

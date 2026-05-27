@@ -1,11 +1,10 @@
-"""Tests for parallel multi-workspace job fetching (core.jobs)."""
+"""Tests for parallel multi-workspace job fetching (az_client.ml.discovery)."""
 
 from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-from azure_jobs.core.az_client import WorkspaceInfo
-from azure_jobs.core.jobs import fetch_jobs_all_workspaces
+from azure_jobs.core.az_client import WorkspaceInfo, fetch_jobs_all_workspaces
 
 
 def _make_ws(name: str) -> WorkspaceInfo:
@@ -29,14 +28,19 @@ class TestFetchJobsAllWorkspaces:
         arm.workspace.list.return_value = [_make_ws("ws1"), _make_ws("ws2")]
         mock_arm_cls.return_value = arm
 
-        ws1_jobs = [{"name": "job1"}]
-        ws2_jobs = [{"name": "job2"}, {"name": "job3"}]
+        ws_jobs = {
+            "ws1": [{"name": "job1"}],
+            "ws2": [{"name": "job2"}, {"name": "job3"}],
+        }
 
-        with patch(
-            "azure_jobs.core.jobs.fetch_jobs",
-            side_effect=[ws1_jobs, ws2_jobs],
-        ):
-            result = fetch_jobs_all_workspaces(10)
+        def _client_factory(*args, **kwargs):
+            m = MagicMock()
+            ws = kwargs.get("workspace_name", "")
+            m.jobs.fetch.return_value = [dict(j) for j in ws_jobs[ws]]
+            return m
+
+        mock_ml_cls.side_effect = _client_factory
+        result = fetch_jobs_all_workspaces(10)
 
         assert len(result) == 3
         assert result[0].get("_workspace") in ("ws1", "ws2")
@@ -46,37 +50,36 @@ class TestFetchJobsAllWorkspaces:
         arm.workspace.list.return_value = [_make_ws("my-ws")]
         mock_arm_cls.return_value = arm
 
-        with patch(
-            "azure_jobs.core.jobs.fetch_jobs",
-            return_value=[{"name": "j1"}],
-        ):
-            result = fetch_jobs_all_workspaces(5)
+        client = MagicMock()
+        client.jobs.fetch.return_value = [{"name": "j1"}]
+        mock_ml_cls.return_value = client
 
+        result = fetch_jobs_all_workspaces(5)
         assert result[0]["_workspace"] == "my-ws"
 
-    def test_skips_failed_workspace_and_calls_callback(self, mock_arm_cls, mock_ml_cls):
+    def test_skips_failed_workspace_and_calls_callback(
+        self, mock_arm_cls, mock_ml_cls
+    ):
         arm = MagicMock()
         arm.workspace.list.return_value = [_make_ws("good"), _make_ws("bad")]
         mock_arm_cls.return_value = arm
 
         def _client_factory(*args, **kwargs):
             m = MagicMock()
-            m._ws = kwargs.get("workspace_name", "")
+            ws = kwargs.get("workspace_name", "")
+            if ws == "bad":
+                m.jobs.fetch.side_effect = RuntimeError("auth error")
+            else:
+                m.jobs.fetch.return_value = [{"name": "j1"}]
             return m
 
         mock_ml_cls.side_effect = _client_factory
 
-        def _fetch_side_effect(client, n, *, cutoff_utc=None, on_progress=None):
-            if client._ws == "bad":
-                raise RuntimeError("auth error")
-            return [{"name": "j1"}]
-
         failures: list[tuple[WorkspaceInfo, BaseException]] = []
-        with patch("azure_jobs.core.jobs.fetch_jobs", side_effect=_fetch_side_effect):
-            result = fetch_jobs_all_workspaces(
-                10,
-                on_workspace_failure=lambda ws, exc: failures.append((ws, exc)),
-            )
+        result = fetch_jobs_all_workspaces(
+            10,
+            on_workspace_failure=lambda ws, exc: failures.append((ws, exc)),
+        )
 
         assert len(result) == 1
         assert result[0]["_workspace"] == "good"
@@ -88,10 +91,11 @@ class TestFetchJobsAllWorkspaces:
         arm.workspace.list.return_value = [_make_ws("ws1"), _make_ws("ws2")]
         mock_arm_cls.return_value = arm
 
-        with patch(
-            "azure_jobs.core.jobs.fetch_jobs",
-            side_effect=RuntimeError("network error"),
-        ):
-            result = fetch_jobs_all_workspaces(10)
+        def _client_factory(*args, **kwargs):
+            m = MagicMock()
+            m.jobs.fetch.side_effect = RuntimeError("network error")
+            return m
 
-        assert result == []
+        mock_ml_cls.side_effect = _client_factory
+
+        assert fetch_jobs_all_workspaces(10) == []

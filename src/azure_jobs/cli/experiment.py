@@ -49,7 +49,7 @@ def exp_list(
         fetch_jobs_all_ws_with_progress,
         fetch_jobs_with_progress,
     )
-    from azure_jobs.core.jobs import apply_cutoff
+    from azure_jobs.core.az_client import apply_cutoff
     from azure_jobs.utils.stats import aggregate_by_experiment
     from azure_jobs.utils.ui import show_experiment_stats_table, warning
 

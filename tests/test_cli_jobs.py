@@ -7,7 +7,7 @@ import pytest
 from click.testing import CliRunner
 
 from azure_jobs.cli import main
-from azure_jobs.core.submit import SubmissionRecord
+from azure_jobs.core.journal import SubmissionRecord
 from azure_jobs.core.submit import SubmitRequest
 
 from .helpers import MINIMAL_JOB_CONF, write_template
@@ -103,7 +103,7 @@ class TestJobListCommand:
         from unittest.mock import MagicMock, patch
 
         mock_client = MagicMock()
-        mock_client.jobs.list_page.return_value = ([], None)
+        mock_client.jobs.fetch.return_value = []
         with patch(
             "azure_jobs.core.az_client.create_rest_client", return_value=mock_client
         ):
@@ -127,7 +127,7 @@ class TestJobListCommand:
             },
         ]
         mock_client = MagicMock()
-        mock_client.jobs.list_page.return_value = (jobs, None)
+        mock_client.jobs.fetch.return_value = jobs
         with patch(
             "azure_jobs.core.az_client.create_rest_client", return_value=mock_client
         ):
@@ -161,7 +161,9 @@ class TestJobListCommand:
             },
         ]
         mock_client = MagicMock()
-        mock_client.jobs.list_page.return_value = (jobs, None)
+        mock_client.jobs.fetch.side_effect = lambda *a, **kw: [
+            j for j in jobs if kw["predicate"](j)
+        ]
         with patch(
             "azure_jobs.core.az_client.create_rest_client", return_value=mock_client
         ):
@@ -196,7 +198,9 @@ class TestJobListCommand:
             },
         ]
         mock_client = MagicMock()
-        mock_client.jobs.list_page.return_value = (jobs, None)
+        mock_client.jobs.fetch.side_effect = lambda *a, **kw: [
+            j for j in jobs if kw["predicate"](j)
+        ]
         with patch(
             "azure_jobs.core.az_client.create_rest_client", return_value=mock_client
         ):

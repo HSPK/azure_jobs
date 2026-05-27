@@ -1,3 +1,5 @@
+"""Local submission journal (``record.jsonl``) — append-only log + lookups."""
+
 from __future__ import annotations
 
 import json
@@ -5,8 +7,9 @@ import shlex
 from dataclasses import dataclass
 from typing import Any
 
-from .. import const
-from .models import SubmitRequest
+from . import const
+from .submit.models import SubmitRequest
+
 
 @dataclass
 class SubmissionRecord:
@@ -16,6 +19,7 @@ class SubmissionRecord:
     portal: str = ""
     note: str = ""
     azure_name: str = ""
+
 
 def log_record(record: SubmissionRecord) -> None:
     const.AJ_RECORD.parent.mkdir(parents=True, exist_ok=True)
@@ -30,8 +34,9 @@ def log_record(record: SubmissionRecord) -> None:
     with open(const.AJ_RECORD, "a") as f:
         f.write(json.dumps(payload) + "\n")
 
+
 def read_records(*, last: int | None = None) -> list[dict[str, Any]]:
-    """Read submission records from record.jsonl."""
+    """Read submission records from ``record.jsonl`` (newest first)."""
     if not const.AJ_RECORD.exists():
         return []
     lines = const.AJ_RECORD.read_text().strip().splitlines()
@@ -39,6 +44,15 @@ def read_records(*, last: int | None = None) -> list[dict[str, Any]]:
     if last is not None:
         records = records[:last]
     return records
+
+
+def resolve_short_id(job_id: str) -> str:
+    """Map a short aj id (8-char ``sid``) to its full Azure job name."""
+    for r in read_records():
+        if r.get("id") == job_id:
+            return r.get("azure_name") or job_id
+    return job_id
+
 
 def _normalize_record(record: dict[str, Any]) -> dict[str, Any]:
     request = record.get("request")
@@ -67,3 +81,11 @@ def _normalize_record(record: dict[str, Any]) -> dict[str, Any]:
     normalized.setdefault("command", command)
     normalized.setdefault("args", args)
     return normalized
+
+
+__all__ = [
+    "SubmissionRecord",
+    "log_record",
+    "read_records",
+    "resolve_short_id",
+]
