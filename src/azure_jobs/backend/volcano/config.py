@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from azure_jobs.job.spec import JobSpec
+from azure_jobs.utils.naming import sanitize_dns1035
 from . import constants as C
 
 _DISTRIBUTED_PREAMBLE = Path(__file__).parent / "distributed_preamble.sh"
@@ -56,7 +57,7 @@ class VolcanoConfig:
     setup_commands: list[str] = field(default_factory=list)
     env_vars: dict[str, str] = field(default_factory=dict)
     rdma: bool = True
-    shm_size: str = C.DEFAULT_SHM_SIZE
+    shm_size: str = ""
     priority_class: str = ""
     labels: dict[str, str] = field(default_factory=dict)
     code_dir: str = ""
@@ -94,7 +95,7 @@ def build_volcano_config_from_request(request: JobSpec) -> VolcanoConfig:
         setup_commands=list(request.setup_commands),
         env_vars=env_vars,
         rdma=vol.rdma,
-        shm_size=container_args.get("shm_size", C.DEFAULT_SHM_SIZE),
+        shm_size=container_args.get("shm_size", ""),
         priority_class=vol.priority_class,
         labels=dict(vol.labels),
         code_dir=code_dir,
@@ -105,7 +106,7 @@ def build_volcano_config_from_request(request: JobSpec) -> VolcanoConfig:
 
 def build_volcano_job(cfg: VolcanoConfig) -> dict[str, Any]:
     """Build a Volcano Job spec dict from config."""
-    job_name = cfg.name.lower().replace("_", "-")[: C.JOB_NAME_MAX_LEN]
+    job_name = sanitize_dns1035(cfg.name, max_length=C.JOB_NAME_MAX_LEN)
     app_label = job_name
 
     code_path = (
@@ -169,10 +170,13 @@ def build_volcano_job(cfg: VolcanoConfig) -> dict[str, Any]:
             }
         )
 
+    shm_volume_spec: dict[str, Any] = {"medium": "Memory"}
+    if cfg.shm_size:
+        shm_volume_spec["sizeLimit"] = cfg.shm_size
     volumes: list[dict[str, Any]] = [
         {
             "name": C.SHM_VOLUME_NAME,
-            "emptyDir": {"medium": "Memory", "sizeLimit": cfg.shm_size},
+            "emptyDir": shm_volume_spec,
         },
         {
             "name": C.WORKDIR_VOLUME_NAME,

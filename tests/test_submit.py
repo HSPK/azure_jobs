@@ -203,6 +203,86 @@ class TestRenderAmltConfig:
         # Keep AMLT-resolved path token unchanged
         assert conf["code"]["local_dir"] == "$CONFIG_DIR/project"
 
+    def test_no_shm_size_emits_no_container_args(self):
+        """No code-level default for shm_size. When the user does not set
+        anything (top-level or container_args.shm_size), the rendered yaml
+        carries no container_args block at all — each backend falls back to
+        its platform default (docker ~64MB, amlt-volcano 100Gi, native
+        volcano omits emptyDir sizeLimit)."""
+        request = JobSpec(name="j", service="volcano")
+        conf = render_amlt_yaml(request)
+        assert "container_args" not in conf["jobs"][0]["submit_args"]
+
+    def test_top_level_shm_size_promoted_to_container_args(self):
+        """Explicit top-level shm_size is the user's choice — promote
+        verbatim. The user is responsible for using a format their target
+        backend accepts (docker lowercase for aml/sing, k8s Ki/Mi/Gi for
+        volcano)."""
+        request = JobSpec(name="j", service="aml", shm_size="2048g")
+        conf = render_amlt_yaml(request)
+        assert (
+            conf["jobs"][0]["submit_args"]["container_args"]["shm_size"]
+            == "2048g"
+        )
+
+    def test_explicit_container_args_shm_size_passes_through(self):
+        request = JobSpec(
+            name="j",
+            service="volcano",
+            container_args={"shm_size": "2048Gi"},
+        )
+        conf = render_amlt_yaml(request)
+        assert (
+            conf["jobs"][0]["submit_args"]["container_args"]["shm_size"]
+            == "2048Gi"
+        )
+
+
+class TestBuildVolcanoJobNameSanitisation:
+    """Volcano dispatches to k8s; the Job/Service names must satisfy
+    RFC 1035. build_job_spec normalises the name in-place when the
+    target service is ``volcano`` so every downstream consumer (render,
+    native volcano backend, AJ_NAME env var, record.jsonl) sees the
+    same canonical value."""
+
+    def _conf(self, service: str) -> dict:
+        target_extra: dict = {}
+        if service == "volcano":
+            target_extra = {"namespace": "ns", "queue": "q", "context": ""}
+        return {
+            "description": "d",
+            "target": {"name": "", "service": service, **target_extra},
+            "environment": {"image": "alpine"},
+            "jobs": [{"sku": "1xG1"}],
+        }
+
+    def test_volcano_name_underscores_and_dots_normalised(self):
+        r = _make_request(
+            self._conf("volcano"),
+            name="ml_group_v2.0-t2-vq-dyn-brss-rds-b200_d173cf2a",
+        )
+        assert r.name == "ml-group-v2-0-t2-vq-dyn-brss-rds-b200-d173cf2a"
+        # AJ_NAME env reflects the canonical (sanitised) name.
+        assert r.env_vars["AJ_NAME"] == r.name
+
+    def test_volcano_name_starting_with_digit_gets_letter_prefix(self):
+        r = _make_request(self._conf("volcano"), name="9foo")
+        assert r.name.startswith("j-")
+
+    def test_volcano_name_truncated_with_room_for_amlt_suffix(self):
+        # amlt appends "-<8hex>" (9 chars) to the Job stem before the
+        # k8s Service name is composed; we cap at 63-9=54 to keep the
+        # final Service name within k8s's 63-char limit.
+        long_name = "a" * 100
+        r = _make_request(self._conf("volcano"), name=long_name)
+        assert len(r.name) <= 54
+        assert r.name == "a" * 54
+
+    def test_non_volcano_service_preserves_name_for_portal_display(self):
+        for svc in ("aml", "sing"):
+            r = _make_request(self._conf(svc), name="ml_group_v2.0_abc")
+            assert r.name == "ml_group_v2.0_abc", svc
+
 
 class TestSubmitMocked:
     """Test the submit function with mocked Azure SDK."""

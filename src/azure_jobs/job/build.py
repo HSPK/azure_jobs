@@ -8,9 +8,10 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from azure_jobs.utils.fs import read_ignore_file
+from azure_jobs.utils.naming import sanitize_dns1035
 
-from .spec import AmltOpts, SingularityOpts, StorageMount, JobSpec, VolcanoOpts
 from .command import build_user_command
+from .spec import AmltOpts, JobSpec, SingularityOpts, StorageMount, VolcanoOpts
 
 if TYPE_CHECKING:
     from ..template import Template
@@ -21,6 +22,7 @@ _PRELUDE_COMMANDS: tuple[str, ...] = (
     "[ -f /tmp/.aj_ssh_env ] && source /tmp/.aj_ssh_env",
     "export PATH=$HOME/.local/bin:$PATH",
 )
+
 
 def _normalize_storage(
     storage_dict: dict[str, object],
@@ -39,12 +41,14 @@ def _normalize_storage(
             raise TypeError(f"Unsupported storage entry for '{k}': {type(v).__name__}")
     return storage
 
+
 def _normalize_template_commands(raw: object) -> list[str]:
     if isinstance(raw, str):
         return [raw]
     if isinstance(raw, list):
         return list(raw)
     return []
+
 
 def _merge_env(user_env: dict[str, str], aj_env: dict[str, str]) -> dict[str, str]:
     overrides = sorted(k for k in aj_env if k in user_env)
@@ -56,6 +60,7 @@ def _merge_env(user_env: dict[str, str], aj_env: dict[str, str]) -> dict[str, st
     merged = dict(user_env)
     merged.update(aj_env)
     return merged
+
 
 def build_job_spec(
     template: Template,
@@ -86,6 +91,9 @@ def build_job_spec(
 
     storage = _normalize_storage(template.storage)
     service = target.service
+
+    if service == "volcano":
+        name = sanitize_dns1035(name, max_length=63 - 9)
 
     aj_envs: dict[str, str] = {
         "AJ_NAME": name,
@@ -167,7 +175,7 @@ def build_job_spec(
         priority=job.priority,
         tags=job.tags,
         container_args=container_args,
-        shm_size=container_args.get("shm_size", "2048g"),
+        shm_size=container_args.get("shm_size", ""),
         template_name=template_name,
         env_vars=env_extra,
         subscription_id=sub_id,

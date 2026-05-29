@@ -333,7 +333,6 @@ def _ensure_environment_base() -> None:
                     "sla_tier": "Premium",
                     "priority": "high",
                     "process_count_per_node": 1,
-                    "submit_args": {"container_args": {"shm_size": "256g"}},
                 }
             ]
         },
