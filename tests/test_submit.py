@@ -284,6 +284,78 @@ class TestBuildVolcanoJobNameSanitisation:
             assert r.name == "ml_group_v2.0_abc", svc
 
 
+class TestRenderTargetSection:
+    """The rendered ``target:`` block must round-trip the user's template."""
+
+    def test_volcano_target_carries_queue(self):
+        """User config ``target: {service: volcano, queue: bonete04}``
+        must round-trip as-is — earlier we dropped the queue field
+        because render.py never read ``request.volcano``."""
+        from azure_jobs.job.spec import VolcanoOpts
+
+        request = JobSpec(
+            name="j",
+            service="volcano",
+            volcano=VolcanoOpts(queue="bonete04"),
+        )
+        conf = render_amlt_yaml(request)
+        assert conf["target"] == {"service": "volcano", "queue": "bonete04"}
+
+    def test_volcano_target_omits_name_when_empty(self):
+        request = JobSpec(name="j", service="volcano")
+        conf = render_amlt_yaml(request)
+        # User's volcano targets typically have no ``name`` — don't render an
+        # empty string just because the dataclass has one.
+        assert "name" not in conf["target"]
+
+    def test_volcano_target_includes_namespace_and_context_when_set(self):
+        from azure_jobs.job.spec import VolcanoOpts
+
+        request = JobSpec(
+            name="j",
+            service="volcano",
+            volcano=VolcanoOpts(queue="q", namespace="ns", context="ctx"),
+        )
+        conf = render_amlt_yaml(request)
+        assert conf["target"] == {
+            "service": "volcano",
+            "queue": "q",
+            "namespace": "ns",
+            "context": "ctx",
+        }
+
+    def test_aml_target_keeps_name(self):
+        request = JobSpec(name="j", service="aml", compute="gpu-cluster")
+        conf = render_amlt_yaml(request)
+        assert conf["target"] == {"service": "aml", "name": "gpu-cluster"}
+
+    def test_sing_target_keeps_workspace_name(self):
+        request = JobSpec(
+            name="j",
+            service="sing",
+            compute="vc-name",
+            workspace_name="FastAML",
+        )
+        conf = render_amlt_yaml(request)
+        assert conf["target"] == {
+            "service": "sing",
+            "name": "vc-name",
+            "workspace_name": "FastAML",
+        }
+
+    def test_non_volcano_does_not_leak_queue(self):
+        from azure_jobs.job.spec import VolcanoOpts
+
+        request = JobSpec(
+            name="j",
+            service="aml",
+            compute="c",
+            volcano=VolcanoOpts(queue="bonete04"),
+        )
+        conf = render_amlt_yaml(request)
+        assert "queue" not in conf["target"]
+
+
 class TestSubmitMocked:
     """Test the submit function with mocked Azure SDK."""
 
