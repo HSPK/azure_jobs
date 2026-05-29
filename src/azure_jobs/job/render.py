@@ -57,12 +57,20 @@ def render_amlt_yaml(request: JobSpec) -> dict[str, Any]:
     }
 
     if request.compute or request.service:
-        output_conf["target"] = {
-            "name": request.compute,
-            "service": request.service,
-        }
+        target: dict[str, Any] = {"service": request.service}
+        if request.compute:
+            target["name"] = request.compute
         if request.workspace_name and request.service == "sing":
-            output_conf["target"]["workspace_name"] = request.workspace_name
+            target["workspace_name"] = request.workspace_name
+        if request.service == "volcano":
+            vol = request.volcano
+            if vol.queue:
+                target["queue"] = vol.queue
+            if vol.namespace:
+                target["namespace"] = vol.namespace
+            if vol.context:
+                target["context"] = vol.context
+        output_conf["target"] = target
 
     if request.image or request.setup_commands:
         output_conf["environment"] = {}
