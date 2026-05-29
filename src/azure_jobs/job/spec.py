@@ -71,7 +71,7 @@ class JobSpec:
     priority: str = "high"
     tags: list[str] = field(default_factory=list)
     container_args: dict[str, Any] = field(default_factory=dict)
-    shm_size: str = "2048g"
+    shm_size: str = ""
 
     env_vars: dict[str, str] = field(default_factory=dict)
 

@@ -203,6 +203,40 @@ class TestRenderAmltConfig:
         # Keep AMLT-resolved path token unchanged
         assert conf["code"]["local_dir"] == "$CONFIG_DIR/project"
 
+    def test_no_shm_size_emits_no_container_args(self):
+        """No code-level default for shm_size. When the user does not set
+        anything (top-level or container_args.shm_size), the rendered yaml
+        carries no container_args block at all — each backend falls back to
+        its platform default (docker ~64MB, amlt-volcano 100Gi, native
+        volcano omits emptyDir sizeLimit)."""
+        request = JobSpec(name="j", service="volcano")
+        conf = render_amlt_yaml(request)
+        assert "container_args" not in conf["jobs"][0]["submit_args"]
+
+    def test_top_level_shm_size_promoted_to_container_args(self):
+        """Explicit top-level shm_size is the user's choice — promote
+        verbatim. The user is responsible for using a format their target
+        backend accepts (docker lowercase for aml/sing, k8s Ki/Mi/Gi for
+        volcano)."""
+        request = JobSpec(name="j", service="aml", shm_size="2048g")
+        conf = render_amlt_yaml(request)
+        assert (
+            conf["jobs"][0]["submit_args"]["container_args"]["shm_size"]
+            == "2048g"
+        )
+
+    def test_explicit_container_args_shm_size_passes_through(self):
+        request = JobSpec(
+            name="j",
+            service="volcano",
+            container_args={"shm_size": "2048Gi"},
+        )
+        conf = render_amlt_yaml(request)
+        assert (
+            conf["jobs"][0]["submit_args"]["container_args"]["shm_size"]
+            == "2048Gi"
+        )
+
 
 class TestSubmitMocked:
     """Test the submit function with mocked Azure SDK."""

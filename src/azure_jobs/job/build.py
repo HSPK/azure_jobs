@@ -167,7 +167,7 @@ def build_job_spec(
         priority=job.priority,
         tags=job.tags,
         container_args=container_args,
-        shm_size=container_args.get("shm_size", "2048g"),
+        shm_size=container_args.get("shm_size", ""),
         template_name=template_name,
         env_vars=env_extra,
         subscription_id=sub_id,
