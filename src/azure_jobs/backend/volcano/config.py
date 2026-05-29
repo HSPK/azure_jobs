@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from azure_jobs.job.spec import JobSpec
+from azure_jobs.utils.naming import sanitize_dns1035
 from . import constants as C
 
 _DISTRIBUTED_PREAMBLE = Path(__file__).parent / "distributed_preamble.sh"
@@ -105,7 +106,7 @@ def build_volcano_config_from_request(request: JobSpec) -> VolcanoConfig:
 
 def build_volcano_job(cfg: VolcanoConfig) -> dict[str, Any]:
     """Build a Volcano Job spec dict from config."""
-    job_name = cfg.name.lower().replace("_", "-")[: C.JOB_NAME_MAX_LEN]
+    job_name = sanitize_dns1035(cfg.name, max_length=C.JOB_NAME_MAX_LEN)
     app_label = job_name
 
     code_path = (
