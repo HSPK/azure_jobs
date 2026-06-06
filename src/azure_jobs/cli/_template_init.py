@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from pathlib import Path
 from typing import Any
@@ -12,6 +13,8 @@ from rich.panel import Panel
 from rich.table import Table
 
 from azure_jobs import const
+
+log = logging.getLogger(__name__)
 
 _STEPS = 4
 
@@ -60,7 +63,11 @@ def _pick_account() -> str:
         try:
             uais = AzureARMClient().identity.list()
         except Exception as exc:
-            warning(f"Could not list UAIs: {exc}")
+            log.exception("Could not list UAIs")
+            warning(
+                f"Could not list UAIs ({type(exc).__name__}: {exc}). "
+                "Run with AJ_DEBUG=1 for a Python traceback."
+            )
             uais = []
 
     if uais:
@@ -100,7 +107,11 @@ def _pick_environment() -> tuple[str, str]:
         try:
             images = _fetch_sing_images()
         except Exception as exc:
-            warning(f"Could not list images: {exc}")
+            log.exception("Could not list Singularity images")
+            warning(
+                f"Could not list images ({type(exc).__name__}: {exc}). "
+                "Run with AJ_DEBUG=1 for a Python traceback."
+            )
             images = []
 
     if images:
@@ -143,7 +154,11 @@ def _pick_storage() -> str:
         try:
             sas = AzureARMClient().storage.list()
         except Exception as exc:
-            warning(f"Could not list storage accounts: {exc}")
+            log.exception("Could not list storage accounts")
+            warning(
+                f"Could not list storage accounts ({type(exc).__name__}: {exc}). "
+                "Run with AJ_DEBUG=1 for a Python traceback."
+            )
             sas = []
 
     mounts: dict[str, dict[str, str]] = {}
@@ -198,7 +213,11 @@ def _generate_leaves(
         try:
             vcs = AzureARMClient().vc.quota.list()
         except Exception as exc:
-            error(f"Could not fetch VC quota: {exc}")
+            log.exception("Could not fetch VC quota")
+            error(
+                f"Could not fetch VC quota ({type(exc).__name__}: {exc}). "
+                "Run with AJ_DEBUG=1 for a Python traceback."
+            )
             raise SystemExit(1) from exc
 
     rows: list[dict[str, str]] = []
@@ -260,7 +279,11 @@ def _pick_workspace() -> dict[str, str]:
         try:
             workspaces = AzureARMClient().workspace.list()
         except Exception as exc:
-            error(f"Could not discover workspaces: {exc}")
+            log.exception("Could not discover workspaces")
+            error(
+                f"Could not discover workspaces ({type(exc).__name__}: {exc}). "
+                "Run with AJ_DEBUG=1 for a Python traceback."
+            )
             raise SystemExit(1) from exc
 
     if not workspaces:

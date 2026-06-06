@@ -52,10 +52,26 @@ def submit(
     try:
         return _submit_impl(request, emit)
     except (AJError, requests.RequestException, OSError) as exc:
+        log.exception(
+            "AzureML submission failed for %s (%s)",
+            request.name,
+            type(exc).__name__,
+        )
+        msg = parse_exception_message(exc)
+        type_name = type(exc).__name__
+        extra = ""
+        from azure_jobs.errors import RestError
+
+        if isinstance(exc, RestError):
+            if exc.status_code:
+                extra += f" [HTTP {exc.status_code}]"
+            if exc.azure_code:
+                extra += f" [code={exc.azure_code}]"
+        emit(JobEvent(kind="error", detail=f"{type_name}: {msg}{extra}"))
         return JobResult(
             job_name=request.name,
             status="failed",
-            error=parse_exception_message(exc),
+            error=f"{type_name}: {msg}{extra}",
         )
 
 def _submit_impl(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import subprocess
 from dataclasses import dataclass, field
@@ -12,6 +13,8 @@ from azure_jobs.job.spec import JobSpec
 from azure_jobs.utils.naming import sanitize_dns1035
 from . import constants as C
 
+log = logging.getLogger(__name__)
+
 _DISTRIBUTED_PREAMBLE = Path(__file__).parent / "distributed_preamble.sh"
 
 def _load_distributed_preamble(nodes: int) -> list[str]:
@@ -20,24 +23,35 @@ def _load_distributed_preamble(nodes: int) -> list[str]:
     return text.splitlines()
 
 def _kubectl_namespace(context: str = "") -> str:
+    cmd = [
+        "kubectl",
+        "config",
+        "view",
+        "--minify",
+        "-o",
+        "jsonpath={.contexts[0].context.namespace}",
+    ]
+    if context:
+        cmd.extend(["--context", context])
     try:
-        cmd = [
-            "kubectl",
-            "config",
-            "view",
-            "--minify",
-            "-o",
-            "jsonpath={.contexts[0].context.namespace}",
-        ]
-        if context:
-            cmd.extend(["--context", context])
         out = subprocess.run(
             cmd, capture_output=True, text=True, timeout=C.KUBECTL_NAMESPACE_TIMEOUT
         )
-        ns = out.stdout.strip()
-        return ns if ns else "default"
     except Exception:
+        log.debug(
+            "kubectl config view (namespace lookup) raised — falling back to 'default'",
+            exc_info=True,
+        )
         return "default"
+    if out.returncode != 0:
+        log.debug(
+            "kubectl config view returned exit=%s, stderr=%r — falling back to 'default'",
+            out.returncode,
+            (out.stderr or "")[:500],
+        )
+        return "default"
+    ns = out.stdout.strip()
+    return ns if ns else "default"
 
 @dataclass
 class VolcanoConfig:

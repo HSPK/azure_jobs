@@ -230,6 +230,26 @@ def _render_submission_result_rich(
     if failed:
         msg = payload["error"] or payload["note"]
         if msg:
+            if "\n" in msg:
+                console.print()
+                console.print(
+                    Panel(
+                        grid,
+                        title=f"[bold]{title}[/bold]",
+                        border_style=border_style,
+                        expand=False,
+                    )
+                )
+                console.print(
+                    Panel(
+                        f"[red]{esc(msg)}[/red]",
+                        title="[bold red]Error detail[/bold red]",
+                        border_style="red",
+                        expand=False,
+                    )
+                )
+                console.print()
+                return
             grid.add_row("Error", f"[red]{esc(msg)}[/red]")
     elif payload["note"] and not payload["portal_url"]:
         grid.add_row("Note", esc(payload["note"]))

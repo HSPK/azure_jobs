@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import shutil
 import subprocess
 
@@ -9,6 +10,8 @@ import click
 from typing_extensions import TYPE_CHECKING
 
 from azure_jobs.cli import main
+
+log = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from azure_jobs.config import AJWorkspace
@@ -124,8 +127,14 @@ def init_amlt(ctx: click.Context, force: bool) -> None:
                 f"amlt project: {amlt_cfg.get('project_name', '?')}  "
                 f"(storage={amlt_cfg.get('storage_account_name', '?')})"
             )
-        except Exception:
-            dim(".amltconfig exists")
+        except Exception as exc:
+            log.debug(
+                "Failed to parse .amltconfig (%s: %s)",
+                type(exc).__name__,
+                exc,
+                exc_info=True,
+            )
+            dim(".amltconfig exists (failed to parse — AJ_DEBUG=1 for trace)")
         if not (force and _confirm_step("amlt project", force)):
             _print_amlt_workspace_commands(ws)
             success("amlt configured ✓")
@@ -145,7 +154,11 @@ def init_amlt(ctx: click.Context, force: bool) -> None:
             else:
                 storage_account = storage_arm
         except Exception as exc:
-            error(f"Failed to query workspace: {exc}")
+            log.exception("Failed to query workspace storage account")
+            error(
+                f"Failed to query workspace ({type(exc).__name__}: {exc}). "
+                "Run with AJ_DEBUG=1 for a Python traceback."
+            )
             return
 
     if not storage_account:

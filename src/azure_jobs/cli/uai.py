@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import logging
+
 import click
 
 from azure_jobs.cli import main
+
+log = logging.getLogger(__name__)
 
 @main.group(name="uai")
 def uai_group() -> None:
@@ -29,7 +33,11 @@ def uai_list(full: bool) -> None:
         try:
             uais = arm.identity.list()
         except Exception as exc:
-            error(f"Could not list managed identities: {exc}")
+            log.exception("Could not list managed identities")
+            error(
+                f"Could not list managed identities ({type(exc).__name__}: {exc}). "
+                "Run with AJ_DEBUG=1 for a Python traceback."
+            )
             raise SystemExit(1) from exc
 
     if full or get_output_mode() == "json":

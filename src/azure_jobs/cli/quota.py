@@ -71,8 +71,12 @@ def _show_aml_quotas(show_all: bool) -> None:
         try:
             workspaces = arm.workspace.list()
         except Exception as exc:
-            error(f"Could not discover workspaces: {exc}")
-            raise SystemExit(1)
+            log.exception("Could not discover workspaces")
+            error(
+                f"Could not discover workspaces ({type(exc).__name__}: {exc}). "
+                "Run with AJ_DEBUG=1 for a Python traceback."
+            )
+            raise SystemExit(1) from exc
         arm.ensure_token()
 
         if not workspaces:
