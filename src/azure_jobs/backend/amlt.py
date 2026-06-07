@@ -4,14 +4,11 @@ from __future__ import annotations
 
 import shutil
 import subprocess
-import tempfile
 from pathlib import Path
 from typing import Callable
 
-import yaml
-
-from azure_jobs.job.render import render_amlt_yaml
 from azure_jobs.job.spec import JobEvent, JobResult, JobSpec
+from azure_jobs.job.write import write_amlt_yaml
 
 from . import register_backend
 
@@ -44,14 +41,10 @@ def submit_via_amlt(
     job_name = request.name
     experiment = request.expr_name
 
-    cfg = render_amlt_yaml(request)
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".yaml", prefix="aj-amlt-", delete=False
-    ) as f:
-        yaml.dump(cfg, f, default_flow_style=False, sort_keys=False)
-        tmp_fp = Path(f.name)
+    submission_fp = write_amlt_yaml(request)
+    emit(JobEvent(kind="submit", detail=f"wrote submission YAML → {submission_fp}"))
 
-    cmd = ["amlt", "run", str(tmp_fp), experiment, "-y"]
+    cmd = ["amlt", "run", str(submission_fp), experiment, "-y"]
     emit(JobEvent(kind="submit", detail=f"amlt run → {experiment}"))
 
     try:
@@ -85,16 +78,17 @@ def submit_via_amlt(
                 job_name=job_name,
                 status="failed",
                 error=note,
-                note=note,
+                note=f"submission YAML: {submission_fp}\n{note}",
             )
 
         portal_url = extract_portal_url("\n".join(output_lines))
-        emit(JobEvent(kind="done", detail=job_name))
+        emit(JobEvent(kind="done", detail=f"submitted (yaml: {submission_fp})"))
         return JobResult(
             job_name=job_name,
             azure_name=job_name,
             status="submitted",
             portal_url=portal_url,
+            note=f"submission YAML: {submission_fp}",
         )
     except subprocess.TimeoutExpired:
         msg = "amlt run timed out"
@@ -104,8 +98,6 @@ def submit_via_amlt(
         msg = str(exc)
         emit(JobEvent(kind="error", detail=msg))
         return JobResult(job_name=job_name, status="failed", error=msg)
-    finally:
-        tmp_fp.unlink(missing_ok=True)
 
 
 register_backend("amlt", submit_via_amlt, label="amlt")
