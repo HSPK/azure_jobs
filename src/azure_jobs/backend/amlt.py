@@ -4,10 +4,14 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Callable
 
-from azure_jobs.job.spec import JobEvent, JobSpec, JobResult
+import yaml
+
+from azure_jobs.job.render import render_amlt_yaml
+from azure_jobs.job.spec import JobEvent, JobResult, JobSpec
 
 from . import register_backend
 
@@ -40,16 +44,14 @@ def submit_via_amlt(
     job_name = request.name
     experiment = request.expr_name
 
-    config_fp = Path(request.submission_path) if request.submission_path else None
-    if config_fp is None or not config_fp.exists():
-        msg = (
-            f"Submission YAML not found: {config_fp}. "
-            "Did you call write_amlt_yaml() first?"
-        )
-        emit(JobEvent(kind="error", detail=msg))
-        return JobResult(job_name=job_name, status="failed", error=msg)
+    cfg = render_amlt_yaml(request)
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".yaml", prefix="aj-amlt-", delete=False
+    ) as f:
+        yaml.dump(cfg, f, default_flow_style=False, sort_keys=False)
+        tmp_fp = Path(f.name)
 
-    cmd = ["amlt", "run", str(config_fp), experiment, "-y"]
+    cmd = ["amlt", "run", str(tmp_fp), experiment, "-y"]
     emit(JobEvent(kind="submit", detail=f"amlt run → {experiment}"))
 
     try:
@@ -102,6 +104,8 @@ def submit_via_amlt(
         msg = str(exc)
         emit(JobEvent(kind="error", detail=msg))
         return JobResult(job_name=job_name, status="failed", error=msg)
+    finally:
+        tmp_fp.unlink(missing_ok=True)
 
 
 register_backend("amlt", submit_via_amlt, label="amlt")

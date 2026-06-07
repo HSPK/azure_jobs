@@ -6,6 +6,7 @@ from typing import Any
 
 from azure_jobs.job.spec import JobSpec
 from .bootstrap import RUNNER_FILENAME
+from .opts import AmlOpts
 
 _SING_DEFAULT_ENV = {
     "SUDO": "sudo",
@@ -17,14 +18,15 @@ _SING_DEFAULT_ENV = {
 def _build_env_vars(
     request: JobSpec, dataref_env: dict[str, str]
 ) -> dict[str, str]:
+    aml: AmlOpts = request.backend_spec
     env_vars = dict(request.env_vars)
-    if request.shm_size:
-        env_vars.setdefault("SHM_SIZE", request.shm_size)
+    if aml.shm_size:
+        env_vars.setdefault("SHM_SIZE", aml.shm_size)
     if request.service == "sing":
         for k, v in _SING_DEFAULT_ENV.items():
             env_vars.setdefault(k, v)
-        if request.sing.group_policy:
-            env_vars.setdefault("AML_JOB_GROUP_POLICY", request.sing.group_policy)
+        if aml.group_policy:
+            env_vars.setdefault("AML_JOB_GROUP_POLICY", aml.group_policy)
     env_vars.update(dataref_env)
     return env_vars
 
@@ -49,6 +51,7 @@ def _build_job_body(
     custom_props: dict[str, Any] | None,
     tags: dict[str, str | None],
 ) -> dict[str, Any]:
+    aml: AmlOpts = request.backend_spec
     job_payload: dict[str, Any] = {
         "jobType": "Command",
         "displayName": request.name,
@@ -78,8 +81,8 @@ def _build_job_body(
     res: dict[str, Any] = {"instanceCount": request.nodes}
     if resources:
         res["properties"] = resources.get("properties", {})
-    if request.shm_size:
-        res["shmSize"] = request.shm_size
+    if aml.shm_size:
+        res["shmSize"] = aml.shm_size
     job_payload["resources"] = res
 
     if outputs:

@@ -115,8 +115,8 @@ def run(
                 "amlt CLI not available or no .amltconfig in current directory."
             )
 
-    if dry_run or amlt:
-        write_amlt_yaml(request, dry_run=dry_run)
+    if dry_run:
+        write_amlt_yaml(request, dry_run=True)
 
     show_submission_preview(request, dry_run=dry_run)
     if dry_run:

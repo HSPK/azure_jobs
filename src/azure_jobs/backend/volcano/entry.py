@@ -12,9 +12,14 @@ from typing import Callable
 
 import yaml
 
+from azure_jobs.errors import AJError
 from azure_jobs.job.spec import JobEvent, JobSpec, JobResult
-from .config import build_volcano_config_from_request, build_volcano_job
-from .upload import upload_code_to_pvc
+from .config import (
+    build_volcano_config_from_request,
+    build_volcano_job,
+    resolve_namespace,
+)
+from .uploaders import pick_uploader
 
 log = logging.getLogger(__name__)
 
@@ -36,7 +41,64 @@ def submit_via_volcano(
 
     try:
         cfg = build_volcano_config_from_request(request)
-        job_spec = build_volcano_job(cfg)
+        namespace = resolve_namespace(cfg)
+    except Exception as exc:
+        log.exception("Failed to build Volcano config for %s", request.name)
+        err = (
+            f"Failed to build Volcano config: {type(exc).__name__}: {exc}\n"
+            f"{traceback.format_exc()}"
+        )
+        emit(JobEvent(kind="error", detail=f"{type(exc).__name__}: {exc}"))
+        return JobResult(
+            job_name=request.name,
+            status="failed",
+            error=err,
+            note=f"{type(exc).__name__}: {exc}",
+        )
+
+    try:
+        uploader = pick_uploader(request.extra)
+    except AJError as exc:
+        emit(JobEvent(kind="error", detail=str(exc)))
+        return JobResult(
+            job_name=request.name,
+            status="failed",
+            error=str(exc),
+            note=str(exc),
+        )
+
+    emit(JobEvent(kind="code", detail=f"code-upload strategy: {uploader.name}"))
+    upload_result = uploader.prepare(
+        cfg, request, namespace=namespace, on_event=emit
+    )
+    if not upload_result.ok:
+        detail = upload_result.error or (
+            f"Code upload ({uploader.name}) failed (no error detail captured)"
+        )
+        log.error(
+            "Code upload via %s failed for job %s on namespace %s:\n%s",
+            uploader.name,
+            request.name,
+            namespace,
+            detail,
+        )
+        return JobResult(
+            job_name=request.name,
+            status="failed",
+            error=f"Code upload ({uploader.name}) failed: {detail}",
+            note=f"Code upload ({uploader.name}) failed: "
+            + detail.splitlines()[0],
+        )
+
+    # Build the Volcano Job spec, injecting any strategy-specific bash
+    # setup the pod needs (e.g. curl-from-blob).
+    try:
+        job_spec = build_volcano_job(
+            cfg,
+            namespace=namespace,
+            code_setup_lines=upload_result.pod_setup_lines or None,
+            code_path=upload_result.code_path or None,
+        )
     except Exception as exc:
         log.exception("Failed to build Volcano job spec for %s", request.name)
         err = (
@@ -50,27 +112,6 @@ def submit_via_volcano(
             error=err,
             note=f"{type(exc).__name__}: {exc}",
         )
-    namespace = job_spec["metadata"]["namespace"]
-
-    if cfg.code_dir and cfg.pvc_name and cfg.pvc_mount_dir:
-        ok, upload_err = upload_code_to_pvc(cfg, namespace=namespace, on_event=emit)
-        if not ok:
-            short = upload_err.splitlines()[0] if upload_err else (
-                "Code upload to PVC failed (no error detail captured)"
-            )
-            full = upload_err or "Code upload to PVC failed (no error detail captured)"
-            log.error(
-                "Code upload to PVC failed for job %s on namespace %s:\n%s",
-                request.name,
-                namespace,
-                full,
-            )
-            return JobResult(
-                job_name=request.name,
-                status="failed",
-                error=f"Code upload to PVC failed: {full}",
-                note=f"Code upload to PVC failed: {short}",
-            )
 
     emit(JobEvent(kind="submit", detail="kubectl create"))
 

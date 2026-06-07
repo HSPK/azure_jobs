@@ -12,13 +12,13 @@ if TYPE_CHECKING:
     from azure_jobs.az_client import AzureMLClient
 
 from azure_jobs.az_client import AzureARMClient
+from azure_jobs.job.spec import JobEvent, JobResult, JobSpec
 
 from ...errors import AJError, parse_exception_message
-from azure_jobs.job.spec import JobEvent, JobSpec, JobResult
 from .bootstrap import RUNNER_FILENAME, generate_runner_script
 from .image import _build_environment
+from .opts import AmlOpts
 from .payload import _build_env_vars, _build_job_body, _build_tags
-from .workspace import resolve_target
 from .ssh import _collect_ssh_files
 from .storage import _build_storage_mounts
 from .target import (
@@ -28,19 +28,22 @@ from .target import (
     _resolve_compute,
     _resolve_sing_identity,
 )
+from .workspace import resolve_target
 
 log = logging.getLogger(__name__)
 
 __all__ = ["submit", "_get_rest_client", "_build_env_vars"]
 
-def _get_rest_client(request: JobSpec) -> AzureMLClient:
+
+def _get_rest_client(aml: AmlOpts) -> AzureMLClient:
     from azure_jobs.az_client import AzureMLClient
 
     return AzureMLClient(
-        subscription_id=request.subscription_id,
-        resource_group=request.resource_group,
-        workspace_name=request.workspace_name,
+        subscription_id=aml.subscription_id,
+        resource_group=aml.resource_group,
+        workspace_name=aml.workspace_name,
     )
+
 
 def submit(
     request: JobSpec,
@@ -74,6 +77,7 @@ def submit(
             error=f"{type_name}: {msg}{extra}",
         )
 
+
 def _submit_impl(
     request: JobSpec,
     emit: Callable[[JobEvent], None],
@@ -94,10 +98,11 @@ def _submit_impl(
 
     _status("resolve", "Resolving Azure coordinates…")
     arm = AzureARMClient()
-    vc = resolve_target(request, arm_client=arm)
+    aml = resolve_target(request, arm_client=arm)
+    vc = arm.vc.quota.get_by_name(aml.compute) if request.service == "sing" else None
 
     _status("auth", "Authenticating…")
-    client = _get_rest_client(request)
+    client = _get_rest_client(aml)
 
     _status("command", "Building command…")
     distribution = _build_distribution(request)
@@ -132,7 +137,7 @@ def _submit_impl(
         on_progress=_on_upload,
     )
 
-    _status("submit", f"Submitting to {request.compute}…")
+    _status("submit", f"Submitting to {aml.compute}…")
     job_body = _build_job_body(
         request,
         env_id=env_id,
@@ -144,7 +149,7 @@ def _submit_impl(
         resources=resources,
         outputs=outputs,
         custom_props=dict(poc_props) if poc_props else None,
-        tags=_build_tags(request.tags),
+        tags=_build_tags(aml.tags),
     )
     returned_job = client.jobs.create_or_update(request.name, job_body)
 

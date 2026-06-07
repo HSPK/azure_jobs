@@ -7,8 +7,10 @@ import json
 import sys
 from unittest.mock import MagicMock
 
+from azure_jobs.backend.azureml.opts import AmlOpts
 from azure_jobs.journal import JobRecord
 from azure_jobs.job.spec import JobSpec, JobResult
+from azure_jobs.template import Template
 from azure_jobs.utils.ui import (
     set_output_mode,
     show_dry_run_result,
@@ -29,19 +31,41 @@ def _capture_stdout(fn) -> str:
 
 
 def _make_request(**overrides) -> JobSpec:
+    """Build a JobSpec with sensible defaults for JSON-output tests.
+
+    ``compute``/``tags``/etc. are AML-flavoured: they go into a typed
+    :class:`AmlOpts` stored under the dedicated ``backend_spec`` slot.
+    Tests may pass flat kwargs and we route them automatically. A
+    minimal :class:`Template` is attached so render_amlt_yaml's
+    raw-passthrough path has something to overlay onto.
+    """
+    aml_kw: dict = {"compute": "aml-compute"}
+    for k in ("compute", "subscription_id", "resource_group", "workspace_name",
+              "identity", "sla_tier", "priority", "tags",
+              "container_args", "shm_size", "matched_instances"):
+        if k in overrides:
+            aml_kw[k] = overrides.pop(k)
+    service = overrides.get("service", "aml")
+    sku = overrides.get("sku", "G1")
+    tmpl = Template.from_dict(
+        {
+            "target": {"service": service, "name": aml_kw["compute"]},
+            "jobs": [{"name": overrides.get("name", "azure_jobs_abc12345"), "sku": sku}],
+        }
+    )
     defaults = dict(
         name="azure_jobs_abc12345",
         sid="abc12345",
         template_name="demo",
         expr_name="aj",
         service="aml",
-        compute="aml-compute",
         sku="G1",
         nodes=2,
         gpus_per_node=4,
         processes_per_node=1,
         command=["echo template", "echo user"],
-        submission_path="/tmp/abc12345.yaml",
+        backend_spec=AmlOpts(**aml_kw),
+        template=tmpl,
     )
     defaults.update(overrides)
     return JobSpec(**defaults)
@@ -64,13 +88,14 @@ class TestDryRunResultJson:
 
     def test_dry_run_emits_full_envelope(self):
         req = _make_request()
-        req.submission_path = "/tmp/abc12345.yaml"
         out = _capture_stdout(lambda: show_dry_run_result(req))
         parsed = json.loads(out)
         assert parsed["kind"] == "submission_result"
         assert parsed["status"] == "dry_run"
         assert parsed["sid"] == "abc12345"
-        assert parsed["submission_path"] == "/tmp/abc12345.yaml"
+        # submission_path was dropped from the spec/envelope — the amlt
+        # backend reads the YAML straight from request.template.raw now.
+        assert "submission_path" not in parsed
         # Request sub-object carries the same shape as a real result
         assert parsed["request"]["nodes"] == 2
         assert parsed["request"]["gpus_per_node"] == 4
@@ -84,7 +109,6 @@ class TestDryRunResultJson:
 
     def test_no_rich_markup_leaks(self):
         req = _make_request(tags=["env:prod", "owner:alice"])
-        req.submission_path = "/tmp/abc12345.yaml"
         out = _capture_stdout(lambda: show_dry_run_result(req))
         assert "[bold" not in out
         assert "[/bold" not in out

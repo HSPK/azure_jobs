@@ -7,44 +7,33 @@ from typing import TYPE_CHECKING
 
 from azure_jobs.job.spec import JobSpec
 
+from .opts import AmlOpts
+
 if TYPE_CHECKING:
-    from ...az_client import AzureARMClient, VCInfo
+    from ...az_client import AzureARMClient
 
 log = logging.getLogger(__name__)
 
-def _warn_mismatch(label: str, requested: str, actual: str) -> None:
-    if requested and requested != actual:
-        log.warning(
-            "%s in template (%r) differs from resolved value (%r); using %r.",
-            label,
-            requested,
-            actual,
-            actual,
-        )
 
-def resolve_target(
-    request: JobSpec, *, arm_client: AzureARMClient
-) -> VCInfo | None:
-    """Resolve Azure coordinates for *request*'s compute target."""
-    if request.service not in ("sing", "aml") or not request.compute:
-        return None
+def resolve_target(request: JobSpec, *, arm_client: AzureARMClient) -> AmlOpts:
+    """Fill Azure sub/rg/workspace on ``request.backend_spec`` and return it."""
+    aml: AmlOpts = request.backend_spec
+    if request.service not in ("sing", "aml") or not aml.compute:
+        return aml
 
     if request.service == "sing":
-        vc = arm_client.vc.quota.get_by_name(request.compute)
-        sing = request.sing
-        sing.vc_subscription_id = vc.subscription_id
-        sing.vc_resource_group = vc.resource_group
+        vc = arm_client.vc.quota.get_by_name(aml.compute)
+        aml.vc_subscription_id = vc.subscription_id
+        aml.vc_resource_group = vc.resource_group
 
-        if request.workspace_name and not (
-            request.subscription_id and request.resource_group
-        ):
-            ws = arm_client.workspace.get(request.workspace_name)
-            request.subscription_id = ws.subscription_id
-            request.resource_group = ws.resource_group
-        return vc
+        if aml.workspace_name and not (aml.subscription_id and aml.resource_group):
+            ws = arm_client.workspace.get(aml.workspace_name)
+            aml.subscription_id = ws.subscription_id
+            aml.resource_group = ws.resource_group
+        return aml
 
-    ws = arm_client.compute.get_workspace(request.compute)
-    request.subscription_id = ws.subscription_id
-    request.resource_group = ws.resource_group
-    request.workspace_name = ws.name
-    return None
+    ws = arm_client.compute.get_workspace(aml.compute)
+    aml.subscription_id = ws.subscription_id
+    aml.resource_group = ws.resource_group
+    aml.workspace_name = ws.name
+    return aml

@@ -8,10 +8,9 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from azure_jobs.utils.fs import read_ignore_file
-from azure_jobs.utils.naming import sanitize_dns1035
 
 from .command import build_user_command
-from .spec import AmltOpts, JobSpec, SingularityOpts, StorageMount, VolcanoOpts
+from .spec import JobSpec, StorageMount
 
 if TYPE_CHECKING:
     from ..template import Template
@@ -79,7 +78,8 @@ def build_job_spec(
     description: str = "",
 ) -> JobSpec:
     """Build a JobSpec from a template + submission parameters."""
-    target = template.target
+    from azure_jobs.backend import get_backend
+
     env = template.environment
     job = template.jobs[0] if template.jobs else None
     if job is None:
@@ -90,29 +90,8 @@ def build_job_spec(
     submit_args = job.submit_args
 
     storage = _normalize_storage(template.storage)
-    service = target.service
+    service = template.target.service
 
-    if service == "volcano":
-        name = sanitize_dns1035(name, max_length=63 - 9)
-
-    aj_envs: dict[str, str] = {
-        "AJ_NAME": name,
-        "AJ_ID": sid,
-        "AJ_TEMPLATE": template_name,
-        "AJ_SUBMIT_TIMESTAMP_UTC": datetime.now(timezone.utc).isoformat(),
-        "AJ_NODES": str(nodes),
-        "AJ_PROCESSES": str(gpus_per_node * nodes),
-        "AJ_GPUS_PER_NODE": str(gpus_per_node),
-        "AJ_PROCESSES_PER_NODE": str(processes_per_node),
-    }
-
-    command_list: list[str] = [
-        *_PRELUDE_COMMANDS,
-        *_normalize_template_commands(job.command),
-        build_user_command(user_command, user_args),
-    ]
-
-    amlt_code_dir = code.local_dir
     resolved_code_dir = code_dir if code_dir is not None else os.getcwd()
 
     file_ignore = read_ignore_file(resolved_code_dir)
@@ -123,42 +102,32 @@ def build_job_spec(
             seen.add(pat)
             code_ignore.append(pat)
 
-    env_extra = _merge_env(dict(submit_args.get("env", {})), aj_envs)
-    container_args = dict(submit_args.get("container_args", {}))
+    backend = get_backend(service)
+    final_name = backend.normalize_job_name(name)
+    backend_spec = backend.build_spec_backend(template)
 
-    sing_opts = SingularityOpts(
-        vc_subscription_id=target.subscription_id if service == "sing" else "",
-        vc_resource_group=target.resource_group if service == "sing" else "",
-    )
-    if service == "sing":
-        sub_id = ""
-        rg = ""
-    else:
-        sub_id = target.subscription_id
-        rg = target.resource_group
-    ws_name = target.workspace_name
-
-    amlt_opts = AmltOpts(code_dir=amlt_code_dir)
-    volcano_opts = VolcanoOpts()
-    if service == "volcano":
-        volcano_opts = VolcanoOpts(
-            namespace=target.namespace,
-            queue=target.queue,
-            context=target.context,
-            gpus_per_node=target.gpus_per_node,
-            cpus_per_node=target.cpus_per_node,
-            memory=target.memory,
-            rdma=target.rdma,
-            priority_class=target.priority_class,
-            labels=dict(target.labels),
-        )
+    aj_envs: dict[str, str] = {
+        "AJ_NAME": final_name,
+        "AJ_ID": sid,
+        "AJ_TEMPLATE": template_name,
+        "AJ_SUBMIT_TIMESTAMP_UTC": datetime.now(timezone.utc).isoformat(),
+        "AJ_NODES": str(nodes),
+        "AJ_PROCESSES": str(gpus_per_node * nodes),
+        "AJ_GPUS_PER_NODE": str(gpus_per_node),
+        "AJ_PROCESSES_PER_NODE": str(processes_per_node),
+    }
+    env_vars = _merge_env(dict(submit_args.get("env", {})), aj_envs)
+    command = [
+        *_PRELUDE_COMMANDS,
+        *_normalize_template_commands(job.command),
+        build_user_command(user_command, user_args),
+    ]
 
     return JobSpec(
-        name=name,
+        name=final_name,
         sid=sid,
         description=description or experiment,
         expr_name=experiment,
-        compute=target.name,
         sku=sku,
         nodes=nodes,
         gpus_per_node=gpus_per_node,
@@ -168,21 +137,12 @@ def build_job_spec(
         code_dir=resolved_code_dir,
         code_ignore=code_ignore,
         setup_commands=env.setup,
-        command=command_list,
         storage=storage,
-        identity=job.identity,
-        sla_tier=job.sla_tier,
-        priority=job.priority,
-        tags=job.tags,
-        container_args=container_args,
-        shm_size=container_args.get("shm_size", ""),
         template_name=template_name,
-        env_vars=env_extra,
-        subscription_id=sub_id,
-        resource_group=rg,
-        workspace_name=ws_name,
         service=service,
-        sing=sing_opts,
-        amlt=amlt_opts,
-        volcano=volcano_opts,
+        env_vars=env_vars,
+        command=command,
+        extra=dict(template._extra or {}),
+        backend_spec=backend_spec,
+        template=template,
     )
