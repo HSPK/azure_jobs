@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from pathlib import Path
 from typing import Any
@@ -13,7 +14,10 @@ from rich.table import Table
 
 from azure_jobs import const
 
+log = logging.getLogger(__name__)
+
 _STEPS = 4
+
 
 def _step(num: int, title: str, hint: str = "") -> None:
     from azure_jobs.utils.ui import console
@@ -23,6 +27,7 @@ def _step(num: int, title: str, hint: str = "") -> None:
     console.print(f"{bar} [bold]{title}[/bold]")
     if hint:
         console.print(f"     [dim]{hint}[/dim]")
+
 
 def _pick_row(prompt: str, rows: list[Any]) -> Any:
     from azure_jobs.utils.ui import console
@@ -41,14 +46,18 @@ def _pick_row(prompt: str, rows: list[Any]) -> Any:
         pass
     raise click.ClickException(f"Invalid selection: {raw}")
 
+
 def _write_yaml(path: Path, data: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(yaml.safe_dump(data, sort_keys=False, allow_unicode=True))
 
+
 _SAFE_NAME = re.compile(r"[^a-z0-9._-]+")
+
 
 def _sanitise(name: str) -> str:
     return _SAFE_NAME.sub("-", name.lower()).strip("-") or "default"
+
 
 def _pick_account() -> str:
     from azure_jobs.az_client import AzureARMClient
@@ -60,7 +69,11 @@ def _pick_account() -> str:
         try:
             uais = AzureARMClient().identity.list()
         except Exception as exc:
-            warning(f"Could not list UAIs: {exc}")
+            log.exception("Could not list UAIs")
+            warning(
+                f"Could not list UAIs ({type(exc).__name__}: {exc}). "
+                "Run with AJ_DEBUG=1 for a Python traceback."
+            )
             uais = []
 
     if uais:
@@ -90,6 +103,7 @@ def _pick_account() -> str:
     dim(f"  → wrote {path}")
     return f"account.{name}"
 
+
 def _pick_environment() -> tuple[str, str]:
     from azure_jobs.cli.images import _fetch_sing_images
     from azure_jobs.utils.ui import console, dim, warning
@@ -100,7 +114,11 @@ def _pick_environment() -> tuple[str, str]:
         try:
             images = _fetch_sing_images()
         except Exception as exc:
-            warning(f"Could not list images: {exc}")
+            log.exception("Could not list Singularity images")
+            warning(
+                f"Could not list images ({type(exc).__name__}: {exc}). "
+                "Run with AJ_DEBUG=1 for a Python traceback."
+            )
             images = []
 
     if images:
@@ -116,6 +134,7 @@ def _pick_environment() -> tuple[str, str]:
         image = click.prompt("  Image")
 
     _ensure_environment_base()
+    _ensure_copy_ssh_sh()
     _ensure_install_sh()
 
     data = {
@@ -124,7 +143,10 @@ def _pick_environment() -> tuple[str, str]:
             "target": {"service": "sing"},
             "environment": {
                 "image": image,
-                "setup": ["bash .azure_jobs/scripts/install.sh"],
+                "setup": [
+                    "bash .azure_jobs/scripts/copy_ssh.sh",
+                    "bash .azure_jobs/scripts/install.sh",
+                ],
             },
         },
     }
@@ -132,6 +154,7 @@ def _pick_environment() -> tuple[str, str]:
     _write_yaml(path, data)
     dim(f"  → wrote {path}")
     return "environment.sing", image
+
 
 def _pick_storage() -> str:
     from azure_jobs.az_client import AzureARMClient
@@ -143,7 +166,11 @@ def _pick_storage() -> str:
         try:
             sas = AzureARMClient().storage.list()
         except Exception as exc:
-            warning(f"Could not list storage accounts: {exc}")
+            log.exception("Could not list storage accounts")
+            warning(
+                f"Could not list storage accounts ({type(exc).__name__}: {exc}). "
+                "Run with AJ_DEBUG=1 for a Python traceback."
+            )
             sas = []
 
     mounts: dict[str, dict[str, str]] = {}
@@ -177,10 +204,12 @@ def _pick_storage() -> str:
     dim(f"  → wrote {path}")
     return "storage.default"
 
+
 def _sku_for(accelerator: str, gpu_memory: int) -> str:
     if gpu_memory > 0:
         return f"{{nodes}}x{gpu_memory}G{{processes}}-{accelerator}"
     return "{nodes}xC{processes}"
+
 
 def _generate_leaves(
     *,
@@ -198,7 +227,11 @@ def _generate_leaves(
         try:
             vcs = AzureARMClient().vc.quota.list()
         except Exception as exc:
-            error(f"Could not fetch VC quota: {exc}")
+            log.exception("Could not fetch VC quota")
+            error(
+                f"Could not fetch VC quota ({type(exc).__name__}: {exc}). "
+                "Run with AJ_DEBUG=1 for a Python traceback."
+            )
             raise SystemExit(1) from exc
 
     rows: list[dict[str, str]] = []
@@ -250,6 +283,7 @@ def _generate_leaves(
         )
     return rows
 
+
 def _pick_workspace() -> dict[str, str]:
     from azure_jobs.az_client import AzureARMClient
     from azure_jobs.utils.ui import console, error
@@ -260,7 +294,11 @@ def _pick_workspace() -> dict[str, str]:
         try:
             workspaces = AzureARMClient().workspace.list()
         except Exception as exc:
-            error(f"Could not discover workspaces: {exc}")
+            log.exception("Could not discover workspaces")
+            error(
+                f"Could not discover workspaces ({type(exc).__name__}: {exc}). "
+                "Run with AJ_DEBUG=1 for a Python traceback."
+            )
             raise SystemExit(1) from exc
 
     if not workspaces:
@@ -288,6 +326,7 @@ def _pick_workspace() -> dict[str, str]:
         "subscription_id": ws.subscription_id,
     }
 
+
 _INSTALL_SH = """\
 echo "Installing dependencies and setting up environment..."
 
@@ -309,6 +348,7 @@ $SUDO cp $HOME/.local/bin/uvx /usr/local/bin
 uv python install 3.10
 """
 
+
 def _ensure_install_sh() -> None:
     from azure_jobs.utils.ui import dim
 
@@ -319,6 +359,57 @@ def _ensure_install_sh() -> None:
     p.write_text(_INSTALL_SH, encoding="utf-8")
     p.chmod(0o755)
     dim(f"  → wrote {p}")
+
+
+_COPY_SSH_SH = r"""#!/usr/bin/env bash
+# Materialise SSH into /tmp/aj-ssh and export GIT_SSH_COMMAND so
+# git/uv work regardless of $HOME. /tmp/.aj_ssh_env is sourced by
+# the user-command preamble.
+
+set -uo pipefail
+
+DST="/tmp/aj-ssh"
+ENV_FILE="/tmp/.aj_ssh_env"
+SRC="${AJ_SSH_SRC:-./.ssh}"
+
+if [[ -z "${HOME:-}" || "${HOME}" == "/" || ! -w "${HOME}" ]]; then
+    export HOME="/tmp/aj-home-$(id -u)"
+    mkdir -p "${HOME}"
+fi
+export USER="${USER:-$(id -un 2>/dev/null || echo "uid$(id -u)")}"
+
+mkdir -p "${DST}" && chmod 700 "${DST}"
+[[ -d "${SRC}" ]] && cp -rL "${SRC}/." "${DST}/" 2>/dev/null || true
+chmod 600 "${DST}"/id_* 2>/dev/null || true
+touch "${DST}/known_hosts"
+
+OPTS="-o UserKnownHostsFile=${DST}/known_hosts -o StrictHostKeyChecking=accept-new -o IdentitiesOnly=yes"
+for k in "${DST}"/id_{ed25519,rsa,ecdsa}; do
+    [[ -f "${k}" ]] && OPTS+=" -i ${k}"
+done
+
+cat >"${ENV_FILE}" <<EOF
+export HOME="${HOME}"
+export USER="${USER}"
+export AJ_SSH_DIR="${DST}"
+export GIT_SSH_COMMAND="ssh ${OPTS}"
+EOF
+
+echo "[copy_ssh] ${DST}:" && ls -la "${DST}"
+"""
+
+
+def _ensure_copy_ssh_sh() -> None:
+    from azure_jobs.utils.ui import dim
+
+    p = const.AJ_HOME / "scripts" / "copy_ssh.sh"
+    if p.exists():
+        return
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(_COPY_SSH_SH, encoding="utf-8")
+    p.chmod(0o755)
+    dim(f"  → wrote {p}")
+
 
 def _ensure_environment_base() -> None:
     p = const.AJ_HOME / "environment" / "base.yaml"
@@ -338,6 +429,7 @@ def _ensure_environment_base() -> None:
         },
     }
     _write_yaml(p, data)
+
 
 def _ensure_template_base() -> None:
     p = const.AJ_TEMPLATE_HOME / "base.yaml"
@@ -363,6 +455,7 @@ def _ensure_template_base() -> None:
     }
     _write_yaml(p, data)
 
+
 def _intro() -> None:
     from azure_jobs.utils.ui import console
 
@@ -375,6 +468,7 @@ def _intro() -> None:
             padding=(1, 4),
         )
     )
+
 
 def _summary(
     *,
@@ -414,6 +508,7 @@ def _summary(
     for r in leaves:
         table.add_row(r["leaf"], r["vc"], r["accelerator"], r["memory"], r["status"])
     console.print(table)
+
 
 def run_wizard(leaf_name: str | None, *, force: bool) -> None:
     from azure_jobs.utils.ui import console, info, success, warning

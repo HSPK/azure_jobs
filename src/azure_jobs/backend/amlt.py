@@ -7,7 +7,8 @@ import subprocess
 from pathlib import Path
 from typing import Callable
 
-from azure_jobs.job.spec import JobEvent, JobSpec, JobResult
+from azure_jobs.job.spec import JobEvent, JobResult, JobSpec
+from azure_jobs.job.write import write_amlt_yaml
 
 from . import register_backend
 
@@ -40,16 +41,10 @@ def submit_via_amlt(
     job_name = request.name
     experiment = request.expr_name
 
-    config_fp = Path(request.submission_path) if request.submission_path else None
-    if config_fp is None or not config_fp.exists():
-        msg = (
-            f"Submission YAML not found: {config_fp}. "
-            "Did you call write_amlt_yaml() first?"
-        )
-        emit(JobEvent(kind="error", detail=msg))
-        return JobResult(job_name=job_name, status="failed", error=msg)
+    submission_fp = write_amlt_yaml(request)
+    emit(JobEvent(kind="submit", detail=f"wrote submission YAML → {submission_fp}"))
 
-    cmd = ["amlt", "run", str(config_fp), experiment, "-y"]
+    cmd = ["amlt", "run", str(submission_fp), experiment, "-y"]
     emit(JobEvent(kind="submit", detail=f"amlt run → {experiment}"))
 
     try:
@@ -83,16 +78,17 @@ def submit_via_amlt(
                 job_name=job_name,
                 status="failed",
                 error=note,
-                note=note,
+                note=f"submission YAML: {submission_fp}\n{note}",
             )
 
         portal_url = extract_portal_url("\n".join(output_lines))
-        emit(JobEvent(kind="done", detail=job_name))
+        emit(JobEvent(kind="done", detail=f"submitted (yaml: {submission_fp})"))
         return JobResult(
             job_name=job_name,
             azure_name=job_name,
             status="submitted",
             portal_url=portal_url,
+            note=f"submission YAML: {submission_fp}",
         )
     except subprocess.TimeoutExpired:
         msg = "amlt run timed out"

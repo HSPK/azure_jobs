@@ -126,8 +126,21 @@ def _fetch_and_show_job(job_id: str, ws_name: str | None = None) -> None:
         if exc.status_code == 404:
             error(f"Job not found: [bold]{name}[/bold]")
         else:
-            error(f"Failed to fetch job: {exc}")
+            details = [f"Failed to fetch job: {exc}"]
+            if exc.status_code:
+                details.append(f"HTTP {exc.status_code}")
+            if exc.azure_code:
+                details.append(f"azure_code={exc.azure_code}")
+            log.exception("client.jobs.get(%s) failed", name)
+            error(" — ".join(details) + "  (AJ_DEBUG=1 for traceback)")
         raise SystemExit(1)
+    except Exception as exc:
+        log.exception("client.jobs.get(%s) raised unexpectedly", name)
+        error(
+            f"Failed to fetch job ({type(exc).__name__}: {exc}). "
+            "Run with AJ_DEBUG=1 for a Python traceback."
+        )
+        raise SystemExit(1) from exc
 
     show_job_detail(job)
 

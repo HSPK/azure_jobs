@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 import subprocess
 
 from . import main
+
+log = logging.getLogger(__name__)
 
 @main.group(name="auth")
 def auth_group() -> None:
@@ -33,7 +36,8 @@ def auth_status() -> None:
         if token and token.token:
             cred_ok = True
     except Exception as exc:
-        cred_err = str(exc)
+        log.exception("AzureCliCredential.get_token failed")
+        cred_err = f"{type(exc).__name__}: {exc}"
     if not cred_ok and not cred_err:
         try:
             import azure.identity  # noqa: F401

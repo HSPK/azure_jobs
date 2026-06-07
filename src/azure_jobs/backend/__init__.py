@@ -1,44 +1,59 @@
-"""Submission backends — registry + the three concrete backends.
-
-Three sibling backends are available, each self-registering at import time:
-
-- :mod:`azure_jobs.backend.amlt` — shells out to the external ``amlt`` CLI
-- :mod:`azure_jobs.backend.azureml` — native REST submission to Azure ML / Singularity
-- :mod:`azure_jobs.backend.volcano` — Volcano/Kubernetes submission via ``kubectl``
-
-The CLI dispatches on :attr:`JobSpec.service` via :func:`submit_via`.
-"""
+"""Submission backend registry."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Callable, Optional
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any, Callable, Optional
 
 from azure_jobs.errors import BackendError
 from azure_jobs.job.spec import JobEvent, JobSpec, JobResult
 
+if TYPE_CHECKING:
+    from azure_jobs.template.models import Template
+
 SubmitFn = Callable[..., JobResult]
+SpecBuilder = Callable[["Template"], Any]
+NameNormalizer = Callable[[str], str]
+
+
+def _noop_build_spec_backend(_template: Any) -> None:
+    return None
+
+
+def _identity_name(name: str) -> str:
+    return name
 
 
 @dataclass(frozen=True)
 class BackendEntry:
-    """Registered submission backend."""
-
     name: str
     fn: SubmitFn
     label: str
+    build_spec_backend: SpecBuilder = field(default=_noop_build_spec_backend)
+    normalize_job_name: NameNormalizer = field(default=_identity_name)
 
 
 _REGISTRY: dict[str, BackendEntry] = {}
 
 
-def register_backend(name: str, fn: SubmitFn, *, label: str | None = None) -> None:
-    """Register a submission backend under ``name`` (idempotent overwrite)."""
-    _REGISTRY[name] = BackendEntry(name=name, fn=fn, label=label or name)
+def register_backend(
+    name: str,
+    fn: SubmitFn,
+    *,
+    label: str | None = None,
+    build_spec_backend: SpecBuilder | None = None,
+    normalize_job_name: NameNormalizer | None = None,
+) -> None:
+    _REGISTRY[name] = BackendEntry(
+        name=name,
+        fn=fn,
+        label=label or name,
+        build_spec_backend=build_spec_backend or _noop_build_spec_backend,
+        normalize_job_name=normalize_job_name or _identity_name,
+    )
 
 
 def get_backend(name: str) -> BackendEntry:
-    """Look up a backend by service name; raises :class:`BackendError` if missing."""
     try:
         return _REGISTRY[name]
     except KeyError:
@@ -49,7 +64,6 @@ def get_backend(name: str) -> BackendEntry:
 
 
 def list_backends() -> list[BackendEntry]:
-    """Return all registered backends, sorted by name."""
     return sorted(_REGISTRY.values(), key=lambda e: e.name)
 
 
@@ -58,22 +72,20 @@ def submit_via(
     *,
     on_event: Optional[Callable[[JobEvent], None]] = None,
 ) -> JobResult:
-    """Dispatch a submission to the backend registered for ``request.service``."""
     return get_backend(request.service).fn(request, on_event=on_event)
 
 
-# Importing the three backends has the side-effect of registering them.
+# Importing the backends self-registers them.
 from . import amlt, azureml, volcano  # noqa: E402,F401
 
-# Expose the amlt entrypoint at SDK-level: amlt is *not* dispatched via
-# ``spec.service`` (it's triggered by the ``--amlt`` CLI flag instead), so
-# callers need a direct handle. The aml/sing/volcano flows all go through
-# ``submit_via(spec)``.
+# amlt is triggered by --amlt, not by spec.service, so callers need a direct handle.
 from .amlt import submit_via_amlt  # noqa: E402
 
 
 __all__ = [
     "BackendEntry",
+    "SpecBuilder",
+    "NameNormalizer",
     "get_backend",
     "list_backends",
     "register_backend",

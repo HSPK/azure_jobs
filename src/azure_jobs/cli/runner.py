@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import logging
+import os
+import traceback
 from typing import Callable
 
 import click
@@ -15,6 +18,13 @@ from azure_jobs.utils.ui import (
     show_submission_result,
     truncate_middle,
 )
+
+log = logging.getLogger(__name__)
+
+_DEBUG_ENV_FALSY = frozenset({"", "0", "false", "no", "off"})
+
+def _debug_enabled() -> bool:
+    return os.getenv("AJ_DEBUG", "").strip().lower() not in _DEBUG_ENV_FALSY
 
 def submit_and_record(
     submit_fn: Callable[[Callable[[JobEvent], None]], JobResult],
@@ -51,16 +61,32 @@ def submit_and_record(
     except SystemExit:
         raise
     except Exception as exc:
+        log.exception(
+            "Submission failed for %s (backend=%s)", display_name, backend_label
+        )
         rec.status = "failed"
         msg = parse_exception_message(exc)
-        rec.note = msg
+        type_name = type(exc).__name__
+        rec.note = f"{type_name}: {msg}"
+        full_msg = f"{type_name}: {msg}"
         if json_mode:
-            synth = JobResult(job_name=display_name, status="failed", error=msg)
+            tb_str = traceback.format_exc()
+            synth = JobResult(
+                job_name=display_name,
+                status="failed",
+                error=f"{full_msg}\n{tb_str}",
+            )
             show_submission_result(
                 rec, synth, display_name=display_name, backend_label=backend_label
             )
             raise SystemExit(1) from exc
-        raise click.ClickException(f"Submission failed: {msg}")
+        if _debug_enabled():
+            console.print_exception(show_locals=False)
+        else:
+            console.print(
+                "[dim](run with AJ_DEBUG=1 for a full Python traceback)[/dim]"
+            )
+        raise click.ClickException(f"Submission failed: {full_msg}")
     finally:
         log_record(rec)
 

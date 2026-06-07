@@ -21,28 +21,38 @@ from .render import emit_json, get_output_mode
 if TYPE_CHECKING:
     from azure_jobs.journal import JobRecord
     from azure_jobs.job import JobSpec, JobResult
+    from azure_jobs.backend.azureml.opts import AmlOpts
+
+def _aml_view(request: JobSpec) -> "AmlOpts":
+    """Best-effort AmlOpts view of *request*: typed for aml/sing, defaults otherwise."""
+    from azure_jobs.backend.azureml.opts import AmlOpts
+
+    bs = request.backend_spec
+    return bs if isinstance(bs, AmlOpts) else AmlOpts()
+
 
 def _request_payload(request: JobSpec) -> dict[str, Any]:
+    aml = _aml_view(request)
     return {
         "template_name": request.template_name,
         "experiment": request.expr_name,
         "service": request.service,
-        "compute": request.compute,
+        "compute": aml.compute,
         "sku": request.sku,
-        "matched_instances": list(request.matched_instances),
+        "matched_instances": list(aml.matched_instances),
         "nodes": request.nodes,
         "gpus_per_node": request.gpus_per_node,
         "processes_per_node": request.processes_per_node,
         "total_processes": request.nodes * (request.processes_per_node or 1),
         "image": request.image,
         "image_registry": request.image_registry,
-        "subscription_id": request.subscription_id,
-        "resource_group": request.resource_group,
-        "workspace_name": request.workspace_name,
+        "subscription_id": aml.subscription_id,
+        "resource_group": aml.resource_group,
+        "workspace_name": aml.workspace_name,
         "code_dir": request.code_dir,
-        "priority": request.priority,
-        "sla_tier": request.sla_tier,
-        "tags": list(request.tags),
+        "priority": aml.priority,
+        "sla_tier": aml.sla_tier,
+        "tags": list(aml.tags),
         "command": list(request.command),
     }
 
@@ -55,11 +65,12 @@ def show_submission_preview(
     if get_output_mode() == "json":
         return
 
+    aml = _aml_view(request)
     total_processes = request.nodes * request.processes_per_node
     final_cmd = request.command[-1] if request.command else ""
     storage_count = len(request.storage)
-    tag_text = ", ".join(request.tags[:4]) if request.tags else "-"
-    if len(request.tags) > 4:
+    tag_text = ", ".join(aml.tags[:4]) if aml.tags else "-"
+    if len(aml.tags) > 4:
         tag_text += " ..."
     created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -85,14 +96,14 @@ def show_submission_preview(
     right = _section(
         "Runtime",
         [
-            ("Compute", esc(request.compute or "-")),
+            ("Compute", esc(aml.compute or "-")),
             ("SKU", esc(request.sku or "auto")),
             ("Nodes", str(request.nodes)),
             (
                 "Processes",
                 f"{total_processes}  ({request.processes_per_node} x {request.nodes})",
             ),
-            ("Priority", esc(request.priority)),
+            ("Priority", esc(aml.priority)),
         ],
     )
 
@@ -106,11 +117,11 @@ def show_submission_preview(
     details.add_column(style="value")
     details.add_row("Image", esc(request.image or "-"))
     details.add_row("Registry", esc(request.image_registry or "-"))
-    if request.matched_instances:
-        details.add_row("Matched", esc(", ".join(request.matched_instances)))
+    if aml.matched_instances:
+        details.add_row("Matched", esc(", ".join(aml.matched_instances)))
     details.add_row("Code", esc(request.code_dir or "."))
-    details.add_row("Workspace", esc(request.workspace_name or "-"))
-    details.add_row("Resource Group", esc(request.resource_group or "-"))
+    details.add_row("Workspace", esc(aml.workspace_name or "-"))
+    details.add_row("Resource Group", esc(aml.resource_group or "-"))
     details.add_row("Created", created_at)
     details.add_row("Storage", f"{storage_count} mounts")
     details.add_row("Tags", esc(tag_text))
@@ -124,8 +135,6 @@ def show_submission_preview(
     body.add_row(
         f"[key]Command[/key]      [highlight]{esc(final_cmd or '-')}[/highlight]"
     )
-    if request.submission_path:
-        body.add_row(f"[key]AMLT Config[/key]  {esc(request.submission_path)}")
 
     title = "Dry Run Preview" if dry_run else "Submission Preview"
     style = "cyan" if dry_run else "green"
@@ -152,7 +161,6 @@ def show_submission_result(
         "azure_name": rec.azure_name or result.azure_name or "",
         "portal_url": rec.portal or result.portal_url or "",
         "backend": backend_label,
-        "submission_path": request.submission_path,
         "note": rec.note,
         "error": result.error or "",
         "request": _request_payload(request),
@@ -177,7 +185,6 @@ def show_dry_run_result(request: JobSpec) -> None:
             "azure_name": "",
             "portal_url": "",
             "backend": "",
-            "submission_path": request.submission_path,
             "note": "",
             "error": "",
             "request": _request_payload(request),
@@ -210,12 +217,13 @@ def _render_submission_result_rich(
         grid.add_row("Azure ID", esc(azure_name))
     if request.expr_name:
         grid.add_row("Experiment", esc(request.expr_name))
-    if request.compute:
-        grid.add_row("Compute", esc(request.compute))
+    if payload.get("compute"):
+        grid.add_row("Compute", esc(payload["compute"]))
     if request.sku:
         grid.add_row("SKU", esc(request.sku))
-    if request.matched_instances:
-        grid.add_row("Matched", esc(", ".join(request.matched_instances)))
+    matched = payload.get("request", {}).get("matched_instances", [])
+    if matched:
+        grid.add_row("Matched", esc(", ".join(matched)))
     if request.nodes:
         total_processes = request.nodes * (request.processes_per_node or 1)
         grid.add_row(
@@ -225,11 +233,29 @@ def _render_submission_result_rich(
         )
     if payload["portal_url"]:
         grid.add_row("Portal", short_portal_url(payload["portal_url"]))
-    if payload["submission_path"]:
-        grid.add_row("Config", esc(payload["submission_path"]))
     if failed:
         msg = payload["error"] or payload["note"]
         if msg:
+            if "\n" in msg:
+                console.print()
+                console.print(
+                    Panel(
+                        grid,
+                        title=f"[bold]{title}[/bold]",
+                        border_style=border_style,
+                        expand=False,
+                    )
+                )
+                console.print(
+                    Panel(
+                        f"[red]{esc(msg)}[/red]",
+                        title="[bold red]Error detail[/bold red]",
+                        border_style="red",
+                        expand=False,
+                    )
+                )
+                console.print()
+                return
             grid.add_row("Error", f"[red]{esc(msg)}[/red]")
     elif payload["note"] and not payload["portal_url"]:
         grid.add_row("Note", esc(payload["note"]))

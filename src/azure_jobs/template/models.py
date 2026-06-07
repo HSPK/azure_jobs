@@ -10,8 +10,6 @@ from azure_jobs.utils.dataclass_utils import dataclass_from_dict
 
 @dataclass
 class Target:
-    """Target compute section of an amlt template."""
-
     name: str = ""
     service: str = "aml"
     subscription_id: str = ""
@@ -30,23 +28,17 @@ class Target:
 
 @dataclass
 class Environment:
-    """Environment section of an amlt template."""
-
     image: str = ""
     registry: str = ""
     setup: list[str] = field(default_factory=list)
 
 @dataclass
 class Code:
-    """Code section of an amlt template."""
-
     local_dir: str = "."
     ignore: list[str] = field(default_factory=list)
 
 @dataclass
 class Job:
-    """A single job in an amlt template."""
-
     name: str = ""
     command: list[str] = field(default_factory=list)
     sku: str = ""
@@ -62,8 +54,6 @@ class Job:
 
 @dataclass
 class Template:
-    """Amlt template configuration with one-level structure."""
-
     jobs: list[Job] = field(default_factory=list)
 
     target: Target = field(default_factory=Target)
@@ -73,13 +63,19 @@ class Template:
 
     description: str = ""
 
+    _extra: dict[str, Any] = field(default_factory=dict)
+
+    # Full merged YAML as the user wrote it — for amlt raw passthrough.
+    raw: dict[str, Any] = field(default_factory=dict)
+
     @classmethod
     def from_dict(cls, conf: dict[str, Any]) -> Template:
-        return dataclass_from_dict(cls, conf)
+        instance = dataclass_from_dict(cls, conf)
+        instance.raw = dict(conf) if isinstance(conf, dict) else {}
+        return instance
 
     @classmethod
     def from_conf_path(cls, fp: Path | str) -> Template:
-        """Load a YAML template file (resolving its base chain) into a Template."""
         from .engine import read_conf
 
         return cls.from_dict(read_conf(fp))

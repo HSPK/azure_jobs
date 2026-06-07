@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import subprocess
 from dataclasses import dataclass, field
@@ -12,6 +13,8 @@ from azure_jobs.job.spec import JobSpec
 from azure_jobs.utils.naming import sanitize_dns1035
 from . import constants as C
 
+log = logging.getLogger(__name__)
+
 _DISTRIBUTED_PREAMBLE = Path(__file__).parent / "distributed_preamble.sh"
 
 def _load_distributed_preamble(nodes: int) -> list[str]:
@@ -20,24 +23,35 @@ def _load_distributed_preamble(nodes: int) -> list[str]:
     return text.splitlines()
 
 def _kubectl_namespace(context: str = "") -> str:
+    cmd = [
+        "kubectl",
+        "config",
+        "view",
+        "--minify",
+        "-o",
+        "jsonpath={.contexts[0].context.namespace}",
+    ]
+    if context:
+        cmd.extend(["--context", context])
     try:
-        cmd = [
-            "kubectl",
-            "config",
-            "view",
-            "--minify",
-            "-o",
-            "jsonpath={.contexts[0].context.namespace}",
-        ]
-        if context:
-            cmd.extend(["--context", context])
         out = subprocess.run(
             cmd, capture_output=True, text=True, timeout=C.KUBECTL_NAMESPACE_TIMEOUT
         )
-        ns = out.stdout.strip()
-        return ns if ns else "default"
     except Exception:
+        log.debug(
+            "kubectl config view (namespace lookup) raised — falling back to 'default'",
+            exc_info=True,
+        )
         return "default"
+    if out.returncode != 0:
+        log.debug(
+            "kubectl config view returned exit=%s, stderr=%r — falling back to 'default'",
+            out.returncode,
+            (out.stderr or "")[:500],
+        )
+        return "default"
+    ns = out.stdout.strip()
+    return ns if ns else "default"
 
 @dataclass
 class VolcanoConfig:
@@ -67,8 +81,9 @@ class VolcanoConfig:
 
 def build_volcano_config_from_request(request: JobSpec) -> VolcanoConfig:
     """Translate a :class:JobSpec into a VolcanoConfig."""
-    vol = request.volcano
-    container_args = request.container_args or {}
+    from .opts import VolcanoOpts
+
+    vol: VolcanoOpts = request.backend_spec
     env_vars = dict(request.env_vars)
 
     code_dir = request.code_dir or os.getcwd()
@@ -86,16 +101,19 @@ def build_volcano_config_from_request(request: JobSpec) -> VolcanoConfig:
             vol.gpus_per_node or request.gpus_per_node or C.DEFAULT_GPUS_PER_NODE
         ),
         cpus_per_node=(
-            vol.cpus_per_node or container_args.get("cpus", C.DEFAULT_CPUS_PER_NODE)
+            vol.cpus_per_node
+            or vol.container_args.get("cpus", C.DEFAULT_CPUS_PER_NODE)
         ),
-        memory=(vol.memory or container_args.get("memory", C.DEFAULT_MEMORY)),
+        memory=(
+            vol.memory or vol.container_args.get("memory", C.DEFAULT_MEMORY)
+        ),
         processes_per_node=request.processes_per_node,
         image=request.image,
         command=list(request.command),
         setup_commands=list(request.setup_commands),
         env_vars=env_vars,
         rdma=vol.rdma,
-        shm_size=container_args.get("shm_size", ""),
+        shm_size=vol.shm_size,
         priority_class=vol.priority_class,
         labels=dict(vol.labels),
         code_dir=code_dir,
@@ -104,18 +122,49 @@ def build_volcano_config_from_request(request: JobSpec) -> VolcanoConfig:
         pvc_mount_dir=pvc_mount_dir,
     )
 
-def build_volcano_job(cfg: VolcanoConfig) -> dict[str, Any]:
-    """Build a Volcano Job spec dict from config."""
+def resolve_namespace(cfg: VolcanoConfig) -> str:
+    """Pick the Kubernetes namespace to submit into.
+
+    Public helper so callers (e.g. ``entry.py``) can compute the namespace
+    before rendering a full Volcano Job spec — they need it for upload-pod
+    placement, which happens *before* the job spec is built.
+    """
+    return cfg.namespace or _kubectl_namespace(cfg.context)
+
+def build_volcano_job(
+    cfg: VolcanoConfig,
+    *,
+    namespace: str | None = None,
+    code_setup_lines: list[str] | None = None,
+    code_path: str | None = None,
+) -> dict[str, Any]:
+    """Build a Volcano Job spec dict from config.
+
+    ``namespace`` / ``code_setup_lines`` / ``code_path`` are uploader hooks:
+
+    * ``namespace`` — pre-resolved namespace (avoids a second ``kubectl
+      config view`` call when the caller already resolved it for the
+      upload pod). Defaults to :func:`resolve_namespace(cfg)`.
+    * ``code_setup_lines`` — bash lines injected at the very top of the
+      container script. Used by the blob uploader to ``curl`` the tarball
+      and extract it before user setup runs.
+    * ``code_path`` — absolute path inside the pod where the code tree
+      will live (used by the ``cp -a $code_path/. $AJ_WORKDIR/`` step).
+      Defaults to the PVC-mount layout for backwards compatibility.
+    """
     job_name = sanitize_dns1035(cfg.name, max_length=C.JOB_NAME_MAX_LEN)
     app_label = job_name
 
-    code_path = (
-        f"{cfg.pvc_mount_dir}/{C.CODE_UPLOAD_PREFIX}/{cfg.name}"
-        if cfg.pvc_name and cfg.pvc_mount_dir
-        else ""
-    )
+    if code_path is None:
+        code_path = (
+            f"{cfg.pvc_mount_dir}/{C.CODE_UPLOAD_PREFIX}/{cfg.name}"
+            if cfg.pvc_name and cfg.pvc_mount_dir
+            else ""
+        )
 
     script_lines: list[str] = []
+    if code_setup_lines:
+        script_lines.extend(code_setup_lines)
     if code_path:
         run_wd = f"{C.WORKDIR_MOUNT_PATH}/{cfg.name}/wd"
         script_lines.extend(
@@ -269,14 +318,14 @@ def build_volcano_job(cfg: VolcanoConfig) -> dict[str, Any]:
             }
         )
 
-    namespace = cfg.namespace or _kubectl_namespace(cfg.context)
+    resolved_ns = namespace if namespace is not None else resolve_namespace(cfg)
 
     job_spec: dict[str, Any] = {
         "apiVersion": C.VOLCANO_API_VERSION,
         "kind": "Job",
         "metadata": {
             "generateName": f"{job_name}-",
-            "namespace": namespace,
+            "namespace": resolved_ns,
             "labels": {"app": app_label, **cfg.labels},
         },
         "spec": {

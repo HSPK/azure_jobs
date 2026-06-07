@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import logging
+
 from azure_jobs.cli import main
+
+log = logging.getLogger(__name__)
 
 @main.group(name="sa")
 def sa_group() -> None:
@@ -21,7 +25,11 @@ def sa_list() -> None:
         try:
             accounts = arm.storage.list()
         except Exception as exc:
-            error(f"Could not list storage accounts: {exc}")
+            log.exception("Could not list storage accounts")
+            error(
+                f"Could not list storage accounts ({type(exc).__name__}: {exc}). "
+                "Run with AJ_DEBUG=1 for a Python traceback."
+            )
             raise SystemExit(1) from exc
 
     show_storage_accounts_table(accounts)

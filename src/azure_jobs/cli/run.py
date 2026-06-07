@@ -5,6 +5,9 @@ from datetime import datetime, timezone
 
 import click
 
+from azure_jobs.backend import get_backend
+from azure_jobs.backend.amlt import amlt_available
+from azure_jobs.backend.azureml.sku import resolve_sku
 from azure_jobs.cli import main
 from azure_jobs.cli.runner import submit_and_record
 from azure_jobs.config import (
@@ -14,16 +17,14 @@ from azure_jobs.config import (
     save_defaults,
 )
 from azure_jobs.errors import AJError
-from azure_jobs.journal import JobRecord
-from azure_jobs.backend import get_backend
-from azure_jobs.backend.amlt import amlt_available
-from azure_jobs.backend.azureml.sku import resolve_sku
 from azure_jobs.job import build_job_spec, write_amlt_yaml
+from azure_jobs.journal import JobRecord
 from azure_jobs.template import Template
 from azure_jobs.utils.naming import resolve_name
 from azure_jobs.utils.ui import show_dry_run_result, show_submission_preview
 
 __all__ = ["resolve_name"]
+
 
 @main.command(
     context_settings={
@@ -115,11 +116,10 @@ def run(
                 "amlt CLI not available or no .amltconfig in current directory."
             )
 
-    if dry_run or amlt:
-        write_amlt_yaml(request, dry_run=dry_run)
-
     show_submission_preview(request, dry_run=dry_run)
     if dry_run:
+        submission_fp = write_amlt_yaml(request, dry_run=True)
+        click.echo(f"[dry-run] wrote submission YAML → {submission_fp}")
         show_dry_run_result(request)
         return
 
@@ -139,6 +139,7 @@ def run(
         name,
         backend_label=entry.label,
     )
+
 
 def _load_template(template: str | None) -> tuple[Template, str]:
     from azure_jobs import const

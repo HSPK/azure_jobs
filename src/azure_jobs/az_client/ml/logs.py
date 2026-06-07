@@ -69,7 +69,12 @@ class LogStreamer:
             resp.raise_for_status()
             self._size = int(resp.headers.get("Content-Length", 0))
         except Exception as exc:
-            log.debug("HEAD failed: %s", exc)
+            log.debug(
+                "LogStreamer HEAD failed (%s: %s)",
+                type(exc).__name__,
+                exc,
+                exc_info=True,
+            )
             self._size = 0
         return self._size
 

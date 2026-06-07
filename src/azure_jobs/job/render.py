@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import asdict
+from copy import deepcopy
 from typing import Any
 
 from .spec import JobSpec
@@ -26,69 +26,34 @@ def _escape_amlt_dollars(value: Any) -> Any:
     return value
 
 def render_amlt_yaml(request: JobSpec) -> dict[str, Any]:
-    """Reconstruct an amlt-style config dict from a JobSpec for display/save."""
-    job: dict[str, Any] = {
-        "name": request.name,
-        "sku": request.sku,
-        "command": request.command,
-        "submit_args": {
-            "env": request.env_vars,
-        },
-    }
-    if request.identity:
-        job["identity"] = request.identity
-    if request.sla_tier:
-        job["sla_tier"] = request.sla_tier
-    if request.priority:
-        job["priority"] = request.priority
-    if request.tags:
-        job["tags"] = list(request.tags)
-    if request.processes_per_node:
-        job["process_count_per_node"] = request.processes_per_node
-    container_args = dict(request.container_args)
-    if request.shm_size and "shm_size" not in container_args:
-        container_args["shm_size"] = request.shm_size
-    if container_args:
-        job["submit_args"]["container_args"] = container_args
+    """Render amlt YAML: user's raw template with aj-resolved fields overlaid.
 
-    output_conf: dict[str, Any] = {
-        "description": request.description,
-        "jobs": [job],
-    }
+    Overlays jobs[0].{command, sku, name, process_count_per_node, submit_args.env}.
+    Strips ``_extra`` (aj-only); escapes ``$`` → ``$$`` except for ``$CONFIG_DIR``.
+    """
+    if request.template is None or not request.template.raw:
+        raise ValueError(
+            "render_amlt_yaml requires JobSpec.template with a non-empty .raw — "
+            "build via build_job_spec(template, ...) or pass "
+            "template=Template.from_dict({...})."
+        )
 
-    if request.compute or request.service:
-        target: dict[str, Any] = {"service": request.service}
-        if request.compute:
-            target["name"] = request.compute
-        if request.workspace_name and request.service == "sing":
-            target["workspace_name"] = request.workspace_name
-        if request.service == "volcano":
-            vol = request.volcano
-            if vol.queue:
-                target["queue"] = vol.queue
-            if vol.namespace:
-                target["namespace"] = vol.namespace
-            if vol.context:
-                target["context"] = vol.context
-        output_conf["target"] = target
-
-    if request.image or request.setup_commands:
-        output_conf["environment"] = {}
-        if request.image:
-            output_conf["environment"]["image"] = request.image
-        if request.image_registry:
-            output_conf["environment"]["registry"] = request.image_registry
-        if request.setup_commands:
-            output_conf["environment"]["setup"] = request.setup_commands
-
-    if request.amlt.code_dir != "." or request.code_ignore:
-        output_conf["code"] = {}
-        if request.amlt.code_dir != ".":
-            output_conf["code"]["local_dir"] = request.amlt.code_dir
-        if request.code_ignore:
-            output_conf["code"]["ignore"] = request.code_ignore
-
-    if request.storage:
-        output_conf["storage"] = {k: asdict(v) for k, v in request.storage.items()}
-
-    return _escape_amlt_dollars(output_conf)
+    cfg = deepcopy(request.template.raw)
+    cfg.pop("_extra", None)
+    jobs = cfg.get("jobs") or []
+    if jobs:
+        j = jobs[0]
+        if request.command:
+            j["command"] = list(request.command)
+        if request.sku:
+            j["sku"] = request.sku
+        if request.name:
+            j["name"] = request.name
+        if request.processes_per_node:
+            j["process_count_per_node"] = request.processes_per_node
+        if request.env_vars:
+            sa = j.setdefault("submit_args", {})
+            env = dict(sa.get("env") or {})
+            env.update(request.env_vars)
+            sa["env"] = env
+    return _escape_amlt_dollars(cfg)

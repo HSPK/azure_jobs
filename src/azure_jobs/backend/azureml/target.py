@@ -7,11 +7,13 @@ from typing import TYPE_CHECKING, Any
 
 from azure_jobs.job.spec import JobSpec
 from .image import _SING_IMAGE_PREFIX
+from .opts import AmlOpts
 
 if TYPE_CHECKING:
     from azure_jobs.az_client import AzureMLClient
 
 log = logging.getLogger(__name__)
+
 
 def _build_distribution(request: JobSpec) -> dict[str, Any] | None:
     if request.nodes <= 1 and request.processes_per_node <= 1:
@@ -23,21 +25,22 @@ def _build_distribution(request: JobSpec) -> dict[str, Any] | None:
     }
 
 def _resolve_compute(request: JobSpec) -> str:
+    aml: AmlOpts = request.backend_spec
     if request.service == "sing":
-        sub = request.sing.vc_subscription_id or request.subscription_id
-        rg = request.sing.vc_resource_group or request.resource_group
+        sub = aml.vc_subscription_id or aml.subscription_id
+        rg = aml.vc_resource_group or aml.resource_group
         return (
             f"/subscriptions/{sub}"
             f"/resourceGroups/{rg}"
             f"/providers/Microsoft.MachineLearningServices"
-            f"/virtualclusters/{request.compute}"
+            f"/virtualclusters/{aml.compute}"
         )
     return (
-        f"/subscriptions/{request.subscription_id}"
-        f"/resourceGroups/{request.resource_group}"
+        f"/subscriptions/{aml.subscription_id}"
+        f"/resourceGroups/{aml.resource_group}"
         f"/providers/Microsoft.MachineLearningServices"
-        f"/workspaces/{request.workspace_name}"
-        f"/computes/{request.compute}"
+        f"/workspaces/{aml.workspace_name}"
+        f"/computes/{aml.compute}"
     )
 
 def _build_resources(
@@ -56,7 +59,8 @@ def _build_resources(
     if on_log:
         on_log(f"Resolving SKU {sku}\u2026")
 
-    requested_tier = request.sla_tier or "Premium"
+    aml: AmlOpts = request.backend_spec
+    requested_tier = aml.sla_tier or "Premium"
     match = match_instance_type(
         sku,
         client=client,
@@ -68,7 +72,7 @@ def _build_resources(
     if match.effective_tier != requested_tier:
         log.warning(
             "VC '%s' has no %s quota for SKU '%s'; auto-downgraded SLA tier to %s.",
-            request.compute,
+            aml.compute,
             requested_tier,
             sku,
             match.effective_tier,
@@ -76,25 +80,25 @@ def _build_resources(
         if on_log:
             on_log(
                 f"SLA tier downgraded: {requested_tier} → {match.effective_tier} "
-                f"(no {requested_tier} quota on VC '{request.compute}')"
+                f"(no {requested_tier} quota on VC '{aml.compute}')"
             )
-        request.sla_tier = match.effective_tier
+        aml.sla_tier = match.effective_tier
 
     if not match.nvlink_satisfied:
         log.warning(
             "VC '%s' has no NVLink-enabled instance type matching SKU '%s'; "
             "falling back to non-NVLink rows.",
-            request.compute,
+            aml.compute,
             sku,
         )
         if on_log:
             on_log(
-                f"NVLink unavailable on VC '{request.compute}' for SKU '{sku}' — "
+                f"NVLink unavailable on VC '{aml.compute}' for SKU '{sku}' — "
                 "using non-NVLink instance types."
             )
 
     instance_types = [f"Singularity.{n.short_name}" for n in match.instances]
-    request.matched_instances = [n.shorthand for n in match.instances][:4]
+    aml.matched_instances = [n.shorthand for n in match.instances][:4]
 
     image_version = ""
     image = request.image or ""
@@ -109,18 +113,16 @@ def _build_resources(
                 "instanceCount": request.nodes,
                 "interactive": False,
                 "imageVersion": image_version,
-                "slaTier": request.sla_tier,
-                "Priority": request.priority,
+                "slaTier": aml.sla_tier,
+                "Priority": aml.priority,
                 "EnableAzmlInt": False,
                 "VirtualClusterArmId": compute_id,
                 "tensorboardLogDirectory": "/scratch/outputs",
             }
         }
     }
-    if request.sing.group_policy:
-        res["properties"]["AISuperComputer"]["groupPolicyName"] = (
-            request.sing.group_policy
-        )
+    if aml.group_policy:
+        res["properties"]["AISuperComputer"]["groupPolicyName"] = aml.group_policy
     return res
 
 def _resolve_sing_identity(
@@ -143,9 +145,10 @@ def _resolve_sing_identity(
         if rid.lower().rstrip("/") == wanted:
             return (props or {}).get("clientId") or None
 
+    aml: AmlOpts = request.backend_spec
     available = sorted(rid.rsplit("/", 1)[-1] for rid in uais) or ["(none)"]
     raise ConfigError(
-        f"Workspace '{request.workspace_name}' does not have the user-assigned "
+        f"Workspace '{aml.workspace_name}' does not have the user-assigned "
         f"identity '{uai_resource_id.rsplit('/', 1)[-1]}' attached. "
         f"Available UAIs: {', '.join(available)}. "
         "Attach it (Portal → workspace → Identity) or pick another workspace."
@@ -155,8 +158,9 @@ def _build_identity(request: JobSpec) -> dict[str, str] | None:
     if request.service == "sing":
         return None
 
-    if request.identity == "managed":
+    aml: AmlOpts = request.backend_spec
+    if aml.identity == "managed":
         return {"identityType": "Managed"}
-    elif request.identity == "user":
+    elif aml.identity == "user":
         return {"identityType": "UserIdentity"}
     return None

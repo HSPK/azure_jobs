@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import subprocess
 import tempfile
 import threading
@@ -16,6 +17,34 @@ from azure_jobs.utils.fs import CodeFile, walk_code
 from azure_jobs.job.spec import JobEvent
 from . import constants as C
 from .config import VolcanoConfig
+
+log = logging.getLogger(__name__)
+
+_KUBECTL_OUTPUT_LIMIT = 4000
+
+def _trim(text: str, limit: int = _KUBECTL_OUTPUT_LIMIT) -> str:
+    text = text.strip()
+    if len(text) <= limit:
+        return text
+    head = text[: limit // 2]
+    tail = text[-limit // 2 :]
+    return f"{head}\n…[truncated {len(text) - limit} chars]…\n{tail}"
+
+def _format_subprocess_failure(
+    label: str,
+    cmd: list[str],
+    result: subprocess.CompletedProcess[str],
+) -> str:
+    parts = [f"{label} (exit={result.returncode}): {' '.join(cmd[:4])}"]
+    stderr = _trim(result.stderr or "")
+    stdout = _trim(result.stdout or "")
+    if stderr:
+        parts.append(f"stderr: {stderr}")
+    if stdout:
+        parts.append(f"stdout: {stdout}")
+    if not stderr and not stdout:
+        parts.append("(no stdout/stderr produced)")
+    return "\n".join(parts)
 
 def write_filelist(selected: list[CodeFile]) -> str:
     """Write a NUL-separated list of relpaths for tar --null -T."""
@@ -38,8 +67,13 @@ def stream_tar(
     ctx_args: list[str],
     total_files: int,
     emit: Callable[[JobEvent], None],
-) -> subprocess.CompletedProcess[str]:
-    """Stream tar c into kubectl exec tar x, emitting per-file events."""
+) -> tuple[subprocess.CompletedProcess[str], list[str]]:
+    """Stream tar c into kubectl exec tar x, emitting per-file events.
+
+    Returns (kubectl_exec_result, tar_stderr_lines). The tar stderr lines are
+    collected so the caller can surface a meaningful error if either side of
+    the pipe fails (kubectl exit codes alone often hide the real cause).
+    """
     tar_proc = subprocess.Popen(
         [
             "tar",
@@ -57,12 +91,16 @@ def stream_tar(
     )
 
     completed = [0]
+    tar_diagnostics: list[str] = []
 
     def _drain_stderr() -> None:
         assert tar_proc.stderr is not None
         for raw in tar_proc.stderr:
             line = raw.decode("utf-8", errors="replace").rstrip()
-            if not line or line.startswith("tar:"):
+            if not line:
+                continue
+            if line.startswith("tar:"):
+                tar_diagnostics.append(line)
                 continue
             cur = line[2:] if line.startswith("./") else line
             completed[0] += 1
@@ -80,7 +118,7 @@ def stream_tar(
     drainer.start()
 
     try:
-        return subprocess.run(
+        result = subprocess.run(
             [
                 "kubectl",
                 "exec",
@@ -105,6 +143,9 @@ def stream_tar(
             tar_proc.stdout.close()
         tar_proc.wait()
         drainer.join(timeout=C.STDERR_DRAIN_JOIN_TIMEOUT)
+    if tar_proc.returncode and tar_proc.returncode != 0:
+        tar_diagnostics.append(f"tar exited with code {tar_proc.returncode}")
+    return result, tar_diagnostics
 
 def upload_files_to_pvc(
     *,
@@ -119,8 +160,14 @@ def upload_files_to_pvc(
     on_event: Callable[[JobEvent], None] | None = None,
     status_kind: str = "code",
     label: str = "Files",
-) -> bool:
-    """Upload files (relative to src_dir) into dest_dir on a PVC."""
+) -> tuple[bool, str]:
+    """Upload files (relative to src_dir) into dest_dir on a PVC.
+
+    Returns (ok, error_detail). When ok is True, error_detail is empty;
+    otherwise it contains a multi-line message describing exactly what
+    failed (kubectl/tar exit codes, stdout, stderr) so the caller can
+    surface it to the user without forcing them to enable AJ_DEBUG.
+    """
     emit = on_event or (lambda _ev: None)
 
     def status(kind: str, detail: str) -> None:
@@ -128,7 +175,7 @@ def upload_files_to_pvc(
 
     if not files:
         status(status_kind, f"No {label.lower()} to upload")
-        return True
+        return True, ""
 
     ctx_args = ["--context", context] if context else []
     total_bytes = sum(cf.size for cf in files)
@@ -179,36 +226,52 @@ def upload_files_to_pvc(
     filelist_path = write_filelist(files)
 
     try:
+        apply_cmd = ["kubectl", "apply", "-f", pod_yaml_path, *ctx_args]
         result = subprocess.run(
-            ["kubectl", "apply", "-f", pod_yaml_path, *ctx_args],
+            apply_cmd,
             capture_output=True,
             text=True,
             timeout=C.KUBECTL_APPLY_TIMEOUT,
         )
         if result.returncode != 0:
-            err = result.stderr.strip() or result.stdout.strip()
-            status("error", f"Upload pod creation failed: {err}")
-            return False
+            detail = _format_subprocess_failure(
+                "kubectl apply (upload pod)", apply_cmd, result
+            )
+            log.error("Upload pod creation failed\n%s", detail)
+            status("error", f"Upload pod creation failed: {_trim(result.stderr, 200) or _trim(result.stdout, 200)}")
+            return False, detail
 
+        wait_cmd = [
+            "kubectl",
+            "wait",
+            "--for=condition=Ready",
+            f"pod/{pod_name}",
+            f"--namespace={namespace}",
+            f"--timeout={C.KUBECTL_WAIT_TIMEOUT}s",
+            *ctx_args,
+        ]
         result = subprocess.run(
-            [
-                "kubectl",
-                "wait",
-                "--for=condition=Ready",
-                f"pod/{pod_name}",
-                f"--namespace={namespace}",
-                f"--timeout={C.KUBECTL_WAIT_TIMEOUT}s",
-                *ctx_args,
-            ],
+            wait_cmd,
             capture_output=True,
             text=True,
             timeout=C.KUBECTL_WAIT_SUBPROCESS_TIMEOUT,
         )
         if result.returncode != 0:
-            status("error", "Upload pod failed to become ready")
-            return False
+            detail = _format_subprocess_failure(
+                f"kubectl wait pod/{pod_name}", wait_cmd, result
+            )
+            describe = _describe_pod(pod_name, namespace, ctx_args)
+            if describe:
+                detail = f"{detail}\n\nkubectl describe pod:\n{describe}"
+            log.error("Upload pod failed to become ready\n%s", detail)
+            status(
+                "error",
+                f"Upload pod {pod_name} failed to become ready "
+                f"(see error detail; AJ_DEBUG=1 for full trace)",
+            )
+            return False, detail
 
-        exec_result = stream_tar(
+        exec_result, tar_diagnostics = stream_tar(
             src_dir=src_dir,
             filelist_path=filelist_path,
             pod_name=pod_name,
@@ -219,19 +282,63 @@ def upload_files_to_pvc(
             emit=emit,
         )
         if exec_result.returncode != 0:
-            err = exec_result.stderr.strip() or exec_result.stdout.strip()
-            status("error", f"{label} copy failed: {err}")
-            return False
+            detail = _format_subprocess_failure(
+                f"kubectl exec tar (extract into {dest_dir})",
+                ["kubectl", "exec", pod_name, "--", "tar", "xf", "-"],
+                exec_result,
+            )
+            if tar_diagnostics:
+                detail = f"{detail}\n\nlocal tar diagnostics:\n" + "\n".join(
+                    tar_diagnostics[:50]
+                )
+            log.error("%s extract failed\n%s", label, detail)
+            short = _trim(exec_result.stderr, 200) or _trim(
+                exec_result.stdout, 200
+            )
+            if not short and tar_diagnostics:
+                short = tar_diagnostics[0]
+            status("error", f"{label} copy failed: {short}")
+            return False, detail
+
+        # Extract succeeded; surface any tar warnings as non-fatal diagnostics.
+        # Local ``tar`` frequently emits ``tar: <file>: file changed as we read it``
+        # for live workspaces and exits non-zero, but the archive still made it
+        # through and kubectl's tar xf returned 0 — don't fail the upload.
+        if tar_diagnostics:
+            log.warning(
+                "%s: local tar produced %d diagnostic line(s) (non-fatal):\n%s",
+                label,
+                len(tar_diagnostics),
+                "\n".join(tar_diagnostics[:50]),
+            )
 
         status(status_kind, f"{label} uploaded to {dest_dir}")
-        return True
+        return True, ""
 
-    except subprocess.TimeoutExpired:
-        status("error", f"{label} upload timed out")
-        return False
+    except subprocess.TimeoutExpired as exc:
+        cmd_repr = " ".join(map(str, exc.cmd or [])) if exc.cmd else "<unknown>"
+        detail = (
+            f"{label} upload timed out after {exc.timeout}s\n"
+            f"command: {cmd_repr}\n"
+            f"hint: increase the timeout, check kubectl connectivity, or "
+            f"run with AJ_DEBUG=1 for a Python traceback"
+        )
+        if exc.stderr:
+            try:
+                detail += f"\nstderr (last bytes): {_trim(exc.stderr.decode('utf-8', errors='replace') if isinstance(exc.stderr, (bytes, bytearray)) else exc.stderr, 1000)}"
+            except Exception:
+                pass
+        log.exception("%s upload timed out", label)
+        status("error", f"{label} upload timed out after {exc.timeout}s")
+        return False, detail
     except Exception as exc:
-        status("error", f"{label} upload error: {exc}")
-        return False
+        log.exception("%s upload error", label)
+        detail = (
+            f"{label} upload error: {type(exc).__name__}: {exc}\n"
+            f"(run with AJ_DEBUG=1 for a Python traceback)"
+        )
+        status("error", f"{label} upload error: {type(exc).__name__}: {exc}")
+        return False, detail
     finally:
         Path(pod_yaml_path).unlink(missing_ok=True)
         Path(filelist_path).unlink(missing_ok=True)
@@ -251,19 +358,67 @@ def upload_files_to_pvc(
             timeout=C.KUBECTL_DELETE_TIMEOUT,
         )
 
+def _describe_pod(
+    pod_name: str, namespace: str, ctx_args: list[str]
+) -> str:
+    """Best-effort `kubectl describe pod` for use in error messages."""
+    try:
+        result = subprocess.run(
+            [
+                "kubectl",
+                "describe",
+                "pod",
+                pod_name,
+                f"--namespace={namespace}",
+                *ctx_args,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=C.KUBECTL_NAMESPACE_TIMEOUT,
+        )
+    except Exception as exc:
+        log.debug(
+            "kubectl describe pod/%s failed", pod_name, exc_info=True
+        )
+        return f"(kubectl describe failed: {type(exc).__name__}: {exc})"
+    if result.returncode != 0:
+        return _trim(result.stderr or result.stdout, 1500)
+    return _trim(result.stdout, 1500)
+
 def upload_code_to_pvc(
     cfg: VolcanoConfig,
     *,
     namespace: str,
     on_event: Callable[[JobEvent], None] | None = None,
-) -> bool:
-    """Upload local code to PVC via a transient kubectl-managed pod."""
+) -> tuple[bool, str]:
+    """Upload local code to PVC via a transient kubectl-managed pod.
+
+    Returns (ok, error_detail). On success error_detail is empty; on failure
+    it contains a multi-line, user-actionable description of the underlying
+    failure (which kubectl subprocess failed, its exit code, captured
+    stdout/stderr, and `kubectl describe pod` output when relevant).
+    """
     if not cfg.code_dir or not cfg.pvc_name or not cfg.pvc_mount_dir:
-        return False
+        missing = [
+            name
+            for name, val in (
+                ("code_dir", cfg.code_dir),
+                ("pvc_name", cfg.pvc_name),
+                ("pvc_mount_dir", cfg.pvc_mount_dir),
+            )
+            if not val
+        ]
+        return False, (
+            "Upload precondition not met: missing "
+            f"{', '.join(missing)} in VolcanoConfig"
+        )
 
     code_path = Path(cfg.code_dir).resolve()
     if not code_path.is_dir():
-        return False
+        return False, (
+            f"code_dir is not a directory: {code_path} "
+            f"(cfg.code_dir={cfg.code_dir!r})"
+        )
 
     selected = walk_code(code_path, cfg.code_ignore)
     dest_dir = f"{cfg.pvc_mount_dir}/{C.CODE_UPLOAD_PREFIX}/{cfg.name}"
