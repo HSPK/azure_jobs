@@ -118,11 +118,9 @@ def run(
 
     show_submission_preview(request, dry_run=dry_run)
     if dry_run:
+        submission_fp = write_amlt_yaml(request, dry_run=True)
+        click.echo(f"[dry-run] wrote submission YAML → {submission_fp}")
         show_dry_run_result(request)
-        if amlt:
-            submission_fp = write_amlt_yaml(request, dry_run=True)
-            click.echo(f"[dry-run] wrote submission YAML → {submission_fp}")
-
         return
 
     try:

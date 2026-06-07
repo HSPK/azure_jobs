@@ -281,7 +281,7 @@ def upload_files_to_pvc(
             total_files=len(files),
             emit=emit,
         )
-        if exec_result.returncode != 0 or tar_diagnostics:
+        if exec_result.returncode != 0:
             detail = _format_subprocess_failure(
                 f"kubectl exec tar (extract into {dest_dir})",
                 ["kubectl", "exec", pod_name, "--", "tar", "xf", "-"],
@@ -298,10 +298,19 @@ def upload_files_to_pvc(
             if not short and tar_diagnostics:
                 short = tar_diagnostics[0]
             status("error", f"{label} copy failed: {short}")
-            if exec_result.returncode != 0:
-                return False, detail
-            # tar diagnostics only - still report but mark success ambiguous
             return False, detail
+
+        # Extract succeeded; surface any tar warnings as non-fatal diagnostics.
+        # Local ``tar`` frequently emits ``tar: <file>: file changed as we read it``
+        # for live workspaces and exits non-zero, but the archive still made it
+        # through and kubectl's tar xf returned 0 — don't fail the upload.
+        if tar_diagnostics:
+            log.warning(
+                "%s: local tar produced %d diagnostic line(s) (non-fatal):\n%s",
+                label,
+                len(tar_diagnostics),
+                "\n".join(tar_diagnostics[:50]),
+            )
 
         status(status_kind, f"{label} uploaded to {dest_dir}")
         return True, ""
