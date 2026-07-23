@@ -1,204 +1,123 @@
-"""Render the job list, info pane and titles."""
+"""Pure jobs projection and navigation over JobsStore."""
 
 from __future__ import annotations
 
-import logging
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from rich.markup import escape
-from textual.widgets import OptionList
 
 from azure_jobs.tui.controllers.base import Controller
-from azure_jobs.tui.helpers import icon_style, info_block, kv, make_option, safe_set
+from azure_jobs.tui.events import JobSelectionChanged
+from azure_jobs.tui.helpers import icon_style, info_block, kv
+from azure_jobs.tui.models import Job, as_job
+from azure_jobs.tui.runtime import TaskRunner
 from azure_jobs.tui.state import JobsState
+from azure_jobs.tui.stores import JobsStore
+from azure_jobs.tui.view_ports import JobsViewPort
 
-log = logging.getLogger(__name__)
 
 class JobsView(Controller[JobsState]):
-    """Job list rendering, info panel, navigation."""
+    """Render a read-only JobsState and dispatch navigation transitions."""
 
-    def _apply_filters(self, jobs: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        st = self.state
-        sf, ef = st.status_filter, st.experiment_filter
-        sq = st.search_query.lower() if st.search_query else ""
-        if not (sf or ef or sq):
-            return list(jobs)
-        out: list[dict[str, Any]] = []
-        for j in jobs:
-            if sf and j.get("status") != sf:
-                continue
-            if ef and j.get("experiment") != ef:
-                continue
-            if sq:
-                tags = j.get("tags") or ""
-                if isinstance(tags, dict):
-                    tags_text = " ".join(f"{k}={v}" for k, v in tags.items())
-                elif isinstance(tags, (list, tuple)):
-                    tags_text = " ".join(str(t) for t in tags)
-                else:
-                    tags_text = str(tags)
-                haystack = (
-                    f"{j.get('display_name', '')} {j.get('name', '')} "
-                    f"{j.get('experiment', '')} {tags_text}"
-                ).lower()
-                if sq not in haystack:
-                    continue
-            out.append(j)
-        return out
-
-    def refresh(
+    def __init__(
         self,
-        restore_name: str = "",
+        ui: JobsViewPort,
+        tasks: TaskRunner,
+        store: JobsStore,
         *,
-        restore_selection: bool = False,
+        fetch_next: Callable[[], None],
+        fetch_single: Callable[[Job], None],
+        can_actions: Callable[[], bool],
     ) -> None:
-        """Repaint the job list from filtered all_jobs and re-derive pages."""
-        st = self.state
+        super().__init__(ui, tasks, lambda: store.state)
+        self.store = store
+        self._fetch_next = fetch_next
+        self._fetch_single = fetch_single
+        self._can_actions = can_actions
 
-        if restore_selection and not restore_name:
-            if 0 <= st.selected_idx < len(st.filtered):
-                restore_name = st.filtered[st.selected_idx].get("name", "")
-
-        all_filtered = self._apply_filters(st.all_jobs)
-
-        if all_filtered:
-            st.pages = [
-                all_filtered[i : i + st.page_size]
-                for i in range(0, len(all_filtered), st.page_size)
-            ]
-        else:
-            st.pages = [[]]
-
-        if st.current_page >= len(st.pages):
-            st.current_page = max(0, len(st.pages) - 1)
-
-        st.filtered = list(st.pages[st.current_page])
-
-        ol = self.app.widgets.jobs
-        if ol is not None:
-            ol.clear_options()
-            for j in st.filtered:
-                ol.add_option(make_option(j))
-
+    def render(self) -> None:
+        state = self.state
+        self.ui.set_jobs(state.page_jobs, highlighted=state.selected_index)
         self.update_titles()
+        self._render_selection(state.selected_job)
 
-        target_idx = 0
-        if restore_name:
-            for i, j in enumerate(st.filtered):
-                if j.get("name") == restore_name:
-                    target_idx = i
-                    break
+    def refresh(self, preferred_id: str = "") -> None:
+        """Compatibility alias; selection is now owned by JobsStore."""
+        self.render()
 
-        if st.filtered:
-            st.selected_idx = target_idx
-            if ol is not None:
-                ol.highlighted = target_idx
-            self.show_info(st.filtered[target_idx])
-            self.app.jobs.fetcher.hide_info_loading()
-        else:
-            st.selected_idx = -1
-            if self.app.widgets.info:
-                self.app.widgets.info.update(kv([], hint="No matching jobs."))
-            self.app.jobs.fetcher.hide_info_loading()
-            self.app.logs.update_tab_title()
+    def on_selection_changed(self, event: JobSelectionChanged) -> None:
+        self._render_selection(event.job)
+
+    def _render_selection(self, selected: Job | None) -> None:
+        if selected is None:
+            self.ui.set_info(kv([], hint="No matching jobs."))
+            self.ui.hide_info_loading()
             self._update_subtitle(None)
-
-        self._maybe_prefetch()
-
-    def _maybe_prefetch(self) -> None:
-        st = self.state
-        if not st.has_more or st.fetching:
             return
-        if len(st.all_jobs) >= st.fetch_limit:
-            return
-        on_last_page = st.current_page == len(st.pages) - 1
-        if not on_last_page:
-            return
-        if len(st.filtered) >= st.page_size:
-            return
-        self.app.jobs.fetcher.fetch_next_page()
+        self.show_info(selected)
 
     def update_titles(self) -> None:
-        st = self.state
-        total_pages = len(st.pages)
-        current = st.current_page + 1
-        page_label = f"Page {current}/{total_pages}"
-        if st.has_more:
-            page_label += "+"
-        shown = len(st.filtered)
-        parts = [page_label, f"({shown} jobs)"]
-        if st.status_filter:
-            parts.append(f"▸ {st.status_filter}")
-        if st.experiment_filter:
-            parts.append(f"▸ {st.experiment_filter}")
-        if st.search_query:
-            parts.append(f'"{st.search_query}"')
-        if st.fetching:
-            parts.append("[dim]…[/dim]")
-        elif st.load_status.name == "ERROR":
-            err = st.last_error or "error"
-            parts.append(f"[red]⚠ {err[:60]}[/red]")
-        try:
-            self.app.query_one("#jobs-pane").border_title = "  ".join(parts)
-        except Exception as exc:
-            log.debug("jobs-pane title update failed: %s", exc, exc_info=True)
+        state = self.state
+        total = len(state.matching_jobs)
+        cumulative = min(
+            (state.current_page + 1) * state.page_size,
+            total,
+        )
+        more = "+" if state.source_has_more else ""
+        self.ui.set_jobs_title(f"({cumulative}/{total}{more})")
 
-    def _update_subtitle(self, job: dict[str, Any] | None = None) -> None:
-        try:
-            rp = self.app.query_one("#right-pane")
-        except Exception as exc:
-            log.debug("right-pane lookup failed: %s", exc, exc_info=True)
-            return
+    def _update_subtitle(self, job: Job | None) -> None:
         if job is None:
-            rp.border_subtitle = ""
+            self.ui.set_info_subtitle("")
             return
-        icon, sty = icon_style(job.get("status", ""))
-        status = job.get("status", "?")
-        display = job.get("display_name") or job.get("name", "")
-        max_name = max(20, (rp.size.width or 60) - 20)
+        icon, style = icon_style(job.status)
+        display = job.label
+        max_name = max(20, self.ui.right_width - 20)
         if len(display) > max_name:
             display = display[: max_name - 1] + "…"
-        rp.border_subtitle = f"{escape(display)}  [{sty}]{icon} {status}[/{sty}]"
+        self.ui.set_info_subtitle(
+            f"{escape(display)}  [{style}]{icon} "
+            f"{escape(job.status or '?')}[/{style}]"
+        )
 
-    def show_info(self, job: dict[str, Any]) -> None:
+    def show_info(self, job: Job | Mapping[str, Any]) -> None:
+        job = as_job(job)
         self._update_subtitle(job)
-        self.app.logs.update_tab_title()
-        safe_set(self.app.widgets.info, info_block(job))
+        self.ui.set_info(info_block(job))
 
-    def on_option_selected(self, event: OptionList.OptionSelected) -> None:
-        st = self.state
-        idx = event.option_index
-        if 0 <= idx < len(st.filtered):
-            st.selected_idx = idx
-            if self.app.widgets.info:
-                self.app.widgets.info.update(kv([("", "")], hint="Refreshing..."))
-            self.app.jobs.fetcher.fetch_single(st.filtered[idx])
+    def on_option_selected(self, index: int) -> None:
+        job = self.store.select_index(index)
+        if job is not None and self._can_actions():
+            self.ui.set_info(kv([("", "")], hint="Refreshing…"))
+            self._fetch_single(job)
 
-    def on_option_highlighted(self, event: OptionList.OptionHighlighted) -> None:
-        st = self.state
-        if event.option_list.id != "job-list":
+    def on_option_highlighted(self, index: int) -> None:
+        previous = self.state.selected_id
+        job = self.store.select_index(index)
+        if job is None or job.id == previous:
             return
-        idx = event.option_index
-        if idx == st.selected_idx or not (0 <= idx < len(st.filtered)):
-            return
-        st.selected_idx = idx
-        job = st.filtered[idx]
-        self.show_info(job)
-        self.app.logs.on_job_changed(job.get("name", ""))
-        if job.get("status") == "Failed" and not job.get("error"):
-            self.app.jobs.fetcher.fetch_single(job)
+        if (
+            self._can_actions()
+            and job.status == "Failed"
+            and not job.raw.get("error")
+        ):
+            self._fetch_single(job)
 
     def action_next_page(self) -> None:
-        st = self.state
-        if st.current_page + 1 < len(st.pages):
-            st.current_page += 1
-            self.refresh()
-        elif st.has_more and not st.fetching:
-            st.pending_advance = True
-            self.app.notify("Loading next page…", timeout=2)
-            self.app.jobs.fetcher.fetch_next_page()
+        result = self.store.next_page()
+        if result == "fetch":
+            self.notify("Loading next page…", timeout=2)
+            if not self.state.fetching:
+                self._fetch_next()
 
     def action_prev_page(self) -> None:
-        if self.state.current_page > 0:
-            self.state.current_page -= 1
-            self.refresh()
+        self.store.previous_page()
+
+    def action_next_job(self) -> None:
+        result = self.store.move_selection(1)
+        if result == "fetch" and not self.state.fetching:
+            self._fetch_next()
+
+    def action_previous_job(self) -> None:
+        self.store.move_selection(-1)

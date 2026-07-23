@@ -1,60 +1,51 @@
-"""Interactive TUI dashboard for Azure Jobs."""
+"""Interactive TUI dashboard composition root."""
 
 from __future__ import annotations
 
-import logging
+from collections.abc import Sequence
 from typing import Any
 
+from rich.text import Text
 from textual.app import App, ComposeResult
-from textual.binding import Binding
-from textual.containers import Horizontal, Vertical
-from textual.widgets import Footer, Input, LoadingIndicator, OptionList, Static
+from textual.widgets import Input, OptionList
 
-from azure_jobs.tui.components import HelpScreen, InfoScroll, LogViewer
+from azure_jobs.tui.adapters import AzureSessionFactory, ConfigTargetCatalog
+from azure_jobs.tui.bindings import (
+    COMMAND_BINDINGS,
+    CommandHandler,
+    CommandRegistry,
+    textual_bindings,
+)
+from azure_jobs.tui.components import DashboardShell, LogViewer, PickerItem
 from azure_jobs.tui.controllers import (
     JobsController,
     LogsController,
     WorkspaceController,
 )
-from azure_jobs.tui.helpers import get_page_size, safe_close
-from azure_jobs.tui.state import JobsState, LogsState, Widgets, WorkspaceState
+from azure_jobs.tui.events import (
+    EventBus,
+    JobSelectionChanged,
+    TargetChanging,
+    TargetMissing,
+    TargetReady,
+)
+from azure_jobs.tui.features import DashboardFeature, Feature, FeatureRegistry
+from azure_jobs.tui.helpers import get_page_size
+from azure_jobs.tui.log_store import LogsStore
+from azure_jobs.tui.models import Job, ViewMode
+from azure_jobs.tui.ports import SessionFactory, TargetCatalog
+from azure_jobs.tui.runtime import TaskRunner
+from azure_jobs.tui.settings import validate_last, validate_page_size
+from azure_jobs.tui.stores import JobsStore, TargetStore
+from azure_jobs.tui.ui import DashboardUI
 
-log = logging.getLogger(__name__)
 
 class AjDashboard(App):
-    """Azure Jobs interactive dashboard (root context)."""
+    """Textual shell and cross-feature composition root."""
 
     TITLE = "aj dashboard"
     CSS_PATH = "dashboard.tcss"
-
-    BINDINGS = [
-        Binding("q", "quit", "Quit"),
-        Binding("r", "refresh", "Refresh"),
-        Binding("c", "cancel_job", "Cancel"),
-        Binding("l", "show_logs", "Logs"),
-        Binding("L", "stream_logs", "Stop", show=False),
-        Binding("i", "show_info", "Info"),
-        Binding("s", "toggle_scroll", "Scroll", show=False),
-        Binding("ctrl+s", "save_logs", "Save", show=False),
-        Binding("w", "pick_workspace", "Workspace"),
-        Binding("f", "pick_status", "Status"),
-        Binding("e", "pick_experiment", "Experiment"),
-        Binding("F", "clear_filters", "Clear", show=False),
-        Binding("slash", "search", "Search"),
-        Binding("o", "pick_log_file", "Files", show=False),
-        Binding("escape", "escape", "Help"),
-        Binding("right", "next_page", "Next"),
-        Binding("left", "prev_page", "Prev"),
-        Binding("h", "info_scroll('left')", show=False),
-        Binding("j", "info_scroll('down')", show=False),
-        Binding("k", "info_scroll('up')", show=False),
-        Binding("g", "info_scroll('home')", show=False),
-        Binding("G", "info_scroll('end')", show=False),
-        Binding("ctrl+d", "info_scroll('page_down')", show=False),
-        Binding("ctrl+u", "info_scroll('page_up')", show=False),
-        Binding("ctrl+f", "info_scroll('page_down')", show=False),
-        Binding("ctrl+b", "info_scroll('page_up')", show=False),
-    ]
+    BINDINGS = textual_bindings()
     ENABLE_COMMAND_PALETTE = True
 
     def __init__(
@@ -63,132 +54,236 @@ class AjDashboard(App):
         page_size: int | None = None,
         *,
         mouse: bool = False,
+        workspace_catalog: TargetCatalog | None = None,
+        session_factory: SessionFactory | None = None,
+        features: Sequence[DashboardFeature] = (),
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
         self._mouse = mouse
-        self.widgets = Widgets()
-        ps = page_size if page_size is not None else get_page_size()
-        self.jobs = JobsController(self, JobsState(page_size=ps))
-        self.logs = LogsController(self, LogsState())
-        self.workspace = WorkspaceController(self, WorkspaceState())
+        self._shutting_down = False
+        limit = validate_last(last)
+        size = validate_page_size(
+            page_size if page_size is not None else get_page_size()
+        )
+
+        self.ui = DashboardUI(self)
+        self.tasks = TaskRunner(self)
+        self.events = EventBus()
+        self.target_store = TargetStore(self.events)
+        self.jobs_store = JobsStore(
+            self.events,
+            page_size=size,
+            fetch_limit=limit,
+        )
+        self.logs_store = LogsStore(self.events)
+
+        self.workspace = WorkspaceController(
+            self.ui.target,
+            self.tasks,
+            self.target_store,
+            catalog=workspace_catalog or ConfigTargetCatalog(),
+            session_factory=session_factory or AzureSessionFactory(),
+        )
+        self.jobs = JobsController(
+            self.ui.jobs,
+            self.tasks,
+            self.jobs_store,
+            self.events,
+            session_provider=lambda: self.workspace.session,
+            can_actions=lambda: self.workspace.can_actions,
+            can_delete=lambda: self.workspace.can_delete,
+            target_id=self._target_id,
+        )
+        self.logs = LogsController(
+            self.ui.logs,
+            self.tasks,
+            self.logs_store,
+            self.events,
+            session_provider=lambda: self.workspace.session,
+            can_logs=lambda: self.workspace.can_logs,
+            selected_job=lambda: self.jobs.state.selected_job,
+            target_id=self._target_id,
+            render_selected_info=self._render_selected_info,
+        )
+        self.events.subscribe(TargetChanging, self._on_target_changing)
+        self.events.subscribe(TargetReady, self._on_target_ready)
+        self.events.subscribe(TargetMissing, self._on_target_missing)
+        self.events.subscribe(JobSelectionChanged, self._on_job_changed)
+        self._feature_registry = FeatureRegistry(
+            (
+                Feature(
+                    "target",
+                    self.workspace.commands,
+                    finalizer=self.workspace.shutdown,
+                ),
+                Feature("jobs", self.jobs.commands),
+                Feature(
+                    "logs",
+                    self.logs.commands,
+                    finalizer=self.logs.stop_streaming,
+                ),
+                *features,
+            )
+        )
+        self._feature_registry.install(self)
+        command_specs = (
+            *COMMAND_BINDINGS,
+            *self._feature_registry.command_specs(),
+        )
+        self._command_specs = command_specs
+        self.ui.shell.set_command_specs(command_specs)
+        self.commands = CommandRegistry(command_specs)
+        for handlers in self._feature_registry.commands():
+            if handlers:
+                self.commands.register(handlers)
+        self.commands.register(
+            {
+                "app.quit": CommandHandler(self._request_quit),
+                "app.escape": CommandHandler(self._escape),
+                "app.features": CommandHandler(
+                    self._pick_feature,
+                    lambda: bool(self._feature_registry.screen_entries()),
+                ),
+            }
+        )
+        self.commands.validate()
 
     def run(self, *args: Any, **kwargs: Any) -> Any:
-        """Run the app, defaulting mouse to the value passed to __init__."""
         kwargs.setdefault("mouse", self._mouse)
         return super().run(*args, **kwargs)
 
     def compose(self) -> ComposeResult:
-        with Horizontal():
-            with Vertical(id="left-col"):
-                with Vertical(id="jobs-pane"):
-                    yield OptionList(id="job-list")
-                    with Horizontal(id="search-bar", classes="hidden"):
-                        yield Input(placeholder="search…", id="search-input")
-                with Vertical(id="ws-pane"):
-                    yield Static("", id="ws-current")
-            with Vertical(id="right-pane"):
-                with InfoScroll(id="info-scroll"):
-                    yield Static(id="info-content")
-                yield LogViewer(
-                    id="log-content",
-                    highlight=True,
-                    markup=True,
-                    wrap=False,
-                    auto_scroll=True,
-                    classes="hidden",
-                )
-                yield LoadingIndicator(id="log-loading", classes="hidden")
-                with Vertical(id="info-loading", classes="hidden"):
-                    yield LoadingIndicator(id="info-loading-spinner")
-                    yield Static("", id="info-loading-label")
-        yield Footer()
+        yield DashboardShell()
 
     def on_mount(self) -> None:
-        self.widgets.log = self.query_one("#log-content", LogViewer)
-        self.widgets.info = self.query_one("#info-content", Static)
-        self.widgets.jobs = self.query_one("#job-list", OptionList)
-        self.query_one("#ws-pane").border_title = "Workspace"
-        self.jobs.view.update_titles()
+        self.events.bind_thread()
+        self.target_store.bind_thread()
+        self.jobs_store.bind_thread()
+        self.logs_store.bind_thread()
+        for spec in self._feature_registry.command_specs():
+            self.bind(
+                spec.key,
+                f"command({spec.command!r})",
+                description=spec.description,
+                show=spec.show,
+            )
+        self.ui.mount()
+        self.ui.logs.show_info()
+        self.jobs.view.render()
         self.logs.update_tab_title()
-        self.jobs.fetcher.show_info_loading("Loading jobs…")
-        self.jobs.fetcher.init_fetch()
+        self.workspace.start()
 
-    def action_quit(self) -> None:
-        safe_close(self.logs.stream, "stop_streaming")
-        rest = self.workspace.state.rest_client
-        self.workspace.state.rest_client = None
-        safe_close(rest)
-        self.workers.cancel_all()
+    def action_command(self, name: str) -> None:
+        if not self.commands.contains(name):
+            self.notify(f"Unknown dashboard command: {name}", severity="error")
+            return
+        self.commands.execute(name)
+
+    def check_action(
+        self,
+        action: str,
+        parameters: tuple[object, ...],
+    ) -> bool | None:
+        if action == "command" and parameters:
+            return self.commands.enabled(str(parameters[0]))
+        return True
+
+    def _escape(self) -> None:
+        if self.jobs.filters.close_search_bar(clear=True):
+            return
+        self.ui.shell.show_help()
+
+    def _pick_feature(self) -> None:
+        entries = self._feature_registry.screen_entries()
+        self.ui.shell.pick(
+            "Features",
+            [
+                PickerItem(screen_name, Text(label))
+                for label, screen_name in entries
+            ],
+            "",
+            self._open_feature,
+        )
+
+    def _open_feature(self, screen_name: str | None) -> None:
+        if screen_name:
+            self.push_screen(screen_name)
+
+    def _request_quit(self) -> None:
+        self._shutdown_dashboard()
         self.exit()
 
-    def action_escape(self) -> None:
-        if self.jobs.filters.close_search_bar(clear=True):
-            self.jobs.view.refresh()
+    def _shutdown_dashboard(self) -> None:
+        if self._shutting_down:
             return
-        self.push_screen(HelpScreen())
+        self._shutting_down = True
+        try:
+            self._feature_registry.shutdown()
+        finally:
+            self.tasks.shutdown()
 
-    def action_dismiss(self) -> None:
-        self.action_escape()
+    def on_unmount(self) -> None:
+        self._shutdown_dashboard()
 
-    def action_refresh(self) -> None:
-        self.jobs.fetcher.action_refresh()
+    def _target_id(self) -> str:
+        target = self.workspace.state.current
+        return target.id if target is not None else ""
 
-    def action_cancel_job(self) -> None:
-        self.jobs.cancel.action_cancel()
+    def _on_target_changing(self, event: TargetChanging) -> None:
+        self.tasks.cancel_prefix("workspace.session")
+        self.tasks.cancel_prefix("jobs.")
+        self.tasks.cancel_prefix("logs.")
+        self.logs.on_target_changing()
+        self.jobs.reset()
 
-    def action_show_logs(self) -> None:
-        self.logs.show()
+    def _on_target_ready(self, event: TargetReady) -> None:
+        self.jobs.fetcher.init_fetch()
 
-    def action_stream_logs(self) -> None:
-        self.logs.toggle_stream()
+    def _on_target_missing(self, event: TargetMissing) -> None:
+        if event.target is None:
+            self.ui.target.hide_info_loading()
+            self.ui.target.set_info(
+                "No workspace configured. Press [bold]w[/bold] to select."
+            )
 
-    def action_show_info(self) -> None:
-        self.logs.show_info()
+    def _on_job_changed(self, event: JobSelectionChanged) -> None:
+        self.logs.on_job_changed(event.job)
+        self.logs.update_tab_title()
 
-    def action_toggle_scroll(self) -> None:
-        self.logs.toggle_scroll()
-
-    def action_save_logs(self) -> None:
-        self.logs.save_to_file()
-
-    def action_pick_workspace(self) -> None:
-        self.workspace.pick()
-
-    def action_pick_status(self) -> None:
-        self.jobs.filters.action_pick_status()
-
-    def action_pick_experiment(self) -> None:
-        self.jobs.filters.action_pick_experiment()
-
-    def action_clear_filters(self) -> None:
-        self.jobs.filters.action_clear()
-
-    def action_search(self) -> None:
-        self.jobs.filters.action_search()
-
-    def action_pick_log_file(self) -> None:
-        self.logs.pick_file()
-
-    def action_next_page(self) -> None:
-        self.jobs.view.action_next_page()
-
-    def action_prev_page(self) -> None:
-        self.jobs.view.action_prev_page()
-
-    def action_info_scroll(self, direction: str) -> None:
-        self.logs.scroll_info(direction)
+    def _render_selected_info(self) -> None:
+        if self.logs.state.view_mode is not ViewMode.INFO:
+            return
+        job = self.jobs.state.selected_job
+        if job is not None:
+            self.jobs.view.show_info(job)
+        self.logs.update_tab_title()
 
     def on_input_changed(self, event: Input.Changed) -> None:
-        self.jobs.filters.on_input_changed(event)
+        if event.input.id == "search-input":
+            self.jobs.filters.on_input_changed(event.value)
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
-        self.jobs.filters.on_input_submitted(event)
+        if event.input.id == "search-input":
+            self.jobs.filters.on_input_submitted()
 
-    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
-        self.jobs.view.on_option_selected(event)
+    def on_option_list_option_selected(
+        self, event: OptionList.OptionSelected
+    ) -> None:
+        if event.option_list.id == "job-list":
+            self.jobs.view.on_option_selected(event.option_index)
 
     def on_option_list_option_highlighted(
         self, event: OptionList.OptionHighlighted
     ) -> None:
-        self.jobs.view.on_option_highlighted(event)
+        if event.option_list.id == "job-list":
+            self.jobs.view.on_option_highlighted(event.option_index)
+
+    def on_log_viewer_backfill_requested(
+        self,
+        event: LogViewer.BackfillRequested,
+    ) -> None:
+        if self.logs.state.head_offset > 0:
+            self.logs.backfill(all_remaining=event.all_remaining)
+        elif self.ui.logs.log is not None:
+            self.ui.logs.log.scroll_home(animate=False)

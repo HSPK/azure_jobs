@@ -7,6 +7,8 @@ from typing import Any
 
 from azure_jobs.utils.dataclass_utils import dataclass_from_dict, remove_empty_values
 
+DEFAULT_DASHBOARD_PAGE_SIZE = 50
+
 @dataclass
 class AJDefaults:
     template: str | None = None
@@ -23,7 +25,7 @@ class AJWorkspace:
 class AJDashboard:
     """Dashboard configuration."""
 
-    page_size: int = 20
+    page_size: int = DEFAULT_DASHBOARD_PAGE_SIZE
 
 @dataclass
 class AJConfig:

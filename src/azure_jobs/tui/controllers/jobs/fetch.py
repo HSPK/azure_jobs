@@ -1,278 +1,288 @@
-"""REST I/O for the jobs pane: pagination, refresh, single-job re-fetch."""
+"""Background job queries committing through JobsStore."""
 
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any
 
-from rich.markup import escape
-from textual.worker import get_current_worker
-
-from azure_jobs.az_client import create_rest_client
-from azure_jobs.config import AJWorkspace
+from azure_jobs.errors import RestError
 from azure_jobs.tui.controllers.base import Controller
-from azure_jobs.tui.controllers.jobs._shared import short_error
-from azure_jobs.tui.helpers import safe_notify
-from azure_jobs.tui.state import JobsState, LoadStatus
+from azure_jobs.tui.errors import format_error
+from azure_jobs.tui.models import Job
+from azure_jobs.tui.ports import Cursor, JobPage, JobQuerySpec
+from azure_jobs.tui.runtime import (
+    CancellationToken,
+    SessionHandle,
+    TaskRunner,
+)
+from azure_jobs.tui.state import JobsState
+from azure_jobs.tui.stores import JobsStore
+from azure_jobs.tui.view_ports import JobsViewPort
 
 log = logging.getLogger(__name__)
 
+
+@dataclass(frozen=True)
+class DeleteProbe:
+    target_id: str
+    deleted: Job
+    current: Job | None
+
+
 class JobsFetcher(Controller[JobsState]):
-    """Owns all REST client interaction for the job list."""
+    """Own job query I/O; only JobsStore may mutate feature state."""
 
-    def _set_status(self, status: LoadStatus, *, error: str = "") -> None:
-        st = self.state
-        st.load_status = status
-        st.last_error = error
-
-    def _bump_session(self) -> int:
-        self.state.session_seq += 1
-        return self.state.session_seq
-
-    def _show_loading(self, msg: str) -> None:
-        self.hide_info_loading()
-        self.render_info(msg)
-
-    def show_info_loading(self, label: str) -> None:
-        """Show the centered spinner + *label* overlay over the info pane."""
-        from textual.widgets import Static
-
-        try:
-            ind = self.app.query_one("#info-loading")
-            lbl = self.app.query_one("#info-loading-label", Static)
-        except Exception:
-            return
-        lbl.update(label)
-        ind.remove_class("hidden")
-
-    def hide_info_loading(self) -> None:
-        try:
-            ind = self.app.query_one("#info-loading")
-        except Exception:
-            return
-        ind.add_class("hidden")
-
-    def _create_rest_client(self, ws: AJWorkspace) -> bool:
-        try:
-            self.app.workspace.state.rest_client = create_rest_client(ws)
-            return True
-        except Exception as exc:
-            err = short_error(exc, limit=80)
-            self.notify(f"Auth failed: {err}", severity="error")
-            self._show_loading(f"[red]Auth failed:[/red] {err}")
-            self._set_status(LoadStatus.ERROR, error=err)
-            return False
-
-    @staticmethod
-    def _is_active(worker: Any, st: JobsState, seq: int) -> bool:
-        return (not worker.is_cancelled) and st.session_seq == seq
+    def __init__(
+        self,
+        ui: JobsViewPort,
+        tasks: TaskRunner,
+        store: JobsStore,
+        *,
+        session_provider: Callable[[], SessionHandle | None],
+    ) -> None:
+        super().__init__(ui, tasks, lambda: store.state)
+        self.store = store
+        self._session_provider = session_provider
+        self._loading_initial_scope = False
 
     def init_fetch(self) -> None:
-        """First load after app start (or after workspace switch)."""
-        seq = self._bump_session()
-        self._set_status(LoadStatus.LOADING_INITIAL)
-        self.spawn(lambda: self._do_init_fetch(seq), group="fetch_init")
+        self.tasks.cancel_prefix("jobs.fetch")
+        self.tasks.cancel_group("jobs.detail")
+        self._loading_initial_scope = True
+        self.store.begin_initial()
+        self.ui.show_info_loading("Loading jobs…")
+        self.fetch_next_page(initial=True)
 
-    def _do_init_fetch(self, seq: int) -> None:
-        app = self.app
-        st = self.state
-        worker = get_current_worker()
-        ws = app.workspace.ensure_workspace()
-        app.call_from_thread(app.workspace.update_label)
-        if not self._is_active(worker, st, seq):
+    def fetch_next_page(self, *, initial: bool = False) -> None:
+        request = self.store.begin_page(initial=initial)
+        if request is None:
             return
-        if not ws:
-            self._set_status(LoadStatus.IDLE)
-            app.call_from_thread(
-                self._show_loading,
-                "No workspace configured. Press [bold]w[/bold] to select.",
-            )
+        generation, cursor, limit = request
+        handle = self._session_provider()
+        if handle is None:
+            message = "Workspace is not connected"
+            self.store.load_failed(generation, message)
+            self.ui.hide_info_loading()
+            self.render_info("No workspace session. Press [bold]w[/bold] to select.")
             return
-        if not self._create_rest_client(ws):
-            return
-        if not self._is_active(worker, st, seq):
-            return
-        app.call_from_thread(
-            self.show_info_loading, f"Reading {escape(ws.workspace_name)}…"
+
+        def fetch(token: CancellationToken) -> JobPage:
+            with handle.lease() as session:
+                page = session.jobs.list_page(
+                    cursor,
+                    limit=limit,
+                    query=JobQuerySpec(),
+                )
+            token.check()
+            return page
+
+        self.tasks.run(
+            fetch,
+            group="jobs.fetch.page",
+            on_success=lambda page: self._on_page(
+                generation,
+                cursor,
+                page,
+            ),
+            on_error=lambda exc: self._on_fetch_error(generation, exc),
         )
-        self._fetch_one_page(seq, status=LoadStatus.LOADING_INITIAL)
 
-    def fetch_next_page(self) -> None:
-        """Schedule a single server-page fetch in the background."""
-        st = self.state
-        if st.fetching or not st.has_more or len(st.all_jobs) >= st.fetch_limit:
-            return
-        seq = st.session_seq
-        self._set_status(LoadStatus.LOADING_PAGE)
-        self.spawn(
-            lambda: self._fetch_one_page(seq, status=LoadStatus.LOADING_PAGE),
-            group="fetch_page",
-        )
-
-    def _fetch_one_page(self, seq: int, *, status: LoadStatus) -> None:
-        app = self.app
-        st = self.state
-        worker = get_current_worker()
-        rest = app.workspace.state.rest_client
-        if rest is None:
-            app.call_from_thread(self._set_status, LoadStatus.IDLE)
-            return
-        try:
-            batch, next_link = rest.jobs.list_page(
-                next_link=st.next_link, top=st.page_size
-            )
-        except Exception as exc:
-            log.exception("jobs.list_page failed")
-            if self._is_active(worker, st, seq):
-                err = short_error(exc)
-                app.call_from_thread(self._show_loading, err)
-                app.call_from_thread(self._set_status, LoadStatus.ERROR, error=err)
-            return
-        if not self._is_active(worker, st, seq):
-            return
-        app.call_from_thread(self._on_page_fetched, seq, batch, next_link)
-
-    def _on_page_fetched(
+    def _on_page(
         self,
-        seq: int,
-        batch: list[dict[str, Any]],
-        next_link: str | None,
+        generation: int,
+        requested_cursor: Cursor | None,
+        page: JobPage,
     ) -> None:
-        st = self.state
-        if seq != st.session_seq:
+        should_continue = self.store.page_loaded(
+            generation,
+            requested_cursor,
+            page,
+        )
+        if generation != self.state.generation:
             return
-        st.next_link = next_link
-        st.has_more = next_link is not None
-        self.merge_batch(batch)
+        self.ui.hide_info_loading()
+        if (
+            self._loading_initial_scope
+            and should_continue
+            and len(self.state.ordered_ids) < self.state.fetch_limit
+        ):
+            self.fetch_next_page(initial=True)
+            return
+        self._loading_initial_scope = False
+        if (
+            self.state.pending_advance
+            and should_continue
+        ):
+            self.fetch_next_page()
 
-    def merge_batch(self, batch: list[dict[str, Any]]) -> None:
-        """Append *batch* to all_jobs (dedup by name) and refresh view."""
-        st = self.state
-        for j in batch:
-            name = j.get("name")
-            if not name or name in st.job_idx:
-                continue
-            st.all_jobs.append(j)
-            st.job_idx[name] = len(st.all_jobs) - 1
-        self._set_status(LoadStatus.IDLE)
-        view = self.app.jobs.view
-        view.refresh(restore_selection=not st.pending_advance)
-        if st.pending_advance:
-            st.pending_advance = False
-            if st.current_page + 1 < len(st.pages):
-                st.current_page += 1
-                view.refresh()
+    def _on_fetch_error(self, generation: int, exc: Exception) -> None:
+        if not self.store.load_failed(generation, str(exc)):
+            return
+        self._loading_initial_scope = False
+        message = format_error("Load jobs", exc)
+        self.ui.hide_info_loading()
+        if not self.state.ordered_ids:
+            self.ui.set_info(message)
+        self.notify(message, severity="error")
 
-    def load(self, jobs: list[dict[str, Any]]) -> None:
-        """Direct injection used by tests + restart paths."""
-        self._bump_session()
-        st = self.state
-        st.all_jobs = list(jobs)
-        st.job_idx = {j.get("name", ""): i for i, j in enumerate(st.all_jobs)}
-        st.current_page = 0
-        st.has_more = False
-        st.next_link = None
-        self._set_status(LoadStatus.IDLE)
-        self.app.jobs.view.refresh()
+    def fetch_single(self, job: Job) -> None:
+        handle = self._session_provider()
+        if handle is None:
+            return
+        generation = self.state.generation
 
-    def fetch_single(self, job: dict[str, Any]) -> None:
-        seq = self.state.session_seq
-        self.spawn(
-            lambda: self._do_fetch_single(job, seq),
-            group="single",
-            exclusive=False,
+        def fetch(token: CancellationToken) -> Job:
+            with handle.lease() as session:
+                if session.actions is None:
+                    raise RuntimeError("This backend does not support job details")
+                updated = session.actions.get(job.ref)
+            token.check()
+            return updated
+
+        self.tasks.run(
+            fetch,
+            group="jobs.detail",
+            on_success=lambda updated: self.store.detail_updated(
+                generation,
+                updated,
+            ),
+            on_error=lambda exc: self._on_single_error(
+                generation,
+                job.name,
+                exc,
+            ),
+            priority=5,
         )
 
-    def _do_fetch_single(self, job: dict[str, Any], seq: int) -> None:
-        rest = self.app.workspace.state.rest_client
-        if rest is None:
+    def _on_single_error(
+        self,
+        generation: int,
+        job_name: str,
+        exc: Exception,
+    ) -> None:
+        if not self.store.detail_failed(generation):
             return
-        worker = get_current_worker()
-        name = job.get("name", "")
-        if not name:
-            return
-        try:
-            updated = rest.jobs.get(name)
-        except Exception as exc:
-            log.warning("get %s failed: %s", name, exc)
-            return
-        if self._is_active(worker, self.state, seq):
-            self.app.call_from_thread(self._on_single_fetched, name, updated)
-
-    def _on_single_fetched(self, name: str, updated: dict[str, Any]) -> None:
-        st = self.state
-        idx = st.job_idx.get(name)
-        if idx is None:
-            return
-        st.all_jobs[idx] = updated
-        for i, j in enumerate(st.filtered):
-            if j.get("name") == name:
-                st.filtered[i] = updated
-                if i == st.selected_idx:
-                    self.app.jobs.view.show_info(updated)
-                break
+        self.notify(
+            format_error(f"Refresh job {job_name}", exc),
+            severity="error",
+        )
 
     def action_refresh(self) -> None:
-        if self.app.workspace.state.rest_client is None:
-            safe_notify(self.app, "No workspace configured", severity="warning")
+        handle = self._session_provider()
+        if handle is None:
+            self.notify("No workspace configured", severity="warning")
             return
-        seq = self.state.session_seq
-        self._set_status(LoadStatus.REFRESHING)
-        safe_notify(self.app, "Refreshing…", timeout=2)
-        self.spawn(lambda: self._do_incremental_refresh(seq), group="refresh")
+        self.tasks.cancel_prefix("jobs.fetch")
+        generation, _selected_id = self.store.begin_refresh()
+        limit = max(
+            self.state.fetch_limit,
+            self.state.page_size,
+            len(self.state.ordered_ids),
+        )
+        page_size = self.state.page_size
+        self.notify(f"Refreshing last {limit} jobs…", timeout=2)
 
-    def _do_incremental_refresh(self, seq: int) -> None:
-        app = self.app
-        st = self.state
-        worker = get_current_worker()
-        rest = app.workspace.state.rest_client
-        if rest is None:
-            app.call_from_thread(self._set_status, LoadStatus.IDLE)
-            return
-        try:
-            batch, _next = rest.jobs.list_page(next_link=None, top=st.page_size)
-        except Exception as exc:
-            log.exception("refresh failed")
-            if self._is_active(worker, st, seq):
-                err = short_error(exc)
-                app.call_from_thread(safe_notify, app, err, severity="error")
-                app.call_from_thread(self._set_status, LoadStatus.ERROR, error=err)
-            return
-        new_jobs: list[dict[str, Any]] = []
-        updated: list[tuple[str, dict[str, Any]]] = []
-        for j in batch:
-            name = j.get("name", "")
-            if not name:
-                continue
-            if name not in st.job_idx:
-                new_jobs.append(j)
-            else:
-                updated.append((name, j))
-        if self._is_active(worker, st, seq):
-            app.call_from_thread(self._on_refresh_done, seq, new_jobs, updated)
+        def refresh(token: CancellationToken) -> JobPage:
+            jobs: list[Job] = []
+            seen: set[str] = set()
+            cursor: Cursor | None = None
+            with handle.lease() as session:
+                while len(jobs) < limit:
+                    token.check()
+                    page = session.jobs.list_page(
+                        cursor,
+                        limit=min(page_size, limit - len(jobs)),
+                        query=JobQuerySpec(),
+                    )
+                    for job in page.jobs:
+                        if job.id not in seen:
+                            seen.add(job.id)
+                            jobs.append(job)
+                    if (
+                        not page.jobs
+                        or page.next_cursor is None
+                        or page.next_cursor == cursor
+                    ):
+                        cursor = None
+                        break
+                    cursor = page.next_cursor
+            token.check()
+            return JobPage(tuple(jobs), cursor)
 
-    def _on_refresh_done(
+        self.tasks.run(
+            refresh,
+            group="jobs.fetch.refresh",
+            on_success=lambda page: self._on_refreshed(generation, page),
+            on_error=lambda exc: self._on_refresh_error(generation, exc),
+            priority=5,
+        )
+
+    def _on_refreshed(self, generation: int, page: JobPage) -> None:
+        accepted, changed = self.store.refreshed(generation, page)
+        if accepted:
+            self.notify(
+                f"Refreshed {len(page.jobs)} jobs ({changed} changed)",
+                timeout=2,
+            )
+
+    def _on_refresh_error(self, generation: int, exc: Exception) -> None:
+        if not self.store.refresh_failed(generation, str(exc)):
+            return
+        self.notify(format_error("Refresh jobs", exc), severity="error")
+
+    def load(self, jobs: Sequence[Job | Mapping[str, Any]]) -> None:
+        """Inject a complete snapshot through the production store."""
+        self.tasks.cancel_prefix("jobs.")
+        converted = tuple(
+            item if isinstance(item, Job) else Job.from_mapping(item)
+            for item in jobs
+        )
+        self.store.replace_for_test(converted)
+        self.ui.hide_info_loading()
+
+    def probe_delete(
         self,
-        seq: int,
-        new_jobs: list[dict[str, Any]],
-        updated: list[tuple[str, dict[str, Any]]],
+        target_id: str,
+        job: Job,
+        *,
+        on_result: Callable[[DeleteProbe], None],
+        on_error: Callable[[str, Job, Exception], None],
     ) -> None:
-        st = self.state
-        if seq != st.session_seq:
+        handle = self._session_provider()
+        if handle is None:
+            on_error(
+                target_id,
+                job,
+                RuntimeError("Target is not connected"),
+            )
             return
-        for name, j in updated:
-            idx = st.job_idx.get(name)
-            if idx is not None:
-                st.all_jobs[idx] = j
-        if new_jobs:
-            st.all_jobs = new_jobs + st.all_jobs
-            st.job_idx = {j.get("name", ""): i for i, j in enumerate(st.all_jobs)}
-        cur_name = ""
-        if 0 <= st.selected_idx < len(st.filtered):
-            cur_name = st.filtered[st.selected_idx].get("name", "")
-        self._set_status(LoadStatus.IDLE)
-        self.app.jobs.view.refresh(restore_name=cur_name)
-        msg = f"Refreshed: {len(updated)} updated"
-        if new_jobs:
-            msg += f", {len(new_jobs)} new"
-        safe_notify(self.app, msg, timeout=2)
+
+        def probe(token: CancellationToken) -> DeleteProbe:
+            with handle.lease() as session:
+                actions = session.actions
+                if actions is None:
+                    raise RuntimeError(
+                        "Backend cannot reconcile deletion with an exact GET"
+                    )
+                try:
+                    current = actions.get(job.ref)
+                except RestError as exc:
+                    if exc.status_code == 404:
+                        current = None
+                    else:
+                        raise
+            token.check()
+            return DeleteProbe(target_id, job, current)
+
+        self.tasks.run(
+            probe,
+            group=(
+                f"jobs.delete-probe.{target_id}.{job.id}."
+                f"{hash(job.ref)}"
+            ),
+            on_success=on_result,
+            on_error=lambda exc: on_error(target_id, job, exc),
+            priority=5,
+        )

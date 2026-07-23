@@ -1,99 +1,145 @@
-"""Domain state dataclasses owned by each controller."""
+"""Canonical UI-thread state for dashboard features."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import TYPE_CHECKING, Any
+from types import MappingProxyType
+from typing import Mapping
 
-from azure_jobs.config import AJWorkspace
+from azure_jobs.tui.models import Job, JobRef, Target, ViewMode
+from azure_jobs.tui.ports import Cursor
 
-if TYPE_CHECKING:
-    from textual.widgets import OptionList, Static
-
-    from azure_jobs.az_client import AzureMLClient, LogStreamer
-    from azure_jobs.tui.components import LogViewer
 
 class LoadStatus(str, Enum):
-    """Lifecycle of the jobs pane I/O."""
-
     IDLE = "idle"
     LOADING_INITIAL = "loading_initial"
     LOADING_PAGE = "loading_page"
     REFRESHING = "refreshing"
     ERROR = "error"
 
-@dataclass
-class JobsState:
-    """List/page/filter/selection state for the jobs pane."""
 
-    all_jobs: list[dict[str, Any]] = field(default_factory=list)
-    job_idx: dict[str, int] = field(default_factory=dict)
-    filtered: list[dict[str, Any]] = field(default_factory=list)
-    selected_idx: int = -1
+@dataclass(frozen=True)
+class JobsState:
+    """Canonical job collection plus query and paging controls."""
+
+    jobs_by_id: Mapping[str, Job] = field(
+        default_factory=lambda: MappingProxyType({})
+    )
+    ordered_ids: tuple[str, ...] = ()
+    selected_id: str = ""
     status_filter: str = ""
     experiment_filter: str = ""
     search_query: str = ""
-    pages: list[list[dict[str, Any]]] = field(default_factory=list)
     current_page: int = 0
-    next_link: str | None = None
-    has_more: bool = True
+    next_cursor: Cursor | None = None
+    source_has_more: bool = True
     load_status: LoadStatus = LoadStatus.IDLE
     last_error: str = ""
-    session_seq: int = 0
+    generation: int = 0
     page_size: int = 50
+    fetch_limit: int = 50
     pending_advance: bool = False
-    fetch_limit: int = 500
 
     @property
     def fetching(self) -> bool:
-        """True iff a network fetch is currently in flight."""
-        return self.load_status in (
+        return self.load_status in {
             LoadStatus.LOADING_INITIAL,
             LoadStatus.LOADING_PAGE,
             LoadStatus.REFRESHING,
+        }
+
+    @property
+    def loaded_jobs(self) -> tuple[Job, ...]:
+        return tuple(
+            self.jobs_by_id[name]
+            for name in self.ordered_ids
+            if name in self.jobs_by_id
         )
 
-@dataclass
-class JobLogSnapshot:
-    """Per-job remembered log state (file selection + line buffer)."""
+    @property
+    def matching_jobs(self) -> tuple[Job, ...]:
+        status = self.status_filter
+        experiment = self.experiment_filter
+        query = self.search_query.casefold()
+        return tuple(
+            job
+            for job in self.loaded_jobs
+            if (not status or job.status == status)
+            and (not experiment or job.experiment == experiment)
+            and (not query or query in job.search_text)
+        )
 
-    current_file: str = ""
-    buffer: list[str] = field(default_factory=list)
-    line_count: int = 0
+    @property
+    def page_count(self) -> int:
+        count = len(self.matching_jobs)
+        return max(1, (count + self.page_size - 1) // self.page_size)
 
-@dataclass
+    @property
+    def page_jobs(self) -> tuple[Job, ...]:
+        jobs = self.matching_jobs
+        start = self.current_page * self.page_size
+        return jobs[start : start + self.page_size]
+
+    @property
+    def selected_job(self) -> Job | None:
+        if not self.selected_id:
+            return None
+        return self.jobs_by_id.get(self.selected_id)
+
+    @property
+    def selected_index(self) -> int:
+        for index, job in enumerate(self.page_jobs):
+            if job.id == self.selected_id:
+                return index
+        return -1
+
+    @property
+    def limit_reached(self) -> bool:
+        return len(self.ordered_ids) >= self.fetch_limit and self.source_has_more
+
+    @property
+    def has_more(self) -> bool:
+        return self.source_has_more
+
+@dataclass(frozen=True)
 class LogsState:
-    """Live-tail / view-mode state for the right pane."""
+    """Pure presentation state for log viewing."""
 
-    job: str = ""
-    files: list[str] = field(default_factory=list)
+    target_id: str = ""
+    job: JobRef | None = None
+    files: tuple[str, ...] = ()
     current_file: str = ""
     line_count: int = 0
     streaming: bool = False
     loading: bool = False
-    streamer: "LogStreamer | None" = None
+    stream_paused: bool = False
     last_update_ts: float = 0.0
-    view_mode: str = "info"
+    view_mode: ViewMode = ViewMode.INFO
     auto_scroll: bool = True
-    head_offset: int = 0
+    start_offset: int = 0
+    end_offset: int = 0
     total_size: int = 0
     backfilling: bool = False
-    snapshots: dict[str, JobLogSnapshot] = field(default_factory=dict)
+    buffer_full: bool = False
+    generation: int = 0
+    last_error: str = ""
 
-@dataclass
-class WorkspaceState:
-    """Identity + auth + REST client for the current workspace."""
+    @property
+    def head_offset(self) -> int:
+        return self.start_offset
 
-    current: AJWorkspace | None = None
-    available: list[dict[str, str]] = field(default_factory=list)
-    subscription_id: str = ""
-    rest_client: "AzureMLClient | None" = None
 
-@dataclass
-class Widgets:
-    """Cached widget references (populated on_mount)."""
+@dataclass(frozen=True)
+class TargetState:
+    """Selected backend target and discovery results; no live resources."""
 
-    log: "LogViewer | None" = None
-    info: "Static | None" = None
-    jobs: "OptionList | None" = None
+    current: Target | None = None
+    available: tuple[Target, ...] = ()
+    detecting: bool = False
+    generation: int = 0
+    can_actions: bool = False
+    can_delete: bool = False
+    can_logs: bool = False
+
+WorkspaceState = TargetState

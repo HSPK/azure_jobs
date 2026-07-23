@@ -3,35 +3,34 @@
 from __future__ import annotations
 
 from textual.binding import Binding
+from textual.message import Message
 from textual.widgets import RichLog
 
 class LogViewer(RichLog):
     """RichLog subclass with vim-style navigation."""
 
+    class BackfillRequested(Message):
+        def __init__(self, *, all_remaining: bool = False) -> None:
+            super().__init__()
+            self.all_remaining = all_remaining
+
     BINDINGS = [
         Binding("h", "scroll_left", "Left", show=False),
         Binding("j", "scroll_down", "Down", show=False),
         Binding("k", "scroll_up", "Up", show=False),
-        Binding("l", "scroll_right", "Right", show=False),
+        Binding("l", "app.command('logs.show')", "Logs"),
         Binding("g", "jump_home", "Top", show=False),
         Binding("G", "jump_end", "Bottom", show=False),
         Binding("ctrl+d", "page_down", "PgDn", show=False),
         Binding("ctrl+u", "page_up", "PgUp", show=False),
         Binding("ctrl+f", "page_down", "PgDn", show=False),
         Binding("ctrl+b", "page_up", "PgUp", show=False),
-        Binding("i", "app.show_info", "Info", show=False),
+        Binding("i", "app.command('logs.info')", "Info"),
     ]
 
     def action_jump_home(self) -> None:
         """Instant jump to the very top of the log file."""
-        try:
-            logs = self.app.logs  # type: ignore[attr-defined]
-            if logs.state.head_offset > 0:
-                logs.backfill(all_remaining=True)
-                return
-        except AttributeError:
-            pass
-        self.scroll_home(animate=False)
+        self.post_message(self.BackfillRequested(all_remaining=True))
 
     def action_jump_end(self) -> None:
         """Instant jump to the bottom of the buffer (live tail)."""
@@ -46,11 +45,8 @@ class LogViewer(RichLog):
         self._maybe_backfill()
 
     def _maybe_backfill(self) -> None:
-        from azure_jobs.tui.controllers.logs._shared import BACKFILL_TRIGGER_LINES
+        from azure_jobs.tui.log_settings import BACKFILL_TRIGGER_LINES
 
         if self.scroll_y > BACKFILL_TRIGGER_LINES:
             return
-        try:
-            self.app.logs.backfill()  # type: ignore[attr-defined]
-        except AttributeError:
-            pass
+        self.post_message(self.BackfillRequested())

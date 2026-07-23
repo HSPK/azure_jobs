@@ -1,138 +1,110 @@
-"""Search bar + status / experiment / clear filter actions."""
+"""Search and filter commands dispatching JobsStore transitions."""
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from rich.text import Text
+from textual.timer import Timer
 
-from textual.widgets import Input
-
-from azure_jobs.tui.components import PickerModal
+from azure_jobs.tui.components import PickerItem
 from azure_jobs.tui.controllers.base import Controller
 from azure_jobs.tui.helpers import STATUS_CYCLE, icon_style, safe_close
+from azure_jobs.tui.runtime import TaskRunner
 from azure_jobs.tui.state import JobsState
+from azure_jobs.tui.stores import JobsStore
+from azure_jobs.tui.view_ports import JobsViewPort
 
-if TYPE_CHECKING:
-    from textual.timer import Timer
-
-    from azure_jobs.tui.app import AjDashboard
 
 class JobsFilters(Controller[JobsState]):
-    """Search input + status/experiment pickers + clear-all."""
-
     _SEARCH_DEBOUNCE = 0.15
 
-    def __init__(self, app: "AjDashboard", state: JobsState) -> None:
-        super().__init__(app, state)
-        self._search_timer: "Timer | None" = None
+    def __init__(
+        self,
+        ui: JobsViewPort,
+        tasks: TaskRunner,
+        store: JobsStore,
+    ) -> None:
+        super().__init__(ui, tasks, lambda: store.state)
+        self.store = store
+        self._search_timer: Timer | None = None
+        self._pending_query = ""
 
     def close_search_bar(self, *, clear: bool = False) -> bool:
-        """Hide the search bar if open; return True if it was open."""
-        app = self.app
-        try:
-            search_bar = app.query_one("#search-bar")
-        except Exception:
-            return False
-        if search_bar.has_class("hidden"):
-            return False
-        search_bar.add_class("hidden")
+        was_open = self.ui.close_search(clear=clear)
         if clear:
             safe_close(self._search_timer, "stop")
             self._search_timer = None
-            try:
-                inp = app.query_one("#search-input", Input)
-                if inp.value:
-                    inp.value = ""
-            except Exception:
-                pass
-            self.state.search_query = ""
-        if app.widgets.jobs:
-            app.widgets.jobs.focus()
-        return True
+            self._pending_query = ""
+            if self.state.search_query:
+                self.store.set_search("")
+        return was_open
 
     def action_search(self) -> None:
-        """Toggle the search bar (/ key)."""
-        app = self.app
-        search_bar = app.query_one("#search-bar")
-        if search_bar.has_class("hidden"):
-            search_bar.remove_class("hidden")
-            inp = app.query_one("#search-input", Input)
-            inp.value = self.state.search_query
-            inp.focus()
+        if self.ui.search_open:
+            self.ui.close_search(clear=False)
         else:
-            search_bar.add_class("hidden")
-            if app.widgets.jobs:
-                app.widgets.jobs.focus()
+            self._pending_query = self.state.search_query
+            self.ui.open_search(self.state.search_query)
 
-    def on_input_changed(self, event: Input.Changed) -> None:
-        if event.input.id != "search-input":
-            return
-        self.state.search_query = event.value
+    def on_input_changed(self, value: str) -> None:
+        self._pending_query = value
         safe_close(self._search_timer, "stop")
-        self._search_timer = self.app.set_timer(
-            self._SEARCH_DEBOUNCE, self._do_search_refresh
+        self._search_timer = self.ui.set_timer(
+            self._SEARCH_DEBOUNCE,
+            self._apply_query,
         )
 
-    def _do_search_refresh(self) -> None:
+    def _apply_query(self) -> None:
         self._search_timer = None
-        self.app.jobs.view.refresh()
+        self.store.set_search(self._pending_query)
 
-    def on_input_submitted(self, event: Input.Submitted) -> None:
-        if event.input.id == "search-input":
-            safe_close(self._search_timer, "stop")
-            self._search_timer = None
-            self.app.jobs.view.refresh()
-            self.close_search_bar(clear=False)
+    def on_input_submitted(self) -> None:
+        safe_close(self._search_timer, "stop")
+        self._search_timer = None
+        self._apply_query()
+        self.close_search_bar(clear=False)
 
     def action_pick_status(self) -> None:
-        items: list[tuple[str, str]] = [("", "All")]
-        for s in STATUS_CYCLE[1:]:
-            icon, sty = icon_style(s)
-            items.append((s, f"[{sty}]{icon} {s}[/{sty}]"))
-        self.app.push_screen(
-            PickerModal("Status", items, current=self.state.status_filter),
+        items = [PickerItem("", Text("All"))]
+        for status in STATUS_CYCLE[1:]:
+            icon, style = icon_style(status)
+            items.append(PickerItem(status, Text(f"{icon} {status}", style=style)))
+        self.ui.pick(
+            "Status",
+            items,
+            self.state.status_filter,
             self.apply_status,
         )
 
     def apply_status(self, value: str | None) -> None:
-        if value is None:
+        if value is None or value == self.state.status_filter:
             return
-        if value != self.state.status_filter:
-            self.state.status_filter = value
-            self.app.jobs.view.refresh()
-            self.app.notify(f"Status: {value or 'All'}")
+        self.store.set_status(value)
+        self.notify(f"Status: {value or 'All'}")
 
     def action_pick_experiment(self) -> None:
-        st = self.state
         experiments = sorted(
-            {j.get("experiment", "") for j in st.all_jobs if j.get("experiment")}
+            {job.experiment for job in self.state.loaded_jobs if job.experiment}
         )
         if not experiments:
-            self.app.notify("No experiments to filter")
+            self.notify("No experiments to filter")
             return
-        items: list[tuple[str, str]] = [("", "All")]
-        items.extend((exp, exp) for exp in experiments)
-        self.app.push_screen(
-            PickerModal("Experiment", items, current=st.experiment_filter),
+        items = [PickerItem("", Text("All"))]
+        items.extend(PickerItem(value, Text(value)) for value in experiments)
+        self.ui.pick(
+            "Experiment",
+            items,
+            self.state.experiment_filter,
             self.apply_experiment,
         )
 
     def apply_experiment(self, value: str | None) -> None:
-        if value is None:
+        if value is None or value == self.state.experiment_filter:
             return
-        if value != self.state.experiment_filter:
-            self.state.experiment_filter = value
-            self.app.jobs.view.refresh()
-            self.app.notify(f"Experiment: {value or 'All'}")
+        self.store.set_experiment(value)
+        self.notify(f"Experiment: {value or 'All'}")
 
     def action_clear(self) -> None:
-        st = self.state
-        changed = bool(st.status_filter or st.experiment_filter or st.search_query)
-        st.status_filter = ""
-        st.experiment_filter = ""
-        st.search_query = ""
         self.close_search_bar(clear=True)
-        if changed:
-            self.app.jobs.view.refresh()
-        self.app.notify("Filters cleared")
-        if self.app.widgets.jobs:
-            self.app.widgets.jobs.focus()
+        self.store.clear_filters()
+        self.notify("Filters cleared")
+        self.ui.focus_info()

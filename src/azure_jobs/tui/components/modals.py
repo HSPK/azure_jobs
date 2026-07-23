@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 from rich.markup import escape
@@ -10,14 +11,23 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical
 from textual.screen import ModalScreen
-from textual.widgets import OptionList, Static
+from textual.widgets import Input, OptionList, Static
 from textual.widgets.option_list import Option
 
-class ConfirmCancel(ModalScreen[bool]):
-    """Modal dialog asking the user to confirm job cancellation."""
+
+@dataclass(frozen=True)
+class PickerItem:
+    """One picker value with a pre-rendered, markup-safe label."""
+
+    value: str
+    label: Text
+
+
+class ConfirmJobAction(ModalScreen[bool]):
+    """Modal dialog for a destructive job action."""
 
     CSS = """
-    ConfirmCancel > Vertical { width: 56; }
+    ConfirmJobAction > Vertical { width: 60; }
     """
 
     BINDINGS = [
@@ -27,16 +37,30 @@ class ConfirmCancel(ModalScreen[bool]):
         Binding("escape", "cancel_dialog", "Cancel", show=False),
     ]
 
-    def __init__(self, job_display: str, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        title: str,
+        verb: str,
+        job_display: str,
+        *,
+        warning: str = "",
+        **kwargs: Any,
+    ) -> None:
         super().__init__(**kwargs)
+        self._title = title
+        self._verb = verb
         self._job_display = job_display
+        self._warning = warning
 
     def compose(self) -> ComposeResult:
         with Vertical():
-            yield Static("[bold]⚠  Cancel Job[/bold]")
+            yield Static(f"[bold]⚠  {escape(self._title)}[/bold]")
             yield Static(
-                f"\nCancel [bold cyan]{escape(self._job_display)}[/bold cyan]?\n"
+                f"\n{escape(self._verb)} "
+                f"[bold cyan]{escape(self._job_display)}[/bold cyan]?\n"
             )
+            if self._warning:
+                yield Static(f"[bold red]{escape(self._warning)}[/bold red]\n")
             yield Static(
                 "  [bold]y[/bold]/[bold]Enter[/bold] confirm   "
                 "[bold]n[/bold]/[bold]Esc[/bold] dismiss",
@@ -48,8 +72,34 @@ class ConfirmCancel(ModalScreen[bool]):
     def action_cancel_dialog(self) -> None:
         self.dismiss(False)
 
+
+class ConfirmCancel(ConfirmJobAction):
+    """Confirm cancellation of a job."""
+
+    def __init__(self, job_display: str, **kwargs: Any) -> None:
+        super().__init__(
+            "Cancel Job",
+            "Cancel",
+            job_display,
+            **kwargs,
+        )
+
+
+class ConfirmDelete(ConfirmJobAction):
+    """Confirm permanent deletion of a job."""
+
+    def __init__(self, job_display: str, **kwargs: Any) -> None:
+        super().__init__(
+            "Delete Job",
+            "Delete",
+            job_display,
+            warning="This permanently deletes the job and cannot be undone.",
+            **kwargs,
+        )
+
+
 class PickerModal(ModalScreen["str | None"]):
-    """Keyboard-first picker."""
+    """Keyboard-first searchable picker."""
 
     CSS = """
     PickerModal > Vertical {
@@ -67,17 +117,25 @@ class PickerModal(ModalScreen["str | None"]):
         padding: 0;
         scrollbar-size: 1 1;
     }
+    PickerModal #picker-search {
+        width: 100%;
+        height: 1;
+        margin-bottom: 1;
+        border: none;
+        padding: 0;
+    }
     """
 
     BINDINGS = [
         Binding("escape", "cancel_picker", "Cancel", show=False),
+        Binding("slash", "focus_search", "Search", show=False),
         *[Binding(str(i), f"pick({i - 1})", show=False) for i in range(1, 10)],
     ]
 
     def __init__(
         self,
         title: str,
-        items: list[tuple[str, str]],
+        items: list[PickerItem],
         current: str = "",
         **kwargs: Any,
     ) -> None:
@@ -85,33 +143,63 @@ class PickerModal(ModalScreen["str | None"]):
         self._title = title
         self._items = items
         self._current = current
+        self._visible = list(items)
 
     def compose(self) -> ComposeResult:
         with Vertical():
-            yield Static(f"[bold]{self._title}[/bold]\n")
+            yield Static(Text(self._title, style="bold"))
+            yield Input(placeholder="filter…", id="picker-search")
             yield OptionList(id="picker-list")
 
     def on_mount(self) -> None:
+        self._render_items(focus_list=True)
+
+    def _render_items(self, *, focus_list: bool = False) -> None:
         ol = self.query_one("#picker-list", OptionList)
+        ol.clear_options()
         highlight_idx = 0
-        for i, (value, label) in enumerate(self._items):
-            num = f"[dim]{i + 1}[/dim] "
-            mark = "[green]●[/green] " if value == self._current else "  "
-            ol.add_option(Option(Text.from_markup(f" {num}{mark}{label}"), id=value))
-            if value == self._current:
+        for i, item in enumerate(self._visible):
+            prompt = Text(" ")
+            prompt.append(f"{i + 1} ", style="dim")
+            if item.value == self._current:
+                prompt.append("● ", style="green")
+            else:
+                prompt.append("  ")
+            prompt.append_text(item.label)
+            ol.add_option(Option(prompt, id=item.value))
+            if item.value == self._current:
                 highlight_idx = i
-        ol.highlighted = highlight_idx
-        ol.focus()
+        ol.highlighted = highlight_idx if self._visible else None
+        if focus_list:
+            ol.focus()
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id != "picker-search":
+            return
+        query = event.value.casefold()
+        self._visible = [
+            item
+            for item in self._items
+            if not query
+            or query in item.value.casefold()
+            or query in item.label.plain.casefold()
+        ]
+        self._render_items()
+        event.stop()
 
     def on_option_list_option_selected(
         self,
         event: OptionList.OptionSelected,
     ) -> None:
         self.dismiss(event.option.id or "")
+        event.stop()
 
     def action_pick(self, n: int) -> None:
-        if 0 <= n < len(self._items):
-            self.dismiss(self._items[n][0])
+        if 0 <= n < len(self._visible):
+            self.dismiss(self._visible[n].value)
+
+    def action_focus_search(self) -> None:
+        self.query_one("#picker-search", Input).focus()
 
     def action_cancel_picker(self) -> None:
         self.dismiss(None)
@@ -131,45 +219,23 @@ class HelpScreen(ModalScreen[None]):
         Binding("q", "close_help", "Close", show=False),
     ]
 
+    def __init__(
+        self,
+        command_specs: tuple[Any, ...] | None = None,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(**kwargs)
+        self._command_specs = command_specs
+
     def compose(self) -> ComposeResult:
         with Vertical():
             yield Static("[bold]⌨  Keyboard Shortcuts[/bold]\n")
             yield Static(self._help_text())
 
-    @staticmethod
-    def _help_text() -> str:
-        lines = [
-            "  [bold cyan]Jobs list[/bold cyan]",
-            "    [bold]↑  ↓[/bold]        Move selection",
-            "    [bold]←  →[/bold]        Previous / next page",
-            "    [bold]i[/bold]           Show info panel",
-            "    [bold]l[/bold]           Show logs (live tail)",
-            "",
-            "  [bold cyan]Actions[/bold cyan]",
-            "    [bold]r[/bold]           Refresh",
-            "    [bold]f[/bold]           Filter by status",
-            "    [bold]e[/bold]           Filter by experiment",
-            "    [bold]w[/bold]           Switch workspace",
-            "    [bold]c[/bold]           Cancel selected job",
-            "    [bold]/[/bold]           Search",
-            "",
-            "  [bold cyan]Logs view[/bold cyan]",
-            "    [bold]h j k l[/bold]    Scroll left / down / up / right",
-            "    [bold]g  G[/bold]        Jump top / bottom",
-            "    [bold]^d ^u[/bold]       Page down / up",
-            "    [bold]i[/bold]           Back to info",
-            "    [bold]L[/bold]           Stop live tail",
-            "    [bold]s[/bold]           Toggle auto-scroll",
-            "    [bold]o[/bold]           Pick log file",
-            "    [bold]^s[/bold]          Save buffer to ~/aj-logs/",
-            "",
-            "  [bold cyan]General[/bold cyan]",
-            "    [bold]Esc[/bold]         This help screen",
-            "    [bold]q[/bold]           Quit",
-            "",
-            "  [dim]Press Esc or q to close[/dim]",
-        ]
-        return "\n".join(lines)
+    def _help_text(self) -> str:
+        from azure_jobs.tui.bindings import COMMAND_BINDINGS, help_text
+
+        return help_text(self._command_specs or COMMAND_BINDINGS)
 
     def action_close_help(self) -> None:
         self.dismiss(None)
