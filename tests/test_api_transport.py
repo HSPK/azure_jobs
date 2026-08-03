@@ -271,43 +271,48 @@ class TestDaemonLifecycle:
             daemon.shutdown()
 
 
-class TestFallback:
-    def test_missing_daemon_falls_back_in_process(self, tmp_path, monkeypatch):
-        """A dead daemon must never make aj unusable."""
-        opened: list[Target] = []
+class TestNoSilentDowngrade:
+    """A broken daemon must be reported, not quietly worked around."""
 
-        class Fake:
-            def __init__(self, target):
-                opened.append(target)
+    def test_missing_daemon_raises_with_recovery_steps(self, tmp_path):
+        with pytest.raises(DaemonUnavailable) as caught:
+            open_backend(
+                make_target(),
+                root=tmp_path,
+                path=tmp_path / "nothing.sock",
+                prefer_daemon=True,
+                autostart=False,
+            )
+        message = str(caught.value)
+        assert "aj daemon start" in message
+        assert "AJ_NO_DAEMON=1" in message
+        assert "AJ_DEBUG=1" in message
 
-        monkeypatch.setattr(
-            "azure_jobs.api.inprocess.InProcessBackend", Fake, raising=True
-        )
-        target = make_target()
-        backend = open_backend(
-            target,
-            root=tmp_path,
-            path=tmp_path / "nothing.sock",
-            prefer_daemon=True,
-            autostart=False,
-        )
-        assert isinstance(backend, Fake)
-        assert opened == [target]
-
-    def test_a_wedged_daemon_falls_back_rather_than_raising(
+    def test_a_wedged_daemon_raises_rather_than_degrading(
         self, tmp_path, monkeypatch
     ):
-        """Anything the daemon path throws must end in a usable backend."""
+        class Fake:
+            def __init__(self, target):
+                raise AssertionError("must not run in-process implicitly")
+
+        monkeypatch.delenv("AJ_NO_DAEMON", raising=False)
+        monkeypatch.setattr("azure_jobs.api.inprocess.InProcessBackend", Fake)
+        monkeypatch.setattr(
+            "azure_jobs.api.client.connect_daemon",
+            lambda *a, **k: (_ for _ in ()).throw(RuntimeError("wedged")),
+        )
+        with pytest.raises(DaemonUnavailable):
+            open_backend(make_target(), root=tmp_path)
+
+    def test_explicit_opt_out_is_still_honoured(self, tmp_path, monkeypatch):
+        """AJ_NO_DAEMON is a deliberate choice, not a silent downgrade."""
 
         class Fake:
             def __init__(self, target):
                 self.target = target
 
         monkeypatch.setattr("azure_jobs.api.inprocess.InProcessBackend", Fake)
-        monkeypatch.setattr(
-            "azure_jobs.api.client.connect_daemon",
-            lambda *a, **k: (_ for _ in ()).throw(RuntimeError("wedged")),
-        )
+        monkeypatch.setenv("AJ_NO_DAEMON", "1")
         assert isinstance(open_backend(make_target(), root=tmp_path), Fake)
 
     def test_spawned_daemon_serves_a_real_session(self, tmp_path, monkeypatch):

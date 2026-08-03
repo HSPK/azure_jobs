@@ -117,12 +117,12 @@ torchrun \
 
 ## `aj dash`
 
-### Background daemon (optional)
+### Background daemon
 
-An optional local daemon shares authentication across commands, watches jobs in
-the background, and runs a submission queue. It starts on demand, and **every
-command falls back to running in-process if it is unavailable** — it is an
-accelerator, never a dependency.
+All commands run through a local daemon, which shares authentication, watches
+jobs in the background, and runs the submission queue. It starts on demand. If
+it is unavailable a command **fails with the recovery steps** rather than
+quietly running in-process; use `AJ_NO_DAEMON=1` to opt out explicitly.
 
 ```bash
 aj run --queue -t <template> <command>   # returns a ticket; daemon runs it

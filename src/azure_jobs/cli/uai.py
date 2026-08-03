@@ -32,6 +32,10 @@ def uai_list(full: bool) -> None:
         try:
             with account() as api:
                 uais = api.identities()
+        except click.ClickException:
+            # An unreachable daemon already explains how to recover;
+            # wrapping it again would bury the instructions.
+            raise
         except Exception as exc:
             log.exception("Could not list managed identities")
             error(

@@ -22,9 +22,10 @@ Press `→` on the final loaded page to fetch another page from Azure.
 
 ## Background daemon
 
-An optional local daemon shares authentication, watches jobs, and runs a
-submission queue. It starts on demand and every command falls back to running
-in-process if it is unavailable, so it is never required.
+Every command executes through a local daemon, which shares authentication,
+watches jobs, and runs the submission queue. It starts on demand. If it cannot
+be reached the command fails with the recovery steps rather than silently
+running in-process; `AJ_NO_DAEMON=1` is the explicit opt-out.
 
 ```bash
 aj daemon status                 # is one running, and what is it doing

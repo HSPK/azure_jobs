@@ -142,6 +142,14 @@ class AzureCatalog:
         self._client = client
         self._target = target
 
+    def workspace(self) -> CatalogItem:
+        info = self._client.get_workspace() or {}
+        return CatalogItem(
+            "workspace",
+            str(info.get("name") or self._target.label),
+            info,
+        )
+
     def datastores(self) -> list[CatalogItem]:
         return [
             CatalogItem("datastore", _name_of(item), item)
@@ -199,11 +207,12 @@ class AzureAccount:
         return override or self._subscription_id
 
     def subscriptions(self) -> list[CatalogItem]:
+        """``arm.subscriptions.list()`` returns bare ids, not records."""
         with _arm(self._sub()) as arm:
             values = arm.subscriptions.list()
         return [
-            CatalogItem("subscription", _name_of(item), item)
-            for item in _as_dicts(values)
+            CatalogItem("subscription", str(value), {"id": str(value)})
+            for value in values or ()
         ]
 
     def workspaces(self, subscription_id: str = "") -> list[CatalogItem]:
@@ -310,10 +319,12 @@ class AzureAccount:
                 workspaces=workspaces,
                 on_workspace_failure=on_fail,
             )
+        # The port documents plain dicts here, and quota.py reads them with
+        # .get(); handing back dataclasses breaks both that and json.dumps.
         pairs = [
             {
-                "workspace": _as_dicts([workspace])[0],
-                "computes": _as_dicts(clusters),
+                "workspace": _plain(workspace),
+                "computes": [_plain(c) for c in clusters],
             }
             for workspace, clusters in results
         ]
@@ -355,7 +366,7 @@ class AzureAccount:
                 workspaces=workspaces,
                 on_workspace_failure=on_fail,
             )
-        return {"jobs": list(jobs), "failures": failures}
+        return {"jobs": [_plain(job) for job in jobs], "failures": failures}
 
 
 def _image_name(entry: dict) -> str:
@@ -383,6 +394,21 @@ def _as_dicts(values: Any) -> list[Any]:
     friends); :mod:`azure_jobs.api.typed` tags them only at the wire boundary.
     """
     return list(values or ())
+
+
+def _plain(value: Any) -> Any:
+    """Convert a row to plain JSON-compatible data, recursively."""
+    from dataclasses import asdict, is_dataclass
+
+    if isinstance(value, dict):
+        return {str(k): _plain(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_plain(v) for v in value]
+    if is_dataclass(value) and not isinstance(value, type):
+        return _plain(asdict(value))
+    if hasattr(value, "_asdict"):
+        return _plain(dict(value._asdict()))
+    return value
 
 
 def _name_of(value: Any) -> str:
@@ -481,8 +507,8 @@ class InProcessBackend:
         )
         self.submitter = LocalSubmitter(target)
         # A local queue/watcher so an in-process backend is capability-
-        # equivalent to the daemon-backed one: callers that fall back must not
-        # suddenly hit ``None``. They run only for this process's lifetime.
+        # equivalent to the daemon-backed one, which matters both when the
+        # daemon serves this backend and under AJ_NO_DAEMON=1.
         self.queue = queue if queue is not None else self._local_queue()
         self.watcher = watcher if watcher is not None else self._local_watcher()
 

@@ -35,7 +35,7 @@ from azure_jobs.tui.settings import (
 @click.option(
     "--daemon/--no-daemon",
     default=None,
-    help="Route dashboard I/O through the background daemon (default: auto).",
+    help="Run in-process instead of through the daemon (default: daemon).",
 )
 def dashboard(
     last: int, page_size: int | None, mouse: bool, daemon: bool | None

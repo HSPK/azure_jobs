@@ -69,6 +69,10 @@ def _pick_account() -> str:
         try:
             with account() as api:
                 uais = api.identities()
+        except click.ClickException:
+            # An unreachable daemon already explains how to recover;
+            # wrapping it again would bury the instructions.
+            raise
         except Exception as exc:
             log.exception("Could not list UAIs")
             warning(
@@ -114,6 +118,10 @@ def _pick_environment() -> tuple[str, str]:
     ):
         try:
             images = _fetch_sing_images()
+        except click.ClickException:
+            # An unreachable daemon already explains how to recover;
+            # wrapping it again would bury the instructions.
+            raise
         except Exception as exc:
             log.exception("Could not list Singularity images")
             warning(

@@ -151,6 +151,21 @@ class FakeLogs:
 
 
 class FakeCatalog:
+    def workspace(self) -> CatalogItem:
+        return CatalogItem(
+            "workspace",
+            "ws",
+            {
+                "name": "ws",
+                "properties": {
+                    "storageAccount": (
+                        "/subscriptions/sub/resourceGroups/rg/providers/"
+                        "Microsoft.Storage/storageAccounts/mystorage"
+                    )
+                },
+            },
+        )
+
     def datastores(self) -> list[CatalogItem]:
         return [CatalogItem("datastore", "ds1", {"is_default": True})]
 

@@ -176,26 +176,10 @@ def _load_template(template: str | None) -> tuple[Template, str]:
 
 def _enqueue(request: JobSpec, name: str) -> None:
     """Hand a built JobSpec to the daemon's queue and report the ticket."""
-    from azure_jobs.api.client import connect_daemon
-    from azure_jobs.api.azure import ConfigTargetCatalog
+    from azure_jobs.cli._backend import backend
 
-    target = ConfigTargetCatalog().configured()
-    if target is None:
-        raise click.ClickException(
-            "No workspace configured. Run 'aj init' or 'aj ws set' first."
-        )
-    try:
-        backend = connect_daemon(target)
-    except Exception as exc:
-        raise click.ClickException(
-            f"--queue needs the daemon, which is unavailable "
-            f"({type(exc).__name__}: {exc}). "
-            "Start it with 'aj daemon start', or drop --queue to submit inline."
-        ) from exc
-    try:
-        entry = backend.queue.enqueue(request.to_dict(), name=name)
-    finally:
-        backend.close()
+    with backend() as api:
+        entry = api.queue.enqueue(request.to_dict(), name=name)
     click.echo(f"Queued {name} as {entry.ticket}")
     click.echo(f"  aj queue show {entry.ticket}")
     click.echo(f"  aj queue wait {entry.ticket}")

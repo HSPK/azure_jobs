@@ -293,7 +293,9 @@ class CatalogItem:
     #: storage account carry their own ``kind``, which must not be shadowed.
     category: str
     name: str
-    raw: Any = field(default_factory=dict, repr=False)
+    #: Excluded from equality/hashing like ``Job.raw``: a dict payload
+    #: would otherwise make every CatalogItem unhashable.
+    raw: Any = field(default_factory=dict, repr=False, compare=False)
 
     def __getattr__(self, attribute: str) -> Any:
         if attribute.startswith("_"):

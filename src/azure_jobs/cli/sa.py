@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import click
+
 import logging
 
 from azure_jobs.cli import main
@@ -24,6 +26,10 @@ def sa_list() -> None:
         try:
             with account() as api:
                 accounts = api.storage_accounts()
+        except click.ClickException:
+            # An unreachable daemon already explains how to recover;
+            # wrapping it again would bury the instructions.
+            raise
         except Exception as exc:
             log.exception("Could not list storage accounts")
             error(

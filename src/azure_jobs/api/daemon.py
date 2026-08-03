@@ -723,6 +723,12 @@ def _m_logs_download(daemon: Daemon, params: Mapping[str, Any], conn: Connection
     return _jobs(daemon, params).logs.download(_ref(params))
 
 
+def _m_catalog_workspace(
+    daemon: Daemon, params: Mapping[str, Any], conn: Connection
+) -> Any:
+    return _jobs(daemon, params).catalog.workspace().to_json()
+
+
 def _m_catalog_datastore(
     daemon: Daemon, params: Mapping[str, Any], conn: Connection
 ) -> Any:
@@ -804,6 +810,7 @@ _METHODS: dict[str, Callable[[Daemon, Mapping[str, Any], Connection], Any]] = {
     "catalog.environments": _catalog_call("environments"),
     "catalog.computes": _catalog_call("computes"),
     "catalog.quota": _catalog_call("quota"),
+    "catalog.workspace": _m_catalog_workspace,
     "catalog.datastore": _m_catalog_datastore,
     "catalog.environment_versions": _m_catalog_environment_versions,
     "account.subscriptions": _account_call("subscriptions"),

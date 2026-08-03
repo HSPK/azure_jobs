@@ -1,10 +1,13 @@
-"""Keeps the "accelerator, never a dependency" promise for a whole session.
+"""Keeps a session usable when the daemon restarts, without hiding failure.
 
-``open_backend`` only guarded connection setup. If the daemon went away later —
-``aj daemon restart``, an upgrade, an OOM kill — every subsequent call raised at
-the caller. This facade demotes the session to an in-process backend the first
-time the transport fails, so a dashboard keeps working instead of erroring on
-every keystroke.
+``open_backend`` only guards connection setup. If the daemon goes away later —
+``aj daemon restart``, an upgrade, an OOM kill — every subsequent call would
+raise at the caller.
+
+This facade reconnects once and retries. It deliberately does **not** fall back
+to running in-process: a silent downgrade hides a broken daemon and makes
+behaviour depend on invisible state. If reconnection fails, the caller gets an
+actionable error explaining how to recover.
 """
 
 from __future__ import annotations
@@ -18,64 +21,66 @@ from azure_jobs.api.models import Target
 
 log = logging.getLogger(__name__)
 
-#: Errors that mean "the daemon is gone", as opposed to a real backend error
-#: (a 403 from Azure must keep propagating unchanged).
+#: Errors meaning "the daemon is gone", as opposed to a real backend error —
+#: a 403 from Azure must keep propagating unchanged.
 TRANSPORT_FAILURES = (TransportError, DaemonUnavailable, ConnectionError, OSError)
 
 
 class ResilientBackend:
-    """Delegates to a daemon backend, demoting to in-process on transport loss."""
+    """Delegates to a daemon backend, reconnecting once on transport loss."""
 
     def __init__(
         self,
         target: Target,
         remote: Any,
-        make_local: Callable[[], Any],
+        reconnect: Callable[[], Any] | None = None,
     ) -> None:
         self.target = target
         self._remote = remote
-        self._make_local = make_local
-        self._local: Any = None
+        self._reconnect = reconnect or (lambda: _reconnect(target))
         self._lock = threading.Lock()
-        self._demoted = False
-
-    # ── delegation ───────────────────────────────────────────────────────
+        self._generation = 0
 
     @property
     def active(self) -> Any:
         with self._lock:
-            if self._demoted:
-                return self._local
             return self._remote
 
     @property
-    def demoted(self) -> bool:
-        return self._demoted
+    def generation(self) -> int:
+        return self._generation
 
-    def _demote(self, exc: BaseException) -> Any:
+    def recover(self, exc: BaseException, generation: int) -> Any:
+        """Reopen the session once; concurrent callers share the new one."""
         with self._lock:
-            if not self._demoted:
-                log.warning(
-                    "Daemon became unavailable (%s: %s); continuing in-process. "
-                    "Set AJ_DEBUG=1 for a full traceback.",
-                    type(exc).__name__,
-                    exc,
-                )
-                log.debug("Daemon transport failed", exc_info=exc)
+            if generation != self._generation:
+                return self._remote  # another caller already reconnected
+            log.warning(
+                "Lost the daemon connection (%s: %s); reconnecting. "
+                "Set AJ_DEBUG=1 for a full traceback.",
+                type(exc).__name__,
+                exc,
+            )
+            log.debug("Daemon transport failed", exc_info=exc)
+            if self._remote is not None:
                 try:
                     self._remote.close()
                 except Exception:
-                    log.debug("Closing the dead remote failed", exc_info=True)
-                self._local = self._make_local()
-                self._demoted = True
-            return self._local
+                    log.debug("Closing the dead connection failed", exc_info=True)
+            try:
+                self._remote = self._reconnect()
+            except Exception as retry:
+                from azure_jobs.api.client import daemon_required
+
+                raise daemon_required(retry) from retry
+            self._generation += 1
+            return self._remote
 
     def _port(self, name: str) -> Any:
         backend = self.active
-        port = getattr(backend, name, None)
-        if port is None:
+        if backend is None or getattr(backend, name, None) is None:
             return None
-        return _Port(self, name, port)
+        return _Port(self, name)
 
     @property
     def jobs(self) -> Any:
@@ -115,42 +120,51 @@ class ResilientBackend:
 
     def close(self) -> None:
         with self._lock:
-            backends = [b for b in (self._remote, self._local) if b is not None]
-            self._remote = None
-            self._local = None
-        for backend in backends:
+            remote, self._remote = self._remote, None
+        if remote is not None:
             try:
-                backend.close()
+                remote.close()
             except Exception:
                 log.debug("Backend close failed", exc_info=True)
 
 
 class _Port:
-    """Forwards calls, retrying once against the local backend on transport loss."""
+    """Forwards calls, reconnecting once if the transport drops mid-call."""
 
-    def __init__(self, owner: ResilientBackend, name: str, port: Any) -> None:
+    def __init__(self, owner: ResilientBackend, name: str) -> None:
         self._owner = owner
         self._name = name
-        self._port = port
+
+    def _bound(self, attribute: str) -> Any:
+        backend = self._owner.active
+        if backend is None:
+            raise DaemonUnavailable("This backend has been closed")
+        return getattr(getattr(backend, self._name), attribute)
 
     def __getattr__(self, attribute: str) -> Any:
-        target = getattr(self._port, attribute)
-        if not callable(target):
-            return target
+        if attribute.startswith("_"):
+            raise AttributeError(attribute)
+        probe = self._bound(attribute)
+        if not callable(probe):
+            return probe
 
         def call(*args: Any, **kwargs: Any) -> Any:
+            generation = self._owner.generation
             try:
-                return target(*args, **kwargs)
+                return self._bound(attribute)(*args, **kwargs)
             except TRANSPORT_FAILURES as exc:
-                if self._owner.demoted:
-                    raise
-                local = self._owner._demote(exc)
-                port = getattr(local, self._name, None)
-                if port is None:
-                    raise
-                return getattr(port, attribute)(*args, **kwargs)
+                self._owner.recover(exc, generation)
+                # One retry only: a second failure is an outage, not a
+                # restart, and must reach the caller.
+                return self._bound(attribute)(*args, **kwargs)
 
         return call
+
+
+def _reconnect(target: Target) -> Any:
+    from azure_jobs.api.client import connect_daemon
+
+    return connect_daemon(target)
 
 
 __all__ = ["TRANSPORT_FAILURES", "ResilientBackend"]

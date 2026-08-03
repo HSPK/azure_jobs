@@ -8,6 +8,7 @@ terminated. Server-to-client pushes are JSON-RPC notifications (no ``id``).
 from __future__ import annotations
 
 import json
+import logging
 import socket
 import threading
 from typing import Any, Callable, Iterator, Mapping
@@ -16,6 +17,8 @@ from azure_jobs.api.errors import TransportError, error_from_json, error_to_json
 
 # A log window is capped at 16 MiB and base64 inflates by ~4/3, so a frame has
 # to clear ~22 MB. The ceiling exists to stop a peer from exhausting memory.
+log = logging.getLogger(__name__)
+
 MAX_FRAME_BYTES = 64 * 1024 * 1024
 
 ERROR_CODE = -32000
@@ -49,7 +52,10 @@ def notification(method: str, params: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def result(req_id: Any, value: Any) -> dict[str, Any]:
-    return {"jsonrpc": "2.0", "id": req_id, "result": value}
+    """Build a response, validating now that the payload can be encoded."""
+    frame = {"jsonrpc": "2.0", "id": req_id, "result": value}
+    json.dumps(frame, separators=(",", ":"), ensure_ascii=False)
+    return frame
 
 
 def error(req_id: Any, exc: BaseException, *, code: int = ERROR_CODE) -> dict[str, Any]:
@@ -183,11 +189,32 @@ def serve_connection(
                 if isinstance(exc, (KeyboardInterrupt, SystemExit)):
                     raise
                 continue
-            if req_id is not None:
+            if req_id is None:
+                continue
+            try:
+                frame = result(req_id, value)
+            except Exception as exc:  # noqa: BLE001 - a payload bug, not an outage
+                # Encoding happens here rather than inside writer.send so an
+                # unserialisable result fails one call instead of unwinding
+                # serve_connection and killing every session on this socket.
+                log.exception("Could not encode the result of %r", method)
                 try:
-                    writer.send(result(req_id, value))
+                    writer.send(
+                        error(
+                            req_id,
+                            TypeError(
+                                f"Daemon could not encode the result of "
+                                f"{method!r} ({type(exc).__name__}: {exc})"
+                            ),
+                        )
+                    )
                 except TransportError:
                     return
+                continue
+            try:
+                writer.send(frame)
+            except TransportError:
+                return
     finally:
         if on_close is not None:
             on_close()

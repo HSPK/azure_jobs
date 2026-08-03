@@ -32,7 +32,7 @@ class TransportError(AJError):
 
 
 class DaemonUnavailable(TransportError):
-    """No daemon could be reached; the caller should fall back in-process."""
+    """No daemon could be reached. Surfaced to the user, never swallowed."""
 
 
 class ProtocolMismatch(TransportError):

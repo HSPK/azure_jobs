@@ -343,6 +343,11 @@ class RemoteCatalog:
             for item in self._rpc.call(method, {"session": self._session}) or ()
         ]
 
+    def workspace(self) -> CatalogItem:
+        return CatalogItem.from_json(
+            self._rpc.call("catalog.workspace", {"session": self._session}) or {}
+        )
+
     def datastores(self) -> list[CatalogItem]:
         return self._items("catalog.datastores")
 
@@ -746,35 +751,38 @@ def open_backend(
     autostart: bool = True,
     resilient: bool = True,
 ) -> Any:
-    """Return a backend, preferring the daemon but never depending on it.
+    """Return a backend for *target*.
 
-    With ``resilient`` (the default) the result also survives the daemon dying
-    mid-session: it demotes to an in-process backend rather than raising on
-    every subsequent call.
+    The daemon is the execution path. If it cannot be reached, this raises with
+    an actionable message rather than quietly running in-process: a silent
+    downgrade hides a broken daemon and makes behaviour depend on invisible
+    state. Set ``AJ_NO_DAEMON=1`` to choose in-process execution explicitly.
     """
     from azure_jobs.api.inprocess import InProcessBackend
 
     use_daemon = (not daemon_disabled()) if prefer_daemon is None else prefer_daemon
-    if use_daemon:
-        try:
-            remote = connect_daemon(target, root=root, path=path, autostart=autostart)
-        except Exception as exc:
-            log.warning(
-                "Falling back to an in-process backend (%s: %s). "
-                "Set AJ_DEBUG=1 for a full traceback.",
-                type(exc).__name__,
-                exc,
-            )
-            log.debug("Daemon connection failed", exc_info=True)
-        else:
-            if not resilient:
-                return remote
-            from azure_jobs.api.resilient import ResilientBackend
+    if not use_daemon:
+        return InProcessBackend(target)
+    try:
+        remote = connect_daemon(target, root=root, path=path, autostart=autostart)
+    except Exception as exc:
+        raise daemon_required(exc) from exc
+    if not resilient:
+        return remote
+    from azure_jobs.api.resilient import ResilientBackend
 
-            return ResilientBackend(
-                target, remote, lambda: InProcessBackend(target)
-            )
-    return InProcessBackend(target)
+    return ResilientBackend(target, remote)
+
+
+def daemon_required(exc: BaseException) -> DaemonUnavailable:
+    """Explain how to recover from an unreachable daemon."""
+    return DaemonUnavailable(
+        f"The aj daemon is unavailable ({type(exc).__name__}: {exc}).\n"
+        "  Start it with:      aj daemon start\n"
+        "  Inspect it with:    aj daemon status\n"
+        "  Run without it:     AJ_NO_DAEMON=1 aj <command>\n"
+        "  Full traceback:     AJ_DEBUG=1 aj <command>"
+    )
 
 
 class BackendSessionFactory:

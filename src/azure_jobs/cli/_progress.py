@@ -7,10 +7,7 @@ daemon when one is running.
 
 from __future__ import annotations
 
-import logging
 from typing import Any
-
-log = logging.getLogger(__name__)
 
 
 def fetch_jobs_with_progress(

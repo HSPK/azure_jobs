@@ -13,21 +13,10 @@ from azure_jobs.cli import main
 
 
 def _backend():
-    from azure_jobs.api.client import connect_daemon
-    from azure_jobs.api.azure import ConfigTargetCatalog
+    """Open a daemon-backed session for a queue/watch command."""
+    from azure_jobs.cli._backend import backend
 
-    target = ConfigTargetCatalog().configured()
-    if target is None:
-        raise click.ClickException(
-            "No workspace configured. Run 'aj init' or 'aj ws set' first."
-        )
-    try:
-        return connect_daemon(target)
-    except Exception as exc:
-        raise click.ClickException(
-            f"Watching needs the daemon, which is unavailable "
-            f"({type(exc).__name__}: {exc}). Start it with 'aj daemon start'."
-        ) from exc
+    return backend()
 
 
 def desktop_notify(title: str, body: str) -> None:
@@ -72,13 +61,10 @@ def watch_add(job_name: str) -> None:
     from azure_jobs.api.models import JobRef
     from azure_jobs.utils.ui import console
 
-    backend = _backend()
-    try:
+    with _backend() as backend:
         job = backend.actions.get(JobRef(job_name, job_name))
         backend.watcher.watch(job.ref)
         console.print(f"Watching {job.label} (currently {job.status or 'unknown'})")
-    finally:
-        backend.close()
 
 
 @watch.command(name="remove")
@@ -88,12 +74,9 @@ def watch_remove(job_name: str) -> None:
     from azure_jobs.api.models import JobRef
     from azure_jobs.utils.ui import console
 
-    backend = _backend()
-    try:
+    with _backend() as backend:
         backend.watcher.unwatch(JobRef(job_name, job_name))
         console.print(f"Stopped watching {job_name}")
-    finally:
-        backend.close()
 
 
 @watch.command(name="list")
@@ -101,11 +84,8 @@ def watch_list() -> None:
     """List jobs the daemon is currently watching."""
     from azure_jobs.utils.ui import console
 
-    backend = _backend()
-    try:
+    with _backend() as backend:
         refs = backend.watcher.watched()
-    finally:
-        backend.close()
     if not refs:
         console.print("Not watching anything")
         return
@@ -135,8 +115,6 @@ def watch_listen(desktop: bool, timeout: float) -> None:
             time.sleep(0.5)
     except KeyboardInterrupt:
         console.print("Stopped listening")
-    finally:
-        backend.close()
 
 
 def _render(note, *, desktop: bool, out) -> None:

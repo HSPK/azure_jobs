@@ -139,9 +139,9 @@ Highlights:
 
 ## Client / server split
 
-`aj` runs frontends against one capability contract, with two interchangeable
-backends behind it. The daemon is an **accelerator, never a dependency**: every
-failure path falls back in-process.
+`aj` runs frontends against one capability contract. Every command executes
+through the daemon; the in-process backend is what the daemon itself runs, and
+what `AJ_NO_DAEMON=1` selects explicitly.
 
 ```
 cli/   tui/   (future web/, vscode/)      frontends — import only api/
@@ -152,17 +152,25 @@ cli/   tui/   (future web/, vscode/)      frontends — import only api/
         ├── errors.py    cross-process exception preservation
         ├── rpc.py       line-delimited JSON-RPC 2.0 framing
         ├── azure.py     Azure implementations of the ports
-        ├── inprocess.py direct backend — the only place touching az_client
+        ├── typed.py     type-tagged codec for rich payloads
+        ├── inprocess.py direct backend — the Azure adapter layer
+        ├── resilient.py reconnect-once session facade
         ├── queue.py     serial submission queue with a journal
         ├── watch.py     background polling + notifications
         ├── daemon.py    server: sessions, dispatch table, reader handles
         └── client.py    remote backend + fallback
 ```
 
-`api/` is the lower layer: `tui/` and `cli/` depend on it, never the reverse
-(guarded by `tests/test_api_architecture.py`). The daemon does not reimplement
-anything — it serves `InProcessBackend` over a socket, so one fix covers both
-transports.
+`api/` is the lower layer: `tui/` and `cli/` depend on it, never the reverse, and
+nothing under `cli/` may import `az_client` (both guarded by
+`tests/test_api_architecture.py`). The daemon does not reimplement anything — it
+serves `InProcessBackend` over a socket, so one fix covers both transports.
+
+**Rich payloads.** Catalog rows are not plain records: `SeriesQuota` has
+`has_any_quota()` and `VCInfo` nests quota objects, which the display layer
+calls. `typed.py` tags such values on the way out and rebuilds them from an
+allowlist on the way in — the same approach `errors.py` uses for exception
+types. An unregistered tag degrades to a plain dict.
 
 **Transport.** Line-delimited JSON-RPC 2.0 over a Unix socket, stdlib only, so
 the minimal dependency set is preserved. Frames are capped (a 16 MiB log window
@@ -173,10 +181,19 @@ project directory. One user-level daemon therefore keys sessions by
 `(absolute project root, target id)` and serves every checkout, instead of one
 process per project.
 
-**Safety.** The socket is `0600` and peers are checked with `SO_PEERCRED`.
-Credentials live only in RAM and idle sessions are reaped (default 30 min). A
-handshake compares protocol and `aj` version; a stale daemon is retired and
-respawned, so `pipx upgrade` cannot leave a mismatched pair running.
+**Safety.** The socket is `0600` inside a `0700` directory, and both ends check
+the peer uid (`SO_PEERCRED`) — a predictable `/tmp` path must not let another
+local user plant a socket and capture submission payloads. Credentials live only
+in RAM; idle sessions are reaped (30 min) and an idle daemon exits (1 h), since
+one that starts on demand must also stop on its own. A handshake compares
+protocol and `aj` version; a stale daemon is retired and respawned, so
+`pipx upgrade` cannot leave a mismatched pair running.
+
+**No silent downgrade.** If the daemon cannot be reached, commands fail with the
+recovery steps rather than quietly running in-process — a silent fallback hides
+a broken daemon and makes behaviour depend on invisible state. A daemon that
+dies mid-session is reconnected to once; a second failure is an outage and
+reaches the caller. `AJ_NO_DAEMON=1` is the explicit opt-out.
 
 **Errors.** The wire carries the exception *type*, so frontend code such as
 `except RestError as exc: exc.status_code` keeps working when the work happened
@@ -193,7 +210,6 @@ because its remote outcome is unknown.
 subscribers — the one capability an in-process CLI structurally cannot offer.
 Watching an already-finished job answers immediately rather than going silent.
 
-`AJ_NO_DAEMON=1` disables the daemon path entirely.
 
 ## TUI
 - **Blob credential fallback**: SAS → SharedKey → AAD bearer. If the storage

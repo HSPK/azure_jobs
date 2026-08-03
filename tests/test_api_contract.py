@@ -436,3 +436,22 @@ class TestRichPayloadsSurviveTheTransport:
 
         item = CatalogItem("datastore", "ds", {"name": "ds", "is_default": True})
         assert CatalogItem.from_json(item.to_json()).raw == item.raw
+
+
+class TestWorkspaceResourcePort:
+    """`aj init` needs properties.storageAccount, which the graph projection lacks."""
+
+    def test_workspace_carries_its_properties(self, harness):
+        item = harness.backend.catalog.workspace()
+        storage = (item.raw.get("properties") or {}).get("storageAccount", "")
+        assert storage.endswith("/mystorage")
+
+    def test_account_workspaces_do_not_carry_properties(self):
+        """Regression guard: aj init must not read them from the projection."""
+        import inspect
+
+        from azure_jobs.az_client.arm.workspace import WorkspacesAPI
+
+        source = inspect.getsource(WorkspacesAPI.list)
+        assert "project name, resourceGroup, subscriptionId, location" in source
+        assert "storageAccount" not in source

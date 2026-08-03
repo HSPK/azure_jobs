@@ -152,59 +152,70 @@ class TestNoLostWaiter:
 
 
 class TestResilientSession:
-    """The daemon must stay an accelerator for the whole session, not one call."""
+    """A daemon restart must not end the session, but an outage must surface."""
 
-    def _backend(self, target: Target, remote):
-        local = FakeBackend(target)
-        return ResilientBackend(target, remote, lambda: local), local
+    def _backend(self, remote, replacement=None):
+        target = make_target()
+        made: list = []
+
+        def reconnect():
+            if replacement is None:
+                raise DaemonUnavailable("still gone")
+            made.append(replacement)
+            return replacement
+
+        return ResilientBackend(target, remote, reconnect), made
 
     def test_a_healthy_remote_is_used(self):
-        target = make_target()
-        remote = FakeBackend(target)
-        backend, local = self._backend(target, remote)
+        remote = FakeBackend(make_target())
+        backend, made = self._backend(remote)
         backend.actions.cancel(JobRef("a", "a"))
         assert remote.jobs.cancelled == ["a"]
-        assert local.jobs.cancelled == []
-        assert backend.demoted is False
+        assert made == []
 
-    def test_transport_loss_demotes_and_completes_the_call(self):
-        target = make_target()
-        remote = FakeBackend(target)
-        remote.jobs.raises = TransportError("daemon vanished")
-        backend, local = self._backend(target, remote)
+    def test_transport_loss_reconnects_and_completes_the_call(self):
+        remote = FakeBackend(make_target())
+        remote.jobs.raises = TransportError("daemon restarted")
+        fresh = FakeBackend(make_target())
+        backend, made = self._backend(remote, fresh)
         job = backend.actions.get(JobRef("a", "a"))
         assert job.name == "a"
-        assert backend.demoted is True
+        assert made == [fresh]
 
-    def test_later_calls_go_straight_to_the_local_backend(self):
-        target = make_target()
-        remote = FakeBackend(target)
-        remote.jobs.raises = TransportError("daemon vanished")
-        backend, local = self._backend(target, remote)
+    def test_later_calls_use_the_new_connection(self):
+        remote = FakeBackend(make_target())
+        remote.jobs.raises = TransportError("daemon restarted")
+        fresh = FakeBackend(make_target())
+        backend, _ = self._backend(remote, fresh)
         backend.actions.get(JobRef("a", "a"))
         backend.actions.cancel(JobRef("b", "b"))
-        assert local.jobs.cancelled == ["b"]
+        assert fresh.jobs.cancelled == ["b"]
 
-    def test_a_real_backend_error_is_not_swallowed(self):
-        """A 403 must propagate; only transport loss triggers a demotion."""
+    def test_a_failed_reconnect_raises_with_recovery_steps(self):
+        """No in-process downgrade: the user is told what to do."""
+        remote = FakeBackend(make_target())
+        remote.jobs.raises = TransportError("daemon gone")
+        backend, _ = self._backend(remote, replacement=None)
+        with pytest.raises(DaemonUnavailable) as caught:
+            backend.actions.get(JobRef("a", "a"))
+        assert "aj daemon start" in str(caught.value)
+
+    def test_a_real_backend_error_is_not_retried(self):
+        """A 403 must propagate; only transport loss triggers a reconnect."""
         from azure_jobs.errors import RestError
 
-        target = make_target()
-        remote = FakeBackend(target)
+        remote = FakeBackend(make_target())
         remote.jobs.raises = RestError("denied", status_code=403)
-        backend, _ = self._backend(target, remote)
+        backend, made = self._backend(remote, FakeBackend(make_target()))
         with pytest.raises(RestError):
             backend.actions.get(JobRef("a", "a"))
-        assert backend.demoted is False
+        assert made == []
 
-    def test_close_releases_both_backends(self):
-        target = make_target()
-        remote = FakeBackend(target)
-        remote.jobs.raises = TransportError("gone")
-        backend, local = self._backend(target, remote)
-        backend.actions.get(JobRef("a", "a"))
+    def test_close_releases_the_connection(self):
+        remote = FakeBackend(make_target())
+        backend, _ = self._backend(remote)
         backend.close()
-        assert remote.closed and local.closed
+        assert remote.closed
 
 
 class TestInProcessIsCapabilityEquivalent:
@@ -341,3 +352,213 @@ class TestDesktopNotificationEscaping:
         )
         watch_mod.desktop_notify("--hostile-option", "body")
         assert calls[0][:2] == ["notify-send", "--"]
+
+
+class TestDaemonFailureIsReportedNotWorkedAround:
+    """Policy: no silent in-process downgrade; tell the user how to recover."""
+
+    @pytest.fixture
+    def _wired(self, tmp_path, monkeypatch):
+        from azure_jobs.api.models import Target
+
+        monkeypatch.setenv("AJ_RUNTIME_DIR", str(tmp_path))
+        monkeypatch.delenv("AJ_NO_DAEMON", raising=False)
+        target = Target.create(
+            backend="azureml",
+            native_id="s/r/w",
+            label="ws",
+            metadata={
+                "subscription_id": "s",
+                "resource_group": "r",
+                "workspace_name": "w",
+            },
+        )
+        monkeypatch.setattr(
+            "azure_jobs.api.azure.ConfigTargetCatalog.configured",
+            lambda self: target,
+        )
+        monkeypatch.setattr(
+            "azure_jobs.api.client.spawn_daemon",
+            lambda path: (_ for _ in ()).throw(RuntimeError("daemon missing")),
+        )
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            ["ds", "list"],
+            ["env", "list"],
+            ["job", "list"],
+            ["sa", "list"],
+            ["uai", "list"],
+            ["sku", "list"],
+        ],
+    )
+    def test_commands_report_the_daemon_not_a_traceback(self, _wired, command):
+        from click.testing import CliRunner
+
+        from azure_jobs.cli import main
+
+        result = CliRunner().invoke(main, command)
+        assert result.exit_code != 0
+        assert "The aj daemon is unavailable" in result.output
+        assert "aj daemon start" in result.output
+        assert "AJ_NO_DAEMON=1" in result.output
+        assert "Traceback (most recent call last)" not in result.output
+
+    def test_the_message_is_not_wrapped_twice(self, _wired):
+        """A command's own error handler must not bury the instructions."""
+        from click.testing import CliRunner
+
+        from azure_jobs.cli import main
+
+        result = CliRunner().invoke(main, ["sa", "list"])
+        assert result.output.count("The aj daemon is unavailable") == 1
+        assert "Could not list storage accounts" not in result.output
+
+
+class TestWorkspaceComputesShape:
+    """Regression: `aj quota --aml` crashed on dataclasses where dicts were promised."""
+
+    def _account(self, monkeypatch, pairs):
+        from azure_jobs.api.inprocess import AzureAccount
+
+        class _Arm:
+            class workspace:
+                @staticmethod
+                def list():
+                    return [ws for ws, _ in pairs]
+
+            class compute:
+                @staticmethod
+                def list_all(workspaces=None, on_workspace_failure=None):
+                    return pairs
+
+            @staticmethod
+            def ensure_token():
+                return None
+
+            @staticmethod
+            def close():
+                return None
+
+        from contextlib import contextmanager
+
+        @contextmanager
+        def fake_arm(subscription_id):
+            yield _Arm()
+
+        monkeypatch.setattr("azure_jobs.api.inprocess._arm", fake_arm)
+        return AzureAccount("sub")
+
+    def test_pairs_are_plain_json_ready_dicts(self, monkeypatch):
+        from azure_jobs.az_client import ComputeInfo, WorkspaceInfo
+
+        ws = WorkspaceInfo(
+            name="ws", resource_group="rg", subscription_id="s", location="eastus"
+        )
+        compute = ComputeInfo(
+            name="gpu",
+            resource_group="rg",
+            subscription_id="s",
+            workspace_name="ws",
+        )
+        account = self._account(monkeypatch, [(ws, [compute])])
+        result = account.workspace_computes()
+        pair = result["pairs"][0]
+
+        # quota.py reads these with .get(), and the daemon json.dumps them.
+        assert pair["workspace"].get("name") == "ws"
+        assert pair["computes"][0].get("name") == "gpu"
+        json.dumps(result)
+
+    def test_subscriptions_carry_their_id_as_the_name(self, monkeypatch):
+        from contextlib import contextmanager
+
+        from azure_jobs.api.inprocess import AzureAccount
+
+        class _Arm:
+            class subscriptions:
+                @staticmethod
+                def list():
+                    return ["sub-aaa", "sub-bbb"]  # bare ids, not records
+
+        @contextmanager
+        def fake_arm(subscription_id):
+            yield _Arm()
+
+        monkeypatch.setattr("azure_jobs.api.inprocess._arm", fake_arm)
+        items = AzureAccount().subscriptions()
+        assert [i.name for i in items] == ["sub-aaa", "sub-bbb"]
+
+
+class TestUnencodableResultIsolation:
+    """One bad payload must fail its call, not every session on the socket."""
+
+    def test_connection_survives_an_unserialisable_result(self):
+        import socket as socket_mod
+        import threading as threading_mod
+
+        from azure_jobs.api.rpc import FrameReader, FrameWriter, request, serve_connection
+        from azure_jobs.az_client import WorkspaceInfo
+
+        server, client = socket_mod.socketpair()
+
+        def handler(method, params):
+            if method == "bad":
+                return WorkspaceInfo(
+                    name="x", resource_group="r", subscription_id="s"
+                )
+            return {"ok": True}
+
+        threading_mod.Thread(
+            target=serve_connection, args=(server, handler), daemon=True
+        ).start()
+        try:
+            writer, reader = FrameWriter(client), FrameReader(client)
+            writer.send(request(1, "bad", {}))
+            bad = reader.read()
+            assert "could not encode" in bad["error"]["message"].lower()
+
+            writer.send(request(2, "good", {}))
+            assert reader.read()["result"] == {"ok": True}
+        finally:
+            client.close()
+
+
+class TestWorkspaceOverrideResolution:
+    """`--ws` must prefer the configured subscription, not `az account show`."""
+
+    def test_ws_override_goes_through_resolve_workspace(self, monkeypatch):
+        from azure_jobs.config import AJWorkspace
+
+        calls: list[str] = []
+
+        def fake_resolve(name):
+            calls.append(name)
+            return AJWorkspace(
+                subscription_id="configured-sub",
+                resource_group="rg",
+                workspace_name=name,
+            )
+
+        monkeypatch.setattr("azure_jobs.config.resolve_workspace", fake_resolve)
+        monkeypatch.setattr(
+            "azure_jobs.api.azure.ConfigTargetCatalog.discover",
+            lambda self: (_ for _ in ()).throw(
+                AssertionError("must not discover for --ws")
+            ),
+        )
+        from azure_jobs.cli._backend import configured_target
+
+        target = configured_target("other-ws")
+        assert calls == ["other-ws"]
+        assert target.metadata["subscription_id"] == "configured-sub"
+        assert target.label == "other-ws"
+
+
+class TestCatalogItemIsUsableInCollections:
+    def test_a_dict_backed_item_is_hashable(self):
+        from azure_jobs.api.models import CatalogItem
+
+        item = CatalogItem("compute", "gpu", {"vm_size": "ND96"})
+        assert len({item, CatalogItem("compute", "gpu", {"other": 1})}) == 1

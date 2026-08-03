@@ -10,23 +10,10 @@ from azure_jobs.cli import main
 
 
 def _backend():
-    """Open a daemon-backed session, or fail with an actionable message."""
-    from azure_jobs.api.client import connect_daemon
-    from azure_jobs.api.azure import ConfigTargetCatalog
+    """Open a daemon-backed session for a queue/watch command."""
+    from azure_jobs.cli._backend import backend
 
-    target = ConfigTargetCatalog().configured()
-    if target is None:
-        raise click.ClickException(
-            "No workspace configured. Run 'aj init' or 'aj ws set' first."
-        )
-    try:
-        return connect_daemon(target)
-    except Exception as exc:
-        raise click.ClickException(
-            f"The queue needs the daemon, which is unavailable "
-            f"({type(exc).__name__}: {exc}). "
-            "Start it with 'aj daemon start', or submit directly with 'aj run'."
-        ) from exc
+    return backend()
 
 
 def _age(value: float) -> str:
@@ -50,11 +37,8 @@ def queue_list() -> None:
     """List queued, running and recently finished submissions."""
     from azure_jobs.utils.ui import console
 
-    backend = _backend()
-    try:
+    with _backend() as backend:
         entries = backend.queue.list()
-    finally:
-        backend.close()
     if not entries:
         console.print("Queue is empty")
         return
@@ -73,11 +57,8 @@ def queue_show(ticket: str) -> None:
     """Show one submission in full."""
     from azure_jobs.utils.ui import console
 
-    backend = _backend()
-    try:
+    with _backend() as backend:
         entry = backend.queue.get(ticket)
-    finally:
-        backend.close()
     if entry is None:
         raise click.ClickException(f"No such ticket: {ticket}")
     console.print(f"ticket   {entry.ticket}")
@@ -98,11 +79,8 @@ def queue_cancel(ticket: str) -> None:
     """Cancel a submission that has not started yet."""
     from azure_jobs.utils.ui import console
 
-    backend = _backend()
-    try:
+    with _backend() as backend:
         cancelled = backend.queue.cancel(ticket)
-    finally:
-        backend.close()
     if cancelled:
         console.print(f"Cancelled {ticket}")
         return
@@ -119,8 +97,7 @@ def queue_wait(ticket: str, timeout: float) -> None:
     """Block until a submission reaches a terminal state."""
     from azure_jobs.utils.ui import console
 
-    backend = _backend()
-    try:
+    with _backend() as backend:
         deadline = time.time() + timeout
         while time.time() < deadline:
             entry = backend.queue.get(ticket)
@@ -130,6 +107,4 @@ def queue_wait(ticket: str, timeout: float) -> None:
                 console.print(f"{entry.ticket} {entry.state}: {entry.detail or '-'}")
                 raise SystemExit(0 if entry.state == "done" else 1)
             time.sleep(1.0)
-    finally:
-        backend.close()
     raise click.ClickException(f"{ticket} did not finish within {timeout:g}s")

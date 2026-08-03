@@ -70,6 +70,9 @@ def _show_aml_quotas(show_all: bool) -> None:
         ):
             try:
                 result = api.workspace_computes()
+            except click.ClickException:
+                # The daemon message already tells the user what to do.
+                raise
             except Exception as exc:
                 log.exception("Could not discover workspaces")
                 error(

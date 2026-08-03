@@ -98,6 +98,14 @@ class RangeLogSource(Protocol):
 class Catalog(Protocol):
     """Workspace inventory the CLI lists but the dashboard does not."""
 
+    def workspace(self) -> CatalogItem:
+        """The full workspace resource, including ``properties``.
+
+        ``Account.workspaces()`` is a Resource Graph projection carrying only
+        name/group/subscription/location, so it cannot answer questions about
+        ``properties.storageAccount``.
+        """
+
     def datastores(self) -> list[CatalogItem]: ...
 
     def datastore(self, name: str) -> CatalogItem | None: ...

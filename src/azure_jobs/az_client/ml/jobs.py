@@ -33,6 +33,10 @@ ProgressCallback = Callable[[int, int], None]
 JobPredicate = Callable[[dict[str, Any]], bool]
 """``predicate(job) -> keep?`` — client-side filter applied during fetch."""
 
+#: Server page size when scanning past a filter, so a small --last does
+#: not turn into one HTTP round-trip per handful of jobs.
+_MIN_PAGE_SIZE = 100
+
 _DELETE_POLL_TIMEOUT = 120.0
 _DELETE_POLL_INTERVAL = 1.0
 
@@ -126,7 +130,10 @@ class JobsAPI:
         while len(jobs) < n and (max_scan is None or scanned < max_scan):
             page, next_link = self.list_page(
                 next_link=next_link,
-                top=n,
+                # Page size is decoupled from the limit: with a filter,
+                # max_scan can be many times n, and paging n at a time turned
+                # one interactive command into dozens of round-trips.
+                top=max(n, _MIN_PAGE_SIZE) if max_scan and max_scan > n else n,
                 list_view_type=list_view_type,
                 job_type=job_type,
                 tag=tag,

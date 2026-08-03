@@ -144,22 +144,13 @@ def init_amlt(ctx: click.Context, force: bool) -> None:
         "[bold cyan]Querying workspace storage…[/bold cyan]", spinner="dots"
     ):
         try:
-            from azure_jobs.cli._backend import account
+            from azure_jobs.cli._backend import backend
 
-            with account() as api:
-                match = next(
-                    (
-                        w
-                        for w in api.workspaces()
-                        if w.name == getattr(ws, "workspace_name", "")
-                        or w.name == getattr(ws, "name", "")
-                    ),
-                    None,
-                )
-            storage_arm = (
-                (match.raw.get("properties") or {}).get("storageAccount", "")
-                if match
-                else ""
+            ws_label = getattr(ws, "workspace_name", "") or getattr(ws, "name", "")
+            with backend(ws_label or None) as api:
+                workspace_info = api.catalog.workspace().raw
+            storage_arm = (workspace_info.get("properties") or {}).get(
+                "storageAccount", ""
             )
             if "/" in storage_arm:
                 storage_account = storage_arm.rstrip("/").rsplit("/", 1)[-1]
