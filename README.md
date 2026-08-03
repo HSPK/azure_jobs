@@ -120,8 +120,12 @@ torchrun \
 Interactive TUI dashboard for browsing and managing cloud jobs.
 
 ```bash
-aj dash
+aj dash                         # initially load 50 jobs, 50 per page
+aj dash -n 500 --page-size 40  # expand the local browse/filter scope
 ```
+
+Search and filters cover all jobs loaded so far. Press `→` on the final loaded
+page to fetch the next server page; pagination is not capped by `--last`.
 
 | Key | Action |
 |-----|--------|
@@ -131,6 +135,7 @@ aj dash
 | `l` | Open logs (auto-streams if the job is running) |
 | `o` | Pick a different log file |
 | `c` | Cancel the selected job |
+| `d` | Permanently delete the selected terminal job |
 | `r` | Refresh |
 | `f` / `e` / `w` | Filter by status / experiment / workspace |
 | `/` | Search |

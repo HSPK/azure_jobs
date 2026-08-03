@@ -7,6 +7,10 @@ from unittest.mock import patch
 
 import pytest
 
+from azure_jobs.tui.models import Job, Workspace
+from azure_jobs.tui.ports import JobPage, LogChunk
+from azure_jobs.tui.runtime import SessionHandle
+
 # Two sample cloud job dicts (no local records involved)
 _JOBS = [
     {
@@ -45,6 +49,60 @@ _JOBS = [
 ]
 
 
+class _FakeJobs:
+    def list_page(self, cursor, *, limit, query):
+        return JobPage((), None)
+
+    def get(self, job):
+        return Job.from_mapping(
+            {"name": job.backend_ref, "status": "Running"},
+            job_id=job.id,
+            backend_ref=job.backend_ref,
+        )
+
+    def cancel(self, job):
+        return None
+
+    def delete(self, job, *, cancelled=None):
+        return None
+
+
+class _FakeLogs:
+    def list_files(self, job, *, cancelled=None):
+        return []
+
+    def pick_default(self, files):
+        return ""
+
+    def open(self, job, path):
+        raise AssertionError("No fake log files are configured")
+
+
+class _FakeSession:
+    def __init__(self):
+        jobs = _FakeJobs()
+        self.jobs = jobs
+        self.actions = jobs
+        self.delete_jobs = jobs
+        self.logs = _FakeLogs()
+
+    def close(self):
+        return None
+
+
+class _FakeSessionFactory:
+    def open(self, workspace):
+        return _FakeSession()
+
+
+class _EmptyWorkspaceCatalog:
+    def configured(self):
+        return None
+
+    def discover(self):
+        return ()
+
+
 @pytest.fixture()
 def _dash(tmp_path: Path):
     """Create an AjDashboard pre-loaded with cloud job data (no Azure calls)."""
@@ -53,22 +111,39 @@ def _dash(tmp_path: Path):
     with patch("azure_jobs.const.AJ_CONFIG", cf):
         from azure_jobs.tui.app import AjDashboard
 
-        app = AjDashboard(last=10)
+        app = AjDashboard(
+            last=10,
+            workspace_catalog=_EmptyWorkspaceCatalog(),
+            session_factory=_FakeSessionFactory(),
+        )
         yield app
 
 
 async def _load_jobs(app, pilot=None):
     """Inject test jobs into a running app instance.
 
-    We must first pause to drain any queued messages from the background
-    ``_init_fetch`` worker (which fires on mount), then inject our test data.
+    The injected service ports keep this fixture fully offline.
     """
-    app.workers.cancel_all()
     if pilot:
         await pilot.pause()
+    if app.workspace.state.current is None:
+        target = Workspace("test-sub", "test-rg", "test-ws")
+        app.target_store.configured(target)
+        app.target_store.ready(
+            target,
+            can_actions=True,
+            can_logs=True,
+            can_delete=True,
+        )
+        app.workspace._session = SessionHandle(_FakeSession())
     app.jobs.fetcher.load([dict(j) for j in _JOBS])
-    if app.jobs.state.filtered:
-        app.jobs.view.show_info(app.jobs.state.filtered[0])
+
+
+def _prepare_log_buffer(app, path: str = "test.log") -> None:
+    job = app.jobs.state.selected_job
+    assert job is not None
+    app.logs_store.select_job("test-target", job.ref)
+    app.logs_store.replace_for_test(path, b"")
 
 
 @pytest.mark.asyncio
@@ -96,11 +171,42 @@ async def test_navigate(_dash) -> None:
     async with _dash.run_test(size=(120, 30)) as pilot:
         await _load_jobs(_dash, pilot)
         await pilot.pause()
-        _dash.query_one("#job-list").focus()
-        await pilot.pause()
+        assert _dash.focused is not None
+        assert _dash.focused.id == "info-scroll"
         await pilot.press("down")
         await pilot.pause()
         assert "azure_jobs_abc12345" in _dash.query_one("#info-content").content
+
+
+@pytest.mark.asyncio
+async def test_initial_focus_is_info_and_job_list_is_display_only(_dash) -> None:
+    async with _dash.run_test(size=(120, 30)) as pilot:
+        await _load_jobs(_dash, pilot)
+        await pilot.pause()
+
+        assert _dash.focused is not None
+        assert _dash.focused.id == "info-scroll"
+        assert not _dash.query_one("#job-list").can_focus
+
+        _node, binding, enabled, _tooltip = _dash.screen.active_bindings["l"]
+        assert binding.action == "app.command('logs.show')"
+        assert binding.show
+        assert enabled
+        visible = {
+            key: value[1].description
+            for key, value in _dash.screen.active_bindings.items()
+            if value[1].show
+        }
+        visible.pop(_dash.COMMAND_PALETTE_BINDING, None)
+        assert visible == {
+            "w": "Workspace",
+            "i": "Info",
+            "l": "Logs",
+        }
+        status = _dash.query_one("#status-bar")
+        assert status.render().plain == (
+            "w Workspace   i Info   l Logs   Esc Manual"
+        )
 
 
 @pytest.mark.asyncio
@@ -110,7 +216,11 @@ async def test_empty(tmp_path: Path) -> None:
     with patch("azure_jobs.const.AJ_CONFIG", cf):
         from azure_jobs.tui.app import AjDashboard
 
-        app = AjDashboard(last=10)
+        app = AjDashboard(
+            last=10,
+            workspace_catalog=_EmptyWorkspaceCatalog(),
+            session_factory=_FakeSessionFactory(),
+        )
         async with app.run_test(size=(120, 30)):
             content = app.query_one("#info-content").content
             label = str(app.query_one("#info-loading-label").render())
@@ -133,10 +243,10 @@ async def test_view_toggle(_dash) -> None:
         await _load_jobs(_dash, pilot)
         await pilot.pause()
         assert _dash.logs.state.view_mode == "info"
-        _dash.action_show_logs()
+        _dash.action_command("logs.show")
         await pilot.pause()
         assert _dash.logs.state.view_mode == "logs"
-        _dash.action_show_info()
+        _dash.action_command("logs.info")
         await pilot.pause()
         assert _dash.logs.state.view_mode == "info"
 
@@ -157,6 +267,7 @@ async def test_status_picker(_dash) -> None:
         _dash.jobs.filters.apply_status("")
         await pilot.pause()
         assert _dash.jobs.state.status_filter == ""
+        assert _dash.jobs.state.current_page == 0
         assert ol.option_count == 3
 
 
@@ -176,7 +287,7 @@ async def test_escape_opens_help(_dash) -> None:
     async with _dash.run_test(size=(120, 30)) as pilot:
         await _load_jobs(_dash, pilot)
         await pilot.pause()
-        _dash.action_escape()
+        _dash.action_command("app.escape")
         await pilot.pause()
         from azure_jobs.tui.components import HelpScreen
 
@@ -192,22 +303,22 @@ async def test_escape_opens_help(_dash) -> None:
 @pytest.mark.asyncio
 async def test_workspace_picker(_dash) -> None:
     """w opens workspace picker when workspaces are cached."""
-    from azure_jobs.config import AJWorkspace
-
     async with _dash.run_test(size=(120, 30)) as pilot:
         await _load_jobs(_dash, pilot)
         await pilot.pause()
-        _dash.workspace.state.subscription_id = "sub-123"
-        _dash.workspace.state.available = [
-            {"name": "ws-a", "resource_group": "rg-1"},
-            {"name": "ws-b", "resource_group": "rg-2"},
-        ]
-        _dash.workspace.state.current = AJWorkspace(
+        ws_a = Workspace(
             subscription_id="sub-123",
             resource_group="rg-1",
-            workspace_name="ws-a",
+            name="ws-a",
         )
-        _dash.action_pick_workspace()
+        ws_b = Workspace(
+            subscription_id="sub-123",
+            resource_group="rg-2",
+            name="ws-b",
+        )
+        _dash.target_store.discovered((ws_a, ws_b))
+        _dash.target_store.configured(ws_a)
+        _dash.action_command("workspace.pick")
         await pilot.pause()
         from azure_jobs.tui.components import PickerModal
 
@@ -216,7 +327,7 @@ async def test_workspace_picker(_dash) -> None:
         # Escape cancels
         await pilot.press("escape")
         await pilot.pause()
-        assert _dash.workspace.state.current.workspace_name == "ws-a"  # unchanged
+        assert _dash.workspace.state.current.name == "ws-a"
 
 
 @pytest.mark.asyncio
@@ -225,15 +336,15 @@ async def test_switch_workspace(_dash) -> None:
     async with _dash.run_test(size=(120, 30)) as pilot:
         await _load_jobs(_dash, pilot)
         await pilot.pause()
-        _dash.workspace.state.subscription_id = "sub-123"
-        _dash.workspace.state.available = [
-            {"name": "ws-a", "resource_group": "rg-1", "location": "eastus"},
-            {"name": "ws-b", "resource_group": "rg-2", "location": "westus"},
-        ]
-        _dash.workspace.switch(1)
+        workspace = Workspace(
+            subscription_id="sub-123",
+            resource_group="rg-2",
+            name="ws-b",
+        )
+        _dash.workspace.switch(workspace)
         await pilot.pause()
         cur = _dash.workspace.state.current
-        assert cur.workspace_name == "ws-b"
+        assert cur.name == "ws-b"
         assert cur.resource_group == "rg-2"
         assert cur.subscription_id == "sub-123"
 
@@ -279,7 +390,6 @@ async def test_info_shows_full_name(_dash) -> None:
     long_name = "very-long-job-name-that-exceeds-the-maximum-width-limit"
     jobs = [dict(_JOBS[0], display_name=long_name)]
     async with _dash.run_test(size=(120, 30)) as pilot:
-        _dash.workers.cancel_all()
         await pilot.pause()
         _dash.jobs.fetcher.load(jobs)
         _dash.jobs.view.show_info(jobs[0])
@@ -291,14 +401,17 @@ async def test_info_shows_full_name(_dash) -> None:
 async def test_page_loaded_appends(_dash) -> None:
     """_on_batch_arrived merges items into current display page."""
     async with _dash.run_test(size=(120, 30)) as pilot:
-        _dash.workers.cancel_all()
         await pilot.pause()
         _dash.jobs.fetcher.load([dict(_JOBS[0])])
-        assert len(_dash.jobs.state.all_jobs) == 1
+        assert len(_dash.jobs.state.ordered_ids) == 1
         # Simulate a new batch arriving — merges into current page
-        _dash.jobs.fetcher.merge_batch([dict(_JOBS[1])])
-        assert len(_dash.jobs.state.all_jobs) == 2
-        assert len(_dash.jobs.state.pages) == 1  # merged into same page
+        _dash.jobs_store.page_loaded(
+            _dash.jobs.state.generation,
+            None,
+            JobPage((Job.from_mapping(_JOBS[1]),), None),
+        )
+        assert len(_dash.jobs.state.ordered_ids) == 2
+        assert _dash.jobs.state.page_count == 1
         assert _dash.jobs.state.current_page == 0
         assert _dash.query_one("#job-list").option_count == 2
 
@@ -361,10 +474,13 @@ def test_info_block_new_fields() -> None:
 @pytest.mark.asyncio
 async def test_cancel_shows_modal(_dash) -> None:
     """Pressing cancel opens the confirmation modal."""
+    from azure_jobs.tui.runtime import SessionHandle
+
     async with _dash.run_test(size=(120, 30)) as pilot:
         await _load_jobs(_dash, pilot)
         await pilot.pause()
-        _dash.action_cancel_job()
+        _dash.workspace._session = SessionHandle(_FakeSession())
+        _dash.action_command("jobs.cancel")
         await pilot.pause()
         from azure_jobs.tui.components import ConfirmCancel
 
@@ -378,20 +494,49 @@ async def test_cancel_shows_modal(_dash) -> None:
 
 
 @pytest.mark.asyncio
+async def test_delete_shows_irreversible_modal_and_footer_binding(_dash) -> None:
+    from textual.widgets import Static
+
+    from azure_jobs.tui.components import ConfirmDelete
+
+    async with _dash.run_test(size=(120, 30)) as pilot:
+        await _load_jobs(_dash, pilot)
+        _dash.action_command("jobs.delete")
+        await pilot.pause()
+
+        screens = [
+            screen
+            for screen in _dash.screen_stack
+            if isinstance(screen, ConfirmDelete)
+        ]
+        assert len(screens) == 1
+        modal_text = "\n".join(
+            str(widget.content) for widget in _dash.screen.query(Static)
+        )
+        assert "cannot be undone" in modal_text
+        await pilot.press("n")
+        await pilot.pause()
+
+        _node, binding, enabled, _tooltip = _dash.screen.active_bindings["d"]
+        assert binding.action == "command('jobs.delete')"
+        assert binding.description == "Delete"
+        assert not binding.show
+        assert enabled
+
+
+@pytest.mark.asyncio
 async def test_search_filters_by_keyword(_dash) -> None:
     """Search bar filters jobs by keyword in name."""
     async with _dash.run_test(size=(120, 30)) as pilot:
         await _load_jobs(_dash, pilot)
         await pilot.pause()
         # Set search query directly (Input captures keypresses)
-        _dash.jobs.state.search_query = "bert"
-        _dash.jobs.view.refresh()
+        _dash.jobs_store.set_search("bert")
         await pilot.pause()
         ol = _dash.query_one("#job-list")
         assert ol.option_count == 1  # only eval-bert
         # Clear search
-        _dash.jobs.state.search_query = ""
-        _dash.jobs.view.refresh()
+        _dash.jobs_store.set_search("")
         await pilot.pause()
         assert ol.option_count == 3
 
@@ -402,13 +547,11 @@ async def test_experiment_filter(_dash) -> None:
     async with _dash.run_test(size=(120, 30)) as pilot:
         await _load_jobs(_dash, pilot)
         await pilot.pause()
-        _dash.jobs.state.experiment_filter = "cv"
-        _dash.jobs.view.refresh()
+        _dash.jobs_store.set_experiment("cv")
         await pilot.pause()
         ol = _dash.query_one("#job-list")
         assert ol.option_count == 1  # only train-vision (cv)
-        _dash.jobs.state.experiment_filter = ""
-        _dash.jobs.view.refresh()
+        _dash.jobs_store.set_experiment("")
         await pilot.pause()
         assert ol.option_count == 3
 
@@ -420,13 +563,11 @@ async def test_combined_filters(_dash) -> None:
         await _load_jobs(_dash, pilot)
         await pilot.pause()
         # Filter by experiment=nlp → 2 jobs
-        _dash.jobs.state.experiment_filter = "nlp"
-        _dash.jobs.view.refresh()
+        _dash.jobs_store.set_experiment("nlp")
         await pilot.pause()
         assert _dash.query_one("#job-list").option_count == 2
         # Add status=Failed → 1 job
-        _dash.jobs.state.status_filter = "Failed"
-        _dash.jobs.view.refresh()
+        _dash.jobs_store.set_status("Failed")
         await pilot.pause()
         assert _dash.query_one("#job-list").option_count == 1
 
@@ -439,10 +580,10 @@ async def test_tab_title(_dash) -> None:
         await pilot.pause()
         rp = _dash.query_one("#right-pane")
         assert "Info" in str(rp.border_title)
-        _dash.action_show_logs()
+        _dash.action_command("logs.show")
         await pilot.pause()
         assert "Logs" in str(rp.border_title)
-        _dash.action_show_info()
+        _dash.action_command("logs.info")
         await pilot.pause()
         assert "Info" in str(rp.border_title)
 
@@ -453,7 +594,7 @@ async def test_status_picker_modal(_dash) -> None:
     async with _dash.run_test(size=(120, 30)) as pilot:
         await _load_jobs(_dash, pilot)
         await pilot.pause()
-        _dash.action_pick_status()
+        _dash.action_command("jobs.status")
         await pilot.pause()
         from azure_jobs.tui.components import PickerModal
 
@@ -464,6 +605,22 @@ async def test_status_picker_modal(_dash) -> None:
         await pilot.pause()
         screens = [s for s in _dash.screen_stack if isinstance(s, PickerModal)]
         assert len(screens) == 0
+
+
+@pytest.mark.asyncio
+async def test_picker_search_accepts_multiple_characters(_dash) -> None:
+    from textual.widgets import Input
+
+    async with _dash.run_test(size=(120, 30)) as pilot:
+        await _load_jobs(_dash, pilot)
+        _dash.action_command("jobs.status")
+        await pilot.pause()
+        await pilot.press("slash", "f", "a")
+        await pilot.pause()
+
+        search = _dash.screen.query_one("#picker-search", Input)
+        assert search.value == "fa"
+        assert _dash.focused is search
 
 
 @pytest.mark.asyncio
@@ -488,12 +645,11 @@ async def test_clear_filters(_dash) -> None:
     async with _dash.run_test(size=(120, 30)) as pilot:
         await _load_jobs(_dash, pilot)
         await pilot.pause()
-        _dash.jobs.state.status_filter = "Running"
-        _dash.jobs.state.experiment_filter = "nlp"
-        _dash.jobs.state.search_query = "train"
-        _dash.jobs.view.refresh()
+        _dash.jobs_store.set_status("Running")
+        _dash.jobs_store.set_experiment("nlp")
+        _dash.jobs_store.set_search("train")
         await pilot.pause()
-        _dash.action_clear_filters()
+        _dash.action_command("jobs.clear")
         await pilot.pause()
         assert _dash.jobs.state.status_filter == ""
         assert _dash.jobs.state.experiment_filter == ""
@@ -509,20 +665,26 @@ async def test_search_bar_toggle(_dash) -> None:
         await pilot.pause()
         search_bar = _dash.query_one("#search-bar")
         assert search_bar.has_class("hidden")
-        _dash.action_search()
+        _dash.action_command("jobs.search")
         await pilot.pause()
         assert not search_bar.has_class("hidden")
         # Escape closes it
-        _dash.action_dismiss()
+        _dash.action_command("app.escape")
         await pilot.pause()
         assert search_bar.has_class("hidden")
 
 
 def test_picker_modal_instantiation() -> None:
     """_PickerModal can be instantiated with items and current value."""
-    from azure_jobs.tui.components import PickerModal
+    from rich.text import Text
 
-    items = [("", "All"), ("Running", "Running"), ("Failed", "Failed")]
+    from azure_jobs.tui.components import PickerItem, PickerModal
+
+    items = [
+        PickerItem("", Text("All")),
+        PickerItem("Running", Text("Running")),
+        PickerItem("Failed", Text("Failed")),
+    ]
     modal = PickerModal("Test", items, current="")
     assert modal._items == items
     assert modal._current == ""
@@ -534,11 +696,11 @@ async def test_log_line_numbers(_dash) -> None:
     async with _dash.run_test(size=(120, 30)) as pilot:
         await _load_jobs(_dash, pilot)
         await pilot.pause()
-        _dash.action_show_logs()
+        _dash.action_command("logs.show")
         await pilot.pause()
         lw = _dash.query_one("#log-content")
         lw.clear()
-        _dash.logs.state.line_count = 0
+        _prepare_log_buffer(_dash)
         _dash.logs.write_line("hello world")
         _dash.logs.write_line("second line")
         await pilot.pause()
@@ -551,11 +713,12 @@ async def test_auto_scroll_toggle(_dash) -> None:
     async with _dash.run_test(size=(120, 30)) as pilot:
         await _load_jobs(_dash, pilot)
         await pilot.pause()
+        _dash.action_command("logs.show")
         assert _dash.logs.state.auto_scroll is True
-        _dash.action_toggle_scroll()
+        _dash.action_command("logs.scroll")
         await pilot.pause()
         assert _dash.logs.state.auto_scroll is False
-        _dash.action_toggle_scroll()
+        _dash.action_command("logs.scroll")
         await pilot.pause()
         assert _dash.logs.state.auto_scroll is True
 
@@ -566,9 +729,11 @@ async def test_log_reset_on_job_switch(_dash) -> None:
     async with _dash.run_test(size=(120, 30)) as pilot:
         await _load_jobs(_dash, pilot)
         await pilot.pause()
-        _dash.logs.state.line_count = 42
-        _dash.logs.state.job = ""
-        _dash.action_show_logs()
+        _prepare_log_buffer(_dash)
+        for index in range(42):
+            _dash.logs.write_line(f"line {index}")
+        _dash.jobs_store.select_index(1)
+        _dash.action_command("logs.show")
         await pilot.pause()
         assert _dash.logs.state.line_count == 0
 
@@ -579,16 +744,47 @@ async def test_log_header_shows_scroll_state(_dash) -> None:
     async with _dash.run_test(size=(120, 30)) as pilot:
         await _load_jobs(_dash, pilot)
         await pilot.pause()
-        _dash.action_show_logs()
+        _dash.action_command("logs.show")
         await pilot.pause()
         rp = _dash.query_one("#right-pane")
         text = str(rp.border_subtitle)
         assert "▶" in text  # auto-scroll ON
-        _dash.logs.state.auto_scroll = False
-        _dash.logs.update_header()
+        _dash.logs_store.toggle_auto_scroll()
         await pilot.pause()
         text = str(rp.border_subtitle)
         assert "⏸" in text  # auto-scroll OFF
+        job = _dash.jobs.state.selected_job
+        assert job is not None
+        _dash.logs_store.select_job("test-target", job.ref)
+        request = _dash.logs_store.begin_stream("stdout.log")
+        assert request is not None
+        _dash.logs_store.stream_initial(
+            request,
+            files=("stdout.log",),
+            path="stdout.log",
+            chunk=LogChunk(b"line\n", 0, 5, 5),
+        )
+        _dash.logs.update_header()
+        live_header = str(rp.border_subtitle)
+        _dash.jobs.view.refresh()
+        await pilot.pause()
+        assert str(rp.border_subtitle) == live_header
+
+
+@pytest.mark.asyncio
+async def test_empty_selection_clears_hidden_log_content(_dash) -> None:
+    async with _dash.run_test(size=(120, 30)) as pilot:
+        await _load_jobs(_dash, pilot)
+        _dash.action_command("logs.show")
+        await pilot.pause()
+        _dash.ui.logs.write_log_status("stale log")
+        _dash.action_command("logs.info")
+        _dash.jobs.fetcher.load([])
+        _dash.action_command("logs.show")
+        await pilot.pause()
+
+        assert _dash.logs.state.job is None
+        assert len(_dash.ui.logs.log.lines) == 0
 
 
 @pytest.mark.asyncio
@@ -614,24 +810,54 @@ async def test_logs_focus_on_show(_dash) -> None:
     async with _dash.run_test(size=(120, 30)) as pilot:
         await _load_jobs(_dash, pilot)
         await pilot.pause()
-        _dash.action_show_logs()
+        _dash.action_command("logs.show")
         await pilot.pause()
         assert _dash.focused is not None
         assert _dash.focused.id == "log-content"
 
 
 @pytest.mark.asyncio
-async def test_info_returns_focus_to_job_list(_dash) -> None:
-    """Switching back to info returns focus to job list."""
+async def test_logs_footer_shows_info_shortcut(_dash) -> None:
+    """The focused LogViewer must expose its local i binding to Footer."""
+    async with _dash.run_test(size=(120, 30)) as pilot:
+        await _load_jobs(_dash, pilot)
+        _dash.action_command("logs.show")
+        await pilot.pause()
+
+        _node, binding, enabled, _tooltip = _dash.screen.active_bindings["i"]
+        assert binding.action == "app.command('logs.info')"
+        assert binding.description == "Info"
+        assert binding.show
+        assert enabled
+        visible = {
+            key: value[1].description
+            for key, value in _dash.screen.active_bindings.items()
+            if value[1].show
+        }
+        visible.pop(_dash.COMMAND_PALETTE_BINDING, None)
+        assert visible == {
+            "w": "Workspace",
+            "i": "Info",
+            "l": "Logs",
+        }
+        status = _dash.query_one("#status-bar")
+        assert status.render().plain == (
+            "w Workspace   i Info   l Logs   Esc Manual"
+        )
+
+
+@pytest.mark.asyncio
+async def test_info_returns_focus_to_info_pane(_dash) -> None:
+    """Switching back to info returns focus to the Info pane."""
     async with _dash.run_test(size=(120, 30)) as pilot:
         await _load_jobs(_dash, pilot)
         await pilot.pause()
-        _dash.action_show_logs()
+        _dash.action_command("logs.show")
         await pilot.pause()
-        _dash.action_show_info()
+        _dash.action_command("logs.info")
         await pilot.pause()
         assert _dash.focused is not None
-        assert _dash.focused.id == "job-list"
+        assert _dash.focused.id == "info-scroll"
 
 
 @pytest.mark.asyncio
@@ -640,11 +866,11 @@ async def test_error_lines_inline(_dash) -> None:
     async with _dash.run_test(size=(120, 30)) as pilot:
         await _load_jobs(_dash, pilot)
         await pilot.pause()
-        _dash.action_show_logs()
+        _dash.action_command("logs.show")
         await pilot.pause()
         lw = _dash.query_one("#log-content")
         lw.clear()
-        _dash.logs.state.line_count = 0
+        _prepare_log_buffer(_dash)
         _dash.logs.write_line("normal output")
         _dash.logs.append_error("something failed\ndetails here")
         await pilot.pause()

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 from rich.errors import MarkupError
@@ -12,6 +13,11 @@ from textual.widgets.option_list import Option
 
 from azure_jobs.utils.text import trunc as _trunc
 from azure_jobs.utils.ui import icon_style
+from azure_jobs.tui.models import Job, as_job
+from azure_jobs.tui.settings import (
+    DEFAULT_DASHBOARD_PAGE_SIZE,
+    MAX_DASHBOARD_PAGE_SIZE,
+)
 
 log = logging.getLogger(__name__)
 
@@ -25,17 +31,20 @@ TERMINAL_STATUSES = frozenset({"Completed", "Failed", "Canceled"})
 KW = 14
 LEFT_WIDTH = 38
 NAME_MAX = LEFT_WIDTH - 8
-PAGE_SIZE = 50
-FETCH_LIMIT = 500
-
 def get_page_size() -> int:
-    """Return dashboard page size from config, defaulting to PAGE_SIZE."""
-    try:
-        from azure_jobs.config import read_config
+    """Return the dashboard page size from config, clamped to a valid range.
 
-        return read_config().dashboard.page_size
-    except Exception:
-        return PAGE_SIZE
+    A stored config must never crash ``aj dash``; only explicit CLI flags are
+    strictly validated.
+    """
+    from azure_jobs.config import read_config
+
+    try:
+        value = int(read_config().dashboard.page_size)
+    except (TypeError, ValueError):
+        log.warning("Invalid dashboard.page_size in config; using default")
+        return DEFAULT_DASHBOARD_PAGE_SIZE
+    return max(1, min(value, MAX_DASHBOARD_PAGE_SIZE))
 
 def trunc(s: str, maxlen: int = NAME_MAX) -> str:
     """Truncate with ellipsis in the middle if too long."""
@@ -49,22 +58,24 @@ def safe_markup(markup: str) -> Text:
         return Text(markup)
 
 def safe_set(widget: "Widget | None", markup: str) -> None:
-    """Update a Static-like widget with *markup*, never raising MarkupError."""
+    """Update a Static-like widget with markup-safe content."""
     if widget is None:
         return
-    try:
-        widget.update(safe_markup(markup))
-    except Exception as exc:
-        log.debug("safe_set update failed: %s", exc, exc_info=True)
+    widget.update(safe_markup(markup))
 
 def safe_close(obj: Any, method: str = "close") -> None:
-    """Call obj.<method>() if it exists, silently ignoring errors."""
+    """Call obj.<method>() if present, logging cleanup failures."""
     fn = getattr(obj, method, None)
     if callable(fn):
         try:
             fn()
         except Exception:
-            pass
+            log.debug(
+                "Failed to call %s on %r",
+                method,
+                obj,
+                exc_info=True,
+            )
 
 def safe_notify(
     app: "App", markup: str, *, severity: str = "information", timeout: float = 5
@@ -75,14 +86,14 @@ def safe_notify(
     except MarkupError:
         app.notify(escape(markup), severity=severity, timeout=timeout)
 
-def make_option(job: dict[str, Any]) -> Option:
+def make_option(job: Job | Mapping[str, Any]) -> Option:
     """Compact list item: icon + truncated display name."""
-    name = job.get("display_name") or job.get("name", "?")
-    icon, sty = icon_style(job.get("status", ""))
+    job = as_job(job)
+    icon, sty = icon_style(job.status)
     t = Text()
     t.append(f" {icon} ", style=sty)
-    t.append(trunc(name))
-    return Option(t, id=job.get("name", ""))
+    t.append(trunc(job.label))
+    return Option(t, id=job.id)
 
 def kv(pairs: list[tuple[str, str]], *, hint: str = "") -> str:
     """Aligned key-value lines."""
@@ -93,18 +104,20 @@ def kv(pairs: list[tuple[str, str]], *, hint: str = "") -> str:
         out += ["", f"  [dim]{hint}[/dim]"]
     return "\n".join(out)
 
-def info_block(job: dict[str, Any]) -> str:
+def info_block(job: Job | Mapping[str, Any]) -> str:
     """Build a visually rich info panel for a job (TUI variant)."""
     from azure_jobs.utils.ui import build_job_info_lines, short_portal_url
 
+    job = as_job(job)
+    payload = job.to_dict()
     lines = build_job_info_lines(
-        job,
+        payload,
         label_width=12,
         header_width=32,
         cmd_max=50,
         portal_link=False,
     )
-    url = job.get("portal_url", "")
+    url = payload.get("portal_url", "")
     if url:
         short = short_portal_url(url, rich_link=False)
         if not short.startswith("http"):

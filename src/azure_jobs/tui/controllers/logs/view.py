@@ -1,183 +1,268 @@
-"""View switching, header, file picker."""
+"""Log-pane presenter and commands over LogsStore."""
 
 from __future__ import annotations
 
-from azure_jobs.tui.components import PickerModal
+from collections.abc import Callable
+
+from rich.markup import escape
+from rich.text import Text
+
+from azure_jobs.tui.components import PickerItem
 from azure_jobs.tui.controllers.base import Controller
-from azure_jobs.tui.controllers.logs._shared import NO_LOG_STATUSES
-from azure_jobs.tui.helpers import icon_style
+from azure_jobs.tui.controllers.logs.stream import LogsStream
+from azure_jobs.tui.events import LogsChanged
+from azure_jobs.tui.helpers import TERMINAL_STATUSES, icon_style
+from azure_jobs.tui.log_store import LogsStore
+from azure_jobs.tui.log_settings import NO_LOG_STATUSES
+from azure_jobs.tui.models import Job, StreamRequest, ViewMode
+from azure_jobs.tui.runtime import TaskRunner
 from azure_jobs.tui.state import LogsState
+from azure_jobs.tui.view_ports import LogsViewPort
+
 
 class LogsView(Controller[LogsState]):
-    """Owns the right-pane Info/Logs toggle, header, and log file picker."""
+    """Render read-only log state and dispatch log transitions."""
 
-    def set_loading_overlay(self, on: bool) -> None:
-        """Show/hide the centered spinner overlaid on the log pane."""
-        try:
-            ind = self.app.query_one("#log-loading")
-        except Exception:
-            return
-        if on:
-            ind.remove_class("hidden")
-        else:
-            ind.add_class("hidden")
+    def __init__(
+        self,
+        ui: LogsViewPort,
+        tasks: TaskRunner,
+        store: LogsStore,
+        *,
+        stream: LogsStream,
+        selected_job: Callable[[], Job | None],
+        target_id: Callable[[], str],
+        render_selected_info: Callable[[], None],
+    ) -> None:
+        super().__init__(ui, tasks, lambda: store.state)
+        self.store = store
+        self._stream = stream
+        self._selected_job = selected_job
+        self._target_id = target_id
+        self._render_selected_info = render_selected_info
 
-    def switch_to_view(self) -> None:
-        """Show the log pane (shared by multiple actions)."""
-        app = self.app
-        self.state.view_mode = "logs"
-        app.query_one("#info-scroll").add_class("hidden")
-        if app.widgets.log:
-            app.widgets.log.remove_class("hidden")
-            app.widgets.log.focus()
+    def render(self, event: LogsChanged | None = None) -> None:
         self.update_tab_title()
         self.update_header()
+        if event is None:
+            return
+        if event.reason == "no-log-files":
+            self.ui.write_log_status("[dim]No log files found.[/dim]")
+            return
+        if event.reason in {"stream-error", "stream-gap"}:
+            if self.store.lines():
+                self._render_all(preserve_live=True)
+            elif self.state.last_error:
+                self.ui.write_log_status(self.state.last_error)
+            return
+        if event.reason == "backfill-error":
+            self._render_all(preserve_live=True)
+            return
+        if event.replace_content:
+            if event.reason == "backfill-complete":
+                previous_y = self.ui.log_scroll_y
+                target_y = (
+                    0
+                    if event.jump_home
+                    else previous_y + event.prepended_lines
+                )
+                self.store.set_scroll_y(target_y)
+                self.ui.replace_log_lines(
+                    self.store.lines(),
+                    previous_y=previous_y,
+                    prepended=event.prepended_lines,
+                    scroll_top=event.jump_home,
+                    scroll_end=False,
+                )
+            else:
+                self._render_all(
+                    preserve_live=event.reason == "stream-chunk"
+                )
+            return
+        if event.appended_lines:
+            appended = self.ui.append_log_lines(
+                event.first_line_number,
+                event.appended_lines,
+                scroll_end=self.state.auto_scroll,
+            )
+            if not appended:
+                self._render_all()
+
+    def _render_all(self, *, preserve_live: bool = False) -> None:
+        previous_y = (
+            self.ui.log_scroll_y
+            if preserve_live
+            else self.store.scroll_y()
+        )
+        if preserve_live:
+            self.store.set_scroll_y(previous_y)
+        self.ui.replace_log_lines(
+            self.store.lines(),
+            previous_y=previous_y,
+            scroll_end=self.state.auto_scroll,
+        )
+
+    def switch_to_view(self) -> None:
+        self.store.set_view_mode(ViewMode.LOGS)
+        self.ui.show_logs()
+        self._render_all()
 
     def update_header(self) -> None:
-        """Render log meta into the right-pane border subtitle."""
-        st = self.state
-        try:
-            rp = self.app.query_one("#right-pane")
-        except Exception:
+        state = self.state
+        if state.view_mode is not ViewMode.LOGS:
             return
-        if st.view_mode != "logs":
-            rp.border_subtitle = ""
+        if state.job is None:
+            self.ui.set_right_subtitle(" no job ")
             return
-        if not st.job:
-            rp.border_subtitle = " no job "
-            return
-        scroll_icon = "▶" if st.auto_scroll else "⏸"
-        if st.backfilling:
+        scroll_icon = "▶" if state.auto_scroll else "⏸"
+        if state.backfilling:
             status = "[bold cyan]● backfill…[/bold cyan]"
-        elif st.loading:
+        elif state.loading:
             status = "[bold yellow]● loading…[/bold yellow]"
-        elif st.streaming:
+        elif state.streaming:
             status = "[bold green]● LIVE[/bold green]"
         else:
             status = "[dim]○ idle[/dim]"
-        file_part = st.current_file or "[dim](resolving file…)[/dim]"
+        file_part = (
+            escape(state.current_file)
+            if state.current_file
+            else "[dim](resolving file…)[/dim]"
+        )
         more = ""
-        if st.head_offset > 0:
-            kib = st.head_offset // 1024
-            more = f"  [dim]↑ {kib} KiB more[/dim]"
-        rp.border_subtitle = f" {status}  {file_part}{more}  {scroll_icon} "
+        if state.start_offset > 0 and not state.buffer_full:
+            more = f"  [dim]↑ {state.start_offset // 1024} KiB more[/dim]"
+        elif state.buffer_full:
+            more = "  [yellow]buffer limit[/yellow]"
+        self.ui.set_right_subtitle(
+            f" {status}  {file_part}{more}  {scroll_icon} "
+        )
 
     def update_tab_title(self) -> None:
-        try:
-            rp = self.app.query_one("#right-pane")
-        except Exception:
-            return
-        st = self.state
-        if st.view_mode != "logs":
-            rp.border_title = "  [bold reverse] Info [/bold reverse]  Logs  "
-            return
-        rp.border_title = "  Info  [bold reverse] Logs [/bold reverse]  "
+        if self.state.view_mode is ViewMode.INFO:
+            self.ui.set_right_title(
+                "  [bold reverse] Info [/bold reverse]  Logs  "
+            )
+        else:
+            self.ui.set_right_title(
+                "  Info  [bold reverse] Logs [/bold reverse]  "
+            )
 
     def show(self) -> None:
-        """Switch to logs view; restart streaming only on job change / cold start."""
-        app = self.app
-        st = self.state
-        jobs_st = app.jobs.state
-        if not (0 <= jobs_st.selected_idx < len(jobs_st.filtered)):
-            self.switch_to_view()
-            return
-        job = jobs_st.filtered[jobs_st.selected_idx]
-        name = job.get("name", "")
-
-        if name == st.job:
-            self.switch_to_view()
-            if not st.streaming and st.line_count == 0:
-                self.begin_stream(job, name)
-            return
-
-        self.app.logs.switch_to_job(name)
+        job = self._selected_job()
         self.switch_to_view()
-        self.begin_stream(job, name)
-
-    def begin_stream(self, job: dict, name: str) -> None:
-        """Reset buffer + kick off the stream for *name*."""
-        app = self.app
-        st = self.state
-        snap = app.logs.buffer.snapshot_for(name)
-        snap.buffer.clear()
-        snap.line_count = 0
-        st.line_count = 0
-        if app.widgets.log:
-            app.widgets.log.clear()
-        self.set_loading_overlay(False)
-        status = job.get("status", "")
-        if status in NO_LOG_STATUSES:
-            icon, sty = icon_style(status)
-            if app.widgets.log:
-                app.widgets.log.write(
-                    f"[{sty}]{icon} {status}[/{sty}]  \u2014 logs not available yet."
-                )
-            st.loading = False
-            self.update_header()
+        if job is None:
             return
-        st.loading = True
-        self.set_loading_overlay(True)
-        self.update_header()
-        app.logs.stream.start_streaming(name, st.current_file)
+        if self.state.job != job.ref or self.state.target_id != self._target_id():
+            self.switch_to_job(self._target_id(), job)
+        if (
+            not self.state.streaming
+            and not self.state.loading
+            and not self.state.stream_paused
+        ):
+            self.begin_stream(job)
+
+    def switch_to_job(self, target_id: str, job: Job) -> None:
+        self.store.set_scroll_y(self.ui.log_scroll_y)
+        self._stream.stop_streaming()
+        self.store.select_job(target_id, job.ref)
+
+    def begin_stream(self, job: Job) -> None:
+        if job.status in NO_LOG_STATUSES:
+            icon, style = icon_style(job.status)
+            self.ui.write_log_status(
+                f"[{style}]{icon} {escape(job.status)}[/{style}]"
+                "  — logs not available yet."
+            )
+            return
+        self._stream.start_streaming(
+            job.ref,
+            self.state.current_file,
+            follow=job.status not in TERMINAL_STATUSES,
+        )
 
     def show_info(self) -> None:
-        app = self.app
-        self.state.view_mode = "info"
-        if app.widgets.log:
-            app.widgets.log.add_class("hidden")
-        app.query_one("#info-scroll").remove_class("hidden")
-        self.update_tab_title()
-        self.update_header()
-        if app.widgets.jobs:
-            app.widgets.jobs.focus()
+        self.store.set_scroll_y(self.ui.log_scroll_y)
+        self.store.set_view_mode(ViewMode.INFO)
+        self.ui.show_info()
+        self._render_selected_info()
 
     def toggle_scroll(self) -> None:
-        st = self.state
-        st.auto_scroll = not st.auto_scroll
-        self.update_tab_title()
-        self.update_header()
-        self.app.notify(f"Auto-scroll {'ON' if st.auto_scroll else 'OFF'}", timeout=2)
+        enabled = self.store.toggle_auto_scroll()
+        self.notify(f"Auto-scroll {'ON' if enabled else 'OFF'}", timeout=2)
 
-    def on_job_changed(self, new_name: str) -> None:
-        """Called when the user navigates to a different row in the jobs list."""
-        st = self.state
-        if not new_name or new_name == st.job:
+    def on_job_changed(self, job: Job | None) -> None:
+        same_job = (
+            job is not None
+            and self.state.target_id == self._target_id()
+            and self.state.job == job.ref
+        )
+        if same_job:
+            if job.status in TERMINAL_STATUSES:
+                if self.state.streaming or self.state.loading:
+                    self.store.set_scroll_y(self.ui.log_scroll_y)
+                    self._stream.stop_streaming()
+            elif (
+                self.state.view_mode is ViewMode.LOGS
+                and not self.state.streaming
+                and not self.state.loading
+                and not self.state.stream_paused
+            ):
+                self.begin_stream(job)
             return
-        if st.view_mode == "logs":
-            self.show()
-            return
-        if st.streaming and st.job and st.job != new_name:
-            self.app.logs.buffer.capture()
-            self.app.logs.stream.stop_streaming()
+        self.store.set_scroll_y(self.ui.log_scroll_y)
+        self._stream.stop_streaming()
+        self.store.select_job(
+            self._target_id(),
+            job.ref if job is not None else None,
+        )
+        self.ui.clear_log()
+        if job is not None and self.state.view_mode is ViewMode.LOGS:
+            self.begin_stream(job)
 
     def pick_file(self) -> None:
-        st = self.state
-        if not st.files or not st.job:
-            self.app.notify("No log files available", severity="warning", timeout=2)
+        state = self.state
+        if not state.files or state.job is None:
+            self.notify("No log files available", severity="warning", timeout=2)
             return
-        items = [(p, p) for p in st.files]
-        picker = PickerModal("Log Files", items, current=st.current_file)
-        self.app.push_screen(picker, self._on_file_picked)
-
-    def _on_file_picked(self, chosen: str | None) -> None:
-        st = self.state
-        if chosen is None or chosen == st.current_file:
+        items = [PickerItem(path, Text(path)) for path in state.files]
+        request = self.store.current_request()
+        if request is None:
             return
-        app = self.app
-        if st.streaming:
-            app.logs.stream.stop_streaming()
-        st.current_file = chosen
-        st.line_count = 0
-        st.head_offset = 0
-        st.total_size = 0
-        snap = app.logs.buffer.snapshot_for(st.job)
-        snap.current_file = chosen
-        snap.buffer.clear()
-        snap.line_count = 0
-        if app.widgets.log:
-            app.widgets.log.clear()
-        self.set_loading_overlay(True)
-        st.loading = True
-        self.update_header()
-        app.logs.stream.start_streaming(st.job, chosen)
+        self.ui.pick(
+            "Log Files",
+            items,
+            state.current_file,
+            lambda chosen: self._on_file_picked(chosen, request),
+        )
 
+    def _on_file_picked(
+        self,
+        chosen: str | None,
+        request: StreamRequest,
+    ) -> None:
+        if not chosen:
+            return
+        selected = self._selected_job()
+        if (
+            not self.store.is_active(request)
+            or self._target_id() != request.target_id
+            or selected is None
+            or selected.ref != request.job
+        ):
+            self.notify(
+                "Job changed; log file selection was ignored",
+                severity="warning",
+                timeout=3,
+            )
+            return
+        self.store.set_scroll_y(self.ui.log_scroll_y)
+        if not self.store.select_file(chosen):
+            return
+        selected = self._selected_job()
+        self._stream.start_streaming(
+            request.job,
+            chosen,
+            follow=bool(
+                selected and selected.status not in TERMINAL_STATUSES
+            ),
+        )

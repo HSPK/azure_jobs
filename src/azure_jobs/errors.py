@@ -41,6 +41,9 @@ class RestError(AJError):
         self.azure_code = azure_code
         self.response = response
 
+class DeleteOutcomeUncertain(AJError):
+    """A delete was accepted but its final remote outcome is unknown."""
+
 class SubmissionError(AJError):
     """A submission backend failed to submit the job (network."""
 
@@ -79,6 +82,7 @@ __all__ = [
     "SkuResolveError",
     "AuthError",
     "RestError",
+    "DeleteOutcomeUncertain",
     "SubmissionError",
     "QuotaError",
     "BackendError",

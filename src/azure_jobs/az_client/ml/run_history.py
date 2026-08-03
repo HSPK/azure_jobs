@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from collections.abc import Callable
 from typing import Any
 
 import requests
@@ -13,8 +13,6 @@ from .context import RestContext
 from .extract import parse_azure_error_dict
 
 log = logging.getLogger(__name__)
-
-_ARTIFACT_LOOKUP_WORKERS = 8
 
 class RunHistoryAPI:
     """Workspace data-plane operations: error details and log file URLs."""
@@ -54,7 +52,12 @@ class RunHistoryAPI:
             err = err.get("error", err)
         return parse_azure_error_dict(err)
 
-    def get_log_urls(self, job_name: str) -> dict[str, str]:
+    def get_log_urls(
+        self,
+        job_name: str,
+        *,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> dict[str, str]:
         """Return {log_path: signed_url} for a run."""
         try:
             data = self.get_run(job_name)
@@ -64,9 +67,17 @@ class RunHistoryAPI:
         log_files = data.get("logFiles", {}) or {}
         if log_files:
             return log_files
-        return self._list_artifact_log_urls(job_name)
+        return self._list_artifact_log_urls(
+            job_name,
+            cancelled=cancelled,
+        )
 
-    def _list_artifact_log_urls(self, job_name: str) -> dict[str, str]:
+    def _list_artifact_log_urls(
+        self,
+        job_name: str,
+        *,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> dict[str, str]:
         self._ctx.get_location()
         if not self._ctx.data_plane_base:
             return {}
@@ -80,6 +91,8 @@ class RunHistoryAPI:
 
         paths: set[str] = set()
         for prefix in LOG_PREFIXES:
+            if cancelled is not None and cancelled():
+                return {}
             url = f"{base_url}/prefix/contentinfo/ExperimentRun/{dcid}"
             try:
                 resp = self._ctx.session.get(
@@ -92,7 +105,10 @@ class RunHistoryAPI:
                     continue
                 for item in resp.json().get("value", []):
                     path = item.get("path", "")
-                    if path:
+                    if path and (
+                        path.endswith((".txt", ".log", ".out", ".err"))
+                        or "/std_log" in path
+                    ):
                         paths.add(path)
             except (requests.RequestException, ValueError) as exc:
                 log.debug("Artifact prefix list failed for %s: %s", prefix, exc)
@@ -101,7 +117,10 @@ class RunHistoryAPI:
         if not paths:
             return {}
 
-        def _fetch_one(path: str) -> tuple[str, str]:
+        resolved: dict[str, str] = {}
+        for path in sorted(paths):
+            if cancelled is not None and cancelled():
+                return resolved
             try:
                 url = f"{base_url}/contentinfo/ExperimentRun/{dcid}/{path}"
                 resp = self._ctx.session.get(
@@ -110,16 +129,10 @@ class RunHistoryAPI:
                     timeout=TIMEOUT_QUICK,
                 )
                 if resp.ok:
-                    return path, resp.json().get("contentUri", "") or ""
+                    uri = resp.json().get("contentUri", "") or ""
+                    if uri:
+                        resolved[path] = uri
             except (requests.RequestException, ValueError) as exc:
                 log.debug("Artifact contentinfo failed for %s: %s", path, exc)
-            return path, ""
-
-        resolved: dict[str, str] = {}
-        with ThreadPoolExecutor(max_workers=_ARTIFACT_LOOKUP_WORKERS) as pool:
-            for fut in as_completed(pool.submit(_fetch_one, p) for p in paths):
-                path, uri = fut.result()
-                if uri:
-                    resolved[path] = uri
 
         return resolved

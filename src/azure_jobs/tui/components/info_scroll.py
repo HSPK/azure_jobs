@@ -9,10 +9,22 @@ class InfoScroll(VerticalScroll):
     """VerticalScroll subclass with vim-style navigation."""
 
     BINDINGS = [
+        Binding(
+            "up",
+            "app.command('jobs.selection_prev')",
+            "Previous job",
+            show=False,
+        ),
+        Binding(
+            "down",
+            "app.command('jobs.selection_next')",
+            "Next job",
+            show=False,
+        ),
         Binding("h", "scroll_left", "Left", show=False),
         Binding("j", "scroll_down", "Down", show=False),
         Binding("k", "scroll_up", "Up", show=False),
-        Binding("l", "scroll_right", "Right", show=False),
+        Binding("l", "app.command('logs.show')", "Logs"),
         Binding("g", "jump_home", "Top", show=False),
         Binding("G", "jump_end", "Bottom", show=False),
         Binding("ctrl+d", "page_down", "PgDn", show=False),

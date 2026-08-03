@@ -12,8 +12,13 @@ aj job cancel <id>
 aj job logs <id>                 # download + display logs
 aj job stats                     # GPU-hours, success rate, by experiment/compute/user
 aj list                          # local submission history (record.jsonl)
-aj dash                          # interactive TUI dashboard
+aj dash                          # initially load 50 jobs, 50 per page
+aj dash -n 500 --page-size 40   # larger browse/filter scope
 ```
+
+Inside `aj dash`, press `d` to permanently delete the selected terminal job.
+Running or queued jobs must be canceled first.
+Press `→` on the final loaded page to fetch another page from Azure.
 
 ## Templates
 

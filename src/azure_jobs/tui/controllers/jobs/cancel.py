@@ -1,73 +1,157 @@
-"""Cancel-job confirm modal + worker."""
+"""Cancel-job command with an isolated action worker."""
 
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import Callable
+from dataclasses import dataclass
 
 from rich.markup import escape
-from textual.worker import get_current_worker
 
-from azure_jobs.tui.components import ConfirmCancel
 from azure_jobs.tui.controllers.base import Controller
-from azure_jobs.tui.controllers.jobs._shared import short_error
-from azure_jobs.tui.helpers import TERMINAL_STATUSES, kv, safe_notify
+from azure_jobs.tui.errors import format_error
+from azure_jobs.tui.helpers import TERMINAL_STATUSES, kv
+from azure_jobs.tui.events import JobActionUncertain
+from azure_jobs.tui.models import Job
+from azure_jobs.tui.runtime import (
+    CancellationToken,
+    SessionHandle,
+    TaskRunner,
+)
 from azure_jobs.tui.state import JobsState
+from azure_jobs.tui.stores import JobsStore
+from azure_jobs.tui.view_ports import JobsViewPort
+
+
+@dataclass(frozen=True)
+class CancelResult:
+    job: Job
+    already_terminal: bool
+    reconcile_error: str = ""
+
 
 class JobsCancel(Controller[JobsState]):
-    """Cancel-job action: confirm modal + REST cancel worker."""
+    def __init__(
+        self,
+        ui: JobsViewPort,
+        tasks: TaskRunner,
+        store: JobsStore,
+        *,
+        session_provider: Callable[[], SessionHandle | None],
+    ) -> None:
+        super().__init__(ui, tasks, lambda: store.state)
+        self.store = store
+        self._session_provider = session_provider
 
     def action_cancel(self) -> None:
-        st = self.state
-        if 0 <= st.selected_idx < len(st.filtered):
-            job = st.filtered[st.selected_idx]
-            display = job.get("display_name") or job.get("name", "?")
-            self.app.push_screen(ConfirmCancel(display), self._on_confirmed)
+        job = self.state.selected_job
+        if job is None:
+            return
+        handle = self._session_provider()
+        if handle is None:
+            self.notify("Workspace not configured", severity="warning")
+            return
+        self.ui.confirm_cancel(
+            job.label,
+            lambda confirmed: self._on_confirmed(confirmed, job, handle),
+        )
 
-    def _on_confirmed(self, confirmed: bool) -> None:
+    def _on_confirmed(
+        self,
+        confirmed: bool,
+        job: Job,
+        handle: SessionHandle,
+    ) -> None:
         if not confirmed:
             return
-        st = self.state
-        if 0 <= st.selected_idx < len(st.filtered):
-            job = st.filtered[st.selected_idx]
-            if self.app.widgets.info:
-                self.app.widgets.info.update(kv([("", "")], hint="Cancelling…"))
-            seq = self.state.session_seq
-            self.spawn(
-                lambda: self._do_cancel(job, seq),
-                group="cancel",
+        resident = self.state.jobs_by_id.get(job.id)
+        if resident is None or resident.ref != job.ref:
+            self.notify(
+                "Job changed while confirmation was open; cancellation was "
+                "not submitted.",
+                severity="warning",
             )
+            return
+        if self._session_provider() is not handle:
+            self.notify(
+                "Workspace changed; cancellation was not submitted",
+                severity="warning",
+            )
+            return
+        self.ui.set_info(kv([("", "")], hint="Cancelling…"))
 
-    def _do_cancel(self, job: dict[str, Any], seq: int) -> None:
-        app = self.app
-        rest = app.workspace.state.rest_client
-        safe_display = escape(job.get("display_name") or job.get("name", "?"))
-        if self.state.session_seq != seq:
+        def cancel(token: CancellationToken) -> CancelResult:
+            with handle.lease() as session:
+                if session.actions is None:
+                    raise RuntimeError("This backend does not support cancellation")
+                current = session.actions.get(job.ref)
+                if current.ref != job.ref:
+                    raise RuntimeError(
+                        "Job was recreated before cancellation"
+                    )
+                if current.status in TERMINAL_STATUSES:
+                    return CancelResult(current, True)
+                session.actions.cancel(job.ref)
+                token.check()
+                try:
+                    final = session.actions.get(job.ref)
+                    if final.ref != job.ref:
+                        return CancelResult(
+                            current,
+                            False,
+                            reconcile_error=(
+                                "Job incarnation changed after cancellation"
+                            ),
+                        )
+                except Exception as exc:
+                    return CancelResult(
+                        current,
+                        False,
+                        reconcile_error=f"{type(exc).__name__}: {exc}",
+                    )
+            token.check()
+            return CancelResult(final, False)
+
+        self.tasks.run(
+            cancel,
+            group=f"jobs.cancel.{job.id}",
+            on_success=lambda result: self._on_cancelled(handle, result),
+            on_error=lambda exc: self._on_error(handle, job, exc),
+        )
+
+    def _on_cancelled(
+        self,
+        handle: SessionHandle,
+        result: CancelResult,
+    ) -> None:
+        if self._session_provider() is not handle:
             return
-        if rest is None:
-            app.call_from_thread(
-                safe_notify, app, "Workspace not configured", severity="warning"
+        self.tasks.cancel_prefix("jobs.fetch")
+        if result.reconcile_error:
+            self.store.action_failed()
+            self.notify(
+                "Cancellation was submitted, but status refresh failed "
+                f"({result.reconcile_error}). Refreshing jobs…",
+                severity="warning",
+            )
+            self.store.events.publish(
+                JobActionUncertain(result.job, result.reconcile_error)
             )
             return
-        worker = get_current_worker()
-        name = job.get("name", "")
-        try:
-            cur = rest.jobs.get(name)
-            status = cur.get("status", "")
-            if status in TERMINAL_STATUSES:
-                if not worker.is_cancelled and self.state.session_seq == seq:
-                    app.call_from_thread(
-                        safe_notify, app, f"{safe_display}: already {escape(status)}"
-                    )
-                return
-            rest.jobs.cancel(name)
-            final_job = rest.jobs.get(name)
-            final = escape(final_job.get("status", "?"))
-        except Exception as exc:
-            if not worker.is_cancelled and self.state.session_seq == seq:
-                app.call_from_thread(
-                    safe_notify, app, short_error(exc, limit=80), severity="error"
-                )
+        self.store.cancel_committed(result.job)
+        status = escape(result.job.status or "?")
+        prefix = "already " if result.already_terminal else ""
+        self.notify(f"{escape(result.job.label)}: {prefix}{status}")
+
+    def _on_error(
+        self,
+        handle: SessionHandle,
+        job: Job,
+        exc: Exception,
+    ) -> None:
+        if self._session_provider() is not handle:
             return
-        if not worker.is_cancelled and self.state.session_seq == seq:
-            app.call_from_thread(safe_notify, app, f"{safe_display}: {final}")
-            app.call_from_thread(app.jobs.fetcher.fetch_single, job)
+        self.store.action_failed()
+        self.notify(
+            format_error(f"Cancel job {job.name}", exc),
+            severity="error",
+        )

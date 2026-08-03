@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 import requests
@@ -166,17 +167,30 @@ class LogsAPI:
         self._ctx = ctx
         self._run_history = RunHistoryAPI(ctx)
 
-    def get_urls(self, job_name: str) -> dict[str, str]:
+    def get_urls(
+        self,
+        job_name: str,
+        *,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> dict[str, str]:
         """Return {log_path: signed_url} for a job's log files."""
-        return self._run_history.get_log_urls(job_name)
+        return self._run_history.get_log_urls(
+            job_name,
+            cancelled=cancelled,
+        )
 
     def get_content_uri(self, job_name: str, log_path: str) -> str:
         """Get the signed blob URL for a specific log file ("" if missing)."""
         return self.get_urls(job_name).get(log_path, "")
 
-    def list_files(self, job_name: str) -> list[str]:
+    def list_files(
+        self,
+        job_name: str,
+        *,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> list[str]:
         """Return sorted list of log file paths for a job."""
-        urls = self.get_urls(job_name)
+        urls = self.get_urls(job_name, cancelled=cancelled)
         paths = [
             p
             for p in urls

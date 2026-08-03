@@ -1,51 +1,39 @@
-"""Base class for behavioural controllers."""
+"""Base class for presentation controllers."""
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Callable, Generic, TypeVar
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Generic, TypeVar
 
 if TYPE_CHECKING:
-    from azure_jobs.tui.app import AjDashboard
+    from azure_jobs.tui.runtime import TaskRunner
+    from azure_jobs.tui.view_ports import NoticeView
 
 S = TypeVar("S")
-W = TypeVar("W")
 
 class Controller(Generic[S]):
-    """Holds (a) the App context and (b) its own state slice."""
+    """Holds narrow UI/runtime ports and one state slice."""
 
-    def __init__(self, app: "AjDashboard", state: S) -> None:
-        self.app: AjDashboard = app
-        self.state: S = state
+    def __init__(
+        self,
+        ui: "NoticeView",
+        tasks: "TaskRunner",
+        state: S | Callable[[], S],
+    ) -> None:
+        self.ui = ui
+        self.tasks = tasks
+        self._state_provider = state if callable(state) else lambda: state
 
-    def safe_query(self, selector: str, widget_type: type["W"]) -> "W | None":
-        """Type-checked query_one returning None on NoMatches/WrongType."""
-        from textual.css.query import NoMatches, WrongType
-
-        try:
-            return self.app.query_one(selector, widget_type)
-        except (NoMatches, WrongType):
-            return None
+    @property
+    def state(self) -> S:
+        return self._state_provider()
 
     def render_info(self, hint: str) -> None:
-        """Render *hint* into the info panel via the markup-safe boundary."""
-        from azure_jobs.tui.helpers import kv, safe_set
+        from azure_jobs.tui.helpers import kv
 
-        safe_set(self.app.widgets.info, kv([("", "")], hint=hint))
+        self.ui.set_info(kv([("", "")], hint=hint))
 
     def notify(
         self, msg: str, *, severity: str = "information", timeout: float = 5
     ) -> None:
-        """Emit a notification; falls back to plain text on MarkupError."""
-        from azure_jobs.tui.helpers import safe_notify
-
-        safe_notify(self.app, msg, severity=severity, timeout=timeout)
-
-    def spawn(
-        self,
-        fn: Callable[[], None],
-        *,
-        group: str,
-        exclusive: bool = True,
-    ) -> None:
-        """Schedule *fn* on a thread worker (uniform call site)."""
-        self.app.run_worker(fn, thread=True, exclusive=exclusive, group=group)
+        self.ui.notify(msg, severity=severity, timeout=timeout)

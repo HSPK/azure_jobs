@@ -2,6 +2,25 @@ Screen {
     layout: horizontal;
 }
 
+DashboardShell {
+    width: 100%;
+    height: 100%;
+}
+
+#dashboard-body {
+    width: 100%;
+    height: 1fr;
+}
+
+#status-bar {
+    dock: bottom;
+    width: 100%;
+    height: 1;
+    padding: 0 1;
+    color: $footer-foreground;
+    background: $footer-background;
+}
+
 .hidden { display: none; }
 
 /* ── modal screens (shared frame) ── */
@@ -17,8 +36,9 @@ ModalScreen > Vertical {
 
 /* ── left column ── */
 #left-col {
-    width: 38;
+    width: 35%;
     min-width: 30;
+    max-width: 50;
     height: 100%;
 }
 #jobs-pane {

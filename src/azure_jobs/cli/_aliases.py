@@ -4,11 +4,26 @@ from __future__ import annotations
 
 import click
 
+from azure_jobs.tui.settings import (
+    DEFAULT_DASHBOARD_LAST,
+    MAX_DASHBOARD_LAST,
+    MAX_DASHBOARD_PAGE_SIZE,
+)
+
 from . import main
 
 @main.command(name="d", hidden=True)
-@click.option("-n", "--last", default=100)
-@click.option("--page-size", default=None, type=int)
+@click.option(
+    "-n",
+    "--last",
+    default=DEFAULT_DASHBOARD_LAST,
+    type=click.IntRange(1, MAX_DASHBOARD_LAST),
+)
+@click.option(
+    "--page-size",
+    default=None,
+    type=click.IntRange(1, MAX_DASHBOARD_PAGE_SIZE),
+)
 @click.option("--mouse/--no-mouse", default=False)
 def _alias_d(last: int, page_size: int | None, mouse: bool) -> None:
     from .dashboard import dashboard

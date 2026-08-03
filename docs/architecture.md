@@ -145,32 +145,56 @@ Highlights:
 
 ## TUI
 
-`aj dash` is built on Textual. The `AjDashboard` app is a thin dispatcher: every
-key binding forwards to a controller method. Controllers own their state slice
-and one concern each.
+`aj dash` is built on Textual. `AjDashboard` is only the composition root: it
+wires registered features to immutable stores, typed events, narrow view ports,
+a bounded worker pool, and capability-oriented backend ports.
 
 ```
 tui/
-├── app.py           # AjDashboard: bindings + action_* delegation only
-├── state.py         # JobsState / LogsState / WorkspaceState / Widgets
-├── components/      # LogViewer (vim-nav RichLog), InfoScroll, modals
+├── app.py           # composition root only
+├── bindings.py      # validated commands + context predicates + help
+├── features.py      # feature lifecycle and optional Screen registration
+├── events.py        # typed, breadth-first cross-feature events
+├── models.py        # Target / Job / JobRef / request identities
+├── state.py         # immutable JobsState / LogsState / TargetState snapshots
+├── stores.py        # all jobs/target transitions (UI-thread guarded)
+├── log_store.py     # exact-byte log windows and projections
+├── ports.py         # capability ports + Cursor / LogChunk(bytes)
+├── runtime.py       # bounded worker pool, cancellation, resource leases
+├── view_ports.py    # Jobs / Logs / Target / Shell view Protocols
+├── ui.py            # separate Textual adapter for each view port
+├── adapters/
+│   └── azureml.py   # strict Azure implementation (including HTTP Range)
+├── components/      # shell layout, widgets, searchable modals
 └── controllers/
-    ├── base.py      # Controller[S] (app + state slice + spawn helper)
-    ├── workspace.py # detect / pick / switch
-    ├── jobs/        # fetch · view · filters · cancel (one JobsState)
-    └── logs/        # stream · buffer · view (one LogsState)
+    ├── workspace.py # target discovery + session ownership
+    ├── jobs/        # I/O and commands; mutations go through JobsStore
+    └── logs/        # one-shot I/O and presentation over LogsStore
 ```
 
-REST I/O runs on Textual thread workers via `Controller.spawn(...)`. Stale
-results are dropped by comparing a per-controller `session_seq` captured at
-spawn time; logs additionally guard on `state.job == azure_name`. Workspace
-switches bump the seq and `cancel_all()` outstanding workers.
+Controllers cannot assign state fields and receive only their feature's view
+Protocol. Stores assert UI-thread ownership, publish typed events, and expose
+immutable snapshots. A fixed six-worker daemon pool bounds blocking I/O;
+cancelled queued work is skipped, while session/reader leases defer closing an
+in-use resource. Shutdown cancellation happens before a non-UI finalizer joins
+workers.
 
-Log streaming uses HTTP Range requests: initial `tail(64 KiB)` then `poll()`
-with exponential backoff (3 s → 30 s); scroll-up triggers single-flight
-backfill of 1 MiB chunks; `g` jumps to byte 0 (capped at 32 MiB). Per-job
-buffers (`MAX_BUFFER_LINES=50 000`) are LRU-evicted (`MAX_SNAPSHOTS=32`) with
-the active job protected from eviction.
+Live logs are timer-driven one-shot reads, so idle polling does not occupy a
+worker. `LogChunk` carries raw bytes and authoritative start/end/total offsets;
+decoding happens only for display. Azure's adapter derives ranges from
+`Content-Range`, slices locally when a server ignores Range, treats EOF 416 as
+idle, and reports transport failures. Backfill uses an isolated reader.
+Per-target/job/file windows are capped at 16 MiB (32 MiB globally); oversized
+visual records are split at 256 KiB without changing remote offsets.
+
+Jobs use opaque IDs and value-comparable cursors. The dashboard initially loads
+the requested `--last` scope (50 by default); reaching the final loaded page
+and pressing `→` consumes another cursor page without a fixed total cap. Local
+filters apply to the jobs loaded so far. Optional actions/log capabilities
+drive command availability, so a new backend may implement only the features
+it supports. Permanent deletion is a separate `JobDelete`
+capability rather than part of cancel/detail actions; deleting a job updates
+the JobsStore atomically and emits `JobDeleted` so cached logs are evicted.
 
 ## Design notes
 

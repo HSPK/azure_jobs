@@ -2,6 +2,22 @@
 
 from azure_jobs.tui.components.info_scroll import InfoScroll
 from azure_jobs.tui.components.log_viewer import LogViewer
-from azure_jobs.tui.components.modals import ConfirmCancel, HelpScreen, PickerModal
+from azure_jobs.tui.components.modals import (
+    ConfirmCancel,
+    ConfirmDelete,
+    HelpScreen,
+    PickerItem,
+    PickerModal,
+)
+from azure_jobs.tui.components.shell import DashboardShell
 
-__all__ = ["ConfirmCancel", "HelpScreen", "InfoScroll", "LogViewer", "PickerModal"]
+__all__ = [
+    "ConfirmCancel",
+    "ConfirmDelete",
+    "DashboardShell",
+    "HelpScreen",
+    "InfoScroll",
+    "LogViewer",
+    "PickerItem",
+    "PickerModal",
+]
