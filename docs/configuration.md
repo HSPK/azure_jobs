@@ -58,6 +58,67 @@ sku:                             # range dict
   "8+":  "8xA100-80GB-NvLink"
 ```
 
+## Blob storage on Volcano
+
+Volcano clusters here have no `blob.csi.azure.com` node plugin registered, so a
+CSI volume cannot be satisfied and the pod would wait in `ContainerCreating`.
+Declaring `storage` therefore mounts each container inside the pod with
+blobfuse2:
+
+```yaml
+target:
+  service: volcano
+  queue: <queue>
+
+storage:
+  fast_shared:
+    storage_account_name: <account>
+    container_name: <container>
+    mount_dir: /mnt/fast_shared
+```
+
+At submission a user-delegation SAS is minted per container with the caller's
+`az login` and stored in a Secret named `<job>-blob`. The Secret is *mounted* at
+`/mnt/aj-blob-secrets/<key>` rather than passed through the environment: a value
+read from a Secret via `env` is fixed when the container starts, whereas a
+mounted Secret is refreshed in place by the kubelet. The token never appears in
+the pod spec. Pods that declare storage run privileged, because blobfuse2 opens
+`/dev/fuse`; pods without storage are unchanged.
+
+blobfuse2 is installed at startup for whichever distribution the image uses.
+Minimal images often have no download client at all — base Debian and Ubuntu
+ship no curl, wget or python, and their perl lacks LWP — so the package manager
+bootstraps one. Where no package manager can install the archive, the binary is
+extracted from it directly.
+
+Azure caps a user-delegation SAS at seven days, so a longer run outlives the
+token it started with. Mint a replacement and apply it to the same Secret:
+
+```python
+from azure_jobs.backend.volcano.storage import refresh_secret_manifest
+```
+
+The kubelet propagates the new value to the mounted file within about a minute,
+and the pod re-reads it hourly and rewrites the blobfuse2 configuration, which
+blobfuse2 applies to the live mount. Nothing restarts and the mount does not
+drop. Because the pod cannot mint its own token, this step has to run somewhere
+holding an Azure credential, such as a periodic job on a workstation.
+
+## CPU-only jobs
+
+Set the GPU count to zero. RDMA then defaults off, since CPU nodes expose no
+RDMA device and requesting one leaves the job unschedulable; set `rdma`
+explicitly to override.
+
+```yaml
+target:
+  service: volcano
+  queue: <queue>
+  gpus_per_node: 0
+```
+
+Omitting `gpus_per_node` keeps the previous behaviour of following `-p`.
+
 ## Runtime env vars
 
 Exported into every job:

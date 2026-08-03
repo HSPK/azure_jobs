@@ -19,10 +19,10 @@ class Target:
     namespace: str = ""
     queue: str = "default"
     context: str = ""
-    gpus_per_node: int = 8
+    gpus_per_node: int | None = None
     cpus_per_node: int = 0
     memory: str = ""
-    rdma: bool = True
+    rdma: bool | None = None
     priority_class: str = ""
     labels: dict[str, str] = field(default_factory=dict)
 
