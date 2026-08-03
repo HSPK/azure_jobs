@@ -269,6 +269,9 @@ def build_volcano_job(
             }
         )
 
+    if blob_plan is not None and blob_plan.enabled:
+        volumes.append(blob_plan.volume())
+
     def _make_pod_spec(role: str) -> dict[str, Any]:
         container: dict[str, Any] = {
             "name": role,
@@ -281,7 +284,7 @@ def build_volcano_job(
         if env_list:
             container["env"] = env_list
         if blob_plan is not None and blob_plan.enabled:
-            container.setdefault("env", []).extend(blob_plan.env_entries())
+            container["volumeMounts"].append(blob_plan.volume_mount())
             # blobfuse2 opens /dev/fuse, which an unprivileged container cannot
             # do. Only pods that declare storage are given this privilege.
             container["securityContext"] = {"privileged": True}

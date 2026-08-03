@@ -1,16 +1,19 @@
 """Mount Azure Blob containers inside Volcano pods with blobfuse2.
 
 The cluster has no ``blob.csi.azure.com`` node plugin registered, so a CSI
-volume — inline or through a PersistentVolume — cannot be satisfied and the pod
-would stay in ``ContainerCreating``. Mounting therefore happens inside the
-container with blobfuse2, which needs ``/dev/fuse`` and so requires a
-privileged security context. That privilege is only requested for pods that
-actually declare storage.
+volume — inline or through a PersistentVolume — never binds and the pod stays in
+``ContainerCreating``. Mounting therefore happens inside the container with
+blobfuse2, which opens ``/dev/fuse`` and so needs a privileged security context.
+That privilege is requested only for pods that declare storage.
 
 Credentials are user-delegation SAS tokens minted from the submitting user's
 ``az login``, matching how the blob code uploader authenticates, so no account
-key is needed or stored. Azure caps a user-delegation SAS at seven days: a
-longer run outlives its mount, and the token has to be refreshed in the Secret.
+key is required. Azure caps such a token at seven days. The token is therefore
+delivered as a mounted Secret rather than an environment variable: values taken
+from a Secret through ``env`` are fixed when the container starts, while a
+mounted Secret is refreshed in place by the kubelet. Combined with the mount
+script's refresh loop, replacing the Secret extends a running job's mount
+without restarting it.
 """
 
 from __future__ import annotations
@@ -19,6 +22,7 @@ import datetime as _dt
 import shlex
 import subprocess
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from azure_jobs.errors import AJError
@@ -26,20 +30,20 @@ from azure_jobs.errors import AJError
 if TYPE_CHECKING:
     from azure_jobs.job.spec import StorageMount
 
-# The SAS is delivered through environment variables rather than a mounted
-# Secret file so the mount script stays independent of the pod's volume layout.
-SAS_ENV_PREFIX = "AJ_BLOB_SAS_"
-ACCOUNT_ENV_PREFIX = "AJ_BLOB_ACCOUNT_"
+_SCRIPTS_DIR = Path(__file__).parent / "scripts"
+
+SECRET_VOLUME_NAME = "aj-blob-secrets"
+SECRET_MOUNT_PATH = "/mnt/aj-blob-secrets"
 
 SAS_PERMISSIONS = "racwdl"
-SAS_MAX_DAYS = 7
+# Azure rejects a user-delegation SAS beyond seven days; stay just inside it.
+SAS_MAX_HOURS = 7 * 24 - 1
 AZ_SAS_TIMEOUT = 120
 
-BLOBFUSE_VERSION = "2.3.2"
-BLOBFUSE_DEB_URL = (
-    "https://github.com/Azure/azure-storage-fuse/releases/download/"
-    f"blobfuse2-{BLOBFUSE_VERSION}/blobfuse2-{BLOBFUSE_VERSION}-Ubuntu-20.04.x86_64.deb"
-)
+BLOBFUSE_VERSION = "2.5.4"
+# How often the pod re-reads its credential file. An hour is far below the
+# token lifetime while letting a replaced token take effect promptly.
+REFRESH_SECONDS = 3600
 
 
 class BlobMountError(AJError):
@@ -48,15 +52,17 @@ class BlobMountError(AJError):
 
 @dataclass
 class BlobMount:
-    """One container to mount, and the environment variables that unlock it."""
+    """One container to mount and the credential file that unlocks it."""
 
     key: str
     account: str
     container: str
     mount_dir: str
     sas: str
-    account_env: str
-    sas_env: str
+
+    @property
+    def sas_path(self) -> str:
+        return f"{SECRET_MOUNT_PATH}/{self.key}"
 
 
 @dataclass
@@ -71,122 +77,62 @@ class BlobMountPlan:
     def secret_manifest(self, namespace: str) -> dict[str, Any]:
         """Build the Secret holding every SAS for this job.
 
-        ``stringData`` lets Kubernetes handle the base64 encoding, so the token
-        never passes through an intermediate encoding step here.
+        ``stringData`` lets Kubernetes handle base64 encoding, so the token is
+        never re-encoded here.
         """
-        data: dict[str, str] = {}
-        for mount in self.mounts:
-            data[mount.sas_env] = mount.sas
-            data[mount.account_env] = mount.account
         return {
             "apiVersion": "v1",
             "kind": "Secret",
             "metadata": {"name": self.secret_name, "namespace": namespace},
             "type": "Opaque",
-            "stringData": data,
+            "stringData": {mount.key: mount.sas for mount in self.mounts},
         }
 
-    def env_entries(self) -> list[dict[str, Any]]:
-        """Container env entries that read each value from the Secret."""
-        entries: list[dict[str, Any]] = []
-        for mount in self.mounts:
-            for name in (mount.account_env, mount.sas_env):
-                entries.append(
-                    {
-                        "name": name,
-                        "valueFrom": {
-                            "secretKeyRef": {"name": self.secret_name, "key": name}
-                        },
-                    }
-                )
-        return entries
+    def volume(self) -> dict[str, Any]:
+        return {
+            "name": SECRET_VOLUME_NAME,
+            "secret": {"secretName": self.secret_name, "defaultMode": 0o400},
+        }
+
+    def volume_mount(self) -> dict[str, Any]:
+        return {
+            "name": SECRET_VOLUME_NAME,
+            "mountPath": SECRET_MOUNT_PATH,
+            "readOnly": True,
+        }
 
     def setup_lines(self) -> list[str]:
-        """Bash that installs blobfuse2 once and mounts every container."""
+        """Bash that installs blobfuse2 and mounts every declared container."""
         if not self.mounts:
             return []
-        lines = [
-            "",
-            "# --- aj: mount Azure Blob containers with blobfuse2 ---",
-            "_aj_blobfuse_setup() {",
-            "    command -v blobfuse2 >/dev/null 2>&1 && return 0",
-            "    echo '[aj] installing blobfuse2'",
-            "    export DEBIAN_FRONTEND=noninteractive",
-            "    apt-get -qq update >/dev/null 2>&1 || true",
-            "    apt-get -qq install -y --no-install-recommends "
-            "ca-certificates wget fuse3 >/dev/null 2>&1 || true",
-            "    _aj_deb=$(mktemp /tmp/blobfuse2-XXXXXX.deb)",
-            f"    wget -q -O \"$_aj_deb\" {shlex.quote(BLOBFUSE_DEB_URL)} || return 1",
-            "    dpkg -i \"$_aj_deb\" >/dev/null 2>&1 || "
-            "apt-get -qq -f install -y >/dev/null 2>&1 || true",
-            "    rm -f \"$_aj_deb\"",
-            "    command -v blobfuse2 >/dev/null 2>&1",
-            "}",
-            "",
-            "_aj_blob_mount() {",
-            "    # $1 mount dir, $2 account, $3 container, $4 sas",
-            "    local dir=\"$1\" account=\"$2\" container=\"$3\" sas=\"$4\"",
-            "    if mountpoint -q \"$dir\" 2>/dev/null; then",
-            "        echo \"[aj] $dir already mounted\"",
-            "        return 0",
-            "    fi",
-            "    local cache=\"/tmp/aj-blobfuse-cache/${account}-${container}\"",
-            "    local cfg=\"/tmp/aj-blobfuse-${account}-${container}.yaml\"",
-            "    mkdir -p \"$dir\" \"$cache\"",
-            "    # The cache directory must start empty or blobfuse2 refuses to mount.",
-            "    rm -rf \"${cache:?}/\"* 2>/dev/null || true",
-            "    umask 077",
-            "    cat >\"$cfg\" <<AJ_BLOBFUSE_CFG",
-            "file_cache:",
-            "  path: ${cache}",
-            "components: [libfuse, file_cache, attr_cache, azstorage]",
-            "libfuse:",
-            "  attribute-expiration-sec: 120",
-            "  entry-expiration-sec: 120",
-            "  negative-entry-expiration-sec: 240",
-            "attr_cache:",
-            "  timeout-sec: 7200",
-            "azstorage:",
-            "  type: block",
-            "  account-name: ${account}",
-            "  endpoint: https://${account}.blob.core.windows.net/",
-            "  container: ${container}",
-            "  mode: sas",
-            "  sas: ${sas}",
-            "AJ_BLOBFUSE_CFG",
-            "    umask 022",
-            "    if blobfuse2 mount \"$dir\" --config-file=\"$cfg\" -o allow_other; then",
-            "        echo \"[aj] mounted ${account}/${container} at $dir\"",
-            "    else",
-            "        echo \"[aj] failed to mount ${account}/${container} at $dir\" >&2",
-            "        return 1",
-            "    fi",
-            "}",
-            "",
-            "if _aj_blobfuse_setup; then",
-        ]
+        script = (_SCRIPTS_DIR / "mount_blobfuse.sh").read_text(encoding="utf-8")
+        script = script.replace("{REFRESH_SECONDS}", str(REFRESH_SECONDS))
+        script = script.replace("{BLOBFUSE_VERSION}", BLOBFUSE_VERSION)
+        lines = script.splitlines()
+        lines.append("")
+        lines.append("if _aj_install_blobfuse2; then")
         for mount in self.mounts:
             lines.append(
                 "    _aj_blob_mount "
+                f"{shlex.quote(mount.key)} "
                 f"{shlex.quote(mount.mount_dir)} "
-                f'"${mount.account_env}" '
+                f"{shlex.quote(mount.account)} "
                 f"{shlex.quote(mount.container)} "
-                f'"${mount.sas_env}" || true'
+                f"{shlex.quote(mount.sas_path)} || true"
             )
         lines += [
             "else",
-            "    echo '[aj] blobfuse2 unavailable; blob mounts skipped' >&2",
+            "    _aj_warn 'blobfuse2 unavailable; blob mounts skipped'",
             "fi",
-            "# --- aj: end blob mounts ---",
             "",
         ]
         return lines
 
 
-def _mint_sas(account: str, container: str, expiry_days: int) -> str:
+def _mint_sas(account: str, container: str, expiry_hours: int) -> str:
     """Mint a user-delegation SAS with the caller's az login."""
     expiry = (
-        _dt.datetime.now(_dt.timezone.utc) + _dt.timedelta(days=expiry_days)
+        _dt.datetime.now(_dt.timezone.utc) + _dt.timedelta(hours=expiry_hours)
     ).strftime("%Y-%m-%dT%H:%MZ")
     cmd = [
         "az",
@@ -233,20 +179,13 @@ def _mint_sas(account: str, container: str, expiry_days: int) -> str:
     return sas.lstrip("?")
 
 
-def _env_suffix(key: str) -> str:
-    """Turn a storage key into an environment-variable-safe suffix."""
-    cleaned = "".join(ch if ch.isalnum() else "_" for ch in key).upper()
-    return cleaned.strip("_") or "STORAGE"
-
-
 def build_blob_mount_plan(
     storage: dict[str, "StorageMount"],
     job_name: str,
-    expiry_days: int = SAS_MAX_DAYS,
+    expiry_hours: int = SAS_MAX_HOURS,
 ) -> BlobMountPlan:
     """Mint credentials and describe how each declared container is mounted."""
     plan = BlobMountPlan(secret_name=f"{job_name}-blob")
-    seen: set[str] = set()
     for key, mount in storage.items():
         account = getattr(mount, "storage_account_name", "")
         container = getattr(mount, "container_name", "")
@@ -255,24 +194,31 @@ def build_blob_mount_plan(
             raise BlobMountError(
                 f"storage.{key} needs both storage_account_name and container_name"
             )
-        suffix = _env_suffix(key)
-        if suffix in seen:
-            raise BlobMountError(
-                f"storage keys collide after normalisation: {key} -> {suffix}"
-            )
-        seen.add(suffix)
         plan.mounts.append(
             BlobMount(
                 key=key,
                 account=account,
                 container=container,
                 mount_dir=mount_dir,
-                sas=_mint_sas(account, container, expiry_days),
-                account_env=f"{ACCOUNT_ENV_PREFIX}{suffix}",
-                sas_env=f"{SAS_ENV_PREFIX}{suffix}",
+                sas=_mint_sas(account, container, expiry_hours),
             )
         )
     return plan
+
+
+def refresh_secret_manifest(
+    storage: dict[str, "StorageMount"],
+    job_name: str,
+    namespace: str,
+    expiry_hours: int = SAS_MAX_HOURS,
+) -> dict[str, Any]:
+    """Mint fresh credentials for an existing job and return its Secret.
+
+    Applying the result extends a running job past the seven-day token limit;
+    the pod's refresh loop picks the replacement up without a restart.
+    """
+    plan = build_blob_mount_plan(storage, job_name, expiry_hours)
+    return plan.secret_manifest(namespace)
 
 
 __all__ = [
@@ -280,4 +226,5 @@ __all__ = [
     "BlobMountError",
     "BlobMountPlan",
     "build_blob_mount_plan",
+    "refresh_secret_manifest",
 ]

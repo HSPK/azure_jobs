@@ -124,18 +124,35 @@ class TestBlobMountPlan:
         plan = _plan(storage)
         secret = plan.secret_manifest("ns")
         assert secret["metadata"] == {"name": "job-blob", "namespace": "ns"}
-        assert secret["stringData"]["AJ_BLOB_SAS_FAST_SHARED"] == "sig=abc"
+        assert secret["stringData"]["fast_shared"] == "sig=abc"
+
+    def test_token_expiry_stays_inside_the_azure_limit(self, storage):
+        from azure_jobs.backend.volcano import storage as storage_mod
+
+        assert storage_mod.SAS_MAX_HOURS < 7 * 24
 
 
 class TestBlobMountsInPodSpec:
-    def test_storage_grants_fuse_privilege_and_env(self, storage):
+    def test_storage_grants_fuse_privilege(self, storage):
         plan = _plan(storage)
         spec = build_volcano_job(_config(), namespace="ns", blob_plan=plan)
         container = spec["spec"]["tasks"][0]["template"]["spec"]["containers"][0]
         assert container["securityContext"] == {"privileged": True}
-        names = [e["name"] for e in container["env"]]
-        assert "AJ_BLOB_SAS_FAST_SHARED" in names
-        assert "AJ_BLOB_ACCOUNT_FAST_SHARED" in names
+
+    def test_credential_is_a_mounted_secret_not_an_env_var(self, storage):
+        # Values read from a Secret through env are fixed at container start, so
+        # a rotated token would never reach a running mount.
+        plan = _plan(storage)
+        spec = build_volcano_job(_config(), namespace="ns", blob_plan=plan)
+        pod = spec["spec"]["tasks"][0]["template"]["spec"]
+        container = pod["containers"][0]
+        volume = next(v for v in pod["volumes"] if v["name"] == "aj-blob-secrets")
+        assert volume["secret"]["secretName"] == "job-blob"
+        mount = next(
+            m for m in container["volumeMounts"] if m["name"] == "aj-blob-secrets"
+        )
+        assert mount["readOnly"] is True
+        assert not any("SAS" in e.get("name", "") for e in container.get("env", []))
 
     def test_token_never_reaches_the_pod_spec(self, storage):
         plan = _plan(storage, sas="super-secret-signature")

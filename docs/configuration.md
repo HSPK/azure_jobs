@@ -78,14 +78,31 @@ storage:
 ```
 
 At submission a user-delegation SAS is minted per container with the caller's
-`az login`, stored in a Secret named `<job>-blob`, and exposed to the container
-as `AJ_BLOB_ACCOUNT_<KEY>` and `AJ_BLOB_SAS_<KEY>`. The token stays out of the
-pod spec. Pods that declare storage run privileged, because blobfuse2 opens
+`az login` and stored in a Secret named `<job>-blob`. The Secret is *mounted* at
+`/mnt/aj-blob-secrets/<key>` rather than passed through the environment: a value
+read from a Secret via `env` is fixed when the container starts, whereas a
+mounted Secret is refreshed in place by the kubelet. The token never appears in
+the pod spec. Pods that declare storage run privileged, because blobfuse2 opens
 `/dev/fuse`; pods without storage are unchanged.
 
-Azure caps a user-delegation SAS at seven days, so a run longer than that
-outlives its mount. Refresh it by re-applying the Secret with a new token and
-restarting the pod, or copy the data with `azcopy` instead of mounting.
+blobfuse2 is installed at startup for whichever distribution the image uses.
+Minimal images often have no download client at all — base Debian and Ubuntu
+ship no curl, wget or python, and their perl lacks LWP — so the package manager
+bootstraps one. Where no package manager can install the archive, the binary is
+extracted from it directly.
+
+Azure caps a user-delegation SAS at seven days, so a longer run outlives the
+token it started with. Mint a replacement and apply it to the same Secret:
+
+```python
+from azure_jobs.backend.volcano.storage import refresh_secret_manifest
+```
+
+The kubelet propagates the new value to the mounted file within about a minute,
+and the pod re-reads it hourly and rewrites the blobfuse2 configuration, which
+blobfuse2 applies to the live mount. Nothing restarts and the mount does not
+drop. Because the pod cannot mint its own token, this step has to run somewhere
+holding an Azure credential, such as a periodic job on a workstation.
 
 ## CPU-only jobs
 
