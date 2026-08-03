@@ -12,6 +12,7 @@ from typing import Any
 from azure_jobs.job.spec import JobSpec
 from azure_jobs.utils.naming import sanitize_dns1035
 from . import constants as C
+from .storage import BlobMountPlan
 
 log = logging.getLogger(__name__)
 
@@ -78,6 +79,7 @@ class VolcanoConfig:
     code_ignore: list[str] = field(default_factory=list)
     pvc_name: str = ""
     pvc_mount_dir: str = ""
+    storage: dict[str, Any] = field(default_factory=dict)
 
 def build_volcano_config_from_request(request: JobSpec) -> VolcanoConfig:
     """Translate a :class:JobSpec into a VolcanoConfig."""
@@ -91,15 +93,25 @@ def build_volcano_config_from_request(request: JobSpec) -> VolcanoConfig:
     pvc_name = env_vars.get("AMLT_PERSISTENT_VOLUME_NAME", "")
     pvc_mount_dir = env_vars.get("AMLT_PERSISTENT_VOLUME_MOUNT_DIR", "")
 
+    # A template that omits the GPU count keeps the requested process count, so
+    # existing GPU templates are unaffected, while an explicit 0 now survives
+    # and yields a CPU-only job instead of silently falling back to the default.
+    gpus_per_node = (
+        vol.gpus_per_node
+        if vol.gpus_per_node is not None
+        else (request.gpus_per_node or C.DEFAULT_GPUS_PER_NODE)
+    )
+    # CPU nodes expose no RDMA device, and requesting one leaves the job
+    # unschedulable, so follow the GPU count unless the template is explicit.
+    rdma = vol.rdma if vol.rdma is not None else gpus_per_node > 0
+
     return VolcanoConfig(
         name=request.name,
         namespace=vol.namespace,
         queue=vol.queue or "default",
         context=vol.context,
         nodes=request.nodes,
-        gpus_per_node=(
-            vol.gpus_per_node or request.gpus_per_node or C.DEFAULT_GPUS_PER_NODE
-        ),
+        gpus_per_node=gpus_per_node,
         cpus_per_node=(
             vol.cpus_per_node
             or vol.container_args.get("cpus", C.DEFAULT_CPUS_PER_NODE)
@@ -112,7 +124,7 @@ def build_volcano_config_from_request(request: JobSpec) -> VolcanoConfig:
         command=list(request.command),
         setup_commands=list(request.setup_commands),
         env_vars=env_vars,
-        rdma=vol.rdma,
+        rdma=rdma,
         shm_size=vol.shm_size,
         priority_class=vol.priority_class,
         labels=dict(vol.labels),
@@ -120,6 +132,7 @@ def build_volcano_config_from_request(request: JobSpec) -> VolcanoConfig:
         code_ignore=list(request.code_ignore),
         pvc_name=pvc_name,
         pvc_mount_dir=pvc_mount_dir,
+        storage=dict(request.storage),
     )
 
 def resolve_namespace(cfg: VolcanoConfig) -> str:
@@ -137,6 +150,7 @@ def build_volcano_job(
     namespace: str | None = None,
     code_setup_lines: list[str] | None = None,
     code_path: str | None = None,
+    blob_plan: BlobMountPlan | None = None,
 ) -> dict[str, Any]:
     """Build a Volcano Job spec dict from config.
 
@@ -163,6 +177,10 @@ def build_volcano_job(
         )
 
     script_lines: list[str] = []
+    # Mount before anything else so code setup and the user command can both
+    # read and write the blob containers.
+    if blob_plan is not None and blob_plan.enabled:
+        script_lines.extend(blob_plan.setup_lines())
     if code_setup_lines:
         script_lines.extend(code_setup_lines)
     if code_path:
@@ -262,6 +280,11 @@ def build_volcano_job(
         }
         if env_list:
             container["env"] = env_list
+        if blob_plan is not None and blob_plan.enabled:
+            container.setdefault("env", []).extend(blob_plan.env_entries())
+            # blobfuse2 opens /dev/fuse, which an unprivileged container cannot
+            # do. Only pods that declare storage are given this privilege.
+            container["securityContext"] = {"privileged": True}
         if cfg.rdma:
             container["ports"] = [
                 {"name": C.RDMA_PORT_NAME, "containerPort": C.RDMA_PORT}

@@ -58,6 +58,50 @@ sku:                             # range dict
   "8+":  "8xA100-80GB-NvLink"
 ```
 
+## Blob storage on Volcano
+
+Volcano clusters here have no `blob.csi.azure.com` node plugin registered, so a
+CSI volume cannot be satisfied and the pod would wait in `ContainerCreating`.
+Declaring `storage` therefore mounts each container inside the pod with
+blobfuse2:
+
+```yaml
+target:
+  service: volcano
+  queue: <queue>
+
+storage:
+  fast_shared:
+    storage_account_name: <account>
+    container_name: <container>
+    mount_dir: /mnt/fast_shared
+```
+
+At submission a user-delegation SAS is minted per container with the caller's
+`az login`, stored in a Secret named `<job>-blob`, and exposed to the container
+as `AJ_BLOB_ACCOUNT_<KEY>` and `AJ_BLOB_SAS_<KEY>`. The token stays out of the
+pod spec. Pods that declare storage run privileged, because blobfuse2 opens
+`/dev/fuse`; pods without storage are unchanged.
+
+Azure caps a user-delegation SAS at seven days, so a run longer than that
+outlives its mount. Refresh it by re-applying the Secret with a new token and
+restarting the pod, or copy the data with `azcopy` instead of mounting.
+
+## CPU-only jobs
+
+Set the GPU count to zero. RDMA then defaults off, since CPU nodes expose no
+RDMA device and requesting one leaves the job unschedulable; set `rdma`
+explicitly to override.
+
+```yaml
+target:
+  service: volcano
+  queue: <queue>
+  gpus_per_node: 0
+```
+
+Omitting `gpus_per_node` keeps the previous behaviour of following `-p`.
+
 ## Runtime env vars
 
 Exported into every job:

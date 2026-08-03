@@ -20,6 +20,34 @@ from .config import (
     resolve_namespace,
 )
 from .uploaders import pick_uploader
+from .storage import BlobMountPlan, BlobMountError, build_blob_mount_plan
+
+
+def _apply_blob_secret(
+    plan: BlobMountPlan, namespace: str, context: str
+) -> None:
+    """Create or update the Secret holding this job's SAS tokens.
+
+    ``apply`` rather than ``create`` so a resubmission under the same job name
+    refreshes an existing, possibly expired, token instead of failing.
+    """
+    manifest = yaml.dump(plan.secret_manifest(namespace), default_flow_style=False)
+    cmd = ["kubectl", "apply", "-f", "-"]
+    if context:
+        cmd.extend(["--context", context])
+    try:
+        result = subprocess.run(
+            cmd, input=manifest, capture_output=True, text=True, timeout=60
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise BlobMountError(
+            f"kubectl apply for the blob Secret timed out after {exc.timeout}s"
+        ) from exc
+    if result.returncode != 0:
+        raise BlobMountError(
+            "Failed to create the blob Secret "
+            f"{plan.secret_name}: {(result.stderr or result.stdout).strip()}"
+        )
 
 log = logging.getLogger(__name__)
 
@@ -55,6 +83,31 @@ def submit_via_volcano(
             error=err,
             note=f"{type(exc).__name__}: {exc}",
         )
+
+    try:
+        blob_plan = build_blob_mount_plan(cfg.storage, cfg.name)
+    except AJError as exc:
+        emit(JobEvent(kind="error", detail=str(exc)))
+        return JobResult(
+            job_name=request.name,
+            status="failed",
+            error=str(exc),
+            note=str(exc),
+        )
+
+    if blob_plan.enabled:
+        targets = ", ".join(f"{m.account}/{m.container} -> {m.mount_dir}" for m in blob_plan.mounts)
+        emit(JobEvent(kind="storage", detail=f"blobfuse2 mounts: {targets}"))
+        try:
+            _apply_blob_secret(blob_plan, namespace, cfg.context)
+        except AJError as exc:
+            emit(JobEvent(kind="error", detail=str(exc)))
+            return JobResult(
+                job_name=request.name,
+                status="failed",
+                error=str(exc),
+                note=str(exc),
+            )
 
     try:
         uploader = pick_uploader(request.extra)
@@ -98,6 +151,7 @@ def submit_via_volcano(
             namespace=namespace,
             code_setup_lines=upload_result.pod_setup_lines or None,
             code_path=upload_result.code_path or None,
+            blob_plan=blob_plan,
         )
     except Exception as exc:
         log.exception("Failed to build Volcano job spec for %s", request.name)
