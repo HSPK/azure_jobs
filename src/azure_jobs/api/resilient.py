@@ -98,6 +98,10 @@ class ResilientBackend:
         return self._port("catalog")
 
     @property
+    def account(self) -> Any:
+        return self._port("account")
+
+    @property
     def submitter(self) -> Any:
         return self._port("submitter")
 

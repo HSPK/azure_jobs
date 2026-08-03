@@ -13,7 +13,6 @@ from azure_jobs.cli._progress import (
     fetch_jobs_all_ws_with_progress,
     fetch_jobs_with_progress,
 )
-from azure_jobs.az_client import apply_cutoff
 from azure_jobs.journal import read_records, resolve_short_id
 from azure_jobs.utils.stats import STATUS_TERMINAL
 from azure_jobs.utils.ui import show_jobs_table
@@ -80,48 +79,36 @@ def job_list(
     ws_name: str | None,
 ) -> None:
     """List recent jobs in the cloud workspace."""
-    from azure_jobs.az_client import create_rest_client
+    from azure_jobs.cli._backend import backend
     from azure_jobs.utils.ui import console, show_cloud_jobs_table
 
-    client = create_rest_client(ws_name=ws_name)
-    filtering = bool(status or experiment)
+    with backend(ws_name) as api:
+        with console.status("[bold cyan]Fetching jobs…[/bold cyan]", spinner="dots"):
+            jobs = api.jobs.fetch(
+                limit=last,
+                archived=archived,
+                job_type=job_type or "",
+                tag=tag or "",
+                experiment=experiment or "",
+                status=status or "",
+            )
 
-    def _predicate(j: dict[str, Any]) -> bool:
-        if status and j.get("status", "").lower() != status.lower():
-            return False
-        if experiment and j.get("experiment", "") != experiment:
-            return False
-        return True
-
-    with console.status("[bold cyan]Fetching jobs…[/bold cyan]", spinner="dots") as st:
-
-        def _on_progress(matched: int, scanned: int) -> None:
-            suffix = f" ({scanned} scanned)" if filtering else ""
-            st.update(f"[bold cyan]Fetching… {matched}/{last} jobs{suffix}[/bold cyan]")
-
-        jobs = client.jobs.fetch(
-            last,
-            list_view_type="All" if archived else "ActiveOnly",
-            job_type=job_type or "",
-            tag=tag or "",
-            predicate=_predicate if filtering else None,
-            max_scan=last * 5 if filtering else last,
-            on_progress=_on_progress,
-        )
-
-    show_cloud_jobs_table(jobs)
+    show_cloud_jobs_table([job.to_dict() for job in jobs])
 
 def _fetch_and_show_job(job_id: str, ws_name: str | None = None) -> None:
-    from azure_jobs.az_client import create_rest_client
+    from azure_jobs.api.models import JobRef
+    from azure_jobs.cli._backend import backend
     from azure_jobs.errors import RestError
     from azure_jobs.utils.ui import console, error, show_job_detail
 
     name = resolve_short_id(job_id)
-    client = create_rest_client(ws_name=ws_name)
 
     try:
-        with console.status("[bold cyan]Fetching job…[/bold cyan]", spinner="dots"):
-            job = client.jobs.get(name)
+        with backend(ws_name) as api:
+            with console.status(
+                "[bold cyan]Fetching job…[/bold cyan]", spinner="dots"
+            ):
+                job = api.actions.get(JobRef(name, name)).to_dict()
     except RestError as exc:
         if exc.status_code == 404:
             error(f"Job not found: [bold]{name}[/bold]")
@@ -131,11 +118,11 @@ def _fetch_and_show_job(job_id: str, ws_name: str | None = None) -> None:
                 details.append(f"HTTP {exc.status_code}")
             if exc.azure_code:
                 details.append(f"azure_code={exc.azure_code}")
-            log.exception("client.jobs.get(%s) failed", name)
+            log.exception("Fetching job %s failed", name)
             error(" — ".join(details) + "  (AJ_DEBUG=1 for traceback)")
         raise SystemExit(1)
     except Exception as exc:
-        log.exception("client.jobs.get(%s) raised unexpectedly", name)
+        log.exception("Fetching job %s raised unexpectedly", name)
         error(
             f"Failed to fetch job ({type(exc).__name__}: {exc}). "
             "Run with AJ_DEBUG=1 for a Python traceback."
@@ -161,7 +148,8 @@ def job_status(job_id: str) -> None:
 @click.argument("job_id")
 def job_cancel(job_id: str) -> None:
     """Cancel a running job."""
-    from azure_jobs.az_client import create_rest_client
+    from azure_jobs.api.models import JobRef
+    from azure_jobs.cli._backend import backend
     from azure_jobs.utils.ui import (
         console,
         get_output_mode,
@@ -171,13 +159,20 @@ def job_cancel(job_id: str) -> None:
     )
 
     azure_name = resolve_short_id(job_id)
-    client = create_rest_client()
     json_mode = get_output_mode() == "json"
+    ref = JobRef(azure_name, azure_name)
 
-    with console.status("[bold cyan]Checking job…[/bold cyan]", spinner="dots"):
-        job = client.jobs.get(azure_name)
+    with backend() as api:
+        with console.status("[bold cyan]Checking job…[/bold cyan]", spinner="dots"):
+            current = api.actions.get(ref).status
+        final = current
+        if current not in STATUS_TERMINAL:
+            with console.status(
+                "[bold cyan]Cancelling job…[/bold cyan]", spinner="dots"
+            ):
+                api.actions.cancel(ref)
+                final = api.actions.get(ref).status
 
-    current = job.get("status", "")
     if current in STATUS_TERMINAL:
         if not json_mode:
             warning(f"Job {job_id} already {current.lower()}")
@@ -191,11 +186,6 @@ def job_cancel(job_id: str) -> None:
         )
         return
 
-    with console.status("[bold cyan]Cancelling job…[/bold cyan]", spinner="dots"):
-        client.jobs.cancel(azure_name)
-        job = client.jobs.get(azure_name)
-
-    final = job.get("status", "?")
     if final in ("Canceled", "CancelRequested"):
         if not json_mode:
             success(f"Job {job_id} cancelled")
@@ -223,7 +213,8 @@ def job_cancel(job_id: str) -> None:
 @click.argument("job_id")
 def job_logs(job_id: str) -> None:
     """Show logs from a job."""
-    from azure_jobs.az_client import create_rest_client
+    from azure_jobs.api.models import JobRef
+    from azure_jobs.cli._backend import backend
     from azure_jobs.utils.ui import (
         console,
         emit_json,
@@ -234,10 +225,17 @@ def job_logs(job_id: str) -> None:
 
     azure_name = resolve_short_id(job_id)
     json_mode = get_output_mode() == "json"
+    ref = JobRef(azure_name, azure_name)
 
-    with console.status("[bold cyan]Checking job status…[/bold cyan]", spinner="dots"):
-        client = create_rest_client()
-        job = client.jobs.get(azure_name)
+    with backend() as api:
+        with console.status(
+            "[bold cyan]Checking job status…[/bold cyan]", spinner="dots"
+        ):
+            job = api.actions.get(ref).to_dict()
+        _status = job.get("status", "")
+        downloaded = (
+            api.logs.download(ref) if _status not in _NO_LOG_STATUSES else {}
+        )
 
     status = job.get("status", "")
     display = job.get("display_name") or azure_name
@@ -270,8 +268,8 @@ def job_logs(job_id: str) -> None:
         )
         return
 
-    with console.status("[bold cyan]Downloading logs…[/bold cyan]", spinner="dots"):
-        content, error_msg = client.logs.download(azure_name)
+    content = downloaded.get("content", "")
+    error_msg = downloaded.get("error", "")
 
     if json_mode:
         emit_json(
@@ -359,15 +357,13 @@ def job_stats(
         show_workspace_stats_table,
     )
 
-    cutoff = datetime.now(timezone.utc) - timedelta(days=days) if days else None
     max_jobs = last if last is not None else 10000
+    cutoff_days = days or 0
 
     if all_ws:
-        jobs = fetch_jobs_all_ws_with_progress(max_jobs, cutoff_utc=cutoff)
+        jobs = fetch_jobs_all_ws_with_progress(max_jobs, cutoff_days=cutoff_days)
     else:
-        jobs = fetch_jobs_with_progress(max_jobs, ws_name, cutoff_utc=cutoff)
-
-    jobs = apply_cutoff(jobs, cutoff)
+        jobs = fetch_jobs_with_progress(max_jobs, ws_name, cutoff_days=cutoff_days)
 
     if not jobs:
         console.print("[dim]No jobs found.[/dim]")

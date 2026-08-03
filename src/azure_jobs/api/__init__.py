@@ -51,6 +51,12 @@ from azure_jobs.api.ports import (
 
 PROTOCOL_VERSION = 1
 
+# Registers the Azure value types so tagged payloads rebuild with their
+# behaviour intact on whichever side of the socket decodes them.
+from azure_jobs.api.typed import install_azure_types as _install_azure_types
+
+_install_azure_types()
+
 __all__ = [
     "Backend",
     "BackendFactory",

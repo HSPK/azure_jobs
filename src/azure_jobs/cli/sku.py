@@ -14,14 +14,15 @@ def sku_group() -> None:
 @click.option("--all", "show_all", is_flag=True, help="Include zero-quota families")
 def sku_list(show_all: bool) -> None:
     """List available SKUs on Singularity virtual clusters."""
-    from azure_jobs.az_client import AzureARMClient
+    from azure_jobs.cli._backend import account
     from azure_jobs.utils.ui import console, error, show_sku_table
 
-    arm = AzureARMClient()
-    with console.status(
-        "[bold cyan]Discovering virtual clusters…[/bold cyan]", spinner="dots"
-    ):
-        vcs = arm.vc.quota.list(include_zero=show_all)
+    with account() as api:
+        with console.status(
+            "[bold cyan]Discovering virtual clusters…[/bold cyan]", spinner="dots"
+        ):
+            vcs = api.vc_quota(include_zero=show_all)
+        catalog, seen_names, seen_regions = _sku_catalog(api, vcs)
     if not vcs:
         error("No Singularity virtual clusters found")
         console.print(
@@ -29,6 +30,11 @@ def sku_list(show_all: bool) -> None:
         )
         raise SystemExit(1)
 
+    show_sku_table(vcs, catalog=catalog)
+
+
+def _sku_catalog(api, vcs) -> tuple[list, set[str], set[str]]:
+    """Instance types for every distinct region the VCs live in."""
     catalog: list = []
     seen_names: set[str] = set()
     seen_regions: set[str] = set()
@@ -37,10 +43,9 @@ def sku_list(show_all: bool) -> None:
         if not region or region in seen_regions:
             continue
         seen_regions.add(region)
-        for info in arm.instance_types.list(region):
+        for info in api.instance_types(region):
             if info.name in seen_names:
                 continue
             seen_names.add(info.name)
             catalog.append(info)
-
-    show_sku_table(vcs, catalog=catalog)
+    return catalog, seen_names, seen_regions

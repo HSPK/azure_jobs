@@ -357,3 +357,82 @@ class TestConnectionLifetime:
         finally:
             if harness.daemon is not None:
                 harness.daemon.shutdown()
+
+
+class TestBulkFetchPort:
+    """`aj job list` / `aj exp` / `aj job stats` all go through fetch."""
+
+    def test_fetch_returns_jobs(self, harness):
+        jobs = harness.backend.jobs.fetch(limit=10)
+        assert [j.name for j in jobs] == ["a", "b", "c"]
+
+    def test_limit_is_honoured(self, harness):
+        assert len(harness.backend.jobs.fetch(limit=2)) == 2
+
+    def test_status_filter(self, harness):
+        assert len(harness.backend.jobs.fetch(limit=10, status="running")) == 3
+        assert harness.backend.jobs.fetch(limit=10, status="completed") == []
+
+    def test_experiment_filter(self, harness):
+        jobs = harness.backend.jobs.fetch(limit=10, experiment="nope")
+        assert jobs == []
+
+
+class TestLogDownloadPort:
+    def test_download_returns_content_and_error_keys(self, harness):
+        result = harness.backend.logs.download(JobRef("a", "a"))
+        assert set(result) == {"content", "error"}
+        assert result["content"]
+
+
+class TestExtendedCatalogPort:
+    def test_single_datastore(self, harness):
+        item = harness.backend.catalog.datastore("ds1")
+        assert item is not None
+        assert item.name == "ds1"
+
+    def test_environment_versions(self, harness):
+        items = harness.backend.catalog.environment_versions("env1")
+        assert [i.name for i in items] == ["env1"]
+        assert items[0].version == "3"
+
+
+class TestRichPayloadsSurviveTheTransport:
+    """Catalog rows carry behaviour, not just fields."""
+
+    def test_nested_objects_and_methods_survive(self):
+        from azure_jobs.api.models import CatalogItem
+        from azure_jobs.az_client import SeriesQuota, VCInfo
+
+        quota = SeriesQuota(series="NDH100v5", accelerator="H100", gpu_memory=80)
+        quota.set_tier("Premium", 64, 32)
+        item = CatalogItem(
+            "vc_quota",
+            "vc1",
+            VCInfo(
+                name="vc1",
+                resource_group="rg",
+                subscription_id="sub",
+                quotas=[quota],
+            ),
+        )
+        restored = CatalogItem.from_json(item.to_json())
+        assert type(restored.raw).__name__ == "VCInfo"
+        assert restored.quotas[0].tiers["Premium"].limit == 64
+        assert restored.quotas[0].has_any_quota() is True
+
+    def test_an_unregistered_type_degrades_to_a_dict(self):
+        from azure_jobs.api.models import CatalogItem
+        from azure_jobs.api.typed import TAG
+
+        payload = {TAG: "SomethingUnknown", "a": 1}
+        restored = CatalogItem.from_json(
+            {"category": "x", "name": "n", "raw": payload}
+        )
+        assert restored.raw == {"a": 1}
+
+    def test_plain_dicts_are_untouched(self):
+        from azure_jobs.api.models import CatalogItem
+
+        item = CatalogItem("datastore", "ds", {"name": "ds", "is_default": True})
+        assert CatalogItem.from_json(item.to_json()).raw == item.raw

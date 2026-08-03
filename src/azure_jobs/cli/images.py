@@ -34,32 +34,11 @@ def image_list(query: str | None) -> None:
     show_sing_images_table(images)
 
 def _fetch_sing_images() -> list[dict]:
-    import logging
+    from azure_jobs.cli._backend import account
 
-    from azure_jobs.az_client import AzureARMClient
+    with account() as api:
+        return _parse_images([dict(item.raw) for item in api.singularity_images()])
 
-    log = logging.getLogger(__name__)
-    with AzureARMClient() as arm:
-        try:
-            subs = arm.subscriptions.list()
-        except Exception:
-            log.debug("list_subscriptions failed", exc_info=True)
-            return []
-        for sub_id in subs:
-            try:
-                data = arm.get(
-                    f"https://management.azure.com/subscriptions/{sub_id}"
-                    f"/providers/Microsoft.Singularity/images"
-                    f"?api-version=2020-12-01-preview"
-                )
-                if data and data.get("value"):
-                    return _parse_images(data["value"])
-            except Exception:
-                log.debug(
-                    "Singularity images fetch failed for %s", sub_id, exc_info=True
-                )
-                continue
-    return []
 
 def _parse_images(raw_images: list[dict]) -> list[dict]:
     images = []

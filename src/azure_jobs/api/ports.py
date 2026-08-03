@@ -8,7 +8,7 @@ interface, and the frontend disables the matching commands.
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 from azure_jobs.api.models import (
     CatalogItem,
@@ -39,6 +39,24 @@ class JobQuery(Protocol):
         limit: int,
         query: JobQuerySpec,
     ) -> JobPage: ...
+
+    def fetch(
+        self,
+        *,
+        limit: int,
+        archived: bool = False,
+        job_type: str = "",
+        tag: str = "",
+        experiment: str = "",
+        status: str = "",
+        cutoff_days: int = 0,
+        max_scan: int = 0,
+    ) -> list[Job]:
+        """Bulk listing with server-side paging and client-side filtering.
+
+        Filters are explicit values rather than a predicate callable so the
+        same call can be served locally or over the wire.
+        """
 
 
 @runtime_checkable
@@ -72,6 +90,9 @@ class RangeLogSource(Protocol):
 
     def open(self, job: JobRef, path: str) -> RangeLogReader: ...
 
+    def download(self, job: JobRef, *, cancelled: Cancelled = None) -> dict[str, str]:
+        """Return ``{"content": text, "error": text}`` for a job's logs."""
+
 
 @runtime_checkable
 class Catalog(Protocol):
@@ -79,11 +100,61 @@ class Catalog(Protocol):
 
     def datastores(self) -> list[CatalogItem]: ...
 
+    def datastore(self, name: str) -> CatalogItem | None: ...
+
     def environments(self) -> list[CatalogItem]: ...
+
+    def environment_versions(self, name: str) -> list[CatalogItem]: ...
 
     def computes(self) -> list[CatalogItem]: ...
 
     def quota(self) -> list[CatalogItem]: ...
+
+
+@runtime_checkable
+class Account(Protocol):
+    """Subscription-scoped inventory, usable before a workspace is configured.
+
+    ``aj sku`` / ``aj sa`` / ``aj uai`` / ``aj ws`` must work during bootstrap,
+    so these deliberately take no target.
+    """
+
+    def subscriptions(self) -> list[CatalogItem]: ...
+
+    def workspaces(self, subscription_id: str = "") -> list[CatalogItem]: ...
+
+    def storage_accounts(self, subscription_id: str = "") -> list[CatalogItem]: ...
+
+    def identities(self, subscription_id: str = "") -> list[CatalogItem]: ...
+
+    def instance_types(
+        self, region: str = "", subscription_id: str = ""
+    ) -> list[CatalogItem]: ...
+
+    def vc_quota(
+        self, *, include_zero: bool = False, subscription_id: str = ""
+    ) -> list[CatalogItem]: ...
+
+    def computes(
+        self,
+        resource_group: str,
+        workspace: str,
+        subscription_id: str = "",
+    ) -> list[CatalogItem]: ...
+
+    def singularity_images(self) -> list[CatalogItem]: ...
+
+    def workspace_computes(self) -> dict[str, Any]:
+        """``{"pairs": [{"workspace": {...}, "computes": [...]}], "failures": []}``."""
+
+    def jobs_all_workspaces(
+        self, *, limit: int, cutoff_days: int = 0
+    ) -> dict[str, Any]:
+        """``{"jobs": [...], "failures": [names]}`` across every workspace.
+
+        Returns partial results with the failures named rather than aborting,
+        because one inaccessible workspace must not hide the rest.
+        """
 
 
 @runtime_checkable
@@ -129,6 +200,7 @@ class Backend(Protocol):
     delete_jobs: JobDelete | None
     logs: RangeLogSource | None
     catalog: Catalog | None
+    account: Account | None
     submitter: Submitter | None
     queue: SubmitQueue | None
     watcher: Watcher | None
@@ -149,6 +221,7 @@ class TargetCatalog(Protocol):
 
 
 __all__ = [
+    "Account",
     "Backend",
     "BackendFactory",
     "Cancelled",

@@ -174,6 +174,7 @@ class Daemon:
         *,
         backend_factory: Any = None,
         target_catalog: Any = None,
+        account_factory: Any = None,
         idle_timeout: float = SESSION_IDLE_TIMEOUT,
         watch_interval: float = 20.0,
         shutdown_when_idle: float = DAEMON_IDLE_SHUTDOWN,
@@ -181,6 +182,9 @@ class Daemon:
         self.socket_path = Path(socket_path)
         self._factory = backend_factory
         self._catalog = target_catalog
+        self._account_factory = account_factory
+        self._accounts: dict[str, Any] = {}
+        self._account_touched: dict[str, float] = {}
         self._idle_timeout = idle_timeout
         self._watch_interval = watch_interval
         self._shutdown_when_idle = shutdown_when_idle
@@ -284,6 +288,8 @@ class Daemon:
             sessions = list(self._sessions.values())
             self._sessions.clear()
             self._by_token.clear()
+            self._accounts.clear()
+            self._account_touched.clear()
         for session in sessions:
             session.close()
         try:
@@ -336,6 +342,12 @@ class Daemon:
                         self._by_token.pop(token, None)
         for session in stale:
             session.close()
+        cutoff = time.time() - self._idle_timeout
+        with self._lock:
+            for sub, touched in list(self._account_touched.items()):
+                if touched < cutoff:
+                    self._accounts.pop(sub, None)
+                    self._account_touched.pop(sub, None)
         return len(stale)
 
     # ── connection handling ──────────────────────────────────────────────
@@ -436,6 +448,27 @@ class Daemon:
             session = self._by_token.pop(token, None)
         if session is not None:
             session.release()
+
+    def account_for(self, subscription_id: str) -> Any:
+        """Subscription-scoped access, cached per subscription.
+
+        Deliberately not tied to a Session: ``aj sku`` / ``aj sa`` / ``aj ws``
+        must work before any workspace is configured.
+        """
+        with self._lock:
+            account = self._accounts.get(subscription_id)
+            if account is None:
+                account = self._make_account(subscription_id)
+                self._accounts[subscription_id] = account
+            self._account_touched[subscription_id] = time.time()
+        return account
+
+    def _make_account(self, subscription_id: str) -> Any:
+        if self._account_factory is not None:
+            return self._account_factory(subscription_id)
+        from azure_jobs.api.inprocess import AzureAccount
+
+        return AzureAccount(subscription_id)
 
     def session_for(self, params: Mapping[str, Any]) -> Session:
         token = str(params.get("session") or "")
@@ -672,6 +705,81 @@ def _m_watch_poll(daemon: Daemon, params: Mapping[str, Any], conn: Connection) -
     return [note.to_json() for note in notes]
 
 
+def _m_jobs_fetch(daemon: Daemon, params: Mapping[str, Any], conn: Connection) -> Any:
+    jobs = _jobs(daemon, params).jobs.fetch(
+        limit=int(params.get("limit") or 50),
+        archived=bool(params.get("archived")),
+        job_type=str(params.get("job_type") or ""),
+        tag=str(params.get("tag") or ""),
+        experiment=str(params.get("experiment") or ""),
+        status=str(params.get("status") or ""),
+        cutoff_days=int(params.get("cutoff_days") or 0),
+        max_scan=int(params.get("max_scan") or 0),
+    )
+    return [job.to_json() for job in jobs]
+
+
+def _m_logs_download(daemon: Daemon, params: Mapping[str, Any], conn: Connection) -> Any:
+    return _jobs(daemon, params).logs.download(_ref(params))
+
+
+def _m_catalog_datastore(
+    daemon: Daemon, params: Mapping[str, Any], conn: Connection
+) -> Any:
+    item = _jobs(daemon, params).catalog.datastore(str(params.get("name") or ""))
+    return item.to_json() if item else None
+
+
+def _m_catalog_environment_versions(
+    daemon: Daemon, params: Mapping[str, Any], conn: Connection
+) -> Any:
+    items = _jobs(daemon, params).catalog.environment_versions(
+        str(params.get("name") or "")
+    )
+    return [item.to_json() for item in items]
+
+
+def _account(daemon: Daemon, params: Mapping[str, Any]) -> Any:
+    """Subscription-scoped access, usable without an open workspace session."""
+    return daemon.account_for(str(params.get("subscription_id") or ""))
+
+
+def _m_account_all_jobs(
+    daemon: Daemon, params: Mapping[str, Any], conn: Connection
+) -> Any:
+    return _account(daemon, params).jobs_all_workspaces(
+        limit=int(params.get("limit") or 10000),
+        cutoff_days=int(params.get("cutoff_days") or 0),
+    )
+
+
+def _m_account_ws_computes(
+    daemon: Daemon, params: Mapping[str, Any], conn: Connection
+) -> Any:
+    return _account(daemon, params).workspace_computes()
+
+
+def _account_call(kind: str) -> Callable[[Daemon, Mapping[str, Any], Connection], Any]:
+    def call(daemon: Daemon, params: Mapping[str, Any], conn: Connection) -> Any:
+        account = _account(daemon, params)
+        if kind == "subscriptions":
+            items = account.subscriptions()
+        elif kind == "instance_types":
+            items = account.instance_types(str(params.get("region") or ""))
+        elif kind == "vc_quota":
+            items = account.vc_quota(include_zero=bool(params.get("include_zero")))
+        elif kind == "computes":
+            items = account.computes(
+                str(params.get("resource_group") or ""),
+                str(params.get("workspace") or ""),
+            )
+        else:
+            items = getattr(account, kind)()
+        return [item.to_json() for item in items]
+
+    return call
+
+
 _METHODS: dict[str, Callable[[Daemon, Mapping[str, Any], Connection], Any]] = {
     "daemon.ping": _m_ping,
     "daemon.info": _m_info,
@@ -683,6 +791,7 @@ _METHODS: dict[str, Callable[[Daemon, Mapping[str, Any], Connection], Any]] = {
     "jobs.get": _m_jobs_get,
     "jobs.cancel": _m_jobs_cancel,
     "jobs.delete": _m_jobs_delete,
+    "jobs.fetch": _m_jobs_fetch,
     "logs.list_files": _m_logs_list,
     "logs.pick_default": _m_logs_pick,
     "logs.open": _m_logs_open,
@@ -690,10 +799,23 @@ _METHODS: dict[str, Callable[[Daemon, Mapping[str, Any], Connection], Any]] = {
     "logs.read_after": _m_logs_after,
     "logs.read_range": _m_logs_range,
     "logs.close": _m_logs_close,
+    "logs.download": _m_logs_download,
     "catalog.datastores": _catalog_call("datastores"),
     "catalog.environments": _catalog_call("environments"),
     "catalog.computes": _catalog_call("computes"),
     "catalog.quota": _catalog_call("quota"),
+    "catalog.datastore": _m_catalog_datastore,
+    "catalog.environment_versions": _m_catalog_environment_versions,
+    "account.subscriptions": _account_call("subscriptions"),
+    "account.workspaces": _account_call("workspaces"),
+    "account.storage_accounts": _account_call("storage_accounts"),
+    "account.identities": _account_call("identities"),
+    "account.instance_types": _account_call("instance_types"),
+    "account.vc_quota": _account_call("vc_quota"),
+    "account.singularity_images": _account_call("singularity_images"),
+    "account.jobs_all_workspaces": _m_account_all_jobs,
+    "account.workspace_computes": _m_account_ws_computes,
+    "account.computes": _account_call("computes"),
     "submit.run": _m_submit_run,
     "queue.enqueue": _m_queue_enqueue,
     "queue.list": _m_queue_list,

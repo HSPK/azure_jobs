@@ -15,15 +15,15 @@ def sa_group() -> None:
 @sa_group.command(name="list")
 def sa_list() -> None:
     """List storage accounts across accessible subscriptions."""
-    from azure_jobs.az_client import AzureARMClient
+    from azure_jobs.cli._backend import account
     from azure_jobs.utils.ui import console, error, show_storage_accounts_table
 
-    arm = AzureARMClient()
     with console.status(
         "[bold cyan]Discovering storage accounts…[/bold cyan]", spinner="dots"
     ):
         try:
-            accounts = arm.storage.list()
+            with account() as api:
+                accounts = api.storage_accounts()
         except Exception as exc:
             log.exception("Could not list storage accounts")
             error(

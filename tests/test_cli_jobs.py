@@ -96,6 +96,32 @@ class TestListCommand:
         assert "a1" in result.output
         assert "b2" not in result.output
 
+@pytest.fixture(autouse=True)
+def _configured_workspace(monkeypatch):
+    """Commands resolve a target before opening a backend."""
+    from azure_jobs.api.models import Target
+
+    target = Target.create(
+        backend="azureml",
+        native_id="sub/rg/ws",
+        label="ws",
+        detail="rg",
+        metadata={
+            "subscription_id": "sub",
+            "resource_group": "rg",
+            "workspace_name": "ws",
+        },
+    )
+    monkeypatch.setattr(
+        "azure_jobs.api.azure.ConfigTargetCatalog.configured",
+        lambda self: target,
+    )
+    monkeypatch.setattr(
+        "azure_jobs.api.azure.ConfigTargetCatalog.discover",
+        lambda self: (target,),
+    )
+
+
 class TestJobListCommand:
     """``aj job list`` now fetches cloud jobs via REST API."""
 

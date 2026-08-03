@@ -89,17 +89,21 @@ def test_there_is_one_canonical_job_model():
     assert TuiTarget is ApiTarget
 
 
-def test_only_inprocess_talks_to_az_client():
-    """One place owns the SDK, so the daemon cannot drift from direct calls."""
+#: The Azure adapter layer. Everything else in api/ reaches Azure through it.
+AZURE_ADAPTER_FILES = ("inprocess.py", "azure.py", "typed.py")
+
+
+def test_only_the_azure_adapter_talks_to_az_client():
+    """The SDK stays in one layer, so the daemon cannot drift from direct calls."""
     offenders = []
     for path in API.rglob("*.py"):
-        if path.name in ("inprocess.py",):
+        if path.name in AZURE_ADAPTER_FILES:
             continue
         for name in _imports(path):
             if name.startswith("azure_jobs.az_client"):
                 offenders.append(f"{path.name}: {name}")
     # daemon.py and client.py may not reach the SDK directly; they go through
-    # the InProcess backend or the wire respectively.
+    # the adapter or the wire respectively.
     assert offenders == [], offenders
 
 
@@ -207,3 +211,57 @@ def test_every_daemon_method_is_registered_in_one_table():
 
     assert set(METHODS) == set(_METHODS)
     assert len(METHODS) == len(set(METHODS))
+
+
+CLI = Path(__file__).parents[1] / "src" / "azure_jobs" / "cli"
+
+
+def test_cli_never_imports_az_client():
+    """Commands go through the contract so the daemon can serve them.
+
+    A direct az_client import silently bypasses the daemon, so this is the
+    invariant that keeps the split real rather than aspirational.
+    """
+    offenders = []
+    for path in CLI.rglob("*.py"):
+        for name in _imports(path):
+            if name == "azure_jobs.az_client" or name.startswith(
+                "azure_jobs.az_client."
+            ):
+                offenders.append(f"{path.name}: {name}")
+    assert offenders == [], offenders
+
+
+def test_cli_does_not_construct_azure_clients():
+    """Catch `from azure_jobs import az_client` style access too."""
+    offenders = []
+    for path in CLI.rglob("*.py"):
+        source = path.read_text(encoding="utf-8")
+        for needle in ("AzureARMClient(", "create_rest_client(", "AzureMLClient("):
+            if needle in source:
+                offenders.append(f"{path.name}: {needle}")
+    assert offenders == [], offenders
+
+
+def test_every_account_port_method_is_reachable_over_the_wire():
+    from azure_jobs.api import ports
+    from azure_jobs.api.daemon import METHODS
+
+    missing = [
+        f"account.{name}"
+        for name, member in vars(ports.Account).items()
+        if not name.startswith("_")
+        and callable(member)
+        and f"account.{name}" not in METHODS
+    ]
+    assert missing == [], missing
+
+
+def test_catalog_item_does_not_shadow_payload_keys():
+    """`kind` is a storage-account attribute, so the field is `category`."""
+    from azure_jobs.api.models import CatalogItem
+
+    item = CatalogItem("storage_account", "sa", {"kind": "StorageV2", "sku": "LRS"})
+    assert item.category == "storage_account"
+    assert item.kind == "StorageV2"
+    assert item.sku == "LRS"

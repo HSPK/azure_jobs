@@ -14,14 +14,14 @@ def env_group() -> None:
 @click.option("--ws", "ws_name", default=None, help="Workspace name override")
 def env_list(ws_name: str | None) -> None:
     """List environments in the current workspace."""
-    from azure_jobs.az_client import create_rest_client
+    from azure_jobs.cli._backend import backend
     from azure_jobs.utils.ui import console, show_environments_table
 
-    client = create_rest_client(ws_name=ws_name)
-    with console.status(
-        "[bold cyan]Fetching environments…[/bold cyan]", spinner="dots"
-    ):
-        envs = client.environments.list()
+    with backend(ws_name) as api:
+        with console.status(
+            "[bold cyan]Fetching environments…[/bold cyan]", spinner="dots"
+        ):
+            envs = api.catalog.environments()
     show_environments_table(envs)
 
 @env_group.command(name="show")
@@ -36,13 +36,13 @@ def env_list(ws_name: str | None) -> None:
 @click.option("--ws", "ws_name", default=None, help="Workspace name override")
 def env_show(name: str, last: int, ws_name: str | None) -> None:
     """Show versions of an environment."""
-    from azure_jobs.az_client import create_rest_client
+    from azure_jobs.cli._backend import backend
     from azure_jobs.utils.ui import console, show_environment_versions_table
 
-    client = create_rest_client(ws_name=ws_name)
-    with console.status(
-        f"[bold cyan]Fetching versions for '{name}'…[/bold cyan]",
-        spinner="dots",
-    ):
-        versions = client.environments.list_versions(name)
+    with backend(ws_name) as api:
+        with console.status(
+            f"[bold cyan]Fetching versions for '{name}'…[/bold cyan]",
+            spinner="dots",
+        ):
+            versions = api.catalog.environment_versions(name)
     show_environment_versions_table(name, versions, last=last)

@@ -19,6 +19,9 @@ def _isolate_daemon_runtime(tmp_path_factory, monkeypatch):
     """
     runtime = tmp_path_factory.mktemp("aj-runtime")
     monkeypatch.setenv("AJ_RUNTIME_DIR", str(runtime))
+    # Unit tests must not spawn a background process; the daemon suites
+    # construct one explicitly instead.
+    monkeypatch.setenv("AJ_NO_DAEMON", "1")
 
 
 @pytest.fixture(autouse=True)

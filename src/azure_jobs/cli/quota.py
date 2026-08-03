@@ -38,14 +38,14 @@ def quota_list(backend: str, show_all: bool, full: bool) -> None:
         _show_sing_quotas(show_all, full=full)
 
 def _show_sing_quotas(show_all: bool, *, full: bool = False) -> None:
-    from azure_jobs.az_client import AzureARMClient
+    from azure_jobs.cli._backend import account
     from azure_jobs.utils.ui import console, error, show_sing_quota_table
 
-    arm = AzureARMClient()
-    with console.status(
-        "[bold cyan]Discovering virtual clusters…[/bold cyan]", spinner="dots"
-    ):
-        vcs = arm.vc.quota.list(include_zero=show_all)
+    with account() as api:
+        with console.status(
+            "[bold cyan]Discovering virtual clusters…[/bold cyan]", spinner="dots"
+        ):
+            vcs = api.vc_quota(include_zero=show_all)
     if not vcs:
         error("No Singularity virtual clusters found")
         console.print(
@@ -55,7 +55,8 @@ def _show_sing_quotas(show_all: bool, *, full: bool = False) -> None:
     show_sing_quota_table(vcs, full=full)
 
 def _show_aml_quotas(show_all: bool) -> None:
-    from azure_jobs.az_client import AzureARMClient, WorkspaceInfo
+    from azure_jobs.api.models import CatalogItem
+    from azure_jobs.cli._backend import account
     from azure_jobs.utils.ui import (
         console,
         error,
@@ -63,38 +64,43 @@ def _show_aml_quotas(show_all: bool) -> None:
         warning,
     )
 
-    arm = AzureARMClient()
-    failures: list[tuple[WorkspaceInfo, BaseException]] = []
-    with console.status(
-        "[bold cyan]Discovering AML workspaces…[/bold cyan]", spinner="dots"
-    ):
-        try:
-            workspaces = arm.workspace.list()
-        except Exception as exc:
-            log.exception("Could not discover workspaces")
-            error(
-                f"Could not discover workspaces ({type(exc).__name__}: {exc}). "
-                "Run with AJ_DEBUG=1 for a Python traceback."
-            )
-            raise SystemExit(1) from exc
-        arm.ensure_token()
+    with account() as api:
+        with console.status(
+            "[bold cyan]Discovering AML workspaces…[/bold cyan]", spinner="dots"
+        ):
+            try:
+                result = api.workspace_computes()
+            except Exception as exc:
+                log.exception("Could not discover workspaces")
+                error(
+                    f"Could not discover workspaces ({type(exc).__name__}: {exc}). "
+                    "Run with AJ_DEBUG=1 for a Python traceback."
+                )
+                raise SystemExit(1) from exc
 
-        if not workspaces:
-            error("No AML workspaces found")
-            console.print(
-                "  Make sure you are logged in (`az login`) and have access to workspaces"
-            )
-            raise SystemExit(1)
-
-        results = arm.compute.list_all(
-            workspaces=workspaces,
-            on_workspace_failure=lambda ws, exc: failures.append((ws, exc)),
+    pairs = list(result.get("pairs") or ())
+    failures = list(result.get("failures") or ())
+    if not pairs and not failures:
+        error("No AML workspaces found")
+        console.print(
+            "  Make sure you are logged in (`az login`) and have access to workspaces"
         )
+        raise SystemExit(1)
 
     if failures:
         warning(
             f"Skipped {len(failures)} workspace(s) (run with AJ_DEBUG=1 for details)"
         )
+    results = [
+        (
+            CatalogItem("workspace", str(p["workspace"].get("name") or ""), p["workspace"]),
+            [
+                CatalogItem("compute", str(c.get("name") or ""), c)
+                for c in p.get("computes") or ()
+            ],
+        )
+        for p in pairs
+    ]
     ws_computes = [(ws, clusters) for ws, clusters in results if clusters or show_all]
     ws_computes.sort(key=lambda x: x[0].name)
 

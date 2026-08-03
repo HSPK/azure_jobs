@@ -49,22 +49,16 @@ def exp_list(
         fetch_jobs_all_ws_with_progress,
         fetch_jobs_with_progress,
     )
-    from azure_jobs.az_client import apply_cutoff
     from azure_jobs.utils.stats import aggregate_by_experiment
     from azure_jobs.utils.ui import show_experiment_stats_table, warning
 
-    cutoff: datetime | None = None
-    if days:
-        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
-
     max_jobs = last if last is not None else 10000
+    cutoff_days = days or 0
 
     if all_ws:
-        jobs = fetch_jobs_all_ws_with_progress(max_jobs, cutoff_utc=cutoff)
+        jobs = fetch_jobs_all_ws_with_progress(max_jobs, cutoff_days=cutoff_days)
     else:
-        jobs = fetch_jobs_with_progress(max_jobs, ws_name, cutoff_utc=cutoff)
-
-    jobs = apply_cutoff(jobs, cutoff)
+        jobs = fetch_jobs_with_progress(max_jobs, ws_name, cutoff_days=cutoff_days)
 
     if not jobs:
         warning("No experiments found")
@@ -91,39 +85,17 @@ def exp_list(
 @click.option("--ws", "ws_name", default=None, help="Workspace name override")
 def exp_show(name: str, last: int, ws_name: str | None) -> None:
     """Show recent jobs for a specific experiment."""
-    from azure_jobs.az_client import create_rest_client
+    from azure_jobs.cli._backend import backend
     from azure_jobs.utils.ui import console, show_cloud_jobs_table, warning
 
-    client = create_rest_client(ws_name=ws_name)
-    matched: list[dict[str, Any]] = []
-    next_link = None
-    scanned = 0
-    max_pages = 5
+    with backend(ws_name) as api:
+        with console.status(
+            f"[bold cyan]Fetching jobs for '{name}'…[/bold cyan]",
+            spinner="dots",
+        ):
+            jobs = api.jobs.fetch(limit=last, experiment=name, max_scan=last * 20)
 
-    with console.status(
-        f"[bold cyan]Fetching jobs for '{name}'…[/bold cyan]",
-        spinner="dots",
-    ) as st:
-        for _ in range(max_pages):
-            jobs, next_link = client.jobs.list_page(
-                next_link=next_link,
-                top=100,
-            )
-            if not jobs:
-                break
-            for j in jobs:
-                if j.get("experiment", "") == name:
-                    matched.append(j)
-                    if len(matched) >= last:
-                        break
-            scanned += len(jobs)
-            st.update(
-                f"[bold cyan]Scanning… {scanned} scanned, "
-                f"{len(matched)} matched[/bold cyan]"
-            )
-            if not next_link or len(matched) >= last:
-                break
-
+    matched = [job.to_dict() for job in jobs]
     if not matched:
         warning(f"No jobs found for experiment '{name}'")
         return

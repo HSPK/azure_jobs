@@ -23,15 +23,15 @@ def uai_group() -> None:
 )
 def uai_list(full: bool) -> None:
     """List user-assigned managed identities across accessible subscriptions."""
-    from azure_jobs.az_client import AzureARMClient
+    from azure_jobs.cli._backend import account
     from azure_jobs.utils.ui import console, error, get_output_mode, show_uai_table
 
-    arm = AzureARMClient()
     with console.status(
         "[bold cyan]Discovering managed identities…[/bold cyan]", spinner="dots"
     ):
         try:
-            uais = arm.identity.list()
+            with account() as api:
+                uais = api.identities()
         except Exception as exc:
             log.exception("Could not list managed identities")
             error(

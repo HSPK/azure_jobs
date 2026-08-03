@@ -284,22 +284,54 @@ class CatalogItem:
     """One row of a catalog listing (datastore, environment, compute, quota).
 
     Catalog payloads differ per kind and are display-oriented, so the typed
-    surface stays deliberately thin and the rest travels in ``raw``.
+    surface stays deliberately thin and the rest travels in ``raw``. Attribute
+    access falls through to ``raw`` so display helpers written against the
+    original dataclasses keep working without importing the Azure SDK types.
     """
 
-    kind: str
+    #: Named ``category`` rather than ``kind`` because payloads such as a
+    #: storage account carry their own ``kind``, which must not be shadowed.
+    category: str
     name: str
-    raw: Mapping[str, Any] = field(default_factory=dict, repr=False)
+    raw: Any = field(default_factory=dict, repr=False)
+
+    def __getattr__(self, attribute: str) -> Any:
+        if attribute.startswith("_"):
+            raise AttributeError(attribute)
+        raw = object.__getattribute__(self, "raw")
+        if isinstance(raw, Mapping):
+            try:
+                return raw[attribute]
+            except KeyError:
+                raise AttributeError(
+                    f"CatalogItem has no attribute {attribute!r}; "
+                    f"its payload has {sorted(raw)}"
+                ) from None
+        return getattr(raw, attribute)
+
+    def get(self, key: str, default: Any = None) -> Any:
+        raw = self.raw
+        if isinstance(raw, Mapping):
+            return raw.get(key, default)
+        return getattr(raw, key, default)
 
     def to_json(self) -> dict[str, Any]:
-        return {"kind": self.kind, "name": self.name, "raw": dict(self.raw)}
+        from azure_jobs.api.typed import encode
+
+        return {
+            "category": self.category,
+            "name": self.name,
+            "raw": encode(self.raw),
+        }
 
     @classmethod
     def from_json(cls, value: Mapping[str, Any]) -> "CatalogItem":
+        from azure_jobs.api.typed import decode
+
         return cls(
-            kind=_text(value.get("kind")),
+            category=_text(value.get("category")),
             name=_text(value.get("name")),
-            raw=dict(value.get("raw") or {}),
+            raw=decode(value.get("raw") or {}),
         )
 
 

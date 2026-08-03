@@ -87,6 +87,27 @@ class FakeJobs:
             raise self.raises
         self.deleted.append(job.backend_ref)
 
+    def fetch(
+        self,
+        *,
+        limit: int,
+        archived: bool = False,
+        job_type: str = "",
+        tag: str = "",
+        experiment: str = "",
+        status: str = "",
+        cutoff_days: int = 0,
+        max_scan: int = 0,
+    ) -> list[Job]:
+        if self.raises is not None:
+            raise self.raises
+        jobs = [job for page in self.pages for job in page]
+        if experiment:
+            jobs = [j for j in jobs if j.experiment == experiment]
+        if status:
+            jobs = [j for j in jobs if j.status.lower() == status.lower()]
+        return jobs[:limit]
+
 
 class FakeReader:
     def __init__(self, blob: bytes) -> None:
@@ -125,10 +146,19 @@ class FakeLogs:
         self.readers.append(reader)
         return reader
 
+    def download(self, job: JobRef, *, cancelled: Any = None) -> dict[str, str]:
+        return {"content": self.blob.decode("utf-8", "replace"), "error": ""}
+
 
 class FakeCatalog:
     def datastores(self) -> list[CatalogItem]:
         return [CatalogItem("datastore", "ds1", {"is_default": True})]
+
+    def datastore(self, name: str) -> CatalogItem | None:
+        return CatalogItem("datastore", name, {"name": name, "is_default": True})
+
+    def environment_versions(self, name: str) -> list[CatalogItem]:
+        return [CatalogItem("environment_version", name, {"version": "3"})]
 
     def environments(self) -> list[CatalogItem]:
         return [CatalogItem("environment", "env1", {"version": "3"})]

@@ -225,6 +225,36 @@ class RemoteJobs:
     def delete(self, job: JobRef, *, cancelled: Cancelled = None) -> None:
         self._rpc.call("jobs.delete", self._params(job=job.to_json()))
 
+    def fetch(
+        self,
+        *,
+        limit: int,
+        archived: bool = False,
+        job_type: str = "",
+        tag: str = "",
+        experiment: str = "",
+        status: str = "",
+        cutoff_days: int = 0,
+        max_scan: int = 0,
+    ) -> list[Job]:
+        return [
+            Job.from_json(item)
+            for item in self._rpc.call(
+                "jobs.fetch",
+                self._params(
+                    limit=limit,
+                    archived=archived,
+                    job_type=job_type,
+                    tag=tag,
+                    experiment=experiment,
+                    status=status,
+                    cutoff_days=cutoff_days,
+                    max_scan=max_scan,
+                ),
+            )
+            or ()
+        ]
+
 
 class RemoteLogReader:
     def __init__(self, rpc: RpcConnection, session: str, handle: str) -> None:
@@ -292,6 +322,15 @@ class RemoteLogs:
         )
         return RemoteLogReader(self._rpc, self._session, str(result["reader"]))
 
+    def download(self, job: JobRef, *, cancelled: Cancelled = None) -> dict[str, str]:
+        return dict(
+            self._rpc.call(
+                "logs.download",
+                {"session": self._session, "job": job.to_json()},
+            )
+            or {}
+        )
+
 
 class RemoteCatalog:
     def __init__(self, rpc: RpcConnection, session: str) -> None:
@@ -315,6 +354,98 @@ class RemoteCatalog:
 
     def quota(self) -> list[CatalogItem]:
         return self._items("catalog.quota")
+
+    def datastore(self, name: str) -> CatalogItem | None:
+        value = self._rpc.call(
+            "catalog.datastore", {"session": self._session, "name": name}
+        )
+        return CatalogItem.from_json(value) if value else None
+
+    def environment_versions(self, name: str) -> list[CatalogItem]:
+        return [
+            CatalogItem.from_json(item)
+            for item in self._rpc.call(
+                "catalog.environment_versions",
+                {"session": self._session, "name": name},
+            )
+            or ()
+        ]
+
+
+class RemoteAccount:
+    """Subscription-scoped inventory; needs no workspace session."""
+
+    def __init__(self, rpc: RpcConnection, subscription_id: str = "") -> None:
+        self._rpc = rpc
+        self._subscription_id = subscription_id
+
+    def _items(self, method: str, **extra: Any) -> list[CatalogItem]:
+        params = {"subscription_id": self._subscription_id, **extra}
+        return [
+            CatalogItem.from_json(item)
+            for item in self._rpc.call(method, params) or ()
+        ]
+
+    def subscriptions(self) -> list[CatalogItem]:
+        return self._items("account.subscriptions")
+
+    def workspaces(self, subscription_id: str = "") -> list[CatalogItem]:
+        return self._items("account.workspaces", subscription_id=subscription_id or self._subscription_id)
+
+    def storage_accounts(self, subscription_id: str = "") -> list[CatalogItem]:
+        return self._items("account.storage_accounts", subscription_id=subscription_id or self._subscription_id)
+
+    def identities(self, subscription_id: str = "") -> list[CatalogItem]:
+        return self._items("account.identities", subscription_id=subscription_id or self._subscription_id)
+
+    def instance_types(self, region: str = "", subscription_id: str = "") -> list[CatalogItem]:
+        return self._items(
+            "account.instance_types",
+            region=region,
+            subscription_id=subscription_id or self._subscription_id,
+        )
+
+    def vc_quota(
+        self, *, include_zero: bool = False, subscription_id: str = ""
+    ) -> list[CatalogItem]:
+        return self._items(
+            "account.vc_quota",
+            include_zero=include_zero,
+            subscription_id=subscription_id or self._subscription_id,
+        )
+
+    def singularity_images(self) -> list[CatalogItem]:
+        return self._items("account.singularity_images")
+
+    def workspace_computes(self) -> dict:
+        return dict(
+            self._rpc.call(
+                "account.workspace_computes",
+                {"subscription_id": self._subscription_id},
+            )
+            or {"pairs": [], "failures": []}
+        )
+
+    def jobs_all_workspaces(self, *, limit: int, cutoff_days: int = 0) -> dict:
+        return dict(
+            self._rpc.call(
+                "account.jobs_all_workspaces",
+                {
+                    "subscription_id": self._subscription_id,
+                    "limit": limit,
+                    "cutoff_days": cutoff_days,
+                },
+            )
+            or {"jobs": [], "failures": []}
+        )
+
+    def computes(self, resource_group: str, workspace: str, subscription_id: str = "") -> list[CatalogItem]:
+        return self._items(
+            "account.computes",
+            resource_group=resource_group,
+            workspace=workspace,
+            subscription_id=subscription_id or self._subscription_id,
+        )
 
 
 class RemoteSubmitter:
@@ -405,6 +536,9 @@ class DaemonBackend:
         self.delete_jobs = jobs
         self.logs = RemoteLogs(rpc, session)
         self.catalog = RemoteCatalog(rpc, session)
+        self.account = RemoteAccount(
+            rpc, str(target.metadata.get('subscription_id') or '')
+        )
         self.submitter = RemoteSubmitter(rpc, session)
         self.queue = RemoteQueue(rpc, session)
         self.watcher = RemoteWatcher(rpc, session)
@@ -673,6 +807,7 @@ class BackendSessionFactory:
 __all__ = [
     "BackendSessionFactory",
     "DaemonBackend",
+    "RemoteAccount",
     "RemoteCatalog",
     "RemoteJobs",
     "RemoteLogReader",
