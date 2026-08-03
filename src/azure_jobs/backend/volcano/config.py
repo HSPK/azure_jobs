@@ -96,10 +96,12 @@ def build_volcano_config_from_request(request: JobSpec) -> VolcanoConfig:
     # A template that omits the GPU count keeps the requested process count, so
     # existing GPU templates are unaffected, while an explicit 0 now survives
     # and yields a CPU-only job instead of silently falling back to the default.
+    # JobSpec.gpus_per_node is always an int, so `or` here would resurrect the
+    # same truthiness bug for an explicit 0.
     gpus_per_node = (
         vol.gpus_per_node
         if vol.gpus_per_node is not None
-        else (request.gpus_per_node or C.DEFAULT_GPUS_PER_NODE)
+        else request.gpus_per_node
     )
     # CPU nodes expose no RDMA device, and requesting one leaves the job
     # unschedulable, so follow the GPU count unless the template is explicit.

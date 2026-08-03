@@ -270,7 +270,8 @@ _aj_write_config() {
     umask 077
     cat >"$1" <<AJ_BLOBFUSE_CFG
 logging:
-  type: syslog
+  type: base
+  file-path: /tmp/aj-blobfuse-$3-$4.log
   level: log_warning
 components: [libfuse, file_cache, attr_cache, azstorage]
 file_cache:
@@ -295,6 +296,17 @@ AJ_BLOBFUSE_CFG
     umask "$_aj_umask"
 }
 
+# Report whether $1 is a live mount point. `mountpoint` lives in util-linux,
+# which base images may omit, so fall back to /proc/mounts rather than letting
+# a missing binary (exit 127) read as "not mounted".
+_aj_is_mounted() {
+    if command -v mountpoint >/dev/null 2>&1; then
+        mountpoint -q "$1" 2>/dev/null
+        return $?
+    fi
+    grep -qs " $1 " /proc/mounts
+}
+
 _aj_blob_mount() {
     # $1 identifier, $2 mount dir, $3 account, $4 container, $5 sas file
     _aj_id="$1"
@@ -303,7 +315,7 @@ _aj_blob_mount() {
     _aj_container="$4"
     _aj_sas_file="$5"
 
-    if mountpoint -q "$_aj_dir" 2>/dev/null; then
+    if _aj_is_mounted "$_aj_dir"; then
         _aj_log "$_aj_dir is already mounted"
         return 0
     fi
@@ -323,12 +335,29 @@ _aj_blob_mount() {
         return 1
     }
 
-    if blobfuse2 mount "$_aj_dir" --config-file="$_aj_cfg" -o allow_other; then
-        _aj_log "mounted $_aj_account/$_aj_container at $_aj_dir"
-    else
+    if ! blobfuse2 mount "$_aj_dir" --config-file="$_aj_cfg" -o allow_other; then
         _aj_warn "failed to mount $_aj_account/$_aj_container at $_aj_dir"
         return 1
     fi
+    # blobfuse2 daemonises, so a zero exit only means the child was spawned.
+    # Confirm the mount actually appeared before letting the job proceed;
+    # otherwise the command would read an empty directory and silently
+    # train on no data.
+    _aj_ready=0
+    for _aj_try in 1 2 3 4 5 6 7 8 9 10; do
+        if _aj_is_mounted "$_aj_dir"; then
+            _aj_ready=1
+            break
+        fi
+        sleep 1
+    done
+    if [ "$_aj_ready" -ne 1 ]; then
+        _aj_warn "mount did not appear for $_aj_account/$_aj_container at $_aj_dir"
+        [ -f "/tmp/aj-blobfuse-$_aj_account-$_aj_container.log" ] &&
+            tail -n 50 "/tmp/aj-blobfuse-$_aj_account-$_aj_container.log" >&2
+        return 1
+    fi
+    _aj_log "mounted $_aj_account/$_aj_container at $_aj_dir"
 
     if [ "{REFRESH_SECONDS}" -gt 0 ] 2>/dev/null; then
         # Rewriting the config is enough: blobfuse2 watches the file and applies
@@ -336,7 +365,7 @@ _aj_blob_mount() {
         (
             while true; do
                 sleep {REFRESH_SECONDS}
-                mountpoint -q "$_aj_dir" 2>/dev/null || exit 0
+                _aj_is_mounted "$_aj_dir" || exit 0
                 _aj_write_config "$_aj_cfg" "$_aj_cache" "$_aj_account" \
                     "$_aj_container" "$_aj_sas_file" || true
             done

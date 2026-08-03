@@ -172,3 +172,121 @@ class TestBlobMountsInPodSpec:
         container = spec["spec"]["tasks"][0]["template"]["spec"]["containers"][0]
         assert "securityContext" not in container
         assert "_aj_blob_mount" not in container["args"][0]
+
+
+class TestMountFailureIsFatal:
+    """A mount that silently fails would let a job train on an empty dir."""
+
+    def test_mount_failure_aborts_the_job(self, storage):
+        lines = _plan(storage).setup_lines()
+        mount = next(line for line in lines if "_aj_blob_mount " in line)
+        assert mount.endswith("|| exit 1")
+        assert "|| true" not in mount
+
+    def test_missing_blobfuse2_aborts_the_job(self, storage):
+        lines = _plan(storage).setup_lines()
+        tail = lines[lines.index("else"):]
+        assert "    exit 1" in tail
+
+    def test_mount_is_verified_after_blobfuse2_returns(self, storage):
+        script = "\n".join(_plan(storage).setup_lines())
+        assert "mount did not appear" in script
+
+    def test_liveness_check_survives_a_missing_mountpoint_binary(self, storage):
+        """`mountpoint` exits 127 when absent, which must not read as unmounted."""
+        script = "\n".join(_plan(storage).setup_lines())
+        assert "/proc/mounts" in script
+        assert "mountpoint -q \"$_aj_dir\" 2>/dev/null || exit 0" not in script
+
+    def test_blobfuse_logs_somewhere_a_container_can_read(self, storage):
+        script = "\n".join(_plan(storage).setup_lines())
+        assert "type: syslog" not in script
+
+
+class TestSecretHygiene:
+    def test_apply_uses_server_side_to_keep_the_sas_out_of_annotations(self, storage):
+        from azure_jobs.backend.volcano import entry
+
+        plan = _plan(storage)
+        with patch.object(entry.subprocess, "run") as run:
+            run.return_value = subprocess.CompletedProcess([], 0, stdout="", stderr="")
+            entry._apply_blob_secret(plan, "ns", "")
+        cmd = run.call_args.args[0]
+        assert "--server-side" in cmd
+        # The manifest must reach kubectl on stdin, never on the command line.
+        assert not any("sig=abc" in part for part in cmd)
+        assert "sig=abc" in run.call_args.kwargs["input"]
+
+    def test_failed_submission_deletes_the_credential_secret(self):
+        from azure_jobs.backend.volcano import entry
+
+        cleanup = entry._SecretCleanup(name="job-blob", namespace="ns", context="ctx")
+        with patch.object(entry.subprocess, "run") as run:
+            run.return_value = subprocess.CompletedProcess([], 0, stdout="", stderr="")
+            entry._discard_blob_secret(cleanup)
+        cmd = run.call_args.args[0]
+        assert cmd[:4] == ["kubectl", "delete", "secret", "job-blob"]
+        assert "--ignore-not-found" in cmd
+        assert cmd[cmd.index("--namespace") + 1] == "ns"
+        assert cmd[cmd.index("--context") + 1] == "ctx"
+
+    def test_nothing_is_deleted_when_no_secret_was_created(self):
+        from azure_jobs.backend.volcano import entry
+
+        with patch.object(entry.subprocess, "run") as run:
+            entry._discard_blob_secret(entry._SecretCleanup())
+        run.assert_not_called()
+
+    def test_successful_submission_keeps_the_secret(self):
+        from azure_jobs.backend.volcano import entry
+        from azure_jobs.job.spec import JobResult
+
+        submitted = JobResult(job_name="job", status="submitted")
+        with patch.object(entry, "_submit_via_volcano", return_value=submitted), \
+             patch.object(entry, "_discard_blob_secret") as discard:
+            assert entry.submit_via_volcano(JobSpec(name="job")) is submitted
+        discard.assert_not_called()
+
+    def test_failed_submission_triggers_cleanup(self):
+        from azure_jobs.backend.volcano import entry
+        from azure_jobs.job.spec import JobResult
+
+        failed = JobResult(job_name="job", status="failed", error="boom")
+        with patch.object(entry, "_submit_via_volcano", return_value=failed), \
+             patch.object(entry, "_discard_blob_secret") as discard:
+            entry.submit_via_volcano(JobSpec(name="job"))
+        discard.assert_called_once()
+
+    def test_raised_submission_triggers_cleanup_and_reraises(self):
+        from azure_jobs.backend.volcano import entry
+
+        with patch.object(entry, "_submit_via_volcano", side_effect=RuntimeError("x")), \
+             patch.object(entry, "_discard_blob_secret") as discard:
+            with pytest.raises(RuntimeError):
+                entry.submit_via_volcano(JobSpec(name="job"))
+        discard.assert_called_once()
+
+
+class TestRequestedGpuCount:
+    def test_explicit_zero_in_the_request_yields_a_cpu_pod(self):
+        """`aj run -p 0` with a template that omits the GPU count."""
+        request = JobSpec(
+            name="job",
+            gpus_per_node=0,
+            image="img",
+            command=["true"],
+            backend_spec=VolcanoOpts(queue="q", cpus_per_node=4, memory="16Gi"),
+        )
+        cfg = build_volcano_config_from_request(request)
+        assert cfg.gpus_per_node == 0
+        assert cfg.rdma is False
+
+    def test_requested_count_is_still_honoured(self):
+        request = JobSpec(
+            name="job",
+            gpus_per_node=4,
+            image="img",
+            command=["true"],
+            backend_spec=VolcanoOpts(queue="q", cpus_per_node=4, memory="16Gi"),
+        )
+        assert build_volcano_config_from_request(request).gpus_per_node == 4

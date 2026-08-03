@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import tempfile
 import traceback
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
@@ -23,6 +24,15 @@ from .uploaders import pick_uploader
 from .storage import BlobMountPlan, BlobMountError, build_blob_mount_plan
 
 
+@dataclass
+class _SecretCleanup:
+    """A credential Secret that must be removed unless the job is created."""
+
+    name: str = ""
+    namespace: str = ""
+    context: str = ""
+
+
 def _apply_blob_secret(
     plan: BlobMountPlan, namespace: str, context: str
 ) -> None:
@@ -30,9 +40,13 @@ def _apply_blob_secret(
 
     ``apply`` rather than ``create`` so a resubmission under the same job name
     refreshes an existing, possibly expired, token instead of failing.
+    Server-side apply records ownership in ``managedFields``; client-side apply
+    would copy the manifest — including the plaintext SAS — into the
+    ``last-applied-configuration`` annotation, which is not treated as secret
+    by ``kubectl describe`` or by log and GitOps tooling.
     """
     manifest = yaml.dump(plan.secret_manifest(namespace), default_flow_style=False)
-    cmd = ["kubectl", "apply", "-f", "-"]
+    cmd = ["kubectl", "apply", "--server-side", "--force-conflicts", "-f", "-"]
     if context:
         cmd.extend(["--context", context])
     try:
@@ -51,10 +65,72 @@ def _apply_blob_secret(
 
 log = logging.getLogger(__name__)
 
+def _discard_blob_secret(cleanup: _SecretCleanup) -> None:
+    """Best-effort removal of a Secret whose job never reached the cluster.
+
+    The Secret holds a live user-delegation SAS valid for days, so leaving it
+    behind after a failed submission leaks a usable credential into a shared
+    namespace with nothing to garbage-collect it.
+    """
+    if not cleanup.name:
+        return
+    cmd = [
+        "kubectl",
+        "delete",
+        "secret",
+        cleanup.name,
+        "--ignore-not-found",
+    ]
+    if cleanup.namespace:
+        cmd.extend(["--namespace", cleanup.namespace])
+    if cleanup.context:
+        cmd.extend(["--context", cleanup.context])
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    except Exception as exc:
+        log.exception("Failed to delete orphaned blob Secret %s", cleanup.name)
+        log.error(
+            "Orphaned blob Secret %s may still hold a live SAS "
+            "(%s: %s); remove it with: %s",
+            cleanup.name,
+            type(exc).__name__,
+            exc,
+            " ".join(cmd),
+        )
+        return
+    if result.returncode != 0:
+        log.error(
+            "Orphaned blob Secret %s may still hold a live SAS "
+            "(kubectl exited with %s)\ncommand: %s\nstderr: %s",
+            cleanup.name,
+            result.returncode,
+            " ".join(cmd),
+            (result.stderr or result.stdout or "").strip() or "(empty)",
+        )
+
+
 def submit_via_volcano(
     request: JobSpec,
     *,
     on_event: Callable[[JobEvent], None] | None = None,
+) -> JobResult:
+    """Submit a job to Kubernetes via Volcano."""
+    cleanup = _SecretCleanup()
+    try:
+        result = _submit_via_volcano(request, on_event=on_event, cleanup=cleanup)
+    except BaseException:
+        _discard_blob_secret(cleanup)
+        raise
+    if result.status != "submitted":
+        _discard_blob_secret(cleanup)
+    return result
+
+
+def _submit_via_volcano(
+    request: JobSpec,
+    *,
+    on_event: Callable[[JobEvent], None] | None = None,
+    cleanup: _SecretCleanup,
 ) -> JobResult:
     """Submit a job to Kubernetes via Volcano."""
     emit = on_event or (lambda _ev: None)
@@ -98,6 +174,9 @@ def submit_via_volcano(
     if blob_plan.enabled:
         targets = ", ".join(f"{m.account}/{m.container} -> {m.mount_dir}" for m in blob_plan.mounts)
         emit(JobEvent(kind="storage", detail=f"blobfuse2 mounts: {targets}"))
+        cleanup.name = blob_plan.secret_name
+        cleanup.namespace = namespace
+        cleanup.context = cfg.context
         try:
             _apply_blob_secret(blob_plan, namespace, cfg.context)
         except AJError as exc:

@@ -118,11 +118,12 @@ class BlobMountPlan:
                 f"{shlex.quote(mount.mount_dir)} "
                 f"{shlex.quote(mount.account)} "
                 f"{shlex.quote(mount.container)} "
-                f"{shlex.quote(mount.sas_path)} || true"
+                f"{shlex.quote(mount.sas_path)} || exit 1"
             )
         lines += [
             "else",
-            "    _aj_warn 'blobfuse2 unavailable; blob mounts skipped'",
+            "    _aj_warn 'blobfuse2 unavailable; blob mounts are required'",
+            "    exit 1",
             "fi",
             "",
         ]
