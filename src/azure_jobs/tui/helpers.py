@@ -14,7 +14,10 @@ from textual.widgets.option_list import Option
 from azure_jobs.utils.text import trunc as _trunc
 from azure_jobs.utils.ui import icon_style
 from azure_jobs.tui.models import Job, as_job
-from azure_jobs.tui.settings import validate_page_size
+from azure_jobs.tui.settings import (
+    DEFAULT_DASHBOARD_PAGE_SIZE,
+    MAX_DASHBOARD_PAGE_SIZE,
+)
 
 log = logging.getLogger(__name__)
 
@@ -29,10 +32,19 @@ KW = 14
 LEFT_WIDTH = 38
 NAME_MAX = LEFT_WIDTH - 8
 def get_page_size() -> int:
-    """Return the validated dashboard page size from config."""
+    """Return the dashboard page size from config, clamped to a valid range.
+
+    A stored config must never crash ``aj dash``; only explicit CLI flags are
+    strictly validated.
+    """
     from azure_jobs.config import read_config
 
-    return validate_page_size(read_config().dashboard.page_size)
+    try:
+        value = int(read_config().dashboard.page_size)
+    except (TypeError, ValueError):
+        log.warning("Invalid dashboard.page_size in config; using default")
+        return DEFAULT_DASHBOARD_PAGE_SIZE
+    return max(1, min(value, MAX_DASHBOARD_PAGE_SIZE))
 
 def trunc(s: str, maxlen: int = NAME_MAX) -> str:
     """Truncate with ellipsis in the middle if too long."""

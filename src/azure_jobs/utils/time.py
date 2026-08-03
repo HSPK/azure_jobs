@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 _DEFAULT_TZ = "Asia/Shanghai"
+
+_ISO_FRACTION = re.compile(r"\.(\d+)")
 
 _tz_cache: dict[str, Any] = {}
 
@@ -94,6 +97,19 @@ def format_duration(seconds: int) -> str:
         return f"{seconds // 60}m {seconds % 60}s"
     return f"{seconds}s"
 
+def _iso_compatible(s: str) -> str:
+    """Normalize RFC3339/.NET timestamps for ``fromisoformat`` on Python 3.10.
+
+    Python < 3.11 rejects a trailing ``Z`` and accepts only 3 or 6 fractional
+    digits, while Azure returns ``DateTimeOffset`` values such as
+    ``2026-01-01T00:00:00.9000000Z``.
+    """
+    if s.endswith(("Z", "z")):
+        s = f"{s[:-1]}+00:00"
+    return _ISO_FRACTION.sub(
+        lambda m: "." + m.group(1)[:6].ljust(6, "0"), s, count=1
+    )
+
 def parse_utc(s: str) -> datetime:
     """Parse a UTC time string with T or space separator."""
     s = s.strip()
@@ -102,7 +118,7 @@ def parse_utc(s: str) -> datetime:
             return datetime.strptime(s, fmt).replace(tzinfo=timezone.utc)
         except ValueError:
             continue
-    dt = datetime.fromisoformat(s)
+    dt = datetime.fromisoformat(_iso_compatible(s))
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt

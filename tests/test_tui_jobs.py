@@ -757,3 +757,28 @@ async def test_cancel_post_submit_status_failure_triggers_refresh(
 
         assert actions.cancelled
         assert "Cancelling" not in str(app.ui.jobs.info.content)
+
+
+@pytest.mark.parametrize(
+    ("stored", "expected"),
+    [
+        (300, 200),
+        (0, 1),
+        (-5, 1),
+        ("50", 50),
+        (None, 50),
+        ("nope", 50),
+        (40, 40),
+    ],
+)
+def test_get_page_size_clamps_stored_config(stored, expected, monkeypatch):
+    """A stored config must never crash ``aj dash`` (only CLI flags are strict)."""
+    from types import SimpleNamespace
+
+    from azure_jobs.tui import helpers
+
+    monkeypatch.setattr(
+        "azure_jobs.config.read_config",
+        lambda: SimpleNamespace(dashboard=SimpleNamespace(page_size=stored)),
+    )
+    assert helpers.get_page_size() == expected

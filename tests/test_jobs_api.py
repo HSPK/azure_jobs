@@ -12,6 +12,7 @@ from azure_jobs.az_client.ml.jobs import JobsAPI, apply_cutoff
 from azure_jobs.az_client.ml.extract import extract_rest_job
 from azure_jobs.errors import DeleteOutcomeUncertain, RestError
 from azure_jobs.journal import resolve_short_id
+from azure_jobs.utils.time import parse_utc
 
 
 # ────────────────────────────────────────────────────────────────────────
@@ -76,6 +77,32 @@ def test_apply_cutoff_keeps_jobs_with_unparseable_timestamp():
     jobs = [{"name": "bad", "created_utc": "not-a-date"}]
     cutoff = datetime(2025, 1, 1, tzinfo=timezone.utc)
     assert apply_cutoff(jobs, cutoff) == jobs
+
+
+def test_apply_cutoff_handles_dotnet_subsecond_timestamps():
+    """Azure DateTimeOffset values must still be comparable on Python 3.10."""
+    jobs = [
+        _job_at("2024-06-01T00:00:00.9000000Z"),
+        _job_at("2025-06-01T00:00:00.9000000Z"),
+    ]
+    cutoff = datetime(2025, 1, 1, tzinfo=timezone.utc)
+    out = apply_cutoff(jobs, cutoff)
+    assert len(out) == 1
+    assert out[0]["created_utc"] == "2025-06-01T00:00:00.9000000Z"
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("2025-06-01T01:02:03.9000000Z", datetime(2025, 6, 1, 1, 2, 3, 900000, tzinfo=timezone.utc)),
+        ("2025-06-01T01:02:03.9Z", datetime(2025, 6, 1, 1, 2, 3, 900000, tzinfo=timezone.utc)),
+        ("2025-06-01T01:02:03Z", datetime(2025, 6, 1, 1, 2, 3, tzinfo=timezone.utc)),
+        ("2025-06-01T01:02:03", datetime(2025, 6, 1, 1, 2, 3, tzinfo=timezone.utc)),
+        ("2025-06-01 01:02:03", datetime(2025, 6, 1, 1, 2, 3, tzinfo=timezone.utc)),
+    ],
+)
+def test_parse_utc_accepts_azure_timestamp_shapes(raw, expected):
+    assert parse_utc(raw) == expected
 
 
 def test_extract_preserves_subsecond_creation_timestamp():

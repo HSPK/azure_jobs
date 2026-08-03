@@ -382,9 +382,9 @@ class JobsStore(_Store):
         page: JobPage,
     ) -> tuple[bool, int]:
         state = self._state
+        baseline = self._refresh_baselines.pop(generation, {})
         if generation != state.generation:
             return False, 0
-        baseline = self._refresh_baselines.pop(generation, {})
         effective_jobs = tuple(
             (
                 state.jobs_by_id[job.id]

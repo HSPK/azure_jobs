@@ -32,7 +32,7 @@ from azure_jobs.tui.events import (
 from azure_jobs.tui.features import DashboardFeature, Feature, FeatureRegistry
 from azure_jobs.tui.helpers import get_page_size
 from azure_jobs.tui.log_store import LogsStore
-from azure_jobs.tui.models import Job, ViewMode
+from azure_jobs.tui.models import ViewMode
 from azure_jobs.tui.ports import SessionFactory, TargetCatalog
 from azure_jobs.tui.runtime import TaskRunner
 from azure_jobs.tui.settings import validate_last, validate_page_size
