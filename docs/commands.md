@@ -20,6 +20,40 @@ Inside `aj dash`, press `d` to permanently delete the selected terminal job.
 Running or queued jobs must be canceled first.
 Press `→` on the final loaded page to fetch another page from Azure.
 
+## Background daemon
+
+An optional local daemon shares authentication, watches jobs, and runs a
+submission queue. It starts on demand and every command falls back to running
+in-process if it is unavailable, so it is never required.
+
+```bash
+aj daemon status                 # is one running, and what is it doing
+aj daemon start / stop / restart # restart after upgrading aj
+AJ_NO_DAEMON=1 aj job list       # bypass it entirely
+```
+
+### Submission queue
+
+```bash
+aj run --queue -t <template> <command>   # returns a ticket immediately
+aj queue list                            # queued / running / recent
+aj queue show <ticket>
+aj queue wait <ticket>                   # block until terminal; exit 1 on failure
+aj queue cancel <ticket>                 # only while still pending
+```
+
+Submissions run one at a time and survive the shell that started them. Pending
+work is journalled, so a daemon restart does not lose it.
+
+### Job watching and notifications
+
+```bash
+aj watch add <job>       # daemon keeps polling after your shell exits
+aj watch list
+aj watch listen          # stream changes, with OS notifications
+aj watch remove <job>
+```
+
 ## Templates
 
 ```bash

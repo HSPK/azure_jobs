@@ -43,6 +43,9 @@ class _LazyGroup(click.Group):
         ".code": ("code",),
         ".uai": ("uai",),
         ".sa": ("sa",),
+        ".daemon": ("daemon",),
+        ".queue": ("queue",),
+        ".watch": ("watch",),
     }
     _ALIASES_MODULE = "._aliases"
 

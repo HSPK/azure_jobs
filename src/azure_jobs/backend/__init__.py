@@ -14,6 +14,7 @@ if TYPE_CHECKING:
 SubmitFn = Callable[..., JobResult]
 SpecBuilder = Callable[["Template"], Any]
 NameNormalizer = Callable[[str], str]
+SpecBackendLoader = Callable[[dict], Any]
 
 
 def _noop_build_spec_backend(_template: Any) -> None:
@@ -24,6 +25,10 @@ def _identity_name(name: str) -> str:
     return name
 
 
+def _noop_load_spec_backend(_data: dict) -> None:
+    return None
+
+
 @dataclass(frozen=True)
 class BackendEntry:
     name: str
@@ -31,6 +36,9 @@ class BackendEntry:
     label: str
     build_spec_backend: SpecBuilder = field(default=_noop_build_spec_backend)
     normalize_job_name: NameNormalizer = field(default=_identity_name)
+    #: Rebuild the typed backend Opts from its serialised form. Needed whenever
+    #: a JobSpec crosses a process boundary (the daemon's submission queue).
+    load_spec_backend: SpecBackendLoader = field(default=_noop_load_spec_backend)
 
 
 _REGISTRY: dict[str, BackendEntry] = {}
@@ -43,6 +51,7 @@ def register_backend(
     label: str | None = None,
     build_spec_backend: SpecBuilder | None = None,
     normalize_job_name: NameNormalizer | None = None,
+    load_spec_backend: SpecBackendLoader | None = None,
 ) -> None:
     _REGISTRY[name] = BackendEntry(
         name=name,
@@ -50,6 +59,7 @@ def register_backend(
         label=label or name,
         build_spec_backend=build_spec_backend or _noop_build_spec_backend,
         normalize_job_name=normalize_job_name or _identity_name,
+        load_spec_backend=load_spec_backend or _noop_load_spec_backend,
     )
 
 

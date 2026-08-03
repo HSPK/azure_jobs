@@ -117,6 +117,26 @@ torchrun \
 
 ## `aj dash`
 
+### Background daemon (optional)
+
+An optional local daemon shares authentication across commands, watches jobs in
+the background, and runs a submission queue. It starts on demand, and **every
+command falls back to running in-process if it is unavailable** — it is an
+accelerator, never a dependency.
+
+```bash
+aj run --queue -t <template> <command>   # returns a ticket; daemon runs it
+aj queue list                            # queued / running / recent
+aj queue wait <ticket>                   # block until it finishes
+
+aj watch add <job>                       # keeps polling after your shell exits
+aj watch listen                          # stream changes + OS notifications
+
+aj daemon status                         # inspect it
+aj daemon restart                        # after upgrading aj
+AJ_NO_DAEMON=1 aj job list               # bypass it entirely
+```
+
 Interactive TUI dashboard for browsing and managing cloud jobs.
 
 ```bash

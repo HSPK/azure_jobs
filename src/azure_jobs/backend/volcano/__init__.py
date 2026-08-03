@@ -36,6 +36,11 @@ def _build_volcano_spec(template: "Template") -> VolcanoOpts:
     return VolcanoOpts.from_template(template)
 
 
+def _load_volcano_spec(data: dict) -> VolcanoOpts:
+    known = set(VolcanoOpts.__dataclass_fields__)
+    return VolcanoOpts(**{k: v for k, v in (data or {}).items() if k in known})
+
+
 def _normalize_volcano_name(name: str) -> str:
     return sanitize_dns1035(name, max_length=_VOLCANO_NAME_MAX)
 
@@ -46,6 +51,7 @@ register_backend(
     label="Volcano",
     build_spec_backend=_build_volcano_spec,
     normalize_job_name=_normalize_volcano_name,
+    load_spec_backend=_load_volcano_spec,
 )
 
 __all__ = [

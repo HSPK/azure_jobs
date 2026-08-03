@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
+import os
 import re
 import sys
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, TypeVar
 
 import requests
@@ -74,11 +78,83 @@ class TokenCache:
         self.token = token
         self.expires_on = expires_on
 
+def _identity_fingerprint() -> str:
+    """Change whenever the active ``az`` login or subscription changes.
+
+    The cache must not outlive the identity it was issued for: replaying a
+    previous account's token after ``az login`` would run operations as the
+    wrong principal, or fail with a confusing 403.
+    """
+    parts: list[str] = []
+    for name in ("azureProfile.json", "msal_token_cache.json"):
+        try:
+            info = os.stat(Path.home() / ".azure" / name)
+            parts.append(f"{name}:{info.st_mtime_ns}:{info.st_size}")
+        except OSError:
+            continue
+    for var in ("AZURE_SUBSCRIPTION_ID", "AZURE_TENANT_ID"):
+        value = os.getenv(var)
+        if value:
+            parts.append(f"{var}={value}")
+    return "|".join(parts)
+
+
+def _token_cache_path(scope: str) -> Path:
+    from azure_jobs import const
+
+    key = f"{scope}\0{_identity_fingerprint()}"
+    digest = hashlib.sha256(key.encode()).hexdigest()[:32]
+    return Path(const.AJ_CACHE_HOME) / "tokens" / f"{digest}.json"
+
+
+def _read_cached_token(scope: str) -> tuple[str, float] | None:
+    """Return a still-valid token previously fetched by any aj process."""
+    path = _token_cache_path(scope)
+    try:
+        if not path.exists():
+            return None
+        if path.stat().st_mode & 0o077:
+            log.debug("Ignoring token cache with loose permissions: %s", path)
+            return None
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        token = str(payload.get("token") or "")
+        expires_on = float(payload.get("expires_on") or 0.0)
+    except Exception:
+        log.debug("Token cache read failed for %s", scope, exc_info=True)
+        return None
+    if not token or time.time() >= expires_on - _REFRESH_LEEWAY:
+        return None
+    return token, expires_on
+
+
+def _write_cached_token(scope: str, token: str, expires_on: float) -> None:
+    """Persist a token 0600 so the next process skips the ~0.5s az call."""
+    path = _token_cache_path(scope)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        os.chmod(path.parent, 0o700)
+        tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+        fd = os.open(str(tmp), os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump({"token": token, "expires_on": expires_on}, handle)
+        os.replace(tmp, path)
+    except Exception:
+        log.debug("Token cache write failed for %s", scope, exc_info=True)
+
+
 def fetch_token(scope: str) -> tuple[str, float]:
-    """Acquire a token for *scope* via AzureCliCredential."""
+    """Acquire a token for *scope*, reusing a cached one across processes.
+
+    ``AzureCliCredential`` shells out to ``az``, which costs ~0.5s warm and
+    several seconds cold. Without this, every ``aj`` invocation paid it again.
+    """
+    cached = _read_cached_token(scope)
+    if cached is not None:
+        return cached
     from azure.identity import AzureCliCredential
 
     tok = AzureCliCredential().get_token(scope)
+    _write_cached_token(scope, tok.token, float(tok.expires_on))
     return tok.token, tok.expires_on
 
 @dataclass(frozen=True, slots=True)

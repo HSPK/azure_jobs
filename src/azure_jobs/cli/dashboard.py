@@ -32,9 +32,27 @@ from azure_jobs.tui.settings import (
     show_default=True,
     help="Enable mouse support (off by default for low-latency SSH).",
 )
-def dashboard(last: int, page_size: int | None, mouse: bool) -> None:
+@click.option(
+    "--daemon/--no-daemon",
+    default=None,
+    help="Route dashboard I/O through the background daemon (default: auto).",
+)
+def dashboard(
+    last: int, page_size: int | None, mouse: bool, daemon: bool | None
+) -> None:
     """Interactive job dashboard (lazydocker-style TUI)."""
     from azure_jobs.tui.app import AjDashboard
 
-    app = AjDashboard(last=last, page_size=page_size, mouse=mouse)
+    session_factory = None
+    if daemon is not False:
+        from azure_jobs.api.client import BackendSessionFactory
+
+        session_factory = BackendSessionFactory(prefer_daemon=daemon)
+
+    app = AjDashboard(
+        last=last,
+        page_size=page_size,
+        mouse=mouse,
+        session_factory=session_factory,
+    )
     app.run()

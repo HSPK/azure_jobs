@@ -29,8 +29,19 @@ def _build_aml_spec(template: "Template") -> AmlOpts:
     return AmlOpts.from_template(template)
 
 
-register_backend("aml", _submit_azureml, label="Azure ML", build_spec_backend=_build_aml_spec)
-register_backend("sing", _submit_azureml, label="Singularity", build_spec_backend=_build_aml_spec)
+def _load_aml_spec(data: dict) -> AmlOpts:
+    known = set(AmlOpts.__dataclass_fields__)
+    return AmlOpts(**{k: v for k, v in (data or {}).items() if k in known})
+
+
+for _name, _label in (("aml", "Azure ML"), ("sing", "Singularity")):
+    register_backend(
+        _name,
+        _submit_azureml,
+        label=_label,
+        build_spec_backend=_build_aml_spec,
+        load_spec_backend=_load_aml_spec,
+    )
 
 
 __all__ = ["AmlOpts", "resolve_target"]

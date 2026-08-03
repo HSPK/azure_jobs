@@ -10,6 +10,18 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
+def _isolate_daemon_runtime(tmp_path_factory, monkeypatch):
+    """Never let a test reach the developer's real daemon socket.
+
+    The daemon starts on demand, so an unisolated test would spawn a real
+    user-level background process and leave it running after the suite ends.
+    Tests that want a daemon create one explicitly under their own tmp_path.
+    """
+    runtime = tmp_path_factory.mktemp("aj-runtime")
+    monkeypatch.setenv("AJ_RUNTIME_DIR", str(runtime))
+
+
+@pytest.fixture(autouse=True)
 def _stub_azure_resolvers():
     """Avoid hitting Azure Resource Graph / ARM during submit pipeline tests."""
     from azure_jobs.az_client import VCInfo, WorkspaceInfo

@@ -18,6 +18,7 @@ from azure_jobs.config import (
 )
 from azure_jobs.errors import AJError
 from azure_jobs.job import build_job_spec, write_amlt_yaml
+from azure_jobs.job.spec import JobSpec
 from azure_jobs.journal import JobRecord
 from azure_jobs.template import Template
 from azure_jobs.utils.naming import resolve_name
@@ -63,6 +64,11 @@ __all__ = ["resolve_name"]
     is_flag=True,
     help="Submit via amlt instead of aj REST API",
 )
+@click.option(
+    "--queue",
+    is_flag=True,
+    help="Hand the submission to the daemon and return a ticket immediately",
+)
 @click.argument("command", nargs=1)
 @click.argument("args", nargs=-1)
 def run(
@@ -74,6 +80,7 @@ def run(
     ppn: str | None,
     dry_run: bool,
     amlt: bool,
+    queue: bool,
 ) -> None:
     """Submit a job to Azure ML using a template."""
     tmpl, template_name = _load_template(template)
@@ -128,6 +135,10 @@ def run(
     except AJError as exc:
         raise click.ClickException(str(exc)) from exc
 
+    if queue:
+        _enqueue(request, name)
+        return
+
     rec = JobRecord(
         request=request,
         created_at=datetime.now(timezone.utc).isoformat(),
@@ -161,3 +172,30 @@ def _load_template(template: str | None) -> tuple[Template, str]:
     if not tmpl.jobs:
         raise click.ClickException("Template missing 'jobs' section")
     return tmpl, template
+
+
+def _enqueue(request: JobSpec, name: str) -> None:
+    """Hand a built JobSpec to the daemon's queue and report the ticket."""
+    from azure_jobs.api.client import connect_daemon
+    from azure_jobs.api.azure import ConfigTargetCatalog
+
+    target = ConfigTargetCatalog().configured()
+    if target is None:
+        raise click.ClickException(
+            "No workspace configured. Run 'aj init' or 'aj ws set' first."
+        )
+    try:
+        backend = connect_daemon(target)
+    except Exception as exc:
+        raise click.ClickException(
+            f"--queue needs the daemon, which is unavailable "
+            f"({type(exc).__name__}: {exc}). "
+            "Start it with 'aj daemon start', or drop --queue to submit inline."
+        ) from exc
+    try:
+        entry = backend.queue.enqueue(request.to_dict(), name=name)
+    finally:
+        backend.close()
+    click.echo(f"Queued {name} as {entry.ticket}")
+    click.echo(f"  aj queue show {entry.ticket}")
+    click.echo(f"  aj queue wait {entry.ticket}")

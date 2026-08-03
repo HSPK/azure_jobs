@@ -134,7 +134,68 @@ Highlights:
   registration; ML data plane (discovered from `properties.discoveryUrl`,
   `ml.azure.com/.default`) for Run History (error details, log URLs).
 - **Token cache** per scope (ARM, data-plane, storage), with a 60 s refresh
-  leeway.
+  leeway, persisted `0600` under `AJ_CACHE_HOME` so a second `aj` process does
+  not shell out to `az` again. A cache file with loose permissions is ignored.
+
+## Client / server split
+
+`aj` runs frontends against one capability contract, with two interchangeable
+backends behind it. The daemon is an **accelerator, never a dependency**: every
+failure path falls back in-process.
+
+```
+cli/   tui/   (future web/, vscode/)      frontends — import only api/
+  └────────────┬──────────────────────┘
+        api/                              the contract
+        ├── ports.py     capability Protocols
+        ├── models.py    transport-neutral values + JSON codec
+        ├── errors.py    cross-process exception preservation
+        ├── rpc.py       line-delimited JSON-RPC 2.0 framing
+        ├── azure.py     Azure implementations of the ports
+        ├── inprocess.py direct backend — the only place touching az_client
+        ├── queue.py     serial submission queue with a journal
+        ├── watch.py     background polling + notifications
+        ├── daemon.py    server: sessions, dispatch table, reader handles
+        └── client.py    remote backend + fallback
+```
+
+`api/` is the lower layer: `tui/` and `cli/` depend on it, never the reverse
+(guarded by `tests/test_api_architecture.py`). The daemon does not reimplement
+anything — it serves `InProcessBackend` over a socket, so one fix covers both
+transports.
+
+**Transport.** Line-delimited JSON-RPC 2.0 over a Unix socket, stdlib only, so
+the minimal dependency set is preserved. Frames are capped (a 16 MiB log window
+base64-inflates to ~22 MB). Server pushes are JSON-RPC notifications.
+
+**Multi-tenancy.** `AJ_HOME` defaults to `./.azure_jobs`, so state is per
+project directory. One user-level daemon therefore keys sessions by
+`(absolute project root, target id)` and serves every checkout, instead of one
+process per project.
+
+**Safety.** The socket is `0600` and peers are checked with `SO_PEERCRED`.
+Credentials live only in RAM and idle sessions are reaped (default 30 min). A
+handshake compares protocol and `aj` version; a stale daemon is retired and
+respawned, so `pipx upgrade` cannot leave a mismatched pair running.
+
+**Errors.** The wire carries the exception *type*, so frontend code such as
+`except RestError as exc: exc.status_code` keeps working when the work happened
+in the daemon. Unknown types degrade to `RemoteError` with the original name
+preserved. Tracebacks cross only when `AJ_DEBUG=1`.
+
+**Queue.** `aj run --queue` returns a ticket immediately; the daemon runs the
+submission after the client exits. Submissions are serial (they upload code and
+mutate remote state) and journalled, so a restart does not lose pending work. A
+submission interrupted mid-flight is marked failed rather than silently re-run,
+because its remote outcome is unknown.
+
+**Watching.** The daemon polls watched jobs and pushes transitions to
+subscribers — the one capability an in-process CLI structurally cannot offer.
+Watching an already-finished job answers immediately rather than going silent.
+
+`AJ_NO_DAEMON=1` disables the daemon path entirely.
+
+## TUI
 - **Blob credential fallback**: SAS → SharedKey → AAD bearer. If the storage
   account disables shared-key access, it skips straight to AAD; on a 403 mid-
   upload it retries once with bearer.
