@@ -18,9 +18,10 @@ SHARED = SRC / "shared"
 CONTRACT = SHARED / "contract"
 CLIENT = SRC / "client"
 SERVER = SRC / "server"
+CLI = CLIENT / "cli"
 
 #: Files that define the contract itself. Implementations may import more.
-CONTRACT_FILES = ("ports.py", "models.py", "errors.py", "rpc.py")
+CONTRACT_FILES = ("ports.py", "models.py", "errors.py", "routes.py")
 
 FORBIDDEN_IN_CONTRACT = (
     "azure_jobs.server.az_client",
@@ -174,29 +175,51 @@ def test_within_the_server_only_the_adapter_reaches_the_sdk_directly():
     assert offenders == [], offenders
 
 
-def test_every_contract_port_is_reachable_over_the_wire():
+def test_every_contract_port_has_a_route():
     """A capability that exists only in-process breaks transport parity."""
-    from azure_jobs.shared.contract import ports
-    from azure_jobs.server.daemon import METHODS
+    from azure_jobs.server.app import DaemonState, create_app
+    from azure_jobs.shared.contract import routes as R
 
-    # Ports whose methods must each map to a daemon method.
-    mapping = {
-        ports.JobQuery: "jobs",
-        ports.JobActions: "jobs",
-        ports.JobDelete: "jobs",
-        ports.RangeLogSource: "logs",
-        ports.RangeLogReader: "logs",
-        ports.Catalog: "catalog",
-        ports.SubmitQueue: "queue",
+    paths = {getattr(r, "path", "") for r in create_app(DaemonState()).routes}
+    required = {
+        R.jobs("{target_id}"),
+        R.jobs_fetch("{target_id}"),
+        R.job("{target_id}", "{job_id}"),
+        R.job_cancel("{target_id}", "{job_id}"),
+        R.job_logs("{target_id}", "{job_id}"),
+        R.job_log_content("{target_id}", "{job_id}"),
+        R.job_log_download("{target_id}", "{job_id}"),
+        R.catalog("{target_id}", "{kind}"),
+        R.catalog_item("{target_id}", "{kind}", "{name}"),
+        R.account("{kind}"),
+        R.submissions("{target_id}"),
+        R.queue("{target_id}"),
+        R.queue_ticket("{target_id}", "{ticket}"),
+        R.watches("{target_id}"),
+        R.watch_job("{target_id}", "{job_id}"),
+        R.events(),
     }
-    missing: list[str] = []
-    for protocol, namespace in mapping.items():
-        for name, member in vars(protocol).items():
-            if name.startswith("_") or not callable(member):
-                continue
-            if f"{namespace}.{name}" not in METHODS:
-                missing.append(f"{namespace}.{name}")
-    assert missing == [], missing
+    assert required <= paths, required - paths
+
+
+def test_routes_are_version_prefixed():
+    """Versioning by path is what lets an old client keep working."""
+    from azure_jobs.shared.contract import routes as R
+
+    for path in (R.ping(), R.info(), R.jobs("t"), R.account("k"), R.events()):
+        assert path.startswith(f"{R.API_V1}/")
+
+
+def test_the_client_builds_urls_from_the_shared_route_table():
+    """A path typo should be an import error, not a 404 at runtime."""
+    import inspect
+
+    from azure_jobs.client import connection
+
+    source = inspect.getsource(connection)
+    # Every request goes through R.<helper>(...), never a literal path.
+    assert '"/v1' not in source
+    assert "'/v1" not in source
 
 
 def test_remote_and_inprocess_expose_the_same_backend_attributes():
@@ -259,28 +282,16 @@ def test_inprocess_ports_satisfy_the_runtime_protocols():
     assert isinstance(object.__new__(AzureCatalog), ports.Catalog)
 
 
-def test_daemon_dispatch_has_no_if_elif_chain_on_method_names():
-    """Dispatch is a table; adding a method must not mean editing a branch."""
-    source = (SERVER / "daemon.py").read_text(encoding="utf-8")
-    tree = ast.parse(source)
-    dispatch = next(
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.FunctionDef) and node.name == "dispatch"
-    )
-    branches = [n for n in ast.walk(dispatch) if isinstance(n, ast.If)]
-    # A single guard for "unknown method" is fine; a chain is not.
-    assert len(branches) <= 1
+def test_the_server_does_not_hand_roll_a_transport():
+    """uvicorn owns framing, concurrency and shutdown; we own the domain."""
+    import inspect
 
+    from azure_jobs.server import app, runner
 
-def test_every_daemon_method_is_registered_in_one_table():
-    from azure_jobs.server.daemon import METHODS, _METHODS
-
-    assert set(METHODS) == set(_METHODS)
-    assert len(METHODS) == len(set(METHODS))
-
-
-CLI = CLIENT / "cli"
+    for module in (app, runner):
+        source = inspect.getsource(module)
+        assert "def serve_connection" not in source
+        assert "recv(" not in source
 
 
 def test_cli_never_imports_az_client():
@@ -310,18 +321,19 @@ def test_cli_does_not_construct_azure_clients():
     assert offenders == [], offenders
 
 
-def test_every_account_port_method_is_reachable_over_the_wire():
-    from azure_jobs.shared.contract import ports
-    from azure_jobs.server.daemon import METHODS
+def test_every_account_port_method_is_served():
+    """The account routes fan out from one path, so check the dispatch covers it."""
+    import inspect
 
-    missing = [
-        f"account.{name}"
-        for name, member in vars(ports.Account).items()
-        if not name.startswith("_")
-        and callable(member)
-        and f"account.{name}" not in METHODS
-    ]
-    assert missing == [], missing
+    from azure_jobs.server import app
+    from azure_jobs.shared.contract import ports
+
+    source = inspect.getsource(app.create_app)
+    for name, member in vars(ports.Account).items():
+        if name.startswith("_") or not callable(member):
+            continue
+        wire = name.replace("_", "-")
+        assert wire in source or name in source, name
 
 
 def test_catalog_item_does_not_shadow_payload_keys():

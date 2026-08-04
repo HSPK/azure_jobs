@@ -51,7 +51,17 @@ uv run pytest tests/test_cli.py::TestRunCommand::test_dry_run_creates_submission
 - **Script detection:** `.py` files are executed via `uv run`, `.sh` files via `bash`.
 - **Job records** are appended as JSONL to `AJ_RECORD` using the `SubmissionRecord` dataclass.
 - **SKU templates** support two formats: string templates with `{nodes}`/`{processes}` substitution, and dict templates with range-based matching (e.g., `"1-2": "sku_a"`, `"4+": "sku_b"`).
-- **Dependencies are minimal by design** — only `click` and `pyyaml`. Python 3.10+.
+- **Client/server split is the organising principle.** `shared/` holds the
+  vocabulary both sides speak, `client/` drives and renders, `server/` executes.
+  Neither side may import the other; the SDK lives only in `server/`, and
+  `rich`/`textual` only in `client/`. Enforced by `tests/test_api_architecture.py`.
+- **The daemon is the only execution path.** There is no in-process mode: a
+  second path drifts from the first. Transport is HTTP over a Unix domain
+  socket (FastAPI/uvicorn server, httpx client), the same shape dockerd
+  exposes, so it is `curl --unix-socket` debuggable and versioned by path.
+- **Dependencies serve the split.** The old "minimal by design" rule is
+  retired: a hand-rolled transport cost more in lifecycle bugs than the
+  dependencies save. Python 3.10+.
 
 ## Design Discipline
 

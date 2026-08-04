@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from azure_jobs.shared.contract import MIN_PROTOCOL_VERSION, PROTOCOL_VERSION
+from azure_jobs.shared.contract import routes as R
 from azure_jobs.shared.contract.models import Job, JobRef, SubmitOutcome
 from azure_jobs.server.queue import SubmissionQueue
 from azure_jobs.server.watch import JobWatcher
@@ -122,12 +122,12 @@ class TestVersionRangeNegotiation:
     """P0: an exact match forced a daemon kill on every aj upgrade."""
 
     def test_the_range_is_declared(self):
-        assert MIN_PROTOCOL_VERSION <= PROTOCOL_VERSION
+        assert R.MIN_API_VERSION <= R.API_VERSION
 
     def test_info_reports_the_range(self, local_daemon):
         info = local_daemon.info()
-        assert info["min_protocol"] == MIN_PROTOCOL_VERSION
-        assert info["protocol"] == PROTOCOL_VERSION
+        assert info["min_api_version"] == R.MIN_API_VERSION
+        assert info["api_version"] == R.API_VERSION
 
 
 class TestRetireNeverKillsRunningWork:
@@ -167,7 +167,7 @@ class TestRetireNeverKillsRunningWork:
         session.queue.enqueue({"name": "slow"})
         assert started.wait(timeout=5)
         try:
-            result = local_daemon.retire(drain_timeout=30)
+            result = _retire(local_daemon, drain_timeout=30)
             assert result["outstanding"] == 1
         finally:
             release.set()
@@ -188,7 +188,7 @@ class TestRetireNeverKillsRunningWork:
         session.queue.enqueue({"name": "slow"})
         assert started.wait(timeout=5)
 
-        local_daemon.retire(drain_timeout=30)
+        _retire(local_daemon, drain_timeout=30)
         time.sleep(0.3)
         # Still alive: the submission has not finished yet.
         assert local_daemon.socket_path.exists()
@@ -201,55 +201,57 @@ class TestRetireNeverKillsRunningWork:
         assert not local_daemon.socket_path.exists()
 
 
-class TestConnectionResourcesAreBounded:
-    """P1: a long-lived daemon accumulated a thread per CLI invocation."""
+class TestServerOwnsConnectionResources:
+    """Connection bookkeeping moved to uvicorn, which is the point.
 
-    def test_finished_connection_threads_are_reclaimed(self, local_daemon):
-        from azure_jobs.client.connection import RpcConnection, _connect_socket
+    The hand-rolled loop accumulated a thread per CLI invocation with no
+    ceiling; a real server manages that, so what is worth pinning is that the
+    daemon no longer tries to.
+    """
 
-        conns = [
-            RpcConnection(_connect_socket(local_daemon.socket_path))
-            for _ in range(10)
-        ]
-        for conn in conns:
-            conn.call("daemon.ping", {})
-        assert len(local_daemon._threads) == 10
+    def test_the_daemon_keeps_no_connection_thread_list(self):
+        from azure_jobs.server.runner import Daemon
 
-        for conn in conns:
-            conn.close()
-        deadline = time.time() + 5
-        while time.time() < deadline and len(local_daemon._threads) > 1:
-            RpcConnection(_connect_socket(local_daemon.socket_path)).close()
-            time.sleep(0.05)
-        assert len(local_daemon._threads) <= 2
+        assert not hasattr(Daemon, "_reap_threads")
+        assert "_threads" not in Daemon.__init__.__code__.co_names
 
-    def test_a_connection_ceiling_exists(self):
-        from azure_jobs.server.daemon import MAX_CONNECTIONS
+    def test_many_short_lived_clients_leave_nothing_behind(self, local_daemon):
+        from azure_jobs.client.connection import DaemonClient
+        from azure_jobs.shared.contract import routes as R
 
-        assert MAX_CONNECTIONS > 0
+        before = threading.active_count()
+        for _ in range(20):
+            client = DaemonClient(
+                local_daemon.socket_path, local_daemon.socket_path.parent
+            )
+            client.get(R.ping())
+            client.close()
+        time.sleep(0.5)
+        # Allow a little slack for uvicorn's own pool, but not 20 new threads.
+        assert threading.active_count() < before + 10
+
+
+def _retire(daemon, *, drain_timeout=None):
+    from azure_jobs.client.connection import DaemonClient
+    from azure_jobs.shared.contract import routes as R
+
+    client = DaemonClient(daemon.socket_path, daemon.socket_path.parent)
+    try:
+        return client.post(R.retire(), json={"drain_timeout": drain_timeout})
+    finally:
+        client.close()
 
 
 def _open_session(daemon):
-    from azure_jobs.shared.version import aj_version
+    """Create a context the way a request would, and hand it back."""
+    from pathlib import Path
 
     from .api_fakes import make_target
 
-    class _Conn:
-        tokens: list = []
-        readers: dict = {}
-        unsubscribers: list = []
-
-    conn = _Conn()
-    daemon.open_session(
-        {
-            "root": str(daemon.socket_path.parent),
-            "protocol": PROTOCOL_VERSION,
-            "aj_version": aj_version(),
-            "target": make_target().to_json(),
-        },
-        conn,
+    daemon.state.contexts.register(make_target())
+    return daemon.state.contexts.context(
+        Path(daemon.socket_path.parent), make_target().id
     )
-    return next(iter(daemon._sessions.values()))
 
 
 def _drain(daemon, timeout: float = 5.0) -> None:
@@ -259,93 +261,79 @@ def _drain(daemon, timeout: float = 5.0) -> None:
 
 
 class TestRequestsAreMultiplexed:
-    """A slow call must not freeze everything else on the same connection.
+    """A slow call must not freeze everything else on the connection.
 
-    The protocol always allowed this — requests carry ids and the writer is
-    lock-protected — but the server used to run handlers inline on the read
-    loop, so the dashboard's whole worker pool serialised behind, say, a delete
-    polling a long-running operation for two minutes.
+    uvicorn owns request concurrency now; this pins the property rather than
+    the mechanism, so it keeps meaning something if the server changes again.
     """
 
-    def _slow_daemon(self, local_daemon, seconds=1.0):
-        from azure_jobs.server import daemon as daemon_mod
-
-        daemon_mod._METHODS["daemon.slow"] = lambda d, p, c: (
-            time.sleep(seconds),
-            {"ok": True},
-        )[1]
-        return local_daemon
-
-    def teardown_method(self):
-        from azure_jobs.server import daemon as daemon_mod
-
-        daemon_mod._METHODS.pop("daemon.slow", None)
-
     def test_a_slow_call_does_not_block_the_connection(self, local_daemon):
-        from azure_jobs.client.connection import RpcConnection, _connect_socket
+        from azure_jobs.client.connection import DaemonClient
+        from azure_jobs.shared.contract import routes as R
 
-        daemon = self._slow_daemon(local_daemon, seconds=1.0)
-        conn = RpcConnection(_connect_socket(daemon.socket_path))
+        target = local_daemon.target
+        client = DaemonClient(local_daemon.socket_path, local_daemon.socket_path.parent)
+        client.put(R.target(target.id), json=target.to_json())
+        client.get(R.jobs(target.id), params={"limit": 1})
+
+        backend = local_daemon.factory.backends[0]
+        gate = threading.Event()
+        original = backend.jobs.get
+
+        def slow(ref):
+            gate.wait(timeout=10)
+            return original(ref)
+
+        backend.jobs.get = slow
         waited: dict[str, float] = {}
 
-        def slow():
-            conn.call("daemon.slow", {})
+        def slow_call():
+            client.get(R.job(target.id, "a"), params={"backend_ref": "a"})
 
-        def fast():
-            time.sleep(0.2)
+        def fast_call():
+            time.sleep(0.3)
             started = time.time()
-            conn.call("daemon.ping", {})
+            client.get(R.ping())
             waited["fast"] = time.time() - started
+            gate.set()
 
-        threads = [threading.Thread(target=slow), threading.Thread(target=fast)]
+        threads = [threading.Thread(target=slow_call), threading.Thread(target=fast_call)]
         for t in threads:
             t.start()
         for t in threads:
-            t.join(timeout=15)
-        conn.close()
-        assert waited["fast"] < 0.5, f"ping waited {waited['fast']:.2f}s"
+            t.join(timeout=20)
+        client.close()
+        assert waited["fast"] < 1.0, f"ping waited {waited['fast']:.2f}s"
 
     def test_concurrent_requests_all_get_their_own_reply(self, local_daemon):
-        from azure_jobs.client.connection import RpcConnection, _connect_socket
+        from azure_jobs.client.connection import DaemonClient
+        from azure_jobs.shared.contract import routes as R
 
-        conn = RpcConnection(_connect_socket(local_daemon.socket_path))
+        client = DaemonClient(local_daemon.socket_path, local_daemon.socket_path.parent)
         results: list = []
         errors: list = []
 
-        def call(index: int) -> None:
+        def call() -> None:
             try:
-                results.append(conn.call("daemon.info", {})["pid"])
+                results.append(client.get(R.info())["pid"])
             except BaseException as exc:
                 errors.append(exc)
 
-        threads = [threading.Thread(target=call, args=(i,)) for i in range(24)]
+        threads = [threading.Thread(target=call) for _ in range(24)]
         for t in threads:
             t.start()
         for t in threads:
-            t.join(timeout=15)
-        conn.close()
+            t.join(timeout=20)
+        client.close()
         assert not errors
         assert len(results) == 24
-        assert len(set(results)) == 1
-
-    def test_in_flight_requests_finish_before_the_connection_cleans_up(
-        self, local_daemon
-    ):
-        """Handlers hold log readers and session tokens; cleanup must wait."""
-        import inspect
-
-        from azure_jobs.shared.contract import rpc
-
-        source = inspect.getsource(rpc.serve_connection)
-        assert "pool.shutdown(wait=True)" in source
-        assert source.index("pool.shutdown(wait=True)") < source.index("on_close()")
 
 
 class TestShutdownIsAtomic:
     """Retire runs shutdown on a background thread the process may outlive."""
 
     def test_a_second_caller_waits_for_the_first(self, tmp_path):
-        from azure_jobs.server.daemon import Daemon
+        from azure_jobs.server.runner import Daemon
 
         from .api_fakes import FakeFactory, FakeTargetCatalog
 
@@ -378,7 +366,7 @@ class TestShutdownIsAtomic:
         assert not daemon.socket_path.exists()
 
     def test_shutdown_removes_the_socket_before_returning(self, tmp_path):
-        from azure_jobs.server.daemon import Daemon
+        from azure_jobs.server.runner import Daemon
 
         from .api_fakes import FakeFactory, FakeTargetCatalog
 

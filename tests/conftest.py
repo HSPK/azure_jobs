@@ -41,11 +41,25 @@ def allow_daemon_spawn(monkeypatch):
     return _REAL_SPAWN_DAEMON
 
 
+def _await_socket(path, timeout: float = 20.0) -> None:
+    """uvicorn binds asynchronously; wait until it actually answers."""
+    import time
+
+    from azure_jobs.client.connection import _reachable
+
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if _reachable(path):
+            return
+        time.sleep(0.02)
+    raise AssertionError(f"daemon never answered on {path}")
+
+
 def _serve_daemon(tmp_path, monkeypatch, factory, target):
     """Bind and serve a Daemon over a socket under *tmp_path*."""
     import threading
 
-    from azure_jobs.server.daemon import Daemon
+    from azure_jobs.server.runner import Daemon
 
     from .api_fakes import FakeTargetCatalog
 
@@ -62,6 +76,7 @@ def _serve_daemon(tmp_path, monkeypatch, factory, target):
     daemon.bind()
     thread = threading.Thread(target=daemon.serve_forever, daemon=True)
     thread.start()
+    _await_socket(daemon.socket_path)
 
     monkeypatch.setattr(
         "azure_jobs.shared.targets.ConfigTargetCatalog.configured", lambda self: target

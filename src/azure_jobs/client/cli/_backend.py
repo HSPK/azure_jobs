@@ -12,6 +12,7 @@ than silently taking a second path that would drift from the first.
 from __future__ import annotations
 
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Any, Iterator
 
 import click
@@ -84,35 +85,34 @@ def account(subscription_id: str = "") -> Iterator[Any]:
     """Open a subscription-scoped port.
 
     Separate from :func:`backend` because ``aj sku`` / ``aj sa`` / ``aj uai`` /
-    ``aj ws`` must work before any workspace is configured.
+    ``aj ws`` must work before any workspace is configured, so there is no
+    target to open a context for.
     """
     from azure_jobs.client.connection import (
+        DaemonClient,
         RemoteAccount,
-        RpcConnection,
-        _connect_socket,
+        _reachable,
         daemon_required,
         socket_path,
         spawn_daemon,
     )
+    from azure_jobs.shared import const
     from azure_jobs.shared.contract.errors import DaemonUnavailable
 
     path = socket_path()
     try:
-        try:
-            sock = _connect_socket(path)
-        except OSError:
+        if not _reachable(path):
             spawn_daemon(path)
-            sock = _connect_socket(path)
+        client = DaemonClient(path, Path(const.AJ_HOME).resolve())
     except Exception as exc:
         raise click.ClickException(str(daemon_required(exc))) from exc
 
-    rpc = RpcConnection(sock)
     try:
-        yield RemoteAccount(rpc, subscription_id)
+        yield RemoteAccount(client, subscription_id)
     except DaemonUnavailable as exc:
         raise click.ClickException(str(exc)) from exc
     finally:
-        rpc.close()
+        client.close()
 
 
 __all__ = ["account", "backend", "configured_target"]

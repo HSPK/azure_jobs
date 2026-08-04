@@ -1,30 +1,34 @@
-"""Client half of the daemon transport, plus the fallback that makes it safe.
+"""Client half of the transport: HTTP over a Unix domain socket.
 
-The daemon is an accelerator, never a dependency: every failure path here ends
-in an in-process backend so ``aj`` keeps working when the daemon is missing,
-stale, wedged, or speaking another protocol.
+Implements the same ports as the JSON-RPC client it replaced, so ``cli/`` and
+``tui/`` are untouched by the change — which is what the contract layer is for.
+
+The daemon is the only execution path. If it cannot be reached this raises with
+the steps needed to recover rather than quietly doing the work here.
 """
 
 from __future__ import annotations
 
-import itertools
+import json
 import logging
-import uuid
 import os
 import socket
-import struct
+import stat
 import subprocess
 import sys
 import threading
 import time
+import uuid
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
-from azure_jobs.shared.contract import PROTOCOL_VERSION
+import httpx
+
+from azure_jobs.shared.contract import routes as R
 from azure_jobs.shared.contract.errors import (
     DaemonUnavailable,
-    ProtocolMismatch,
     TransportError,
+    error_from_json,
 )
 from azure_jobs.shared.contract.models import (
     CatalogItem,
@@ -36,17 +40,22 @@ from azure_jobs.shared.contract.models import (
     LogChunk,
     Notification,
     QueuedJob,
+    SubmitEvent,
     SubmitOutcome,
     Target,
 )
 from azure_jobs.shared.contract.ports import Cancelled, EventSink, NotificationSink
-from azure_jobs.shared.contract.rpc import FrameReader, FrameWriter, raise_for_error, request
+from azure_jobs.shared.version import aj_version
 
 log = logging.getLogger(__name__)
 
 CONNECT_TIMEOUT = 5.0
-CALL_TIMEOUT = 300.0
-SPAWN_TIMEOUT = 10.0
+#: A submission uploads code and can legitimately run for a long time.
+CALL_TIMEOUT = 1800.0
+SPAWN_TIMEOUT = 15.0
+
+#: Any host works over a UDS transport; it exists only to form a URL.
+BASE_URL = "http://aj-daemon"
 
 
 def runtime_dir() -> Path:
@@ -63,26 +72,138 @@ def socket_path() -> Path:
     return runtime_dir() / "daemon.sock"
 
 
-class RpcConnection:
-    """Thread-safe request/response over one socket, with server pushes."""
+def daemon_required(exc: BaseException) -> DaemonUnavailable:
+    """Explain how to recover from an unreachable daemon."""
+    return DaemonUnavailable(
+        f"The aj daemon is unavailable ({type(exc).__name__}: {exc}).\n"
+        "  Start it with:    aj daemon start\n"
+        "  Inspect it with:  aj daemon status\n"
+        "  Full traceback:   AJ_DEBUG=1 aj <command>"
+    )
 
-    def __init__(self, sock: socket.socket) -> None:
-        self._sock = sock
-        self._writer = FrameWriter(sock)
-        self._reader = FrameReader(sock)
-        self._ids = itertools.count(1)
-        self._lock = threading.Lock()
-        self._waiters: dict[int, tuple[threading.Event, list]] = {}
+
+def secure_runtime_dir(path: Path) -> None:
+    """Create/validate the runtime dir, refusing one another user controls.
+
+    ``/tmp/aj-<uid>`` is predictable, so a local attacker could pre-create it
+    and plant a socket. Submission payloads carry ``env_vars`` (API tokens), so
+    connecting to an impostor would hand them over.
+    """
+    try:
+        os.makedirs(path, mode=0o700, exist_ok=True)
+        info = os.stat(path)
+    except OSError as exc:
+        raise DaemonUnavailable(
+            f"Cannot use the daemon runtime dir {path} "
+            f"({type(exc).__name__}: {exc})"
+        ) from exc
+    if info.st_uid != os.getuid():
+        raise DaemonUnavailable(
+            f"Refusing to use {path}: owned by uid {info.st_uid}, not {os.getuid()}"
+        )
+    if info.st_mode & 0o077:
+        raise DaemonUnavailable(
+            f"Refusing to use {path}: mode {info.st_mode & 0o777:o} lets other "
+            "users write to it"
+        )
+
+
+def verify_socket(path: Path) -> None:
+    """Refuse a socket this user does not own before speaking to it."""
+    try:
+        info = os.stat(path)
+    except OSError as exc:
+        raise DaemonUnavailable(f"No daemon socket at {path}") from exc
+    if not stat.S_ISSOCK(info.st_mode):
+        raise DaemonUnavailable(f"{path} is not a socket")
+    if info.st_uid != os.getuid():
+        raise DaemonUnavailable(
+            f"Refusing to talk to {path}: owned by uid {info.st_uid}"
+        )
+
+
+class DaemonClient:
+    """A pooled HTTP connection to the daemon, plus its event stream."""
+
+    def __init__(self, path: Path, root: Path) -> None:
+        self.path = path
+        self.root = str(root)
+        verify_socket(path)
+        self._http = httpx.Client(
+            transport=httpx.HTTPTransport(uds=str(path), retries=0),
+            base_url=BASE_URL,
+            timeout=httpx.Timeout(CALL_TIMEOUT, connect=CONNECT_TIMEOUT),
+            headers={
+                R.ROOT_HEADER: str(root),
+                R.CLIENT_VERSION_HEADER: aj_version(),
+            },
+        )
         self._sinks: list[NotificationSink] = []
         self._raw_sinks: dict[str, list[Callable[[Mapping[str, Any]], None]]] = {}
+        self._lock = threading.Lock()
+        self._events_thread: threading.Thread | None = None
         self._closed = threading.Event()
-        self._error: BaseException | None = None
-        self._pump = threading.Thread(target=self._run, name="aj-rpc", daemon=True)
-        self._pump.start()
+
+    # ── requests ─────────────────────────────────────────────────────────
+
+    def request(self, method: str, url: str, **kwargs: Any) -> Any:
+        try:
+            response = self._http.request(method, url, **kwargs)
+        except httpx.HTTPError as exc:
+            raise TransportError(
+                f"{method} {url} failed ({type(exc).__name__}: {exc})"
+            ) from exc
+        return self._decode(response, method, url)
+
+    def _decode(self, response: httpx.Response, method: str, url: str) -> Any:
+        if response.status_code >= 400:
+            self._raise(response, method, url)
+        if response.status_code == 204 or not response.content:
+            return None
+        if response.headers.get("content-type", "").startswith(
+            "application/octet-stream"
+        ):
+            return response
+        return response.json()
+
+    @staticmethod
+    def _raise(response: httpx.Response, method: str, url: str) -> None:
+        """Re-raise the server's exception type so callers can branch on it.
+
+        The CLI reads ``RestError.status_code``; flattening every failure to a
+        string would break that.
+        """
+        payload: Any = None
+        try:
+            payload = response.json()
+        except Exception:
+            payload = None
+        if isinstance(payload, dict) and payload.get("error"):
+            raise error_from_json(payload["error"])
+        detail = str(payload.get("detail") or "") if isinstance(payload, dict) else ""
+        raise TransportError(
+            f"{method} {url} returned {response.status_code}"
+            + (f": {detail}" if detail else "")
+        )
+
+    def get(self, url: str, **kwargs: Any) -> Any:
+        return self.request("GET", url, **kwargs)
+
+    def post(self, url: str, **kwargs: Any) -> Any:
+        return self.request("POST", url, **kwargs)
+
+    def put(self, url: str, **kwargs: Any) -> Any:
+        return self.request("PUT", url, **kwargs)
+
+    def delete(self, url: str, **kwargs: Any) -> Any:
+        return self.request("DELETE", url, **kwargs)
+
+    # ── events ───────────────────────────────────────────────────────────
 
     def subscribe(self, sink: NotificationSink) -> Callable[[], None]:
         with self._lock:
             self._sinks.append(sink)
+        self._ensure_event_stream()
 
         def unsubscribe() -> None:
             with self._lock:
@@ -92,159 +213,104 @@ class RpcConnection:
         return unsubscribe
 
     def subscribe_raw(
-        self, method: str, sink: Callable[[Mapping[str, Any]], None]
+        self, topic: str, sink: Callable[[Mapping[str, Any]], None]
     ) -> Callable[[], None]:
-        """Receive server pushes for one method, e.g. streamed submit progress."""
         with self._lock:
-            self._raw_sinks.setdefault(method, []).append(sink)
+            self._raw_sinks.setdefault(topic, []).append(sink)
+        self._ensure_event_stream()
 
         def unsubscribe() -> None:
             with self._lock:
-                sinks = self._raw_sinks.get(method) or []
+                sinks = self._raw_sinks.get(topic) or []
                 if sink in sinks:
                     sinks.remove(sink)
 
         return unsubscribe
 
-    def call(self, method: str, params: Mapping[str, Any] | None = None) -> Any:
-        req_id = next(self._ids)
-        event = threading.Event()
-        slot: list = []
+    def _ensure_event_stream(self) -> None:
         with self._lock:
-            # Checked inside the lock: _fail() sets _closed and drains
-            # _waiters under this same lock, so testing it outside would let a
-            # waiter be registered into an already-drained dict and then block
-            # for the whole CALL_TIMEOUT.
-            if self._closed.is_set():
-                raise self._error or DaemonUnavailable("Daemon connection is closed")
-            self._waiters[req_id] = (event, slot)
-        try:
-            self._writer.send(request(req_id, method, params or {}))
-        except BaseException:
-            with self._lock:
-                self._waiters.pop(req_id, None)
-            raise
-        if not event.wait(CALL_TIMEOUT):
-            with self._lock:
-                self._waiters.pop(req_id, None)
-            raise TransportError(f"Daemon call {method!r} timed out")
-        if not slot:
-            raise self._error or DaemonUnavailable(
-                f"Daemon closed the connection during {method!r}"
+            if self._events_thread is not None:
+                return
+            self._events_thread = threading.Thread(
+                target=self._pump_events, name="aj-events", daemon=True
             )
-        message = slot[0]
-        raise_for_error(message)
-        return message.get("result")
+            thread = self._events_thread
+        thread.start()
 
-    def _run(self) -> None:
-        try:
-            while True:
-                message = self._reader.read()
-                if message is None:
-                    self._fail(DaemonUnavailable("Daemon closed the connection"))
+    def _pump_events(self) -> None:
+        """Follow the SSE stream, reconnecting if the daemon restarts."""
+        while not self._closed.is_set():
+            try:
+                with self._http.stream(
+                    "GET",
+                    R.events(),
+                    timeout=httpx.Timeout(None, connect=CONNECT_TIMEOUT),
+                ) as response:
+                    for line in response.iter_lines():
+                        if self._closed.is_set():
+                            return
+                        if not line.startswith("data:"):
+                            continue
+                        try:
+                            payload = json.loads(line[5:].strip())
+                        except ValueError:
+                            continue
+                        self._dispatch(payload)
+            except Exception:
+                if self._closed.is_set():
                     return
-                if message.get("id") is None:
-                    self._notify(message)
-                    continue
-                self._resolve(message)
-        except BaseException as exc:  # noqa: BLE001 - surfaced to callers
-            self._fail(exc)
+                log.debug("Event stream dropped; retrying", exc_info=True)
+                time.sleep(0.5)
 
-    def _resolve(self, message: Mapping[str, Any]) -> None:
-        try:
-            req_id = int(message.get("id"))
-        except (TypeError, ValueError):
-            return
+    def _dispatch(self, payload: Mapping[str, Any]) -> None:
+        topic = str(payload.get("topic") or "")
         with self._lock:
-            waiter = self._waiters.pop(req_id, None)
-        if waiter is None:
-            return
-        event, slot = waiter
-        slot.append(dict(message))
-        event.set()
-
-    def _notify(self, message: Mapping[str, Any]) -> None:
-        method = str(message.get("method") or "")
-        if method != "notify":
-            with self._lock:
-                sinks = list(self._raw_sinks.get(method) or ())
-            for sink in sinks:
-                try:
-                    sink(message.get("params") or {})
-                except Exception:
-                    log.exception("Push sink for %s failed", method)
-            return
-        try:
-            note = Notification.from_json(message.get("params") or {})
-        except Exception:
-            log.debug("Malformed notification dropped", exc_info=True)
-            return
-        with self._lock:
+            raw = list(self._raw_sinks.get(topic) or ())
             sinks = list(self._sinks)
+        if raw:
+            for sink in raw:
+                try:
+                    sink(payload.get("payload") or {})
+                except Exception:
+                    log.exception("Event sink for %s failed", topic)
+            return
+        try:
+            note = Notification.from_json(payload)
+        except Exception:
+            log.debug("Malformed event dropped", exc_info=True)
+            return
         for sink in sinks:
             try:
                 sink(note)
             except Exception:
                 log.exception("Notification sink failed")
 
-    def _fail(self, exc: BaseException) -> None:
-        self._error = exc
-        self._closed.set()
-        with self._lock:
-            waiters = list(self._waiters.values())
-            self._waiters.clear()
-        for event, _slot in waiters:
-            event.set()
-
     def close(self) -> None:
         self._closed.set()
         try:
-            self._sock.shutdown(socket.SHUT_RDWR)
-        except OSError:
-            pass
-        try:
-            self._sock.close()
-        except OSError:
-            pass
+            self._http.close()
+        except Exception:
+            log.debug("Closing the HTTP client failed", exc_info=True)
 
 
-# ── remote port implementations ─────────────────────────────────────────────
+# ── remote ports ────────────────────────────────────────────────────────────
 
 
 class RemoteJobs:
-    def __init__(self, rpc: RpcConnection, session: str) -> None:
-        self._rpc = rpc
-        self._session = session
-
-    def _params(self, **extra: Any) -> dict[str, Any]:
-        return {"session": self._session, **extra}
+    def __init__(self, client: DaemonClient, target_id: str) -> None:
+        self._c = client
+        self._t = target_id
 
     def list_page(
-        self,
-        cursor: Cursor | None,
-        *,
-        limit: int,
-        query: JobQuerySpec,
+        self, cursor: Cursor | None, *, limit: int, query: JobQuerySpec
     ) -> JobPage:
-        return JobPage.from_json(
-            self._rpc.call(
-                "jobs.list_page",
-                self._params(
-                    cursor=cursor.to_json() if cursor else None,
-                    limit=limit,
-                    query=query.to_json(),
-                ),
-            )
-        )
-
-    def get(self, job: JobRef) -> Job:
-        return Job.from_json(self._rpc.call("jobs.get", self._params(job=job.to_json())))
-
-    def cancel(self, job: JobRef) -> None:
-        self._rpc.call("jobs.cancel", self._params(job=job.to_json()))
-
-    def delete(self, job: JobRef, *, cancelled: Cancelled = None) -> None:
-        self._rpc.call("jobs.delete", self._params(job=job.to_json()))
+        params: dict[str, Any] = {
+            "limit": limit,
+            "include_archived": query.include_archived,
+        }
+        if cursor:
+            params["cursor"] = cursor.token
+        return JobPage.from_json(self._c.get(R.jobs(self._t), params=params))
 
     def fetch(
         self,
@@ -258,206 +324,214 @@ class RemoteJobs:
         cutoff_days: int = 0,
         max_scan: int = 0,
     ) -> list[Job]:
-        return [
-            Job.from_json(item)
-            for item in self._rpc.call(
-                "jobs.fetch",
-                self._params(
-                    limit=limit,
-                    archived=archived,
-                    job_type=job_type,
-                    tag=tag,
-                    experiment=experiment,
-                    status=status,
-                    cutoff_days=cutoff_days,
-                    max_scan=max_scan,
-                ),
-            )
-            or ()
-        ]
+        rows = self._c.get(
+            R.jobs_fetch(self._t),
+            params={
+                "limit": limit,
+                "archived": archived,
+                "job_type": job_type,
+                "tag": tag,
+                "experiment": experiment,
+                "status": status,
+                "cutoff_days": cutoff_days,
+                "max_scan": max_scan,
+            },
+        )
+        return [Job.from_json(row) for row in rows or ()]
+
+    def get(self, job: JobRef) -> Job:
+        return Job.from_json(
+            self._c.get(R.job(self._t, job.id), params={"backend_ref": job.backend_ref})
+        )
+
+    def cancel(self, job: JobRef) -> None:
+        self._c.post(
+            R.job_cancel(self._t, job.id), params={"backend_ref": job.backend_ref}
+        )
+
+    def delete(self, job: JobRef, *, cancelled: Cancelled = None) -> None:
+        self._c.delete(R.job(self._t, job.id), params={"backend_ref": job.backend_ref})
 
 
 class RemoteLogReader:
-    def __init__(self, rpc: RpcConnection, session: str, handle: str) -> None:
-        self._rpc = rpc
-        self._session = session
-        self._handle = handle
-        self._closed = False
+    """Reads byte windows with HTTP Range, which is what Range is for.
 
-    def _call(self, method: str, **extra: Any) -> LogChunk:
-        return LogChunk.from_json(
-            self._rpc.call(
-                method,
-                {"session": self._session, "reader": self._handle, **extra},
-            )
+    Stateless: each read is its own request, so there is no server-side handle
+    to leak if the client goes away mid-read.
+    """
+
+    def __init__(
+        self, client: DaemonClient, target_id: str, job: JobRef, path: str
+    ) -> None:
+        self._c = client
+        self._t = target_id
+        self._job = job
+        self._path = path
+
+    def _read(self, range_header: str) -> LogChunk:
+        response = self._c.get(
+            R.job_log_content(self._t, self._job.id),
+            params={"path": self._path, "backend_ref": self._job.backend_ref},
+            headers={"Range": range_header},
         )
+        total = int(response.headers.get("X-AJ-Total-Size") or 0)
+        content_range = response.headers.get("Content-Range", "")
+        start = 0
+        if content_range.startswith("bytes "):
+            start = int(content_range[6:].split("/")[0].split("-")[0] or 0)
+        data = response.content
+        return LogChunk(data, start, start + len(data), max(total, start + len(data)))
 
     def tail(self, max_bytes: int) -> LogChunk:
-        return self._call("logs.tail", max_bytes=max_bytes)
+        return self._read(f"bytes=-{max_bytes}")
 
     def read_after(self, offset: int, max_bytes: int) -> LogChunk:
-        return self._call("logs.read_after", offset=offset, max_bytes=max_bytes)
+        return self._read(f"bytes={offset}-{offset + max_bytes - 1}")
 
     def read_range(self, start: int, end: int) -> LogChunk:
-        return self._call("logs.read_range", start=start, end=end)
+        return self._read(f"bytes={start}-{max(start, end - 1)}")
 
     def close(self) -> None:
-        if self._closed:
-            return
-        self._closed = True
-        try:
-            self._rpc.call(
-                "logs.close", {"session": self._session, "reader": self._handle}
-            )
-        except Exception:
-            log.debug("Remote log reader close failed", exc_info=True)
+        """Nothing to release: each read is an independent request."""
 
 
 class RemoteLogs:
-    def __init__(self, rpc: RpcConnection, session: str) -> None:
-        self._rpc = rpc
-        self._session = session
+    def __init__(self, client: DaemonClient, target_id: str) -> None:
+        self._c = client
+        self._t = target_id
 
     def list_files(self, job: JobRef, *, cancelled: Cancelled = None) -> list[str]:
         return list(
-            self._rpc.call(
-                "logs.list_files",
-                {"session": self._session, "job": job.to_json()},
+            self._c.get(
+                R.job_logs(self._t, job.id), params={"backend_ref": job.backend_ref}
             )
             or ()
         )
 
     def pick_default(self, files: list[str]) -> str:
-        return str(
-            self._rpc.call(
-                "logs.pick_default",
-                {"session": self._session, "files": list(files)},
-            )
-            or ""
-        )
+        from azure_jobs.shared.types.logs import pick_default_log
+
+        return pick_default_log(files)
 
     def open(self, job: JobRef, path: str) -> RemoteLogReader:
-        result = self._rpc.call(
-            "logs.open",
-            {"session": self._session, "job": job.to_json(), "path": path},
-        )
-        return RemoteLogReader(self._rpc, self._session, str(result["reader"]))
+        return RemoteLogReader(self._c, self._t, job, path)
 
     def download(self, job: JobRef, *, cancelled: Cancelled = None) -> dict[str, str]:
         return dict(
-            self._rpc.call(
-                "logs.download",
-                {"session": self._session, "job": job.to_json()},
+            self._c.get(
+                R.job_log_download(self._t, job.id),
+                params={"backend_ref": job.backend_ref},
             )
             or {}
         )
 
 
 class RemoteCatalog:
-    def __init__(self, rpc: RpcConnection, session: str) -> None:
-        self._rpc = rpc
-        self._session = session
+    def __init__(self, client: DaemonClient, target_id: str) -> None:
+        self._c = client
+        self._t = target_id
 
-    def _items(self, method: str) -> list[CatalogItem]:
+    def _items(self, kind: str) -> list[CatalogItem]:
         return [
-            CatalogItem.from_json(item)
-            for item in self._rpc.call(method, {"session": self._session}) or ()
+            CatalogItem.from_json(row)
+            for row in self._c.get(R.catalog(self._t, kind)) or ()
         ]
 
     def workspace(self) -> CatalogItem:
-        return CatalogItem.from_json(
-            self._rpc.call("catalog.workspace", {"session": self._session}) or {}
-        )
+        return CatalogItem.from_json(self._c.get(R.catalog(self._t, "workspace")))
 
     def datastores(self) -> list[CatalogItem]:
-        return self._items("catalog.datastores")
-
-    def environments(self) -> list[CatalogItem]:
-        return self._items("catalog.environments")
-
-    def computes(self) -> list[CatalogItem]:
-        return self._items("catalog.computes")
-
-    def quota(self) -> list[CatalogItem]:
-        return self._items("catalog.quota")
+        return self._items("datastores")
 
     def datastore(self, name: str) -> CatalogItem | None:
-        value = self._rpc.call(
-            "catalog.datastore", {"session": self._session, "name": name}
-        )
-        return CatalogItem.from_json(value) if value else None
+        row = self._c.get(R.catalog_item(self._t, "datastores", name))
+        return CatalogItem.from_json(row) if row else None
+
+    def environments(self) -> list[CatalogItem]:
+        return self._items("environments")
 
     def environment_versions(self, name: str) -> list[CatalogItem]:
         return [
-            CatalogItem.from_json(item)
-            for item in self._rpc.call(
-                "catalog.environment_versions",
-                {"session": self._session, "name": name},
-            )
-            or ()
+            CatalogItem.from_json(row)
+            for row in self._c.get(R.catalog_item(self._t, "environments", name)) or ()
         ]
+
+    def computes(self) -> list[CatalogItem]:
+        return self._items("computes")
+
+    def quota(self) -> list[CatalogItem]:
+        return self._items("quota")
 
 
 class RemoteAccount:
-    """Subscription-scoped inventory; needs no workspace session."""
+    def __init__(self, client: DaemonClient, subscription_id: str = "") -> None:
+        self._c = client
+        self._sub = subscription_id
 
-    def __init__(self, rpc: RpcConnection, subscription_id: str = "") -> None:
-        self._rpc = rpc
-        self._subscription_id = subscription_id
-
-    def _items(self, method: str, **extra: Any) -> list[CatalogItem]:
-        params = {"subscription_id": self._subscription_id, **extra}
+    def _items(self, kind: str, **params: Any) -> list[CatalogItem]:
+        params.setdefault("subscription_id", self._sub)
         return [
-            CatalogItem.from_json(item)
-            for item in self._rpc.call(method, params) or ()
+            CatalogItem.from_json(row)
+            for row in self._c.get(R.account(kind), params=params) or ()
         ]
 
     def subscriptions(self) -> list[CatalogItem]:
-        return self._items("account.subscriptions")
+        return self._items("subscriptions")
 
     def workspaces(self, subscription_id: str = "") -> list[CatalogItem]:
-        return self._items("account.workspaces", subscription_id=subscription_id or self._subscription_id)
+        return self._items("workspaces", subscription_id=subscription_id or self._sub)
 
     def storage_accounts(self, subscription_id: str = "") -> list[CatalogItem]:
-        return self._items("account.storage_accounts", subscription_id=subscription_id or self._subscription_id)
+        return self._items(
+            "storage-accounts", subscription_id=subscription_id or self._sub
+        )
 
     def identities(self, subscription_id: str = "") -> list[CatalogItem]:
-        return self._items("account.identities", subscription_id=subscription_id or self._subscription_id)
+        return self._items("identities", subscription_id=subscription_id or self._sub)
 
-    def instance_types(self, region: str = "", subscription_id: str = "") -> list[CatalogItem]:
+    def instance_types(
+        self, region: str = "", subscription_id: str = ""
+    ) -> list[CatalogItem]:
         return self._items(
-            "account.instance_types",
-            region=region,
-            subscription_id=subscription_id or self._subscription_id,
+            "instance-types", region=region, subscription_id=subscription_id or self._sub
         )
 
     def vc_quota(
         self, *, include_zero: bool = False, subscription_id: str = ""
     ) -> list[CatalogItem]:
         return self._items(
-            "account.vc_quota",
+            "vc-quota",
             include_zero=include_zero,
-            subscription_id=subscription_id or self._subscription_id,
+            subscription_id=subscription_id or self._sub,
+        )
+
+    def computes(
+        self, resource_group: str, workspace: str, subscription_id: str = ""
+    ) -> list[CatalogItem]:
+        return self._items(
+            "computes",
+            resource_group=resource_group,
+            workspace=workspace,
+            subscription_id=subscription_id or self._sub,
         )
 
     def singularity_images(self) -> list[CatalogItem]:
-        return self._items("account.singularity_images")
+        return self._items("singularity-images")
 
     def workspace_computes(self) -> dict:
         return dict(
-            self._rpc.call(
-                "account.workspace_computes",
-                {"subscription_id": self._subscription_id},
+            self._c.get(
+                R.account("workspace-computes"), params={"subscription_id": self._sub}
             )
             or {"pairs": [], "failures": []}
         )
 
     def jobs_all_workspaces(self, *, limit: int, cutoff_days: int = 0) -> dict:
         return dict(
-            self._rpc.call(
-                "account.jobs_all_workspaces",
-                {
-                    "subscription_id": self._subscription_id,
+            self._c.get(
+                R.account("jobs"),
+                params={
+                    "subscription_id": self._sub,
                     "limit": limit,
                     "cutoff_days": cutoff_days,
                 },
@@ -465,216 +539,133 @@ class RemoteAccount:
             or {"jobs": [], "failures": []}
         )
 
-    def computes(self, resource_group: str, workspace: str, subscription_id: str = "") -> list[CatalogItem]:
-        return self._items(
-            "account.computes",
-            resource_group=resource_group,
-            workspace=workspace,
-            subscription_id=subscription_id or self._subscription_id,
-        )
-
 
 class RemoteSubmitter:
-    def __init__(self, rpc: RpcConnection, session: str) -> None:
-        self._rpc = rpc
-        self._session = session
+    def __init__(self, client: DaemonClient, target_id: str) -> None:
+        self._c = client
+        self._t = target_id
 
     def submit(self, payload: dict, *, on_event: EventSink = None) -> SubmitOutcome:
-        if on_event is None:
-            return SubmitOutcome.from_json(
-                self._rpc.call(
-                    "submit.run", {"session": self._session, "payload": payload}
-                )
+        body: dict[str, Any] = {"payload": payload}
+        unsubscribe = None
+        if on_event is not None:
+            stream_id = f"s-{uuid.uuid4().hex[:12]}"
+            body["stream"] = stream_id
+            unsubscribe = self._c.subscribe_raw(
+                "submit.progress",
+                lambda params: (
+                    on_event(SubmitEvent.from_json(params.get("event") or {}))
+                    if params.get("stream") == stream_id
+                    else None
+                ),
             )
-        stream_id = f"s-{uuid.uuid4().hex[:12]}"
-        unsubscribe = self._rpc.subscribe_raw(
-            "submit.progress",
-            lambda params: (
-                on_event(SubmitEvent.from_json(params.get("event") or {}))
-                if params.get("stream") == stream_id
-                else None
-            ),
-        )
         try:
             return SubmitOutcome.from_json(
-                self._rpc.call(
-                    "submit.run",
-                    {
-                        "session": self._session,
-                        "payload": payload,
-                        "stream": stream_id,
-                    },
-                )
+                self._c.post(R.submissions(self._t), json=body)
             )
         finally:
-            unsubscribe()
+            if unsubscribe is not None:
+                unsubscribe()
 
 
 class RemoteQueue:
-    def __init__(self, rpc: RpcConnection, session: str) -> None:
-        self._rpc = rpc
-        self._session = session
+    def __init__(self, client: DaemonClient, target_id: str) -> None:
+        self._c = client
+        self._t = target_id
 
     def enqueue(self, payload: dict, *, name: str = "") -> QueuedJob:
         return QueuedJob.from_json(
-            self._rpc.call(
-                "queue.enqueue",
-                {"session": self._session, "payload": payload, "name": name},
-            )
+            self._c.post(R.queue(self._t), json={"payload": payload, "name": name})
         )
 
     def list(self) -> list[QueuedJob]:
-        return [
-            QueuedJob.from_json(item)
-            for item in self._rpc.call("queue.list", {"session": self._session}) or ()
-        ]
+        return [QueuedJob.from_json(r) for r in self._c.get(R.queue(self._t)) or ()]
 
     def get(self, ticket: str) -> QueuedJob | None:
-        value = self._rpc.call(
-            "queue.get", {"session": self._session, "ticket": ticket}
-        )
-        return QueuedJob.from_json(value) if value else None
+        try:
+            return QueuedJob.from_json(self._c.get(R.queue_ticket(self._t, ticket)))
+        except TransportError as exc:
+            if "404" in str(exc):
+                return None
+            raise
 
     def cancel(self, ticket: str) -> bool:
         return bool(
-            (
-                self._rpc.call(
-                    "queue.cancel", {"session": self._session, "ticket": ticket}
-                )
-                or {}
-            ).get("cancelled")
+            (self._c.delete(R.queue_ticket(self._t, ticket)) or {}).get("cancelled")
         )
 
 
 class RemoteWatcher:
-    def __init__(self, rpc: RpcConnection, session: str) -> None:
-        self._rpc = rpc
-        self._session = session
-        self._subscribed = False
+    def __init__(self, client: DaemonClient, target_id: str) -> None:
+        self._c = client
+        self._t = target_id
 
     def subscribe(self, sink: NotificationSink) -> Callable[[], None]:
-        unsubscribe = self._rpc.subscribe(sink)
-        if not self._subscribed:
-            self._rpc.call("watch.subscribe", {"session": self._session})
-            self._subscribed = True
-        return unsubscribe
+        return self._c.subscribe(sink)
 
     def watch(self, job: JobRef) -> None:
-        self._rpc.call("watch.add", {"session": self._session, "job": job.to_json()})
+        self._c.post(R.watches(self._t), json=job.to_json())
 
     def unwatch(self, job: JobRef) -> None:
-        self._rpc.call("watch.remove", {"session": self._session, "job": job.to_json()})
+        self._c.delete(
+            R.watch_job(self._t, job.id), params={"backend_ref": job.backend_ref}
+        )
 
     def watched(self) -> list[JobRef]:
-        return [
-            JobRef.from_json(item)
-            for item in self._rpc.call("watch.list", {"session": self._session}) or ()
-        ]
+        return [JobRef.from_json(r) for r in self._c.get(R.watches(self._t)) or ()]
 
 
 class DaemonBackend:
     """Capability facade whose work happens in the daemon."""
 
-    def __init__(self, rpc: RpcConnection, session: str, target: Target) -> None:
-        self._rpc = rpc
-        self.session = session
+    def __init__(self, client: DaemonClient, target: Target) -> None:
+        self._client = client
         self.target = target
-        jobs = RemoteJobs(rpc, session)
+        jobs = RemoteJobs(client, target.id)
         self.jobs = jobs
         self.actions = jobs
         self.delete_jobs = jobs
-        self.logs = RemoteLogs(rpc, session)
-        self.catalog = RemoteCatalog(rpc, session)
+        self.logs = RemoteLogs(client, target.id)
+        self.catalog = RemoteCatalog(client, target.id)
         self.account = RemoteAccount(
-            rpc, str(target.metadata.get('subscription_id') or '')
+            client, str(target.metadata.get("subscription_id") or "")
         )
-        self.submitter = RemoteSubmitter(rpc, session)
-        self.queue = RemoteQueue(rpc, session)
-        self.watcher = RemoteWatcher(rpc, session)
+        self.submitter = RemoteSubmitter(client, target.id)
+        self.queue = RemoteQueue(client, target.id)
+        self.watcher = RemoteWatcher(client, target.id)
 
     def close(self) -> None:
-        self._rpc.close()
+        self._client.close()
 
 
-# ── connection establishment ────────────────────────────────────────────────
+# ── connecting ──────────────────────────────────────────────────────────────
 
 
-def _secure_runtime_dir(path: Path) -> None:
-    """Create/validate the runtime dir, refusing one another user controls.
-
-    ``/tmp/aj-<uid>`` is predictable, so a local attacker could pre-create it
-    and plant a socket. Submission payloads carry ``env_vars`` (API tokens), so
-    connecting to an impostor would hand them over.
-    """
-    try:
-        os.makedirs(path, mode=0o700, exist_ok=True)
-    except OSError as exc:
-        raise DaemonUnavailable(
-            f"Cannot create the daemon runtime dir {path} "
-            f"({type(exc).__name__}: {exc})"
-        ) from exc
-    try:
-        info = os.stat(path)
-    except OSError as exc:
-        raise DaemonUnavailable(
-            f"Cannot stat the daemon runtime dir {path} "
-            f"({type(exc).__name__}: {exc})"
-        ) from exc
-    if info.st_uid != os.getuid():
-        raise DaemonUnavailable(
-            f"Refusing to use {path}: it is owned by uid {info.st_uid}, "
-            f"not {os.getuid()}"
-        )
-    if info.st_mode & 0o077:
-        raise DaemonUnavailable(
-            f"Refusing to use {path}: mode {info.st_mode & 0o777:o} lets other "
-            "users write to it"
-        )
-
-
-def _verify_peer(sock: socket.socket, path: Path) -> None:
-    """Abort unless the process on the other end runs as this user."""
-    try:
-        creds = sock.getsockopt(
-            socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i")
-        )
-        _pid, uid, _gid = struct.unpack("3i", creds)
-    except (OSError, AttributeError, struct.error):
-        return  # Platform does not expose it; 0700 dir + 0600 socket remain.
-    if uid != os.getuid():
-        raise DaemonUnavailable(
-            f"Refusing to talk to the daemon at {path}: it runs as uid {uid}, "
-            f"not {os.getuid()}"
-        )
-
-
-def _connect_socket(path: Path, timeout: float = CONNECT_TIMEOUT) -> socket.socket:
+def _reachable(path: Path) -> bool:
+    if not path.exists():
+        return False
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    sock.settimeout(timeout)
+    sock.settimeout(0.5)
     try:
         sock.connect(str(path))
-        _verify_peer(sock, path)
-    except BaseException:
+        return True
+    except OSError:
+        return False
+    finally:
         sock.close()
-        raise
-    sock.settimeout(None)
-    return sock
 
 
 def spawn_daemon(path: Path) -> None:
-    """Start ``ajd`` detached, guarded by a lock so racing CLIs spawn one."""
-    _secure_runtime_dir(path.parent)
+    """Start the daemon detached, guarded by a lock so racing CLIs spawn one."""
+    secure_runtime_dir(path.parent)
     lock_path = path.parent / "spawn.lock"
     fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o600)
     try:
         import fcntl
 
         fcntl.flock(fd, fcntl.LOCK_EX)
-        try:
-            _connect_socket(path, timeout=0.5).close()
+        if _reachable(path):
             return  # someone else won the race
-        except OSError:
-            pass
         subprocess.Popen(
             [sys.executable, "-m", "azure_jobs.server.main", "--socket", str(path)],
             stdout=subprocess.DEVNULL,
@@ -684,16 +675,24 @@ def spawn_daemon(path: Path) -> None:
         )
         deadline = time.time() + SPAWN_TIMEOUT
         while time.time() < deadline:
-            try:
-                _connect_socket(path, timeout=0.5).close()
+            if _reachable(path):
                 return
-            except OSError:
-                time.sleep(0.05)
-        raise DaemonUnavailable(
-            f"Daemon did not accept connections within {SPAWN_TIMEOUT:g}s"
-        )
+            time.sleep(0.05)
+        raise DaemonUnavailable(f"Daemon did not answer within {SPAWN_TIMEOUT:g}s")
     finally:
         os.close(fd)
+
+
+def _check_version(info: Mapping[str, Any]) -> None:
+    """Negotiate a range, as Docker does, so an upgrade is not a restart."""
+    server_max = int(info.get("api_version") or 0)
+    server_min = int(info.get("min_api_version") or server_max)
+    if server_min <= R.API_VERSION or server_max >= R.MIN_API_VERSION:
+        return
+    raise DaemonUnavailable(
+        f"Daemon speaks API {server_min}..{server_max}; this build speaks "
+        f"{R.MIN_API_VERSION}..{R.API_VERSION}. Run 'aj daemon restart'."
+    )
 
 
 def connect_daemon(
@@ -703,87 +702,27 @@ def connect_daemon(
     path: Path | None = None,
     autostart: bool = True,
 ) -> DaemonBackend:
-    """Open a daemon-backed backend, spawning the daemon if needed."""
+    """Open a daemon-backed backend, starting the daemon if needed."""
     from azure_jobs.shared import const
 
     sock_path = path or socket_path()
     project_root = Path(root or const.AJ_HOME).resolve()
-    try:
-        sock = _connect_socket(sock_path)
-    except OSError as exc:
+
+    if not _reachable(sock_path):
         if not autostart:
-            raise DaemonUnavailable(
-                f"No daemon at {sock_path} ({type(exc).__name__}: {exc})"
-            ) from exc
+            raise DaemonUnavailable(f"No daemon at {sock_path}")
         spawn_daemon(sock_path)
-        try:
-            sock = _connect_socket(sock_path)
-        except OSError as retry:
-            raise DaemonUnavailable(
-                f"Could not reach the daemon at {sock_path} "
-                f"({type(retry).__name__}: {retry})"
-            ) from retry
-    rpc = RpcConnection(sock)
+
+    client = DaemonClient(sock_path, project_root)
     try:
-        from azure_jobs.shared.version import aj_version
-
-        result = rpc.call(
-            "session.open",
-            {
-                "root": str(project_root),
-                "protocol": PROTOCOL_VERSION,
-                "aj_version": aj_version(),
-                "target": target.to_json(),
-            },
-        )
-    except ProtocolMismatch:
-        # A stale daemon from a previous aj version: retire it and retry once
-        # so an upgrade does not leave the user with a broken CLI.
-        try:
-            rpc.call("daemon.retire", {})
-        except Exception:
-            log.debug("Retire request failed", exc_info=True)
-        rpc.close()
-        _await_socket_gone(sock_path)
-        if not autostart:
-            raise
-        return _reconnect(target, project_root, sock_path)
-    except BaseException:
-        rpc.close()
-        raise
-    return DaemonBackend(rpc, str(result["session"]), Target.from_json(result["target"]))
-
-
-def _reconnect(target: Target, root: Path, sock_path: Path) -> DaemonBackend:
-    spawn_daemon(sock_path)
-    sock = _connect_socket(sock_path)
-    rpc = RpcConnection(sock)
-    from azure_jobs.shared.version import aj_version
-
-    try:
-        result = rpc.call(
-            "session.open",
-            {
-                "root": str(root),
-                "protocol": PROTOCOL_VERSION,
-                "aj_version": aj_version(),
-                "target": target.to_json(),
-            },
+        _check_version(client.get(R.info()))
+        registered = Target.from_json(
+            client.put(R.target(target.id), json=target.to_json())
         )
     except BaseException:
-        rpc.close()
+        client.close()
         raise
-    return DaemonBackend(rpc, str(result["session"]), Target.from_json(result["target"]))
-
-
-def _await_socket_gone(path: Path, timeout: float = 5.0) -> None:
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        try:
-            _connect_socket(path, timeout=0.2).close()
-        except OSError:
-            return
-        time.sleep(0.05)
+    return DaemonBackend(client, registered)
 
 
 def open_backend(
@@ -796,10 +735,8 @@ def open_backend(
 ) -> Any:
     """Return a backend for *target*.
 
-    The daemon is the only execution path. There is deliberately no in-process
-    mode: a second path would drift from the first and make behaviour depend on
-    invisible state. If the daemon cannot be reached, this raises with the
-    steps needed to recover.
+    The daemon is the only execution path; there is deliberately no in-process
+    mode. If it cannot be reached, this raises with the steps to recover.
     """
     try:
         remote = connect_daemon(target, root=root, path=path, autostart=autostart)
@@ -812,29 +749,10 @@ def open_backend(
     return ResilientBackend(target, remote)
 
 
-def daemon_required(exc: BaseException) -> DaemonUnavailable:
-    """Explain how to recover from an unreachable daemon."""
-    return DaemonUnavailable(
-        f"The aj daemon is unavailable ({type(exc).__name__}: {exc}).\n"
-        "  Start it with:    aj daemon start\n"
-        "  Inspect it with:  aj daemon status\n"
-        "  Full traceback:   AJ_DEBUG=1 aj <command>"
-    )
-
-
 class BackendSessionFactory:
-    """``SessionFactory`` that hands the dashboard a daemon-backed session.
+    """``SessionFactory`` handing the dashboard a daemon-backed session."""
 
-    The dashboard only needs ``jobs`` / ``actions`` / ``delete_jobs`` / ``logs``,
-    all of which both backends expose, so it cannot tell which one it received.
-    """
-
-    def __init__(
-        self,
-        *,
-        root: Path | None = None,
-        path: Path | None = None,
-    ) -> None:
+    def __init__(self, *, root: Path | None = None, path: Path | None = None) -> None:
         self._root = root
         self._path = path
 
@@ -843,8 +761,10 @@ class BackendSessionFactory:
 
 
 __all__ = [
+    "BASE_URL",
     "BackendSessionFactory",
     "DaemonBackend",
+    "DaemonClient",
     "RemoteAccount",
     "RemoteCatalog",
     "RemoteJobs",
@@ -853,10 +773,12 @@ __all__ = [
     "RemoteQueue",
     "RemoteSubmitter",
     "RemoteWatcher",
-    "RpcConnection",
     "connect_daemon",
+    "daemon_required",
     "open_backend",
     "runtime_dir",
+    "secure_runtime_dir",
     "socket_path",
     "spawn_daemon",
+    "verify_socket",
 ]

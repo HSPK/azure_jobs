@@ -10,12 +10,15 @@ from pathlib import Path
 import click
 
 from azure_jobs.client.cli import main
+from azure_jobs.shared.contract import routes as R
 
 
-def _rpc(path: Path):
-    from azure_jobs.client.connection import RpcConnection, _connect_socket
+def _client(path: Path):
+    """A short-lived HTTP client for one daemon-control command."""
+    from azure_jobs.client.connection import DaemonClient
+    from azure_jobs.shared import const
 
-    return RpcConnection(_connect_socket(path))
+    return DaemonClient(path, Path(const.AJ_HOME).resolve())
 
 
 @main.group(name="daemon")
@@ -34,8 +37,8 @@ def daemon_status() -> None:
         console.print(f"No daemon running (no socket at {path})")
         return
     try:
-        conn = _rpc(path)
-    except OSError as exc:
+        conn = _client(path)
+    except Exception as exc:
         console.print(
             f"Socket exists at {path} but is not accepting connections "
             f"({type(exc).__name__}: {exc}). It is probably stale; "
@@ -43,12 +46,12 @@ def daemon_status() -> None:
         )
         raise SystemExit(1) from exc
     try:
-        info = conn.call("daemon.info", {})
+        info = conn.get(R.info())
     finally:
         conn.close()
     console.print(f"pid       {info['pid']}")
-    console.print(f"version   aj {info['aj_version']} (protocol {info['protocol']})")
-    console.print(f"sessions  {info['sessions']}")
+    console.print(f"version   aj {info['aj_version']} (API v{info['api_version']})")
+    console.print(f"contexts  {info['contexts']}")
     console.print(f"uptime    {int(info['uptime'])}s")
     console.print(f"socket    {info['socket']}")
     if info.get("retiring"):
@@ -63,17 +66,17 @@ def daemon_start() -> None:
 
     path = socket_path()
     try:
-        conn = _rpc(path)
-        info = conn.call("daemon.info", {})
+        conn = _client(path)
+        info = conn.get(R.info())
         conn.close()
         console.print(f"Daemon already running (pid {info['pid']})")
         return
-    except OSError:
+    except Exception:
         pass
     spawn_daemon(path)
-    conn = _rpc(path)
+    conn = _client(path)
     try:
-        info = conn.call("daemon.info", {})
+        info = conn.get(R.info())
     finally:
         conn.close()
     console.print(f"Daemon started (pid {info['pid']}) at {path}")
@@ -100,16 +103,16 @@ def daemon_stop(force: bool, timeout: float) -> None:
         console.print("No daemon running")
         return
     try:
-        conn = _rpc(path)
-    except OSError:
+        conn = _client(path)
+    except Exception:
         path.unlink(missing_ok=True)
         console.print("Removed a stale daemon socket")
         return
     try:
-        info = conn.call("daemon.info", {})
-        retired = conn.call(
-            "daemon.retire",
-            {"drain_timeout": timeout if (force or timeout) else None},
+        info = conn.get(R.info())
+        retired = conn.post(
+            R.retire(),
+            json={"drain_timeout": timeout if (force or timeout) else None},
         )
     finally:
         conn.close()

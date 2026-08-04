@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from azure_jobs.shared.types.logs import _LOG_PRIORITY, pick_default_log
+
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -15,25 +17,9 @@ log = logging.getLogger(__name__)
 
 _SKIP_LOG_PREFIXES = ("RunId:", "Web View:", "Execution Summary", "=====")
 
-_LOG_PRIORITY = (
-    "user_logs/std_log",
-    "logs/amlt_code_runner",
-    "azureml-logs/70_driver_log",
-    "azureml-logs/75_job_post",
-    "logs/",
-)
 
 DEFAULT_POLL_INTERVAL = 3.0
 
-def pick_default_log(files: list[str]) -> str:
-    """Pick the most useful log file from *files*."""
-    if not files:
-        return ""
-    for prefix in _LOG_PRIORITY:
-        for p in files:
-            if p.startswith(prefix):
-                return p
-    return files[0]
 
 def filter_log_lines(raw: str) -> list[str]:
     """Strip Azure ML boilerplate lines and trim leading/trailing blanks."""

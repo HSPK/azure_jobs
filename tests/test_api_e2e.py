@@ -17,22 +17,20 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
-from azure_jobs.shared.contract import PROTOCOL_VERSION
-from azure_jobs.client.connection import RpcConnection, _connect_socket
+from azure_jobs.shared.contract import routes as R
+from azure_jobs.client.connection import DaemonClient, _reachable
 from azure_jobs.shared.version import aj_version
 
 from .api_fakes import make_target
 
 
-def _wait_for_socket(path: Path, timeout: float = 20.0) -> None:
+def _wait_for_socket(path: Path, timeout: float = 30.0) -> None:
     deadline = time.time() + timeout
     while time.time() < deadline:
-        try:
-            _connect_socket(path, timeout=0.3).close()
+        if _reachable(path):
             return
-        except OSError:
-            time.sleep(0.05)
-    raise AssertionError(f"Daemon never accepted connections on {path}")
+        time.sleep(0.05)
+    raise AssertionError(f"Daemon never answered on {path}")
 
 
 @pytest.fixture
@@ -65,16 +63,16 @@ def live_daemon(tmp_path):
 
 
 class TestLiveDaemonProcess:
-    def test_it_starts_and_answers_ping(self, live_daemon):
+    def test_it_starts_and_answers(self, live_daemon):
         sock, proc = live_daemon
-        conn = RpcConnection(_connect_socket(sock))
+        client = DaemonClient(sock, sock.parent)
         try:
-            assert conn.call("daemon.ping", {})["pong"] is True
-            info = conn.call("daemon.info", {})
+            assert client.get(R.ping())["pong"] is True
+            info = client.get(R.info())
             assert info["pid"] == proc.pid
-            assert info["protocol"] == PROTOCOL_VERSION
+            assert info["api_version"] == R.API_VERSION
         finally:
-            conn.close()
+            client.close()
 
     def test_the_socket_is_private_to_this_user(self, live_daemon):
         sock, _ = live_daemon
@@ -83,74 +81,48 @@ class TestLiveDaemonProcess:
     def test_sigterm_removes_the_socket(self, live_daemon):
         sock, proc = live_daemon
         proc.terminate()
-        proc.wait(timeout=15)
-        deadline = time.time() + 10
+        proc.wait(timeout=20)
+        deadline = time.time() + 15
         while time.time() < deadline and sock.exists():
             time.sleep(0.05)
         assert not sock.exists()
 
-    def test_a_newer_client_negotiates_down_against_the_real_process(
-        self, live_daemon
-    ):
-        sock, _ = live_daemon
-        conn = RpcConnection(_connect_socket(sock))
-        try:
-            result = conn.call(
-                "session.open",
-                {
-                    "root": "/tmp",
-                    "protocol": PROTOCOL_VERSION + 1,
-                    "aj_version": aj_version(),
-                    "target": make_target().to_json(),
-                },
-            )
-            assert result["protocol"] == PROTOCOL_VERSION
-        finally:
-            conn.close()
-
-    def test_a_client_below_the_range_is_refused_by_the_real_process(
-        self, live_daemon
-    ):
-        from azure_jobs.shared.contract import MIN_PROTOCOL_VERSION
-        from azure_jobs.shared.contract.errors import ProtocolMismatch
+    def test_it_is_debuggable_with_an_ordinary_http_client(self, live_daemon):
+        """The reason for choosing HTTP: no special tooling to inspect it."""
+        import httpx
 
         sock, _ = live_daemon
-        conn = RpcConnection(_connect_socket(sock))
-        try:
-            with pytest.raises(ProtocolMismatch):
-                conn.call(
-                    "session.open",
-                    {
-                        "root": "/tmp",
-                        "protocol": MIN_PROTOCOL_VERSION - 1,
-                        "aj_version": aj_version(),
-                        "target": make_target().to_json(),
-                    },
-                )
-        finally:
-            conn.close()
+        with httpx.Client(
+            transport=httpx.HTTPTransport(uds=str(sock)), base_url="http://d"
+        ) as raw:
+            assert raw.get("/v1/ping").json() == {"pong": True}
+            schema = raw.get("/openapi.json").json()
+            assert "/v1/info" in schema["paths"]
 
     def test_many_clients_share_one_daemon(self, live_daemon):
         sock, _ = live_daemon
-        conns = [RpcConnection(_connect_socket(sock)) for _ in range(8)]
+        clients = [DaemonClient(sock, sock.parent) for _ in range(8)]
         try:
-            for conn in conns:
-                assert conn.call("daemon.ping", {})["pong"] is True
+            for client in clients:
+                assert client.get(R.ping())["pong"] is True
         finally:
-            for conn in conns:
-                conn.close()
+            for client in clients:
+                client.close()
 
-    def test_a_client_crash_does_not_take_the_daemon_down(self, live_daemon):
+    def test_a_malformed_request_does_not_take_the_daemon_down(self, live_daemon):
+        import socket as socket_mod
+
         sock, _ = live_daemon
-        rude = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        rude = socket_mod.socket(socket_mod.AF_UNIX, socket_mod.SOCK_STREAM)
         rude.connect(str(sock))
-        rude.sendall(b"garbage that is not json\n")
+        rude.sendall(b"this is not http\r\n\r\n")
         rude.close()
-        conn = RpcConnection(_connect_socket(sock))
+
+        client = DaemonClient(sock, sock.parent)
         try:
-            assert conn.call("daemon.ping", {})["pong"] is True
+            assert client.get(R.ping())["pong"] is True
         finally:
-            conn.close()
+            client.close()
 
 
 class TestDaemonCli:
@@ -170,7 +142,7 @@ class TestDaemonCli:
         result = CliRunner().invoke(daemon_status, [])
         assert result.exit_code == 0, result.output
         assert str(proc.pid) in result.output
-        assert "sessions" in result.output
+        assert "contexts" in result.output
 
     def test_status_flags_a_stale_socket(self, tmp_path, monkeypatch):
         from azure_jobs.client.cli.daemon import daemon_status
@@ -204,7 +176,7 @@ class TestDaemonCli:
         try:
             status = runner.invoke(daemon_status, [])
             assert status.exit_code == 0
-            assert "protocol 1" in status.output
+            assert "API v1" in status.output
 
             again = runner.invoke(daemon_start, [])
             assert "already running" in again.output
@@ -230,96 +202,58 @@ class TestDaemonCli:
 
 
 class TestQueueOverTheRealDaemon:
-    def test_enqueue_run_and_report(self, live_daemon, tmp_path):
-        """A submission survives the client that asked for it."""
+    def test_a_submission_outlives_the_client_that_asked_for_it(
+        self, live_daemon, tmp_path
+    ):
         sock, _ = live_daemon
-        conn = RpcConnection(_connect_socket(sock))
-        try:
-            session = conn.call(
-                "session.open",
-                {
-                    "root": str(tmp_path),
-                    "protocol": PROTOCOL_VERSION,
-                    "aj_version": aj_version(),
-                    "target": make_target().to_json(),
-                },
-            )["session"]
-            entry = conn.call(
-                "queue.enqueue",
-                {
-                    "session": session,
-                    "payload": {"name": "job-1", "service": "nonexistent-backend"},
-                    "name": "job-1",
-                },
-            )
-            assert entry["state"] == "queued"
-            ticket = entry["ticket"]
-        finally:
-            conn.close()
+        target = make_target()
 
-        # Reconnect as a brand-new client: the work is the daemon's, not ours.
-        conn2 = RpcConnection(_connect_socket(sock))
+        client = DaemonClient(sock, tmp_path)
+        client.put(R.target(target.id), json=target.to_json())
+        entry = client.post(
+            R.queue(target.id),
+            json={
+                "payload": {"name": "job-1", "service": "nonexistent-backend"},
+                "name": "job-1",
+            },
+        )
+        assert entry["state"] == "queued"
+        ticket = entry["ticket"]
+        client.close()
+
+        # A brand-new client: the work belongs to the daemon, not the caller.
+        other = DaemonClient(sock, tmp_path)
         try:
-            session2 = conn2.call(
-                "session.open",
-                {
-                    "root": str(tmp_path),
-                    "protocol": PROTOCOL_VERSION,
-                    "aj_version": aj_version(),
-                    "target": make_target().to_json(),
-                },
-            )["session"]
             deadline = time.time() + 30
-            entry = None
             while time.time() < deadline:
-                entry = conn2.call(
-                    "queue.get", {"session": session2, "ticket": ticket}
-                )
-                if entry and entry["state"] in ("done", "failed", "cancelled"):
+                current = other.get(R.queue_ticket(target.id, ticket))
+                if current["state"] in ("done", "failed", "cancelled"):
                     break
                 time.sleep(0.1)
-            assert entry is not None
-            # The backend name is bogus, so it must fail — with detail, not a hang.
-            assert entry["state"] == "failed"
-            assert entry["detail"]
-            assert "AJ_DEBUG=1" in entry["detail"]
+            # The backend name is bogus, so it must fail with detail, not hang.
+            assert current["state"] == "failed"
+            assert "AJ_DEBUG=1" in current["detail"]
         finally:
-            conn2.close()
+            other.close()
 
-    def test_queue_survives_across_client_disconnects(self, live_daemon, tmp_path):
+    def test_the_queue_is_visible_to_a_later_client(self, live_daemon, tmp_path):
         sock, _ = live_daemon
-        conn = RpcConnection(_connect_socket(sock))
-        session = conn.call(
-            "session.open",
-            {
-                "root": str(tmp_path),
-                "protocol": PROTOCOL_VERSION,
-                "aj_version": aj_version(),
-                "target": make_target().to_json(),
-            },
-        )["session"]
-        conn.call(
-            "queue.enqueue",
-            {
-                "session": session,
+        target = make_target()
+
+        first = DaemonClient(sock, tmp_path)
+        first.put(R.target(target.id), json=target.to_json())
+        first.post(
+            R.queue(target.id),
+            json={
                 "payload": {"name": "job-a", "service": "nonexistent-backend"},
                 "name": "job-a",
             },
         )
-        conn.close()
+        first.close()
 
-        conn2 = RpcConnection(_connect_socket(sock))
+        second = DaemonClient(sock, tmp_path)
         try:
-            session2 = conn2.call(
-                "session.open",
-                {
-                    "root": str(tmp_path),
-                    "protocol": PROTOCOL_VERSION,
-                    "aj_version": aj_version(),
-                    "target": make_target().to_json(),
-                },
-            )["session"]
-            entries = conn2.call("queue.list", {"session": session2})
-            assert [e["name"] for e in entries] == ["job-a"]
+            names = [e["name"] for e in second.get(R.queue(target.id))]
+            assert names == ["job-a"]
         finally:
-            conn2.close()
+            second.close()

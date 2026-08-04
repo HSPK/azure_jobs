@@ -16,11 +16,8 @@ from pathlib import Path
 import pytest
 
 from azure_jobs.client.connection import (
-    CALL_TIMEOUT,
-    RpcConnection,
-    _connect_socket,
-    _secure_runtime_dir,
     open_backend,
+    secure_runtime_dir,
 )
 from azure_jobs.shared.contract.errors import DaemonUnavailable, TransportError
 from azure_jobs.server.backend import _spec_from_payload
@@ -82,7 +79,7 @@ class TestRuntimeDirectoryIsTrusted:
 
     def test_created_private(self, tmp_path):
         target = tmp_path / "runtime"
-        _secure_runtime_dir(target)
+        secure_runtime_dir(target)
         assert os.stat(target).st_mode & 0o777 == 0o700
 
     def test_a_group_or_world_writable_dir_is_refused(self, tmp_path):
@@ -90,16 +87,16 @@ class TestRuntimeDirectoryIsTrusted:
         target.mkdir(mode=0o777)
         os.chmod(target, 0o777)
         with pytest.raises(DaemonUnavailable) as caught:
-            _secure_runtime_dir(target)
+            secure_runtime_dir(target)
         assert "other users" in str(caught.value)
 
     def test_an_already_private_dir_is_accepted(self, tmp_path):
         target = tmp_path / "runtime"
         target.mkdir(mode=0o700)
-        _secure_runtime_dir(target)
+        secure_runtime_dir(target)
 
     def test_daemon_refuses_to_bind_in_a_shared_dir(self, tmp_path):
-        from azure_jobs.server.daemon import Daemon
+        from azure_jobs.server.runner import Daemon
 
         shared = tmp_path / "shared"
         shared.mkdir(mode=0o777)
@@ -108,47 +105,21 @@ class TestRuntimeDirectoryIsTrusted:
             Daemon(shared / "d.sock").bind()
 
 
-class TestNoLostWaiter:
-    """A mid-call transport failure must raise at once, not after 300s."""
+class TestTransportFailuresAreFast:
+    """A dead daemon must raise promptly, not block on a long call timeout."""
 
-    def test_call_fails_fast_when_the_pump_dies(self):
-        left, right = socket.socketpair()
-        rpc = RpcConnection(left)
-        try:
-            right.close()
-            started = time.time()
-            with pytest.raises((TransportError, DaemonUnavailable)):
-                rpc.call("daemon.ping", {})
-            elapsed = time.time() - started
-            assert elapsed < 10, f"blocked {elapsed:.1f}s of {CALL_TIMEOUT}s"
-        finally:
-            rpc.close()
-            left.close()
+    def test_a_missing_socket_fails_immediately(self, tmp_path):
+        from azure_jobs.shared.contract.errors import DaemonUnavailable
 
-    def test_a_call_racing_the_failure_does_not_hang(self):
-        """The closed-check and waiter registration must share one lock."""
-        left, right = socket.socketpair()
-        rpc = RpcConnection(left)
-        errors: list[BaseException] = []
-        done = threading.Event()
-
-        def hammer() -> None:
-            try:
-                rpc.call("daemon.ping", {})
-            except BaseException as exc:
-                errors.append(exc)
-            finally:
-                done.set()
-
-        try:
-            thread = threading.Thread(target=hammer, daemon=True)
-            thread.start()
-            right.close()
-            assert done.wait(timeout=15), "call() hung past the failure"
-            assert errors
-        finally:
-            rpc.close()
-            left.close()
+        started = time.time()
+        with pytest.raises(DaemonUnavailable):
+            open_backend(
+                make_target(),
+                root=tmp_path,
+                path=tmp_path / "absent.sock",
+                autostart=False,
+            )
+        assert time.time() - started < 5
 
 
 class TestResilientSession:
@@ -294,7 +265,7 @@ class TestSocketOwnership:
     """A retiring daemon must not delete its successor's socket."""
 
     def test_shutdown_leaves_a_replacement_socket_alone(self, tmp_path):
-        from azure_jobs.server.daemon import Daemon
+        from azure_jobs.server.runner import Daemon
 
         from .api_fakes import FakeFactory, FakeTargetCatalog
 
@@ -489,38 +460,47 @@ class TestWorkspaceComputesShape:
         assert [i.name for i in items] == ["sub-aaa", "sub-bbb"]
 
 
-class TestUnencodableResultIsolation:
-    """One bad payload must fail its call, not every session on the socket."""
+class TestHandlerErrorsDoNotKillTheConnection:
+    """One failing request must not poison the pooled connection."""
 
-    def test_connection_survives_an_unserialisable_result(self):
-        import socket as socket_mod
+    def test_the_connection_survives_a_handler_error(self, tmp_path):
         import threading as threading_mod
 
-        from azure_jobs.shared.contract.rpc import FrameReader, FrameWriter, request, serve_connection
-        from azure_jobs.server.az_client import WorkspaceInfo
+        from azure_jobs.client.connection import DaemonClient, _reachable
+        from azure_jobs.server.runner import Daemon
+        from azure_jobs.shared.contract import routes as R
 
-        server, client = socket_mod.socketpair()
+        from .api_fakes import FakeFactory, FakeTargetCatalog
 
-        def handler(method, params):
-            if method == "bad":
-                return WorkspaceInfo(
-                    name="x", resource_group="r", subscription_id="s"
-                )
-            return {"ok": True}
-
-        threading_mod.Thread(
-            target=serve_connection, args=(server, handler), daemon=True
-        ).start()
+        runtime = tmp_path / "rt"
+        runtime.mkdir(mode=0o700, exist_ok=True)
+        factory = FakeFactory()
+        target = make_target()
+        daemon = Daemon(
+            runtime / "daemon.sock",
+            backend_factory=factory,
+            target_catalog=FakeTargetCatalog(target),
+        )
+        daemon.bind()
+        threading_mod.Thread(target=daemon.serve_forever, daemon=True).start()
+        deadline = time.time() + 20
+        while time.time() < deadline and not _reachable(daemon.socket_path):
+            time.sleep(0.02)
         try:
-            writer, reader = FrameWriter(client), FrameReader(client)
-            writer.send(request(1, "bad", {}))
-            bad = reader.read()
-            assert "could not encode" in bad["error"]["message"].lower()
+            client = DaemonClient(daemon.socket_path, tmp_path)
+            client.put(R.target(target.id), json=target.to_json())
+            client.get(R.jobs(target.id), params={"limit": 1})
+            factory.backends[0].jobs.raises = RuntimeError("backend exploded")
 
-            writer.send(request(2, "good", {}))
-            assert reader.read()["result"] == {"ok": True}
-        finally:
+            with pytest.raises(Exception) as caught:
+                client.get(R.job(target.id, "a"), params={"backend_ref": "a"})
+            assert "exploded" in str(caught.value)
+
+            factory.backends[0].jobs.raises = None
+            assert client.get(R.ping())["pong"] is True
             client.close()
+        finally:
+            daemon.shutdown()
 
 
 class TestWorkspaceOverrideResolution:

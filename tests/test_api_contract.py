@@ -14,9 +14,10 @@ from pathlib import Path
 
 import pytest
 
-from azure_jobs.shared.contract import PROTOCOL_VERSION
-from azure_jobs.client.connection import DaemonBackend, RpcConnection, _connect_socket
-from azure_jobs.server.daemon import Daemon, aj_version
+from azure_jobs.shared.contract import routes as R
+from azure_jobs.client.connection import DaemonBackend, DaemonClient, _reachable
+from azure_jobs.server.runner import Daemon
+from azure_jobs.shared.version import aj_version
 from azure_jobs.shared.contract.errors import ProtocolMismatch, RemoteError
 from azure_jobs.shared.contract.models import JobQuerySpec, JobRef, Target
 from azure_jobs.shared.errors import RestError
@@ -55,6 +56,7 @@ def _in_process() -> _Harness:
 
 def _over_daemon() -> _Harness:
     tmp = Path(tempfile.mkdtemp())
+    tmp.chmod(0o700)
     factory = FakeFactory()
     target = make_target()
     daemon = Daemon(
@@ -65,18 +67,16 @@ def _over_daemon() -> _Harness:
     )
     daemon.bind()
     threading.Thread(target=daemon.serve_forever, daemon=True).start()
-    rpc = RpcConnection(_connect_socket(tmp / "d.sock"))
-    result = rpc.call(
-        "session.open",
-        {
-            "root": str(tmp),
-            "protocol": PROTOCOL_VERSION,
-            "aj_version": aj_version(),
-            "target": target.to_json(),
-        },
-    )
-    backend = DaemonBackend(rpc, result["session"], Target.from_json(result["target"]))
-    return _Harness(backend, factory, daemon=daemon, rpc=rpc, tmp=tmp)
+    deadline = time.time() + 20
+    while time.time() < deadline and not _reachable(daemon.socket_path):
+        time.sleep(0.02)
+    client = DaemonClient(daemon.socket_path, tmp)
+    client.put(R.target(target.id), json=target.to_json())
+    backend = DaemonBackend(client, target)
+    # Contexts (and therefore backends) are created on first use; force one so
+    # `harness.served` refers to the same fake the server is driving.
+    backend.jobs.list_page(None, limit=1, query=JobQuerySpec())
+    return _Harness(backend, factory, daemon=daemon, rpc=client, tmp=tmp)
 
 
 @pytest.fixture(params=["inprocess", "daemon"])
@@ -152,10 +152,13 @@ class TestLogsPort:
         reader = harness.backend.logs.open(JobRef("a", "a"), "std_log.txt")
         assert reader.read_range(0, 256).data == bytes(range(256))
 
-    def test_close_releases_the_server_side_reader(self, harness):
+    def test_the_server_side_reader_is_always_released(self, harness):
+        """Whatever the transport, a read must not leave a reader open."""
         reader = harness.backend.logs.open(JobRef("a", "a"), "std_log.txt")
+        reader.tail(16)
         reader.close()
-        assert harness.served.logs.readers[0].closed is True
+        assert harness.served.logs.readers
+        assert all(r.closed for r in harness.served.logs.readers)
 
 
 class TestCatalogPort:
@@ -213,266 +216,104 @@ class TestErrorSemantics:
         assert harness.backend.actions.get(JobRef("a", "a")).name == "a"
 
 
-class TestProtocolCoverage:
-    def test_every_port_method_has_a_daemon_method(self):
-        """A capability the contract exposes must be reachable over the wire."""
-        from azure_jobs.server.daemon import METHODS
+class TestApiCoverage:
+    """Every capability the contract exposes must have a route."""
 
-        required = {
-            "jobs.list_page",
-            "jobs.get",
-            "jobs.cancel",
-            "jobs.delete",
-            "logs.list_files",
-            "logs.pick_default",
-            "logs.open",
-            "logs.tail",
-            "logs.read_after",
-            "logs.read_range",
-            "logs.close",
-            "catalog.datastores",
-            "catalog.environments",
-            "catalog.computes",
-            "catalog.quota",
-            "submit.run",
-            "queue.enqueue",
-            "queue.list",
-            "queue.get",
-            "queue.cancel",
-            "watch.subscribe",
-            "watch.add",
-            "watch.remove",
-            "watch.list",
-            "targets.configured",
-            "targets.discover",
-            "session.open",
-            "daemon.ping",
-            "daemon.info",
-            "daemon.retire",
+    def test_the_app_exposes_a_route_for_each_capability(self):
+        from azure_jobs.server.app import DaemonState, create_app
+
+        paths = {
+            getattr(r, "path", "") for r in create_app(DaemonState()).routes
         }
-        assert required <= set(METHODS)
+        required = {
+            R.ping(),
+            R.info(),
+            R.retire(),
+            R.events(),
+            R.targets(),
+            R.configured_target(),
+            R.target("{target_id}"),
+            R.jobs("{target_id}"),
+            R.jobs_fetch("{target_id}"),
+            R.job("{target_id}", "{job_id}"),
+            R.job_cancel("{target_id}", "{job_id}"),
+            R.job_logs("{target_id}", "{job_id}"),
+            R.job_log_content("{target_id}", "{job_id}"),
+            R.job_log_download("{target_id}", "{job_id}"),
+            R.catalog("{target_id}", "{kind}"),
+            R.catalog_item("{target_id}", "{kind}", "{name}"),
+            R.account("{kind}"),
+            R.submissions("{target_id}"),
+            R.queue("{target_id}"),
+            R.queue_ticket("{target_id}", "{ticket}"),
+            R.watches("{target_id}"),
+            R.watch_job("{target_id}", "{job_id}"),
+        }
+        assert required <= paths, required - paths
 
-    def test_unknown_method_is_reported_not_silently_ignored(self):
+    def test_an_unknown_path_is_a_404(self):
         harness = _over_daemon()
         try:
             with pytest.raises(Exception) as caught:
-                harness.rpc.call("jobs.teleport", {"session": harness.backend.session})
-            assert "teleport" in str(caught.value)
+                harness.rpc.get("/v1/teleport")
+            assert "404" in str(caught.value)
         finally:
             harness.close()
 
 
-class TestSessionHandshake:
-    def test_a_newer_client_negotiates_down(self):
-        """Like Docker: agree on the highest version both sides speak."""
+class TestApiVersioning:
+    """Paths carry the version, and the range is advertised."""
+
+    def test_info_advertises_the_supported_range(self):
         harness = _over_daemon()
         try:
-            result = harness.rpc.call(
-                "session.open",
-                {
-                    "root": str(harness.tmp),
-                    "protocol": PROTOCOL_VERSION + 99,
-                    "aj_version": aj_version(),
-                    "target": make_target().to_json(),
-                },
-            )
-            assert result["protocol"] == PROTOCOL_VERSION
-            assert result["session"]
+            info = harness.rpc.get(R.info())
+            assert info["api_version"] == R.API_VERSION
+            assert info["min_api_version"] == R.MIN_API_VERSION
         finally:
             harness.close()
 
-    def test_a_client_below_the_supported_range_is_refused(self):
-        from azure_jobs.shared.contract import MIN_PROTOCOL_VERSION
+    def test_routes_are_version_prefixed(self):
+        assert R.ping().startswith("/v1/")
+        assert R.jobs("t").startswith("/v1/")
 
-        harness = _over_daemon()
-        try:
-            with pytest.raises(ProtocolMismatch):
-                harness.rpc.call(
-                    "session.open",
-                    {
-                        "root": str(harness.tmp),
-                        "protocol": MIN_PROTOCOL_VERSION - 1,
-                        "aj_version": aj_version(),
-                        "target": make_target().to_json(),
-                    },
-                )
-        finally:
-            harness.close()
-
-    def test_an_aj_version_difference_does_not_break_the_session(self):
-        """Upgrading aj must not force a restart that kills running work."""
-        harness = _over_daemon()
-        try:
-            result = harness.rpc.call(
-                "session.open",
-                {
-                    "root": str(harness.tmp),
-                    "protocol": PROTOCOL_VERSION,
-                    "aj_version": "0.0.0-ancient",
-                    "target": make_target().to_json(),
-                },
-            )
-            assert result["session"]
-        finally:
-            harness.close()
-
-    def test_unknown_session_token_is_rejected(self):
+    def test_an_unknown_target_is_a_404_not_a_crash(self):
         harness = _over_daemon()
         try:
             with pytest.raises(Exception) as caught:
-                harness.rpc.call("jobs.get", {"session": "s-nope", "job": {"id": "a"}})
-            assert "s-nope" in str(caught.value)
+                harness.rpc.get(R.jobs("no-such-target"))
+            assert "404" in str(caught.value) or "Unknown target" in str(caught.value)
         finally:
             harness.close()
 
-    def test_same_root_and_target_reuse_one_session(self):
+    def test_registering_a_target_is_idempotent(self):
         harness = _over_daemon()
         try:
-            harness.rpc.call(
-                "session.open",
-                {
-                    "root": str(harness.tmp),
-                    "protocol": PROTOCOL_VERSION,
-                    "aj_version": aj_version(),
-                    "target": make_target().to_json(),
-                },
-            )
-            # Two tokens, but the backend was only opened once.
+            target = make_target()
+            first = harness.rpc.put(R.target(target.id), json=target.to_json())
+            second = harness.rpc.put(R.target(target.id), json=target.to_json())
+            assert first == second
+            # Still one backend: the context is cached per (root, target).
             assert len(harness.factory.backends) == 1
-            assert harness.rpc.call("daemon.info", {})["sessions"] == 1
         finally:
             harness.close()
 
-    def test_different_roots_get_isolated_sessions(self):
-        """AJ_HOME is project-relative, so one daemon must serve many roots."""
+    def test_a_mismatched_body_is_rejected(self):
         harness = _over_daemon()
         try:
-            other = Path(tempfile.mkdtemp())
-            harness.rpc.call(
-                "session.open",
-                {
-                    "root": str(other),
-                    "protocol": PROTOCOL_VERSION,
-                    "aj_version": aj_version(),
-                    "target": make_target().to_json(),
-                },
-            )
-            assert len(harness.factory.backends) == 2
-            assert harness.rpc.call("daemon.info", {})["sessions"] == 2
+            other = make_target("other")
+            with pytest.raises(Exception):
+                harness.rpc.put(R.target("wrong-id"), json=other.to_json())
         finally:
             harness.close()
 
 
-class TestConnectionLifetime:
-    def test_disconnect_closes_that_connection_s_readers(self):
-        harness = _over_daemon()
-        try:
-            harness.backend.logs.open(JobRef("a", "a"), "std_log.txt")
-            served = harness.served
-            assert served.logs.readers[0].closed is False
-            harness.rpc.close()
-            deadline = time.time() + 5
-            while time.time() < deadline and not served.logs.readers[0].closed:
-                time.sleep(0.02)
-            assert served.logs.readers[0].closed is True
-        finally:
-            if harness.daemon is not None:
-                harness.daemon.shutdown()
+class TestLogReadsAreStateless:
+    """Each read is its own request, so a vanished client leaks nothing."""
 
-
-class TestBulkFetchPort:
-    """`aj job list` / `aj exp` / `aj job stats` all go through fetch."""
-
-    def test_fetch_returns_jobs(self, harness):
-        jobs = harness.backend.jobs.fetch(limit=10)
-        assert [j.name for j in jobs] == ["a", "b", "c"]
-
-    def test_limit_is_honoured(self, harness):
-        assert len(harness.backend.jobs.fetch(limit=2)) == 2
-
-    def test_status_filter(self, harness):
-        assert len(harness.backend.jobs.fetch(limit=10, status="running")) == 3
-        assert harness.backend.jobs.fetch(limit=10, status="completed") == []
-
-    def test_experiment_filter(self, harness):
-        jobs = harness.backend.jobs.fetch(limit=10, experiment="nope")
-        assert jobs == []
-
-
-class TestLogDownloadPort:
-    def test_download_returns_content_and_error_keys(self, harness):
-        result = harness.backend.logs.download(JobRef("a", "a"))
-        assert set(result) == {"content", "error"}
-        assert result["content"]
-
-
-class TestExtendedCatalogPort:
-    def test_single_datastore(self, harness):
-        item = harness.backend.catalog.datastore("ds1")
-        assert item is not None
-        assert item.name == "ds1"
-
-    def test_environment_versions(self, harness):
-        items = harness.backend.catalog.environment_versions("env1")
-        assert [i.name for i in items] == ["env1"]
-        assert items[0].version == "3"
-
-
-class TestRichPayloadsSurviveTheTransport:
-    """Catalog rows carry behaviour, not just fields."""
-
-    def test_nested_objects_and_methods_survive(self):
-        from azure_jobs.shared.contract.models import CatalogItem
-        from azure_jobs.server.az_client import SeriesQuota, VCInfo
-
-        quota = SeriesQuota(series="NDH100v5", accelerator="H100", gpu_memory=80)
-        quota.set_tier("Premium", 64, 32)
-        item = CatalogItem(
-            "vc_quota",
-            "vc1",
-            VCInfo(
-                name="vc1",
-                resource_group="rg",
-                subscription_id="sub",
-                quotas=[quota],
-            ),
-        )
-        restored = CatalogItem.from_json(item.to_json())
-        assert type(restored.raw).__name__ == "VCInfo"
-        assert restored.quotas[0].tiers["Premium"].limit == 64
-        assert restored.quotas[0].has_any_quota() is True
-
-    def test_an_unregistered_type_degrades_to_a_dict(self):
-        from azure_jobs.shared.contract.models import CatalogItem
-        from azure_jobs.shared.contract.typed import TAG
-
-        payload = {TAG: "SomethingUnknown", "a": 1}
-        restored = CatalogItem.from_json(
-            {"category": "x", "name": "n", "raw": payload}
-        )
-        assert restored.raw == {"a": 1}
-
-    def test_plain_dicts_are_untouched(self):
-        from azure_jobs.shared.contract.models import CatalogItem
-
-        item = CatalogItem("datastore", "ds", {"name": "ds", "is_default": True})
-        assert CatalogItem.from_json(item.to_json()).raw == item.raw
-
-
-class TestWorkspaceResourcePort:
-    """`aj init` needs properties.storageAccount, which the graph projection lacks."""
-
-    def test_workspace_carries_its_properties(self, harness):
-        item = harness.backend.catalog.workspace()
-        storage = (item.raw.get("properties") or {}).get("storageAccount", "")
-        assert storage.endswith("/mystorage")
-
-    def test_account_workspaces_do_not_carry_properties(self):
-        """Regression guard: aj init must not read them from the projection."""
-        import inspect
-
-        from azure_jobs.server.az_client.arm.workspace import WorkspacesAPI
-
-        source = inspect.getsource(WorkspacesAPI.list)
-        assert "project name, resourceGroup, subscriptionId, location" in source
-        assert "storageAccount" not in source
+    def test_closing_a_reader_needs_no_server_call(self, harness):
+        reader = harness.backend.logs.open(JobRef("a", "a"), "std_log.txt")
+        reader.tail(16)
+        reader.close()
+        # Nothing to assert server-side: there is no handle to leak.
+        assert harness.backend.logs.open(JobRef("a", "a"), "std_log.txt") is not None

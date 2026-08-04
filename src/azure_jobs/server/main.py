@@ -1,4 +1,4 @@
-"""``python -m azure_jobs.server.main`` — the ajd process entry point."""
+"""``python -m azure_jobs.server.main`` — the daemon process entry point."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import signal
 import sys
 from pathlib import Path
 
-from azure_jobs.server.daemon import Daemon
+from azure_jobs.server.runner import DAEMON_IDLE_SHUTDOWN, Daemon
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -19,7 +19,7 @@ def main(argv: list[str] | None = None) -> int:
         "--idle-timeout",
         type=float,
         default=1800.0,
-        help="Close a session after this many idle seconds",
+        help="Close a target context after this many idle seconds",
     )
     parser.add_argument(
         "--watch-interval",
@@ -30,8 +30,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--shutdown-when-idle",
         type=float,
-        default=3600.0,
-        help="Exit after this many seconds with no clients and no work (0 = never)",
+        default=DAEMON_IDLE_SHUTDOWN,
+        help="Exit after this many seconds with nothing to do (0 = never)",
     )
     parser.add_argument("--log-level", default=os.getenv("AJ_LOG_LEVEL", "WARNING"))
     args = parser.parse_args(argv)

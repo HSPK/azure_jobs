@@ -144,7 +144,7 @@ Three top-level layers, enforced by `tests/test_api_architecture.py`:
 ```
 src/azure_jobs/
 ├── shared/          vocabulary both sides speak — imports neither side
-│   ├── contract/      ports, models, errors, rpc, typed codec
+│   ├── contract/      ports, models, errors, routes, typed codec
 │   ├── types/         Azure value objects (quota rows, workspaces, SKUs)
 │   ├── opts/          typed backend options + spec-hook registration
 │   ├── spec.py        how a job is *described*
@@ -152,12 +152,15 @@ src/azure_jobs/
 │   ├── template/, config/, sku.py, targets.py, journal.py, utils/
 │
 ├── client/          drives and renders — never imports server/
-│   ├── connection.py  JSON-RPC client, auto-spawn, reconnect
+│   ├── connection.py  httpx client over UDS, auto-spawn, reconnect
 │   ├── resilient.py
 │   ├── cli/, tui/, ui/
 │
 └── server/          executes — never imports client/
-    ├── daemon.py, main.py
+    ├── app.py         FastAPI routes
+    ├── runner.py      uvicorn on a Unix socket + lifecycle
+    ├── context.py     per (root, target) backend/queue/watcher
+    ├── main.py
     ├── backend.py     the Azure implementation of the contract
     ├── azure.py, queue.py, watch.py, concurrent.py
     ├── az_client/     the SDK layer
@@ -185,10 +188,34 @@ this way is what let `job/build.py` stay shared without dragging the SDK along.
 `sku.py` split the same way: parsing shorthand is shared, matching it against
 real instance types needs ARM and stayed server-side.
 
-**Everything runs in the daemon.** `aj run` submits through `submit.run` rather
+**Everything runs in the daemon.** `aj run` submits through the daemon rather
 than in the CLI process, with progress streamed back as correlated
-`submit.progress` pushes — a callback cannot cross a socket, and dropping it
+`submit.progress` events — a callback cannot cross a socket, and dropping it
 would have made `aj run` less informative than before.
+
+## Transport: HTTP over a Unix socket
+
+The same shape `dockerd` exposes. FastAPI/uvicorn serves, httpx calls.
+
+| | |
+|---|---|
+| Versioning | by path (`/v1/...`), so an older client keeps working |
+| Log windows | plain HTTP `Range`, answered `206` — what Range is for |
+| Server push | Server-Sent Events on `/v1/events` |
+| Debugging | `curl --unix-socket … http://d/v1/info`, plus a generated `/openapi.json` |
+| Security | socket `0600` inside a `0700` dir; the client refuses a socket it does not own |
+
+Replacing the hand-rolled JSON-RPC loop was not about the wire format. That
+loop handled one request at a time per connection (so a delete polling a
+long-running operation froze the dashboard), accumulated a thread per CLI
+invocation, and raced on shutdown. Those are exactly the parts a real server
+already solves.
+
+**Stateless, so there is less to get wrong.** A client registers its target
+once (`PUT /v1/targets/{id}`); the daemon caches a *context* per
+`(project root, target)` and expires it on idle. Nothing ties a context to a
+connection, which deleted the session-token and refcount bookkeeping the old
+transport needed — and with it the lifecycle bugs that lived there.
 
 ## TUI
 - **Blob credential fallback**: SAS → SharedKey → AAD bearer. If the storage
