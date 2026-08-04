@@ -136,3 +136,18 @@ def compute_code_hash(
         else:
             hasher.update(hashlib.sha256(extras[rel]).digest())
     return hasher.hexdigest()[:length]
+
+
+def find_az() -> str:
+    """Return the full path to the az CLI (resolves az.cmd on Windows).
+
+    Locating the binary is not the same as running it: the client uses this
+    only for interactive ``az login``/``az logout``, which need a terminal the
+    daemon does not have.
+    """
+    import shutil
+
+    path = shutil.which("az")
+    if path is None:
+        raise FileNotFoundError("Azure CLI not found")
+    return path

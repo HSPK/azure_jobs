@@ -248,9 +248,8 @@ def _open_session(daemon):
 
     from .api_fakes import make_target
 
-    daemon.state.contexts.register(make_target())
     return daemon.state.contexts.context(
-        Path(daemon.socket_path.parent), make_target().id
+        Path(daemon.socket_path.parent), make_target().label
     )
 
 
@@ -273,8 +272,7 @@ class TestRequestsAreMultiplexed:
 
         target = local_daemon.target
         client = DaemonClient(local_daemon.socket_path, local_daemon.socket_path.parent)
-        client.put(R.target(target.id), json=target.to_json())
-        client.get(R.jobs(target.id), params={"limit": 1})
+        client.get(R.jobs(target.label), params={"limit": 1})
 
         backend = local_daemon.factory.backends[0]
         gate = threading.Event()

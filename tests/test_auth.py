@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -14,7 +13,7 @@ from azure_jobs.client.cli import main
 @pytest.fixture(autouse=True)
 def _mock_find_az():
     """Ensure tests don't depend on ``az`` being installed."""
-    with patch("azure_jobs.shared.config.find_az", return_value="az"):
+    with patch("azure_jobs.shared.utils.fs.find_az", return_value="az"):
         yield
 
 
@@ -35,13 +34,17 @@ _ACCOUNT = {
 }
 
 
-def _mock_az_account_show(returncode: int = 0, stdout: str = "") -> MagicMock:
-    """Create a mock for ``az account show``."""
-    m = MagicMock()
-    m.returncode = returncode
-    m.stdout = stdout or json.dumps(_ACCOUNT)
-    m.stderr = ""
-    return m
+def _account(payload: dict | None = _ACCOUNT):
+    """Patch the daemon lookup ``aj auth status`` uses for account details."""
+    return patch("azure_jobs.client.discovery.account", return_value=payload)
+
+
+def _credential(ok: bool = True, error: str = "", missing_package: bool = False):
+    """Credential health is the daemon's answer now, not a local token call."""
+    return patch(
+        "azure_jobs.client.discovery.credential",
+        return_value={"ok": ok, "error": error, "missing_package": missing_package},
+    )
 
 
 class TestAuthStatus:
@@ -58,18 +61,14 @@ class TestAuthStatus:
                 workspace_name="ws-1",
             )
         )
-        mock_token = MagicMock()
-        mock_token.token = "fake-token"
-
         with (
-            patch("subprocess.run", return_value=_mock_az_account_show()),
-            patch("azure.identity.AzureCliCredential") as mock_cred_cls,
+            _account(),
+            _credential(ok=True),
             patch(
                 "azure_jobs.shared.config.read_config",
                 return_value=ws_cfg,
             ),
         ):
-            mock_cred_cls.return_value.get_token.return_value = mock_token
             result = runner.invoke(main, ["auth", "status"])
 
         assert result.exit_code == 0
@@ -80,15 +79,14 @@ class TestAuthStatus:
 
     def test_not_logged_in(self, runner: CliRunner) -> None:
         """Exits with error when not logged in."""
-        mock = _mock_az_account_show(returncode=1, stdout="")
-        with patch("subprocess.run", return_value=mock):
+        with _account(None):
             result = runner.invoke(main, ["auth", "status"])
         assert result.exit_code != 0
         assert "Not logged in" in result.output
 
     def test_az_cli_missing(self, runner: CliRunner) -> None:
-        """Exits with error when Azure CLI not found."""
-        with patch("subprocess.run", side_effect=FileNotFoundError):
+        """Exits with error when the daemon cannot reach the Azure CLI."""
+        with _account(None):
             result = runner.invoke(main, ["auth", "status"])
         assert result.exit_code != 0
         assert "not installed" in result.output
@@ -97,38 +95,31 @@ class TestAuthStatus:
         """Shows 'Not configured' when workspace not set."""
         from azure_jobs.shared.config import AJConfig
 
-        mock_token = MagicMock()
-        mock_token.token = "fake-token"
-
         with (
-            patch("subprocess.run", return_value=_mock_az_account_show()),
-            patch("azure.identity.AzureCliCredential") as mock_cred_cls,
+            _account(),
+            _credential(ok=True),
             patch(
                 "azure_jobs.shared.config.read_config",
                 return_value=AJConfig(),
             ),
         ):
-            mock_cred_cls.return_value.get_token.return_value = mock_token
             result = runner.invoke(main, ["auth", "status"])
 
         assert result.exit_code == 0
         assert "Not configured" in result.output
 
     def test_sdk_credential_failure(self, runner: CliRunner) -> None:
-        """Shows SDK credential error when token fetch fails."""
+        """Shows the credential error the daemon reported."""
         from azure_jobs.shared.config import AJConfig
 
         with (
-            patch("subprocess.run", return_value=_mock_az_account_show()),
-            patch("azure.identity.AzureCliCredential") as mock_cred_cls,
+            _account(),
+            _credential(ok=False, error="ClientAuthenticationError: token expired"),
             patch(
                 "azure_jobs.shared.config.read_config",
                 return_value=AJConfig(),
             ),
         ):
-            mock_cred_cls.return_value.get_token.side_effect = Exception(
-                "token expired"
-            )
             result = runner.invoke(main, ["auth", "status"])
 
         assert result.exit_code == 0

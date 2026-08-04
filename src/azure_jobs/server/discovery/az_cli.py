@@ -1,21 +1,20 @@
-"""Azure CLI shell-out helpers (subscription + workspace detection)."""
+"""Azure CLI shell-out helpers (subscription + workspace detection).
+
+Server-side by design: the client never runs ``az``, so anything that shells
+out to it lives behind the daemon. Clients ask for a workspace by name and the
+daemon resolves it here.
+"""
 
 from __future__ import annotations
 
 import json
 import logging
-import shutil
 import subprocess
 from typing import Any
 
-log = logging.getLogger(__name__)
+from azure_jobs.shared.utils.fs import find_az
 
-def find_az() -> str:
-    """Return the full path to the az CLI (resolves az.cmd on Windows)."""
-    path = shutil.which("az")
-    if path is None:
-        raise FileNotFoundError("Azure CLI not found")
-    return path
+log = logging.getLogger(__name__)
 
 def az_json(args: list[str], timeout: int = 15) -> Any | None:
     """Run an az CLI command and return parsed JSON, or None on failure."""
@@ -51,9 +50,15 @@ def az_json(args: list[str], timeout: int = 15) -> Any | None:
         log.debug("az %s returned non-JSON: %s", " ".join(args), exc)
         return None
 
+def account_show() -> dict[str, Any] | None:
+    """The raw ``az account show`` payload (user + tenant included)."""
+    data = az_json(["account", "show"])
+    return data if isinstance(data, dict) else None
+
+
 def detect_subscription() -> dict[str, str] | None:
     """Try to get subscription info from az account show."""
-    data = az_json(["account", "show"])
+    data = account_show()
     if data:
         return {
             "subscription_id": data.get("id", ""),
@@ -84,3 +89,12 @@ def detect_workspaces(subscription_id: str) -> list[dict[str, str]]:
         }
         for w in data
     ]
+
+
+__all__ = [
+    "account_show",
+    "az_json",
+    "detect_subscription",
+    "detect_workspaces",
+    "find_az",
+]

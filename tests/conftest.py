@@ -79,10 +79,10 @@ def _serve_daemon(tmp_path, monkeypatch, factory, target):
     _await_socket(daemon.socket_path)
 
     monkeypatch.setattr(
-        "azure_jobs.shared.targets.ConfigTargetCatalog.configured", lambda self: target
+        "azure_jobs.server.targets.ConfigTargetCatalog.configured", lambda self: target
     )
     monkeypatch.setattr(
-        "azure_jobs.shared.targets.ConfigTargetCatalog.discover", lambda self: (target,)
+        "azure_jobs.server.targets.ConfigTargetCatalog.discover", lambda self: (target,)
     )
     daemon.factory = factory
     daemon.target = target

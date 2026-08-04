@@ -7,6 +7,7 @@ handling and socket teardown are all exercised.
 
 from __future__ import annotations
 
+import json
 import os
 import socket
 import subprocess
@@ -36,6 +37,21 @@ def _wait_for_socket(path: Path, timeout: float = 30.0) -> None:
 @pytest.fixture
 def live_daemon(tmp_path):
     sock = tmp_path / "daemon.sock"
+    # The daemon resolves workspace names itself, so give it a real config to
+    # resolve against instead of registering a target for it. It goes in the
+    # root the client sends, because one daemon serves many project roots.
+    (tmp_path / "aj_config.json").write_text(
+        json.dumps(
+            {
+                "workspace": {
+                    "subscription_id": "sub",
+                    "resource_group": "rg",
+                    "workspace_name": "ws",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
     proc = subprocess.Popen(
         [
             sys.executable,
@@ -193,12 +209,14 @@ class TestDaemonCli:
 
         monkeypatch.setenv("AJ_RUNTIME_DIR", str(tmp_path))
         monkeypatch.setattr(
-            "azure_jobs.shared.targets.ConfigTargetCatalog.configured",
+            "azure_jobs.server.targets.ConfigTargetCatalog.configured",
             lambda self: None,
         )
         result = CliRunner().invoke(queue_list, [])
         assert result.exit_code != 0
-        assert "No workspace configured" in result.output
+        # Workspace resolution now happens in the daemon, so the first thing a
+        # client can report is that it could not reach one.
+        assert "aj daemon start" in result.output
 
 
 class TestQueueOverTheRealDaemon:
@@ -209,9 +227,8 @@ class TestQueueOverTheRealDaemon:
         target = make_target()
 
         client = DaemonClient(sock, tmp_path)
-        client.put(R.target(target.id), json=target.to_json())
         entry = client.post(
-            R.queue(target.id),
+            R.queue(target.label),
             json={
                 "payload": {"name": "job-1", "service": "nonexistent-backend"},
                 "name": "job-1",
@@ -226,7 +243,7 @@ class TestQueueOverTheRealDaemon:
         try:
             deadline = time.time() + 30
             while time.time() < deadline:
-                current = other.get(R.queue_ticket(target.id, ticket))
+                current = other.get(R.queue_ticket(target.label, ticket))
                 if current["state"] in ("done", "failed", "cancelled"):
                     break
                 time.sleep(0.1)
@@ -241,9 +258,8 @@ class TestQueueOverTheRealDaemon:
         target = make_target()
 
         first = DaemonClient(sock, tmp_path)
-        first.put(R.target(target.id), json=target.to_json())
         first.post(
-            R.queue(target.id),
+            R.queue(target.label),
             json={
                 "payload": {"name": "job-a", "service": "nonexistent-backend"},
                 "name": "job-a",
@@ -253,7 +269,7 @@ class TestQueueOverTheRealDaemon:
 
         second = DaemonClient(sock, tmp_path)
         try:
-            names = [e["name"] for e in second.get(R.queue(target.id))]
+            names = [e["name"] for e in second.get(R.queue(target.label))]
             assert names == ["job-a"]
         finally:
             second.close()

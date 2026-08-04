@@ -153,7 +153,6 @@ class TestDaemonLifecycle:
         daemon, _, target = _serve(tmp_path)
         try:
             client = _client(daemon, tmp_path)
-            client.put(R.target(target.id), json=target.to_json())
             results: list = []
             errors: list = []
 
@@ -180,7 +179,7 @@ class TestNoSilentDowngrade:
     def test_missing_daemon_raises_with_recovery_steps(self, tmp_path):
         with pytest.raises(DaemonUnavailable) as caught:
             open_backend(
-                make_target(),
+                "ws",
                 root=tmp_path,
                 path=tmp_path / "nothing.sock",
                 autostart=False,
@@ -197,7 +196,7 @@ class TestNoSilentDowngrade:
             lambda *a, **k: (_ for _ in ()).throw(RuntimeError("wedged")),
         )
         with pytest.raises(DaemonUnavailable):
-            open_backend(make_target(), root=tmp_path)
+            open_backend("ws", root=tmp_path)
 
     def test_there_is_no_in_process_escape_hatch(self):
         import inspect
@@ -225,7 +224,6 @@ class TestEventDelivery:
 
     def _subscribed(self, daemon, tmp_path, target):
         client = _client(daemon, tmp_path)
-        client.put(R.target(target.id), json=target.to_json())
         received: list = []
         client.subscribe(received.append)
         time.sleep(0.3)  # let the stream attach before anything is published
@@ -235,7 +233,7 @@ class TestEventDelivery:
         daemon, factory, target = _serve(tmp_path, watch_interval=0.05)
         try:
             client, received = self._subscribed(daemon, tmp_path, target)
-            client.post(R.watches(target.id), json={"id": "a", "backend_ref": "a"})
+            client.post(R.watches(target.label), json={"id": "a", "backend_ref": "a"})
             client.post(R.watch_poll(target.id))
             factory.backends[0].jobs.status = "Completed"
             client.post(R.watch_poll(target.id))
@@ -254,7 +252,7 @@ class TestEventDelivery:
         try:
             client, received = self._subscribed(daemon, tmp_path, target)
             client.post(
-                R.queue(target.id),
+                R.queue(target.label),
                 json={"payload": {"name": "job-1"}, "name": "job-1"},
             )
             deadline = time.time() + 10
@@ -280,6 +278,92 @@ class TestEventDelivery:
             daemon.shutdown()
 
 
+class TestWorkspaceResolutionIsPerProject:
+    """One daemon serves many checkouts, so resolution follows the caller.
+
+    Regression: resolution used to read the daemon process's own config, so a
+    daemon started in project A answered project B's request with A's
+    workspace.
+    """
+
+    def _config(self, root, name):
+        import json
+
+        root.mkdir(parents=True, exist_ok=True)
+        (root / "aj_config.json").write_text(
+            json.dumps(
+                {
+                    "workspace": {
+                        "subscription_id": f"sub-{name}",
+                        "resource_group": f"rg-{name}",
+                        "workspace_name": name,
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    def _serve_real_catalog(self, tmp_path):
+        """A daemon with no injected catalog, so it reads config like production."""
+        import threading
+
+        from azure_jobs.server.runner import Daemon
+
+        from .api_fakes import FakeFactory
+
+        runtime = tmp_path / "runtime"
+        runtime.mkdir(mode=0o700, exist_ok=True)
+        daemon = Daemon(
+            runtime / "daemon.sock",
+            backend_factory=FakeFactory(),
+            watch_interval=0.05,
+        )
+        daemon.bind()
+        threading.Thread(target=daemon.serve_forever, daemon=True).start()
+        deadline = time.time() + 20
+        while time.time() < deadline and not _reachable(daemon.socket_path):
+            time.sleep(0.02)
+        return daemon
+
+    def test_two_roots_resolve_to_their_own_workspace(self, tmp_path):
+        alpha, beta = tmp_path / "alpha", tmp_path / "beta"
+        self._config(alpha, "ws-alpha")
+        self._config(beta, "ws-beta")
+
+        daemon = self._serve_real_catalog(tmp_path)
+        try:
+            for root, expected in ((alpha, "ws-alpha"), (beta, "ws-beta")):
+                client = DaemonClient(daemon.socket_path, root)
+                try:
+                    resolved = client.get(R.workspace(R.DEFAULT_WORKSPACE))
+                    assert resolved["label"] == expected
+                    assert resolved["metadata"]["subscription_id"] == f"sub-{expected}"
+                finally:
+                    client.close()
+        finally:
+            daemon.shutdown()
+
+    def test_the_configured_workspace_is_not_cached_across_a_change(self, tmp_path):
+        """`aj ws set` must take effect without restarting the daemon."""
+        root = tmp_path / "proj"
+        self._config(root, "ws-before")
+
+        daemon = self._serve_real_catalog(tmp_path)
+        try:
+            client = DaemonClient(daemon.socket_path, root)
+            try:
+                first = client.get(R.workspace(R.DEFAULT_WORKSPACE))
+                assert first["label"] == "ws-before"
+                time.sleep(0.01)  # a distinct mtime, so the cache must notice
+                self._config(root, "ws-after")
+                second = client.get(R.workspace(R.DEFAULT_WORKSPACE))
+                assert second["label"] == "ws-after"
+            finally:
+                client.close()
+        finally:
+            daemon.shutdown()
+
+
 class TestContextLifetime:
     """Contexts are cached per (root, target) and expire on idle.
 
@@ -292,9 +376,8 @@ class TestContextLifetime:
         daemon, factory, target = _serve(tmp_path)
         try:
             client = _client(daemon, tmp_path)
-            client.put(R.target(target.id), json=target.to_json())
             assert daemon.state.contexts.count() == 0
-            client.get(R.jobs(target.id), params={"limit": 1})
+            client.get(R.jobs(target.label), params={"limit": 1})
             assert daemon.state.contexts.count() == 1
             assert len(factory.backends) == 1
         finally:
@@ -304,9 +387,8 @@ class TestContextLifetime:
         daemon, factory, target = _serve(tmp_path)
         try:
             client = _client(daemon, tmp_path)
-            client.put(R.target(target.id), json=target.to_json())
             for _ in range(5):
-                client.get(R.jobs(target.id), params={"limit": 1})
+                client.get(R.jobs(target.label), params={"limit": 1})
             assert len(factory.backends) == 1
         finally:
             daemon.shutdown()
@@ -319,8 +401,7 @@ class TestContextLifetime:
             other.mkdir()
             for root in (tmp_path, other):
                 client = DaemonClient(daemon.socket_path, root)
-                client.put(R.target(target.id), json=target.to_json())
-                client.get(R.jobs(target.id), params={"limit": 1})
+                client.get(R.jobs(target.label), params={"limit": 1})
                 client.close()
             assert daemon.state.contexts.count() == 2
             assert len(factory.backends) == 2
@@ -331,8 +412,7 @@ class TestContextLifetime:
         daemon, factory, target = _serve(tmp_path, idle_timeout=0.0)
         try:
             client = _client(daemon, tmp_path)
-            client.put(R.target(target.id), json=target.to_json())
-            client.get(R.jobs(target.id), params={"limit": 1})
+            client.get(R.jobs(target.label), params={"limit": 1})
             client.close()
             time.sleep(0.05)
             assert daemon.reap_idle() == 1
@@ -344,8 +424,7 @@ class TestContextLifetime:
         daemon, _, target = _serve(tmp_path, idle_timeout=0.0)
         try:
             client = _client(daemon, tmp_path)
-            client.put(R.target(target.id), json=target.to_json())
-            client.post(R.watches(target.id), json={"id": "a", "backend_ref": "a"})
+            client.post(R.watches(target.label), json={"id": "a", "backend_ref": "a"})
             client.close()
             time.sleep(0.05)
             assert daemon.reap_idle() == 0

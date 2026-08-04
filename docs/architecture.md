@@ -149,17 +149,20 @@ src/azure_jobs/
 │   ├── opts/          typed backend options + spec-hook registration
 │   ├── spec.py        how a job is *described*
 │   ├── job/           JobSpec and how to build one
-│   ├── template/, config/, sku.py, targets.py, journal.py, utils/
+│   ├── template/, config/, sku.py, journal.py, utils/
 │
 ├── client/          drives and renders — never imports server/
 │   ├── connection.py  httpx client over UDS, auto-spawn, reconnect
+│   ├── discovery.py   asks the daemon what exists in Azure
 │   ├── resilient.py
 │   ├── cli/, tui/, ui/
 │
 └── server/          executes — never imports client/
     ├── app.py         FastAPI routes
     ├── runner.py      uvicorn on a Unix socket + lifecycle
-    ├── context.py     per (root, target) backend/queue/watcher
+    ├── context.py     per (root, workspace) backend/queue/watcher
+    ├── discovery/     the only place `az` is executed
+    ├── targets.py     workspace name → target
     ├── main.py
     ├── backend.py     the Azure implementation of the contract
     ├── azure.py, queue.py, watch.py, concurrent.py
@@ -211,11 +214,28 @@ long-running operation froze the dashboard), accumulated a thread per CLI
 invocation, and raced on shutdown. Those are exactly the parts a real server
 already solves.
 
-**Stateless, so there is less to get wrong.** A client registers its target
-once (`PUT /v1/targets/{id}`); the daemon caches a *context* per
-`(project root, target)` and expires it on idle. Nothing ties a context to a
-connection, which deleted the session-token and refcount bookkeeping the old
-transport needed — and with it the lifecycle bugs that lived there.
+**Stateless, so there is less to get wrong.** Requests are addressed by
+workspace *name* (`/v1/workspaces/{name}/...`); the daemon resolves the name
+against the config of the project root in `X-AJ-Root` — not its own — and
+caches a *context* per `(project root, workspace)`, created on first use and
+expired on idle. Named lookups are cached because they cost an `az` call; the
+configured workspace is not, so `aj ws set` takes effect without a restart. Nothing ties a context to a connection, which deleted the
+session-token and refcount bookkeeping the old transport needed — and with it
+the lifecycle bugs that lived there.
+
+**The client never runs `az`.** Resolving a workspace name, listing workspaces
+and reading the active subscription are all `az` calls, so they are endpoints
+(`/v1/workspaces`, `/v1/workspaces/{name}`, `/v1/subscription`) rather than
+client-side subprocesses. Credential health (`/v1/credential`) is asked of the
+daemon too, because the daemon's token is the one that matters. That is why
+`shared/config` holds only local file config: everything that shells out lives
+in `server/discovery/`, guarded by `tests/test_api_architecture.py`. The single
+exception is `aj auth login` / `logout`, which need an interactive terminal the
+daemon does not have.
+
+A domain failure keeps its type across the wire: an unresolvable workspace
+arrives as `WorkspaceError`, not `TransportError`, so `ResilientBackend` does
+not retry a name the daemon has already rejected.
 
 ## TUI
 - **Blob credential fallback**: SAS → SharedKey → AAD bearer. If the storage

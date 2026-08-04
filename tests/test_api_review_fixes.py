@@ -114,7 +114,7 @@ class TestTransportFailuresAreFast:
         started = time.time()
         with pytest.raises(DaemonUnavailable):
             open_backend(
-                make_target(),
+                "ws",
                 root=tmp_path,
                 path=tmp_path / "absent.sock",
                 autostart=False,
@@ -135,7 +135,7 @@ class TestResilientSession:
             made.append(replacement)
             return replacement
 
-        return ResilientBackend(target, remote, reconnect), made
+        return ResilientBackend(target.label, remote, reconnect), made
 
     def test_a_healthy_remote_is_used(self):
         remote = FakeBackend(make_target())
@@ -344,7 +344,7 @@ class TestDaemonFailureIsReportedNotWorkedAround:
             },
         )
         monkeypatch.setattr(
-            "azure_jobs.shared.targets.ConfigTargetCatalog.configured",
+            "azure_jobs.server.targets.ConfigTargetCatalog.configured",
             lambda self: target,
         )
         monkeypatch.setattr(
@@ -488,8 +488,7 @@ class TestHandlerErrorsDoNotKillTheConnection:
             time.sleep(0.02)
         try:
             client = DaemonClient(daemon.socket_path, tmp_path)
-            client.put(R.target(target.id), json=target.to_json())
-            client.get(R.jobs(target.id), params={"limit": 1})
+            client.get(R.jobs(target.label), params={"limit": 1})
             factory.backends[0].jobs.raises = RuntimeError("backend exploded")
 
             with pytest.raises(Exception) as caught:
@@ -511,7 +510,7 @@ class TestWorkspaceOverrideResolution:
 
         calls: list[str] = []
 
-        def fake_resolve(name):
+        def fake_resolve(name, *, root=None):
             calls.append(name)
             return AJWorkspace(
                 subscription_id="configured-sub",
@@ -519,16 +518,18 @@ class TestWorkspaceOverrideResolution:
                 workspace_name=name,
             )
 
-        monkeypatch.setattr("azure_jobs.shared.config.resolve_workspace", fake_resolve)
         monkeypatch.setattr(
-            "azure_jobs.shared.targets.ConfigTargetCatalog.discover",
+            "azure_jobs.server.discovery.resolve_workspace", fake_resolve
+        )
+        monkeypatch.setattr(
+            "azure_jobs.server.targets.ConfigTargetCatalog.discover",
             lambda self: (_ for _ in ()).throw(
                 AssertionError("must not discover for --ws")
             ),
         )
-        from azure_jobs.client.cli._backend import configured_target
+        from azure_jobs.server.targets import resolve_named
 
-        target = configured_target("other-ws")
+        target = resolve_named("other-ws")
         assert calls == ["other-ws"]
         assert target.metadata["subscription_id"] == "configured-sub"
         assert target.label == "other-ws"
@@ -540,3 +541,47 @@ class TestCatalogItemIsUsableInCollections:
 
         item = CatalogItem("compute", "gpu", {"vm_size": "ND96"})
         assert len({item, CatalogItem("compute", "gpu", {"other": 1})}) == 1
+
+
+class TestWorkspaceNameResolutionFailsFast:
+    """A typo must be reported as a typo, not deferred to an Azure error."""
+
+    def test_a_name_missing_from_a_successful_discovery_is_rejected(
+        self, monkeypatch, tmp_path
+    ):
+        from azure_jobs.server.discovery import workspace as mod
+        from azure_jobs.shared.errors import WorkspaceError
+
+        monkeypatch.setattr(
+            mod,
+            "detect_workspaces",
+            lambda sub: [
+                {"name": "real-ws", "resource_group": "rg", "location": "eastus"}
+            ],
+        )
+        monkeypatch.setattr(
+            mod,
+            "_config_workspace",
+            lambda root: __import__(
+                "azure_jobs.shared.config", fromlist=["AJWorkspace"]
+            ).AJWorkspace(subscription_id="sub", resource_group="rg"),
+        )
+        with pytest.raises(WorkspaceError) as caught:
+            mod.resolve_workspace("typo-ws", root=tmp_path)
+        assert "real-ws" in str(caught.value)
+
+    def test_an_unlistable_subscription_still_falls_back(self, monkeypatch, tmp_path):
+        """RBAC can hide a workspace that exists, so keep that path working."""
+        from azure_jobs.server.discovery import workspace as mod
+
+        monkeypatch.setattr(mod, "detect_workspaces", lambda sub: [])
+        monkeypatch.setattr(
+            mod,
+            "_config_workspace",
+            lambda root: __import__(
+                "azure_jobs.shared.config", fromlist=["AJWorkspace"]
+            ).AJWorkspace(subscription_id="sub", resource_group="rg"),
+        )
+        resolved = mod.resolve_workspace("hidden-ws", root=tmp_path)
+        assert resolved.workspace_name == "hidden-ws"
+        assert resolved.resource_group == "rg"

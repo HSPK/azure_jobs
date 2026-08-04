@@ -27,7 +27,7 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
     "log_record": ("azure_jobs.shared.journal", "log_record"),
     "read_records": ("azure_jobs.shared.journal", "read_records"),
     "resolve_short_id": ("azure_jobs.shared.journal", "resolve_short_id"),
-    "get_workspace_config": ("azure_jobs.shared.config", "get_workspace_config"),
+    "get_workspace_config": ("azure_jobs.client.discovery", "get_workspace_config"),
 }
 
 def __getattr__(name: str):
@@ -45,7 +45,7 @@ def __dir__() -> list[str]:
 
 if TYPE_CHECKING:
     from azure_jobs.client.cli.runner import submit_and_record
-    from azure_jobs.shared.config import get_workspace_config
+    from azure_jobs.client.discovery import get_workspace_config
     from azure_jobs.shared.journal import (
         JobRecord,
         log_record,

@@ -24,6 +24,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from azure_jobs.server.context import ContextRegistry
 from azure_jobs.shared.contract import routes as R
 from azure_jobs.shared.contract.errors import error_to_json
+from azure_jobs.shared.errors import AJError, AuthError, WorkspaceError
 from azure_jobs.shared.contract.models import (
     Cursor,
     JobQuerySpec,
@@ -88,13 +89,14 @@ class DaemonState:
         shutdown_when_idle: float = 60 * 60.0,
     ) -> None:
         self.events = EventHub()
+        self._catalog = target_catalog
         self.contexts = ContextRegistry(
             backend_factory=backend_factory,
             watch_interval=watch_interval,
             idle_timeout=idle_timeout,
             publish=self.events.publish,
+            resolver=self.resolve_workspace,
         )
-        self._catalog = target_catalog
         self._account_factory = account_factory
         self._accounts: dict[str, Any] = {}
         self._lock = threading.Lock()
@@ -105,12 +107,40 @@ class DaemonState:
         self.should_exit = threading.Event()
         self.socket_path = ""
 
-    def catalog(self) -> Any:
+    def catalog(self, root: Path | None = None) -> Any:
+        """Discovery for *root* — injected wholesale in tests."""
         if self._catalog is not None:
             return self._catalog
-        from azure_jobs.shared.targets import ConfigTargetCatalog
+        from azure_jobs.server.targets import ConfigTargetCatalog
 
-        return ConfigTargetCatalog()
+        return ConfigTargetCatalog(root)
+
+    def resolve_workspace(self, root: Path, name: str) -> Target:
+        """Turn a workspace name into a target through the injected catalog.
+
+        Going through the catalog (rather than straight to ``resolve_named``)
+        is what lets a test substitute discovery wholesale.
+        """
+        catalog = self._catalog
+        if catalog is None:
+            from azure_jobs.server.targets import resolve_named
+
+            return resolve_named(name, root)
+
+        if not name or name == R.DEFAULT_WORKSPACE:
+            target = catalog.configured()
+            if target is None:
+                raise WorkspaceError(
+                    "No workspace configured. Run 'aj init' or 'aj ws set' first."
+                )
+            return target
+        for candidate in catalog.discover():
+            if name in (candidate.label, candidate.id):
+                return candidate
+        raise WorkspaceError(
+            f"Workspace '{name}' not found. "
+            "Run `aj ws list` to see available workspaces."
+        )
 
     def account(self, subscription_id: str = "") -> Any:
         with self._lock:
@@ -158,11 +188,28 @@ def create_app(state: DaemonState) -> FastAPI:
     app = FastAPI(title="aj daemon", version=str(R.API_VERSION))
     app.state.daemon = state
 
-    def ctx(root: str | None, target_id: str) -> Any:
-        try:
-            return state.contexts.context(_root_of(root), target_id)
-        except KeyError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
+    def ctx(root: str | None, ws: str) -> Any:
+        """Resolve a workspace name to its context.
+
+        Deliberately does not flatten failures: a workspace that cannot be
+        resolved is a domain error the user must act on, and turning it into a
+        bare status code would reach the client as a *transport* error, which
+        ``ResilientBackend`` would then retry as if the daemon had died.
+        """
+        return state.contexts.context(_root_of(root), ws)
+
+    @app.exception_handler(AJError)
+    async def _domain_error(request: Request, exc: AJError) -> JSONResponse:
+        """Answer domain failures with the typed envelope the client rebuilds.
+
+        Registered for this type only: a catch-all handler is re-raised by
+        Starlette, which is why unexpected errors go through the middleware
+        below instead.
+        """
+        status = 404 if isinstance(exc, WorkspaceError) else 400
+        if isinstance(exc, AuthError):
+            status = 401
+        return JSONResponse(status_code=status, content={"error": error_to_json(exc)})
 
     @app.middleware("http")
     async def _surface_errors(request: Request, call_next: Any) -> Any:
@@ -231,47 +278,77 @@ def create_app(state: DaemonState) -> FastAPI:
 
         return StreamingResponse(stream(), media_type="text/event-stream")
 
-    # ── targets ──────────────────────────────────────────────────────────
+    # ── workspaces ───────────────────────────────────────────────────────
 
-    @app.get(R.configured_target())
-    def configured() -> dict | None:
-        target = state.catalog().configured()
-        return target.to_json() if target else None
+    @app.get(R.subscription())
+    def subscription() -> dict | None:
+        """Which subscription the daemon is logged in to, or ``None``.
 
-    @app.get(R.targets())
-    def discover() -> list[dict]:
-        return [t.to_json() for t in state.catalog().discover()]
+        The raw ``az account show`` payload, so ``aj auth status`` can show the
+        user and tenant without a second round trip.
+        """
+        from azure_jobs.server.discovery import account_show
 
-    @app.put(R.target("{target_id}"))
-    def register(target_id: str, body: dict = Body(...)) -> dict:
-        target = Target.from_json(body)
-        if target.id != target_id:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Body describes target {target.id!r}, not {target_id!r}",
-            )
-        return state.contexts.register(target).to_json()
+        return account_show()
+
+    @app.get(R.credential())
+    def credential() -> dict:
+        """Whether the daemon can get a token — it is the one that needs it."""
+        from azure_jobs.server.discovery import credential_health
+
+        return credential_health()
+
+    @app.get(R.workspaces())
+    def discover_workspaces(
+        subscription_id: str = Query(default=""),
+        x_aj_root: str | None = Header(default=None, alias=R.ROOT_HEADER),
+    ) -> list[dict]:
+        """Discovery shells out to ``az``; that is exactly why it lives here.
+
+        ``subscription_id`` lets a caller list a subscription other than the
+        active one, which matters when a project is configured for a
+        subscription the signed-in ``az`` session is not currently on.
+        """
+        catalog = state.catalog(_root_of(x_aj_root))
+        return [t.to_json() for t in catalog.discover(subscription_id)]
+
+    @app.get(R.workspace("{ws}"))
+    def workspace_detail(
+        ws: str,
+        x_aj_root: str | None = Header(default=None, alias=R.ROOT_HEADER),
+    ) -> dict | None:
+        """Resolve a workspace by name, for the calling project.
+
+        The sentinel means "whatever this project is configured for" and is the
+        one case that answers ``None`` instead of raising, so a client can ask
+        whether setup has happened without handling an error.
+        """
+        root = _root_of(x_aj_root)
+        if ws == R.DEFAULT_WORKSPACE:
+            target = state.catalog(root).configured()
+            return target.to_json() if target else None
+        return state.resolve_workspace(root, ws).to_json()
 
     # ── jobs ─────────────────────────────────────────────────────────────
 
-    @app.get(R.jobs("{target_id}"))
+    @app.get(R.jobs("{ws}"))
     def list_jobs(
-        target_id: str,
+        ws: str,
         cursor: str | None = None,
         limit: int = 50,
         include_archived: bool = False,
         x_aj_root: str | None = Header(default=None, alias=R.ROOT_HEADER),
     ) -> dict:
-        page = ctx(x_aj_root, target_id).backend.jobs.list_page(
+        page = ctx(x_aj_root, ws).backend.jobs.list_page(
             Cursor(cursor) if cursor else None,
             limit=limit,
             query=JobQuerySpec(include_archived=include_archived),
         )
         return page.to_json()
 
-    @app.get(R.jobs_fetch("{target_id}"))
+    @app.get(R.jobs_fetch("{ws}"))
     def fetch_jobs(
-        target_id: str,
+        ws: str,
         limit: int = 50,
         archived: bool = False,
         job_type: str = "",
@@ -282,7 +359,7 @@ def create_app(state: DaemonState) -> FastAPI:
         max_scan: int = 0,
         x_aj_root: str | None = Header(default=None, alias=R.ROOT_HEADER),
     ) -> list[dict]:
-        jobs = ctx(x_aj_root, target_id).backend.jobs.fetch(
+        jobs = ctx(x_aj_root, ws).backend.jobs.fetch(
             limit=limit,
             archived=archived,
             job_type=job_type,
@@ -294,53 +371,53 @@ def create_app(state: DaemonState) -> FastAPI:
         )
         return [job.to_json() for job in jobs]
 
-    @app.get(R.job("{target_id}", "{job_id}"))
+    @app.get(R.job("{ws}", "{job_id}"))
     def get_job(
-        target_id: str,
+        ws: str,
         job_id: str,
         backend_ref: str = "",
         x_aj_root: str | None = Header(default=None, alias=R.ROOT_HEADER),
     ) -> dict:
         ref = JobRef(job_id, backend_ref or job_id)
-        return ctx(x_aj_root, target_id).backend.actions.get(ref).to_json()
+        return ctx(x_aj_root, ws).backend.actions.get(ref).to_json()
 
-    @app.post(R.job_cancel("{target_id}", "{job_id}"))
+    @app.post(R.job_cancel("{ws}", "{job_id}"))
     def cancel_job(
-        target_id: str,
+        ws: str,
         job_id: str,
         backend_ref: str = "",
         x_aj_root: str | None = Header(default=None, alias=R.ROOT_HEADER),
     ) -> dict:
         ref = JobRef(job_id, backend_ref or job_id)
-        ctx(x_aj_root, target_id).backend.actions.cancel(ref)
+        ctx(x_aj_root, ws).backend.actions.cancel(ref)
         return {"cancelled": True}
 
-    @app.delete(R.job("{target_id}", "{job_id}"))
+    @app.delete(R.job("{ws}", "{job_id}"))
     def delete_job(
-        target_id: str,
+        ws: str,
         job_id: str,
         backend_ref: str = "",
         x_aj_root: str | None = Header(default=None, alias=R.ROOT_HEADER),
     ) -> dict:
         ref = JobRef(job_id, backend_ref or job_id)
-        ctx(x_aj_root, target_id).backend.delete_jobs.delete(ref)
+        ctx(x_aj_root, ws).backend.delete_jobs.delete(ref)
         return {"deleted": True}
 
     # ── logs ─────────────────────────────────────────────────────────────
 
-    @app.get(R.job_logs("{target_id}", "{job_id}"))
+    @app.get(R.job_logs("{ws}", "{job_id}"))
     def list_logs(
-        target_id: str,
+        ws: str,
         job_id: str,
         backend_ref: str = "",
         x_aj_root: str | None = Header(default=None, alias=R.ROOT_HEADER),
     ) -> list[str]:
         ref = JobRef(job_id, backend_ref or job_id)
-        return ctx(x_aj_root, target_id).backend.logs.list_files(ref)
+        return ctx(x_aj_root, ws).backend.logs.list_files(ref)
 
-    @app.get(R.job_log_content("{target_id}", "{job_id}"))
+    @app.get(R.job_log_content("{ws}", "{job_id}"))
     def read_log(
-        target_id: str,
+        ws: str,
         job_id: str,
         path: str = Query(...),
         backend_ref: str = "",
@@ -349,7 +426,7 @@ def create_app(state: DaemonState) -> FastAPI:
     ) -> Response:
         """Byte ranges are what HTTP is for, so a log window is just a 206."""
         ref = JobRef(job_id, backend_ref or job_id)
-        reader = ctx(x_aj_root, target_id).backend.logs.open(ref, path)
+        reader = ctx(x_aj_root, ws).backend.logs.open(ref, path)
         try:
             chunk = _read_range(reader, range_header)
         finally:
@@ -366,25 +443,25 @@ def create_app(state: DaemonState) -> FastAPI:
             headers=headers,
         )
 
-    @app.get(R.job_log_download("{target_id}", "{job_id}"))
+    @app.get(R.job_log_download("{ws}", "{job_id}"))
     def download_logs(
-        target_id: str,
+        ws: str,
         job_id: str,
         backend_ref: str = "",
         x_aj_root: str | None = Header(default=None, alias=R.ROOT_HEADER),
     ) -> dict:
         ref = JobRef(job_id, backend_ref or job_id)
-        return ctx(x_aj_root, target_id).backend.logs.download(ref)
+        return ctx(x_aj_root, ws).backend.logs.download(ref)
 
     # ── catalog ──────────────────────────────────────────────────────────
 
-    @app.get(R.catalog("{target_id}", "{kind}"))
+    @app.get(R.catalog("{ws}", "{kind}"))
     def catalog_list(
-        target_id: str,
+        ws: str,
         kind: str,
         x_aj_root: str | None = Header(default=None, alias=R.ROOT_HEADER),
     ) -> Any:
-        catalog = ctx(x_aj_root, target_id).backend.catalog
+        catalog = ctx(x_aj_root, ws).backend.catalog
         if kind == "workspace":
             return catalog.workspace().to_json()
         getter = {
@@ -397,14 +474,14 @@ def create_app(state: DaemonState) -> FastAPI:
             raise HTTPException(status_code=404, detail=f"No catalog {kind!r}")
         return [item.to_json() for item in getter()]
 
-    @app.get(R.catalog_item("{target_id}", "{kind}", "{name}"))
+    @app.get(R.catalog_item("{ws}", "{kind}", "{name}"))
     def catalog_detail(
-        target_id: str,
+        ws: str,
         kind: str,
         name: str,
         x_aj_root: str | None = Header(default=None, alias=R.ROOT_HEADER),
     ) -> Any:
-        catalog = ctx(x_aj_root, target_id).backend.catalog
+        catalog = ctx(x_aj_root, ws).backend.catalog
         if kind == "datastores":
             item = catalog.datastore(name)
             return item.to_json() if item else None
@@ -453,13 +530,13 @@ def create_app(state: DaemonState) -> FastAPI:
 
     # ── submissions and queue ────────────────────────────────────────────
 
-    @app.post(R.submissions("{target_id}"))
+    @app.post(R.submissions("{ws}"))
     def submit(
-        target_id: str,
+        ws: str,
         body: dict = Body(...),
         x_aj_root: str | None = Header(default=None, alias=R.ROOT_HEADER),
     ) -> dict:
-        context = ctx(x_aj_root, target_id)
+        context = ctx(x_aj_root, ws)
         stream_id = str(body.get("stream") or "")
 
         def relay(event: Any) -> None:
@@ -475,78 +552,78 @@ def create_app(state: DaemonState) -> FastAPI:
         )
         return outcome.to_json()
 
-    @app.get(R.queue("{target_id}"))
+    @app.get(R.queue("{ws}"))
     def queue_list(
-        target_id: str,
+        ws: str,
         x_aj_root: str | None = Header(default=None, alias=R.ROOT_HEADER),
     ) -> list[dict]:
-        return [e.to_json() for e in ctx(x_aj_root, target_id).queue.list()]
+        return [e.to_json() for e in ctx(x_aj_root, ws).queue.list()]
 
-    @app.post(R.queue("{target_id}"))
+    @app.post(R.queue("{ws}"))
     def queue_enqueue(
-        target_id: str,
+        ws: str,
         body: dict = Body(...),
         x_aj_root: str | None = Header(default=None, alias=R.ROOT_HEADER),
     ) -> dict:
-        entry = ctx(x_aj_root, target_id).queue.enqueue(
+        entry = ctx(x_aj_root, ws).queue.enqueue(
             dict(body.get("payload") or {}), name=str(body.get("name") or "")
         )
         return entry.to_json()
 
-    @app.get(R.queue_ticket("{target_id}", "{ticket}"))
+    @app.get(R.queue_ticket("{ws}", "{ticket}"))
     def queue_get(
-        target_id: str,
+        ws: str,
         ticket: str,
         x_aj_root: str | None = Header(default=None, alias=R.ROOT_HEADER),
     ) -> dict | None:
-        entry = ctx(x_aj_root, target_id).queue.get(ticket)
+        entry = ctx(x_aj_root, ws).queue.get(ticket)
         if entry is None:
             raise HTTPException(status_code=404, detail=f"No such ticket {ticket!r}")
         return entry.to_json()
 
-    @app.delete(R.queue_ticket("{target_id}", "{ticket}"))
+    @app.delete(R.queue_ticket("{ws}", "{ticket}"))
     def queue_cancel(
-        target_id: str,
+        ws: str,
         ticket: str,
         x_aj_root: str | None = Header(default=None, alias=R.ROOT_HEADER),
     ) -> dict:
-        return {"cancelled": ctx(x_aj_root, target_id).queue.cancel(ticket)}
+        return {"cancelled": ctx(x_aj_root, ws).queue.cancel(ticket)}
 
     # ── watches ──────────────────────────────────────────────────────────
 
-    @app.get(R.watches("{target_id}"))
+    @app.get(R.watches("{ws}"))
     def watch_list(
-        target_id: str,
+        ws: str,
         x_aj_root: str | None = Header(default=None, alias=R.ROOT_HEADER),
     ) -> list[dict]:
-        return [r.to_json() for r in ctx(x_aj_root, target_id).watcher.watched()]
+        return [r.to_json() for r in ctx(x_aj_root, ws).watcher.watched()]
 
-    @app.post(R.watches("{target_id}"))
+    @app.post(R.watches("{ws}"))
     def watch_add(
-        target_id: str,
+        ws: str,
         body: dict = Body(...),
         x_aj_root: str | None = Header(default=None, alias=R.ROOT_HEADER),
     ) -> dict:
-        ctx(x_aj_root, target_id).watcher.watch(JobRef.from_json(body))
+        ctx(x_aj_root, ws).watcher.watch(JobRef.from_json(body))
         return {"watching": True}
 
-    @app.delete(R.watch_job("{target_id}", "{job_id}"))
+    @app.delete(R.watch_job("{ws}", "{job_id}"))
     def watch_remove(
-        target_id: str,
+        ws: str,
         job_id: str,
         backend_ref: str = "",
         x_aj_root: str | None = Header(default=None, alias=R.ROOT_HEADER),
     ) -> dict:
         ref = JobRef(job_id, backend_ref or job_id)
-        ctx(x_aj_root, target_id).watcher.unwatch(ref)
+        ctx(x_aj_root, ws).watcher.unwatch(ref)
         return {"watching": False}
 
-    @app.post(R.watch_poll("{target_id}"))
+    @app.post(R.watch_poll("{ws}"))
     def watch_poll(
-        target_id: str,
+        ws: str,
         x_aj_root: str | None = Header(default=None, alias=R.ROOT_HEADER),
     ) -> list[dict]:
-        return [n.to_json() for n in ctx(x_aj_root, target_id).watcher.poll_once()]
+        return [n.to_json() for n in ctx(x_aj_root, ws).watcher.poll_once()]
 
     return app
 

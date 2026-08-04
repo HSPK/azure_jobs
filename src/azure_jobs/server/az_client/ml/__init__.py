@@ -59,7 +59,7 @@ def create_rest_client(
     from azure_jobs.shared.errors import WorkspaceError
 
     if workspace is None:
-        from azure_jobs.shared.config import resolve_workspace
+        from azure_jobs.server.discovery import resolve_workspace
 
         workspace = resolve_workspace(ws_name)
     required = ("subscription_id", "resource_group", "workspace_name")

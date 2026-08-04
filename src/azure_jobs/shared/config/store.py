@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import threading
+from pathlib import Path
 from typing import Any
 
 from .. import const
@@ -11,6 +12,11 @@ from .models import AJConfig
 
 _config_cache: tuple[float, dict[str, Any]] | None = None
 _config_lock = threading.Lock()
+
+#: Per-root configs, keyed by path. Bounded so a long-lived daemon serving many
+#: checkouts cannot grow without limit.
+_scoped_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+_SCOPED_CACHE_MAX = 64
 
 def _read_config_dict() -> dict[str, Any]:
     global _config_cache
@@ -38,3 +44,30 @@ def write_config(config: AJConfig) -> None:
     const.AJ_CONFIG.write_text(json.dumps(config.to_dict(), indent=2) + "\n")
     with _config_lock:
         _config_cache = None
+
+
+def read_config_at(home: Path) -> AJConfig:
+    """Read the config belonging to a specific ``AJ_HOME``.
+
+    The daemon serves many project roots from one process, so it cannot use
+    the process-global ``AJ_HOME`` the way a CLI invocation can — it must read
+    the config of whichever project made the request.
+    """
+    path = Path(home) / const.AJ_CONFIG.name
+    if not path.exists():
+        return AJConfig.from_dict({})
+    try:
+        mtime = path.stat().st_mtime
+    except OSError:
+        return AJConfig.from_dict({})
+    key = str(path)
+    with _config_lock:
+        cached = _scoped_cache.get(key)
+        if cached is not None and cached[0] == mtime:
+            return AJConfig.from_dict(cached[1])
+    data = json.loads(path.read_text())
+    with _config_lock:
+        if len(_scoped_cache) >= _SCOPED_CACHE_MAX:
+            _scoped_cache.clear()
+        _scoped_cache[key] = (mtime, data)
+    return AJConfig.from_dict(data)

@@ -71,8 +71,7 @@ def _over_daemon() -> _Harness:
     while time.time() < deadline and not _reachable(daemon.socket_path):
         time.sleep(0.02)
     client = DaemonClient(daemon.socket_path, tmp)
-    client.put(R.target(target.id), json=target.to_json())
-    backend = DaemonBackend(client, target)
+    backend = DaemonBackend(client, target.label)
     # Contexts (and therefore backends) are created on first use; force one so
     # `harness.served` refers to the same fake the server is driving.
     backend.jobs.list_page(None, limit=1, query=JobQuerySpec())
@@ -230,24 +229,24 @@ class TestApiCoverage:
             R.info(),
             R.retire(),
             R.events(),
-            R.targets(),
-            R.configured_target(),
-            R.target("{target_id}"),
-            R.jobs("{target_id}"),
-            R.jobs_fetch("{target_id}"),
-            R.job("{target_id}", "{job_id}"),
-            R.job_cancel("{target_id}", "{job_id}"),
-            R.job_logs("{target_id}", "{job_id}"),
-            R.job_log_content("{target_id}", "{job_id}"),
-            R.job_log_download("{target_id}", "{job_id}"),
-            R.catalog("{target_id}", "{kind}"),
-            R.catalog_item("{target_id}", "{kind}", "{name}"),
+            R.workspaces(),
+            R.subscription(),
+            R.workspace("{ws}"),
+            R.jobs("{ws}"),
+            R.jobs_fetch("{ws}"),
+            R.job("{ws}", "{job_id}"),
+            R.job_cancel("{ws}", "{job_id}"),
+            R.job_logs("{ws}", "{job_id}"),
+            R.job_log_content("{ws}", "{job_id}"),
+            R.job_log_download("{ws}", "{job_id}"),
+            R.catalog("{ws}", "{kind}"),
+            R.catalog_item("{ws}", "{kind}", "{name}"),
             R.account("{kind}"),
-            R.submissions("{target_id}"),
-            R.queue("{target_id}"),
-            R.queue_ticket("{target_id}", "{ticket}"),
-            R.watches("{target_id}"),
-            R.watch_job("{target_id}", "{job_id}"),
+            R.submissions("{ws}"),
+            R.queue("{ws}"),
+            R.queue_ticket("{ws}", "{ticket}"),
+            R.watches("{ws}"),
+            R.watch_job("{ws}", "{job_id}"),
         }
         assert required <= paths, required - paths
 
@@ -277,33 +276,41 @@ class TestApiVersioning:
         assert R.ping().startswith("/v1/")
         assert R.jobs("t").startswith("/v1/")
 
-    def test_an_unknown_target_is_a_404_not_a_crash(self):
+    def test_an_unknown_workspace_is_an_error_not_a_crash(self):
         harness = _over_daemon()
         try:
-            with pytest.raises(Exception) as caught:
-                harness.rpc.get(R.jobs("no-such-target"))
-            assert "404" in str(caught.value) or "Unknown target" in str(caught.value)
+            from azure_jobs.shared.contract.errors import TransportError
+            from azure_jobs.shared.errors import WorkspaceError
+
+            with pytest.raises(WorkspaceError) as caught:
+                harness.rpc.get(R.jobs("no-such-workspace"))
+            assert "not found" in str(caught.value)
+            # Not a transport failure: ResilientBackend must not retry a name
+            # the daemon has already told us does not exist.
+            assert not isinstance(caught.value, TransportError)
         finally:
             harness.close()
 
-    def test_registering_a_target_is_idempotent(self):
+    def test_a_workspace_resolves_by_name(self):
+        """The client sends a name; the daemon does the lookup."""
         harness = _over_daemon()
         try:
             target = make_target()
-            first = harness.rpc.put(R.target(target.id), json=target.to_json())
-            second = harness.rpc.put(R.target(target.id), json=target.to_json())
-            assert first == second
-            # Still one backend: the context is cached per (root, target).
-            assert len(harness.factory.backends) == 1
+            resolved = harness.rpc.get(R.workspace(target.label))
+            assert resolved["label"] == target.label
         finally:
             harness.close()
 
-    def test_a_mismatched_body_is_rejected(self):
+    def test_repeated_use_of_one_name_shares_a_context(self):
         harness = _over_daemon()
         try:
-            other = make_target("other")
-            with pytest.raises(Exception):
-                harness.rpc.put(R.target("wrong-id"), json=other.to_json())
+            target = make_target()
+            for _ in range(3):
+                harness.rpc.get(
+                    R.jobs(target.label), params={"limit": 1}
+                )
+            # One backend: the context is cached per (root, workspace).
+            assert len(harness.factory.backends) == 1
         finally:
             harness.close()
 

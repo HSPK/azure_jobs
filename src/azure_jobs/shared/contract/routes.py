@@ -39,80 +39,97 @@ def events() -> str:
     return f"{API_V1}/events"
 
 
-def targets() -> str:
-    return f"{API_V1}/targets"
+#: Stands in for "whatever workspace this project is configured for", so the
+#: client never has to resolve one — resolving means running ``az``, which is
+#: the server's job. A single underscore because Azure ML workspace names are
+#: 3-33 characters, so it can never collide with a real one.
+DEFAULT_WORKSPACE = "_"
 
 
-def configured_target() -> str:
-    return f"{API_V1}/targets/configured"
+def subscription() -> str:
+    """The Azure subscription the daemon is logged in to."""
+    return f"{API_V1}/subscription"
 
 
-def target(target_id: str) -> str:
-    return f"{API_V1}/targets/{target_id}"
+def credential() -> str:
+    """Health of the credential the daemon would use to call Azure."""
+    return f"{API_V1}/credential"
 
 
-def jobs(target_id: str) -> str:
-    return f"{target(target_id)}/jobs"
+def workspaces() -> str:
+    return f"{API_V1}/workspaces"
 
 
-def jobs_fetch(target_id: str) -> str:
-    return f"{target(target_id)}/jobs:fetch"
+def current_workspace() -> str:
+    return f"{API_V1}/workspaces/{DEFAULT_WORKSPACE}"
 
 
-def job(target_id: str, job_id: str) -> str:
-    return f"{target(target_id)}/jobs/{job_id}"
+def workspace(name: str = DEFAULT_WORKSPACE) -> str:
+    return f"{API_V1}/workspaces/{name or DEFAULT_WORKSPACE}"
 
 
-def job_cancel(target_id: str, job_id: str) -> str:
-    return f"{job(target_id, job_id)}/cancel"
+def jobs(name: str = DEFAULT_WORKSPACE) -> str:
+    return f"{workspace(name)}/jobs"
 
 
-def job_logs(target_id: str, job_id: str) -> str:
-    return f"{job(target_id, job_id)}/logs"
+def jobs_fetch(name: str = DEFAULT_WORKSPACE) -> str:
+    return f"{workspace(name)}/jobs:fetch"
 
 
-def job_log_content(target_id: str, job_id: str) -> str:
-    return f"{job_logs(target_id, job_id)}/content"
+def job(name: str, job_id: str) -> str:
+    return f"{workspace(name)}/jobs/{job_id}"
 
 
-def job_log_download(target_id: str, job_id: str) -> str:
-    return f"{job_logs(target_id, job_id)}/download"
+def job_cancel(name: str, job_id: str) -> str:
+    return f"{job(name, job_id)}/cancel"
 
 
-def catalog(target_id: str, kind: str) -> str:
-    return f"{target(target_id)}/catalog/{kind}"
+def job_logs(name: str, job_id: str) -> str:
+    return f"{job(name, job_id)}/logs"
 
 
-def catalog_item(target_id: str, kind: str, name: str) -> str:
-    return f"{catalog(target_id, kind)}/{name}"
+def job_log_content(name: str, job_id: str) -> str:
+    return f"{job_logs(name, job_id)}/content"
+
+
+def job_log_download(name: str, job_id: str) -> str:
+    return f"{job_logs(name, job_id)}/download"
+
+
+def catalog(name: str, kind: str) -> str:
+    return f"{workspace(name)}/catalog/{kind}"
+
+
+def catalog_item(ws: str, kind: str, name: str) -> str:
+    return f"{catalog(ws, kind)}/{name}"
 
 
 def account(kind: str) -> str:
     return f"{API_V1}/account/{kind}"
 
 
-def submissions(target_id: str) -> str:
-    return f"{target(target_id)}/submissions"
+def submissions(name: str = DEFAULT_WORKSPACE) -> str:
+    return f"{workspace(name)}/submissions"
 
 
-def queue(target_id: str) -> str:
-    return f"{target(target_id)}/queue"
+def queue(name: str = DEFAULT_WORKSPACE) -> str:
+    return f"{workspace(name)}/queue"
 
 
-def queue_ticket(target_id: str, ticket: str) -> str:
-    return f"{queue(target_id)}/{ticket}"
+def queue_ticket(name: str, ticket: str) -> str:
+    return f"{queue(name)}/{ticket}"
 
 
-def watches(target_id: str) -> str:
-    return f"{target(target_id)}/watches"
+def watches(name: str = DEFAULT_WORKSPACE) -> str:
+    return f"{workspace(name)}/watches"
 
 
-def watch_job(target_id: str, job_id: str) -> str:
-    return f"{watches(target_id)}/{job_id}"
+def watch_job(name: str, job_id: str) -> str:
+    return f"{watches(name)}/{job_id}"
 
 
-def watch_poll(target_id: str) -> str:
-    return f"{watches(target_id)}:poll"
+def watch_poll(name: str) -> str:
+    return f"{watches(name)}:poll"
 
 
 __all__ = [
@@ -124,7 +141,9 @@ __all__ = [
     "account",
     "catalog",
     "catalog_item",
-    "configured_target",
+    "credential",
+    "DEFAULT_WORKSPACE",
+    "current_workspace",
     "events",
     "info",
     "job",
@@ -139,8 +158,9 @@ __all__ = [
     "queue_ticket",
     "retire",
     "submissions",
-    "target",
-    "targets",
+    "subscription",
+    "workspace",
+    "workspaces",
     "watch_job",
     "watch_poll",
     "watches",

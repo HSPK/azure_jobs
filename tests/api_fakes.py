@@ -243,5 +243,5 @@ class FakeTargetCatalog:
     def configured(self) -> Target | None:
         return self._target
 
-    def discover(self) -> tuple[Target, ...]:
+    def discover(self, subscription_id: str = "") -> tuple[Target, ...]:
         return (self._target,)

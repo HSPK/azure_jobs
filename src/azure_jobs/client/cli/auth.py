@@ -1,4 +1,9 @@
-"""aj auth — check and manage Azure authentication status."""
+"""aj auth — check and manage Azure authentication status.
+
+``login``/``logout`` are the one place the client runs ``az`` itself: both need
+an interactive terminal, which the daemon does not have. Everything that only
+*reads* Azure state goes through the daemon like every other command.
+"""
 
 from __future__ import annotations
 
@@ -16,42 +21,29 @@ def auth_group() -> None:
 @auth_group.command(name="status")
 def auth_status() -> None:
     """Show current Azure login status, subscription, and credential health."""
-    from azure_jobs.shared.config import az_json, read_config
+    from azure_jobs.client.discovery import account as az_account
+    from azure_jobs.client.discovery import credential
+    from azure_jobs.shared.config import read_config
     from azure_jobs.client.ui import console, show_auth_status
 
-    account = az_json(["account", "show"])
+    account = az_account()
     if account is None:
         console.print("[error]✗[/error] Not logged in (or Azure CLI not installed)")
         console.print("  Run [bold]az login[/bold] to authenticate")
         raise SystemExit(1)
 
-    cred_ok = False
-    cred_err = ""
-    cred_missing_pkg = False
-    try:
-        from azure.identity import AzureCliCredential
-
-        cred = AzureCliCredential()
-        token = cred.get_token("https://management.azure.com/.default")
-        if token and token.token:
-            cred_ok = True
-    except Exception as exc:
-        log.exception("AzureCliCredential.get_token failed")
-        cred_err = f"{type(exc).__name__}: {exc}"
-    if not cred_ok and not cred_err:
-        try:
-            import azure.identity  # noqa: F401
-        except ImportError:
-            cred_missing_pkg = True
+    # Asked of the daemon: it is the process that will call Azure, so its
+    # credential is the one whose health the user needs to know about.
+    health = credential()
 
     ws = read_config().workspace
     show_auth_status(
         account=account,
         workspace_name=ws.workspace_name,
         resource_group=ws.resource_group,
-        credential_ok=cred_ok,
-        credential_error=cred_err,
-        credential_missing_pkg=cred_missing_pkg,
+        credential_ok=bool(health.get("ok")),
+        credential_error=str(health.get("error") or ""),
+        credential_missing_pkg=bool(health.get("missing_package")),
     )
 
 @auth_group.command(name="login")
@@ -62,7 +54,7 @@ def auth_login() -> None:
     if get_output_mode() != "json":
         console.print("[info]ℹ[/info] Opening Azure login…")
     try:
-        from azure_jobs.shared.config import find_az
+        from azure_jobs.shared.utils.fs import find_az
 
         kwargs = (
             {"capture_output": True, "text": True}
@@ -92,7 +84,7 @@ def auth_logout() -> None:
     from azure_jobs.client.ui import console, get_output_mode, show_command_result
 
     try:
-        from azure_jobs.shared.config import find_az
+        from azure_jobs.shared.utils.fs import find_az
 
         result = subprocess.run(
             [find_az(), "logout"],

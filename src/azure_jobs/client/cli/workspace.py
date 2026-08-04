@@ -12,20 +12,20 @@ def ws_group() -> None:
     """Manage Azure ML workspaces."""
 
 def _ensure_workspaces() -> tuple[dict[str, str], list[dict[str, str]]]:
-    from azure_jobs.shared.config import detect_subscription, detect_workspaces
+    from azure_jobs.client.discovery import subscription, workspaces
     from azure_jobs.client.ui import console
 
-    sub = detect_subscription()
+    sub = subscription()
     if not sub:
         raise click.ClickException("Cannot detect subscription. Run `az login` first.")
 
     with console.status("[bold cyan]Listing workspaces…[/bold cyan]", spinner="dots"):
-        workspaces = detect_workspaces(sub["subscription_id"])
+        found = workspaces()
 
-    if not workspaces:
+    if not found:
         raise click.ClickException("No ML workspaces found in this subscription")
 
-    return sub, workspaces
+    return sub, found
 
 @ws_group.command(name="list")
 def ws_list() -> None:
@@ -80,14 +80,18 @@ def ws_show(name: str | None) -> None:
     from rich.panel import Panel
     from rich.table import Table
 
-    from azure_jobs.shared.config import read_config, resolve_workspace
+    from azure_jobs.client.discovery import resolve
+    from azure_jobs.shared.config import read_config
     from azure_jobs.client.ui import console, emit_json, get_output_mode, warning
 
     if name:
         try:
-            ws = resolve_workspace(name)
+            resolved = resolve(name)
         except AJError as exc:
             raise click.ClickException(str(exc)) from exc
+        if resolved is None:
+            raise click.ClickException(f"Workspace '{name}' not found")
+        ws = resolved
     else:
         cfg = read_config()
         if not cfg.workspace.workspace_name:
@@ -141,12 +145,8 @@ def ws_show(name: str | None) -> None:
 @click.argument("name", required=False)
 def ws_set(name: str | None) -> None:
     """Set the active workspace."""
-    from azure_jobs.shared.config import (
-        AJWorkspace,
-        pick_workspace,
-        read_config,
-        write_config,
-    )
+    from azure_jobs.client.discovery import pick_workspace
+    from azure_jobs.shared.config import AJWorkspace, read_config, write_config
     from azure_jobs.client.ui import get_output_mode, show_command_result, success
 
     sub, workspaces = _ensure_workspaces()

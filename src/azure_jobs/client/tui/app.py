@@ -9,8 +9,7 @@ from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.widgets import Input, OptionList
 
-from azure_jobs.shared.targets import ConfigTargetCatalog
-from azure_jobs.client.connection import BackendSessionFactory
+from azure_jobs.client.connection import BackendSessionFactory, RemoteTargetCatalog
 from azure_jobs.client.tui.bindings import (
     COMMAND_BINDINGS,
     CommandHandler,
@@ -83,7 +82,7 @@ class AjDashboard(App):
             self.ui.target,
             self.tasks,
             self.target_store,
-            catalog=workspace_catalog or ConfigTargetCatalog(),
+            catalog=workspace_catalog or RemoteTargetCatalog(),
             session_factory=session_factory or BackendSessionFactory(),
         )
         self.jobs = JobsController(

@@ -17,6 +17,7 @@ from typing import Any, Callable
 from azure_jobs.server.queue import SubmissionQueue
 from azure_jobs.server.watch import TOPIC_QUEUE, JobWatcher
 from azure_jobs.shared.contract.models import JobRef, Notification, QueuedJob, Target
+from azure_jobs.shared.contract.routes import DEFAULT_WORKSPACE
 
 log = logging.getLogger(__name__)
 
@@ -92,6 +93,10 @@ class Context:
             log.exception("Failed to close the backend for %s", self.key)
 
 
+#: Bounded so a long-lived daemon cannot accumulate one entry per name typed.
+RESOLVE_CACHE_MAX = 128
+
+
 class ContextRegistry:
     """Caches contexts per ``(root, target)`` and expires idle ones."""
 
@@ -102,37 +107,53 @@ class ContextRegistry:
         watch_interval: float = 20.0,
         idle_timeout: float = CONTEXT_IDLE_TIMEOUT,
         publish: Callable[[Notification], None],
+        resolver: Callable[[Path, str], Target] | None = None,
     ) -> None:
         self._factory = backend_factory
+        self._resolver = resolver
         self._watch_interval = watch_interval
         self._idle_timeout = idle_timeout
         self._publish = publish
-        self._targets: dict[str, Target] = {}
+        self._targets: dict[tuple[str, str], Target] = {}
         self._contexts: dict[tuple[str, str], Context] = {}
         self._lock = threading.Lock()
 
-    # ── targets ──────────────────────────────────────────────────────────
+    # ── resolving ────────────────────────────────────────────────────────
 
-    def register(self, target: Target) -> Target:
-        """Idempotent: a client PUTs its target once, then refers to it by id."""
+    def resolve(self, root: Path, name: str) -> Target:
+        """Turn a workspace *name* into a target for *root*, caching lookups.
+
+        Named lookups run ``az``, so the result is cached per ``(root, name)``.
+        The configured workspace is deliberately *not* cached: it is a local
+        config read, and caching it would keep serving the old workspace after
+        ``aj ws set``.
+        """
+        if not name or name == DEFAULT_WORKSPACE:
+            return self._resolve(root, name)
+
+        key = (str(root), name)
         with self._lock:
-            self._targets[target.id] = target
+            cached = self._targets.get(key)
+        if cached is not None:
+            return cached
+        target = self._resolve(root, name)
+        with self._lock:
+            if len(self._targets) >= RESOLVE_CACHE_MAX:
+                self._targets.clear()
+            self._targets[key] = target
         return target
 
-    def resolve(self, target_id: str) -> Target:
-        with self._lock:
-            target = self._targets.get(target_id)
-        if target is not None:
-            return target
-        raise KeyError(
-            f"Unknown target {target_id!r}; register it first with "
-            f"PUT /v1/targets/{target_id}"
-        )
+    def _resolve(self, root: Path, name: str) -> Target:
+        if self._resolver is not None:
+            return self._resolver(root, name)
+        from azure_jobs.server.targets import resolve_named
+
+        return resolve_named(name, root)
 
     # ── contexts ─────────────────────────────────────────────────────────
 
-    def context(self, root: Path, target_id: str) -> Context:
-        target = self.resolve(target_id)
+    def context(self, root: Path, name: str) -> Context:
+        target = self.resolve(root, name)
         key = (str(root), target.id)
         with self._lock:
             ctx = self._contexts.get(key)

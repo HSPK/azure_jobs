@@ -182,21 +182,21 @@ def test_every_contract_port_has_a_route():
 
     paths = {getattr(r, "path", "") for r in create_app(DaemonState()).routes}
     required = {
-        R.jobs("{target_id}"),
-        R.jobs_fetch("{target_id}"),
-        R.job("{target_id}", "{job_id}"),
-        R.job_cancel("{target_id}", "{job_id}"),
-        R.job_logs("{target_id}", "{job_id}"),
-        R.job_log_content("{target_id}", "{job_id}"),
-        R.job_log_download("{target_id}", "{job_id}"),
-        R.catalog("{target_id}", "{kind}"),
-        R.catalog_item("{target_id}", "{kind}", "{name}"),
+        R.jobs("{ws}"),
+        R.jobs_fetch("{ws}"),
+        R.job("{ws}", "{job_id}"),
+        R.job_cancel("{ws}", "{job_id}"),
+        R.job_logs("{ws}", "{job_id}"),
+        R.job_log_content("{ws}", "{job_id}"),
+        R.job_log_download("{ws}", "{job_id}"),
+        R.catalog("{ws}", "{kind}"),
+        R.catalog_item("{ws}", "{kind}", "{name}"),
         R.account("{kind}"),
-        R.submissions("{target_id}"),
-        R.queue("{target_id}"),
-        R.queue_ticket("{target_id}", "{ticket}"),
-        R.watches("{target_id}"),
-        R.watch_job("{target_id}", "{job_id}"),
+        R.submissions("{ws}"),
+        R.queue("{ws}"),
+        R.queue_ticket("{ws}", "{ticket}"),
+        R.watches("{ws}"),
+        R.watch_job("{ws}", "{job_id}"),
         R.events(),
     }
     assert required <= paths, required - paths
@@ -223,12 +223,15 @@ def test_the_client_builds_urls_from_the_shared_route_table():
 
 
 def test_remote_and_inprocess_expose_the_same_backend_attributes():
-    """A frontend must not have to ask which transport it received."""
+    """A frontend must not have to ask which transport it received.
+
+    ``target`` is deliberately absent: the client holds only a workspace name,
+    and the resolved target exists exclusively on the server side.
+    """
     from azure_jobs.client.connection import DaemonBackend
     from azure_jobs.server.backend import AzureBackend
 
     expected = {
-        "target",
         "jobs",
         "actions",
         "delete_jobs",
@@ -318,6 +321,68 @@ def test_cli_does_not_construct_azure_clients():
         for needle in ("AzureARMClient(", "create_rest_client(", "AzureMLClient("):
             if needle in source:
                 offenders.append(f"{path.name}: {needle}")
+    assert offenders == [], offenders
+
+
+#: ``az login``/``az logout`` need a terminal the daemon does not have, so the
+#: client owns them. Nothing else may reach for the Azure CLI.
+AZ_EXEMPT = {"auth.py"}
+
+
+def test_the_client_never_acquires_an_azure_token():
+    """`azure.identity` shells out to ``az`` too, so it is server-only.
+
+    Not covered by the CLI exemption: only spawning ``az login`` needs a
+    terminal, and acquiring a token does not.
+    """
+    offenders = []
+    for path in CLIENT.rglob("*.py"):
+        for name in _imports(path):
+            if name == "azure.identity" or name.startswith("azure.identity."):
+                offenders.append(f"{path.relative_to(CLIENT)}: {name}")
+    assert offenders == [], offenders
+
+
+def test_the_client_never_runs_the_azure_cli():
+    """Discovery belongs to the daemon; the client asks it by workspace name.
+
+    Without this, a command can quietly re-acquire its own ``az`` dependency
+    and the daemon stops being the single execution path.
+    """
+    forbidden = (
+        "azure_jobs.server.discovery",
+        "azure_jobs.shared.config.az_cli",
+    )
+    offenders = []
+    for path in CLIENT.rglob("*.py"):
+        if path.name in AZ_EXEMPT:
+            continue
+        for name in _imports(path):
+            if any(name == f or name.startswith(f + ".") for f in forbidden):
+                offenders.append(f"{path.relative_to(CLIENT)}: {name}")
+    assert offenders == [], offenders
+
+
+def test_the_client_does_not_shell_out_to_az():
+    """Catch a hand-rolled subprocess call that skips the import guard."""
+    offenders = []
+    for path in CLIENT.rglob("*.py"):
+        if path.name in AZ_EXEMPT:
+            continue
+        source = path.read_text(encoding="utf-8")
+        for needle in ('"az"', "'az'", "find_az(", "az_json("):
+            if needle in source:
+                offenders.append(f"{path.relative_to(CLIENT)}: {needle}")
+    assert offenders == [], offenders
+
+
+def test_workspace_resolution_is_server_side_only():
+    """``resolve_workspace`` runs ``az``; only the daemon may call it."""
+    offenders = []
+    for path in CLIENT.rglob("*.py"):
+        source = path.read_text(encoding="utf-8")
+        if "resolve_workspace" in source or "detect_subscription(" in source:
+            offenders.append(str(path.relative_to(CLIENT)))
     assert offenders == [], offenders
 
 

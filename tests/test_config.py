@@ -1,13 +1,14 @@
 import json
 
+from azure_jobs.client.discovery import (
+    get_workspace_config,
+    pick_workspace,
+)
+from azure_jobs.server.discovery import detect_subscription, detect_workspaces
 from azure_jobs.shared.config import (
     AJConfig,
     AJWorkspace,
-    detect_subscription,
-    detect_workspaces,
     get_defaults,
-    get_workspace_config,
-    pick_workspace,
     read_config,
     save_defaults,
     write_config,
@@ -96,14 +97,14 @@ class TestDetectSubscription:
                 stderr="",
             )
 
-        monkeypatch.setattr("azure_jobs.shared.config.az_cli.subprocess.run", mock_run)
+        monkeypatch.setattr("azure_jobs.server.discovery.az_cli.subprocess.run", mock_run)
         info = detect_subscription()
         assert info["subscription_id"] == "sub-abc"
         assert info["subscription_name"] == "My Sub"
 
     def test_returns_none_when_az_missing(self, monkeypatch):
         monkeypatch.setattr(
-            "azure_jobs.shared.config.az_cli.subprocess.run",
+            "azure_jobs.server.discovery.az_cli.subprocess.run",
             lambda *a, **kw: (_ for _ in ()).throw(FileNotFoundError("no az")),
         )
         assert detect_subscription() is None
@@ -126,7 +127,7 @@ class TestDetectWorkspaces:
                 stderr="",
             )
 
-        monkeypatch.setattr("azure_jobs.shared.config.az_cli.subprocess.run", mock_run)
+        monkeypatch.setattr("azure_jobs.server.discovery.az_cli.subprocess.run", mock_run)
         result = detect_workspaces("sub-123")
         assert len(result) == 2
         assert result[0] == {
@@ -137,7 +138,7 @@ class TestDetectWorkspaces:
 
     def test_returns_empty_on_failure(self, monkeypatch):
         monkeypatch.setattr(
-            "azure_jobs.shared.config.az_cli.subprocess.run",
+            "azure_jobs.server.discovery.az_cli.subprocess.run",
             lambda *a, **kw: (_ for _ in ()).throw(FileNotFoundError()),
         )
         assert detect_workspaces("sub-123") == []
@@ -176,38 +177,24 @@ class TestGetWorkspaceConfig:
         assert result.workspace_name == "ws-test"
 
     def test_full_auto_detect_flow(self, aj_config, monkeypatch):
-        """subscription + workspace all auto-detected."""
-        import subprocess as sp
-
-        call_count = {"n": 0}
-
-        def mock_run(cmd, **kw):
-            call_count["n"] += 1
-            if "account" in cmd:
-                return sp.CompletedProcess(
-                    args=cmd,
-                    returncode=0,
-                    stdout=json.dumps({"id": "auto-sub", "name": "MySub"}),
-                    stderr="",
-                )
-            # az resource list
-            return sp.CompletedProcess(
-                args=cmd,
-                returncode=0,
-                stdout=json.dumps(
-                    [
-                        {
-                            "name": "FastAML",
-                            "resourceGroup": "eastus_2",
-                            "location": "eastus2",
-                        },
-                    ]
-                ),
-                stderr="",
-            )
-
-        monkeypatch.setattr("azure_jobs.shared.config.az_cli.subprocess.run", mock_run)
-        monkeypatch.setattr("azure_jobs.shared.config.prompts._prompt", lambda *a, **kw: 1)  # pick workspace #1
+        """subscription + workspace all come from the daemon."""
+        monkeypatch.setattr(
+            "azure_jobs.client.discovery.subscription",
+            lambda: {"subscription_id": "auto-sub", "subscription_name": "MySub"},
+        )
+        monkeypatch.setattr(
+            "azure_jobs.client.discovery.workspaces",
+            lambda sub="": [
+                {
+                    "name": "FastAML",
+                    "resource_group": "eastus_2",
+                    "location": "eastus2",
+                }
+            ],
+        )
+        monkeypatch.setattr(
+            "azure_jobs.shared.config.prompts._prompt", lambda *a, **kw: 1
+        )
         result = get_workspace_config()
         assert result.subscription_id == "auto-sub"
         assert result.resource_group == "eastus_2"
@@ -216,62 +203,50 @@ class TestGetWorkspaceConfig:
         assert saved["workspace"]["resource_group"] == "eastus_2"
 
     def test_manual_fallback_when_no_workspaces_found(self, aj_config, monkeypatch):
-        """Falls back to prompt when az resource list returns empty."""
-        import subprocess as sp
-
-        def mock_run(cmd, **kw):
-            if "account" in cmd:
-                return sp.CompletedProcess(
-                    args=cmd,
-                    returncode=0,
-                    stdout=json.dumps({"id": "sub-x", "name": "Sub"}),
-                    stderr="",
-                )
-            return sp.CompletedProcess(args=cmd, returncode=0, stdout="[]", stderr="")
-
-        monkeypatch.setattr("azure_jobs.shared.config.az_cli.subprocess.run", mock_run)
+        """Falls back to prompting when the daemon finds no workspaces."""
+        monkeypatch.setattr(
+            "azure_jobs.client.discovery.subscription",
+            lambda: {"subscription_id": "sub-x", "subscription_name": "Sub"},
+        )
+        monkeypatch.setattr(
+            "azure_jobs.client.discovery.workspaces", lambda sub="": []
+        )
         inputs = iter(["rg-manual", "ws-manual"])
-        monkeypatch.setattr("azure_jobs.shared.config.prompts._prompt", lambda *a, **kw: next(inputs))
+        monkeypatch.setattr(
+            "azure_jobs.shared.config.prompts._prompt", lambda *a, **kw: next(inputs)
+        )
         result = get_workspace_config()
         assert result.resource_group == "rg-manual"
         assert result.workspace_name == "ws-manual"
 
     def test_manual_entry_via_option_zero(self, aj_config, monkeypatch):
         """User selects '0' to enter manually instead of picking a workspace."""
-        import subprocess as sp
-
-        def mock_run(cmd, **kw):
-            if "account" in cmd:
-                return sp.CompletedProcess(
-                    args=cmd,
-                    returncode=0,
-                    stdout=json.dumps({"id": "sub-y", "name": "Sub"}),
-                    stderr="",
-                )
-            return sp.CompletedProcess(
-                args=cmd,
-                returncode=0,
-                stdout=json.dumps(
-                    [{"name": "W", "resourceGroup": "R", "location": "l"}]
-                ),
-                stderr="",
-            )
-
-        monkeypatch.setattr("azure_jobs.shared.config.az_cli.subprocess.run", mock_run)
+        monkeypatch.setattr(
+            "azure_jobs.client.discovery.subscription",
+            lambda: {"subscription_id": "sub-y", "subscription_name": "Sub"},
+        )
+        monkeypatch.setattr(
+            "azure_jobs.client.discovery.workspaces",
+            lambda sub="": [{"name": "W", "resource_group": "R", "location": "l"}],
+        )
         inputs = iter([0, "my-rg", "my-ws"])
-        monkeypatch.setattr("azure_jobs.shared.config.prompts._prompt", lambda *a, **kw: next(inputs))
+        monkeypatch.setattr(
+            "azure_jobs.shared.config.prompts._prompt", lambda *a, **kw: next(inputs)
+        )
         result = get_workspace_config()
         assert result.resource_group == "my-rg"
         assert result.workspace_name == "my-ws"
 
-    def test_prompts_subscription_when_az_fails(self, aj_config, monkeypatch):
-        """Falls back to prompt if az CLI is not available."""
+    def test_prompts_subscription_when_detection_fails(self, aj_config, monkeypatch):
+        """Falls back to prompting when the daemon cannot detect a login."""
+        monkeypatch.setattr("azure_jobs.client.discovery.subscription", lambda: None)
         monkeypatch.setattr(
-            "azure_jobs.shared.config.az_cli.subprocess.run",
-            lambda *a, **kw: (_ for _ in ()).throw(FileNotFoundError("no az")),
+            "azure_jobs.client.discovery.workspaces", lambda sub="": []
         )
         inputs = iter(["manual-sub", "rg-prod", ""])
-        monkeypatch.setattr("azure_jobs.shared.config.prompts._prompt", lambda *a, **kw: next(inputs))
+        monkeypatch.setattr(
+            "azure_jobs.shared.config.prompts._prompt", lambda *a, **kw: next(inputs)
+        )
         result = get_workspace_config()
         assert result.subscription_id == "manual-sub"
         assert result.resource_group == "rg-prod"

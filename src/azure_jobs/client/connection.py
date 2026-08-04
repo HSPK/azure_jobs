@@ -181,10 +181,18 @@ class DaemonClient:
         if isinstance(payload, dict) and payload.get("error"):
             raise error_from_json(payload["error"])
         detail = str(payload.get("detail") or "") if isinstance(payload, dict) else ""
-        raise TransportError(
-            f"{method} {url} returned {response.status_code}"
-            + (f": {detail}" if detail else "")
+        message = f"{method} {url} returned {response.status_code}" + (
+            f": {detail}" if detail else ""
         )
+        if response.status_code == 404 and url.startswith(R.API_V1):
+            # A route this build knows about is missing, so the daemon is
+            # almost certainly an older process that predates it. Say so:
+            # a bare 404 sends people looking for a missing job instead.
+            message += (
+                "\n  The running daemon does not serve this route; it is "
+                "probably an older build.\n  Restart it with: aj daemon restart"
+            )
+        raise TransportError(message)
 
     def get(self, url: str, **kwargs: Any) -> Any:
         return self.request("GET", url, **kwargs)
@@ -297,9 +305,9 @@ class DaemonClient:
 
 
 class RemoteJobs:
-    def __init__(self, client: DaemonClient, target_id: str) -> None:
+    def __init__(self, client: DaemonClient, ws: str) -> None:
         self._c = client
-        self._t = target_id
+        self._t = ws
 
     def list_page(
         self, cursor: Cursor | None, *, limit: int, query: JobQuerySpec
@@ -361,10 +369,10 @@ class RemoteLogReader:
     """
 
     def __init__(
-        self, client: DaemonClient, target_id: str, job: JobRef, path: str
+        self, client: DaemonClient, ws: str, job: JobRef, path: str
     ) -> None:
         self._c = client
-        self._t = target_id
+        self._t = ws
         self._job = job
         self._path = path
 
@@ -396,9 +404,9 @@ class RemoteLogReader:
 
 
 class RemoteLogs:
-    def __init__(self, client: DaemonClient, target_id: str) -> None:
+    def __init__(self, client: DaemonClient, ws: str) -> None:
         self._c = client
-        self._t = target_id
+        self._t = ws
 
     def list_files(self, job: JobRef, *, cancelled: Cancelled = None) -> list[str]:
         return list(
@@ -427,9 +435,9 @@ class RemoteLogs:
 
 
 class RemoteCatalog:
-    def __init__(self, client: DaemonClient, target_id: str) -> None:
+    def __init__(self, client: DaemonClient, ws: str) -> None:
         self._c = client
-        self._t = target_id
+        self._t = ws
 
     def _items(self, kind: str) -> list[CatalogItem]:
         return [
@@ -541,9 +549,9 @@ class RemoteAccount:
 
 
 class RemoteSubmitter:
-    def __init__(self, client: DaemonClient, target_id: str) -> None:
+    def __init__(self, client: DaemonClient, ws: str) -> None:
         self._c = client
-        self._t = target_id
+        self._t = ws
 
     def submit(self, payload: dict, *, on_event: EventSink = None) -> SubmitOutcome:
         body: dict[str, Any] = {"payload": payload}
@@ -569,9 +577,9 @@ class RemoteSubmitter:
 
 
 class RemoteQueue:
-    def __init__(self, client: DaemonClient, target_id: str) -> None:
+    def __init__(self, client: DaemonClient, ws: str) -> None:
         self._c = client
-        self._t = target_id
+        self._t = ws
 
     def enqueue(self, payload: dict, *, name: str = "") -> QueuedJob:
         return QueuedJob.from_json(
@@ -596,9 +604,9 @@ class RemoteQueue:
 
 
 class RemoteWatcher:
-    def __init__(self, client: DaemonClient, target_id: str) -> None:
+    def __init__(self, client: DaemonClient, ws: str) -> None:
         self._c = client
-        self._t = target_id
+        self._t = ws
 
     def subscribe(self, sink: NotificationSink) -> Callable[[], None]:
         return self._c.subscribe(sink)
@@ -616,23 +624,25 @@ class RemoteWatcher:
 
 
 class DaemonBackend:
-    """Capability facade whose work happens in the daemon."""
+    """Capability facade whose work happens in the daemon.
 
-    def __init__(self, client: DaemonClient, target: Target) -> None:
+    Addressed by workspace *name*: resolving a name to a subscription and
+    resource group means running ``az``, which the client must never do.
+    """
+
+    def __init__(self, client: DaemonClient, ws: str = "") -> None:
         self._client = client
-        self.target = target
-        jobs = RemoteJobs(client, target.id)
+        self.workspace = ws or R.DEFAULT_WORKSPACE
+        jobs = RemoteJobs(client, self.workspace)
         self.jobs = jobs
         self.actions = jobs
         self.delete_jobs = jobs
-        self.logs = RemoteLogs(client, target.id)
-        self.catalog = RemoteCatalog(client, target.id)
-        self.account = RemoteAccount(
-            client, str(target.metadata.get("subscription_id") or "")
-        )
-        self.submitter = RemoteSubmitter(client, target.id)
-        self.queue = RemoteQueue(client, target.id)
-        self.watcher = RemoteWatcher(client, target.id)
+        self.logs = RemoteLogs(client, self.workspace)
+        self.catalog = RemoteCatalog(client, self.workspace)
+        self.account = RemoteAccount(client)
+        self.submitter = RemoteSubmitter(client, self.workspace)
+        self.queue = RemoteQueue(client, self.workspace)
+        self.watcher = RemoteWatcher(client, self.workspace)
 
     def close(self) -> None:
         self._client.close()
@@ -687,7 +697,8 @@ def _check_version(info: Mapping[str, Any]) -> None:
     """Negotiate a range, as Docker does, so an upgrade is not a restart."""
     server_max = int(info.get("api_version") or 0)
     server_min = int(info.get("min_api_version") or server_max)
-    if server_min <= R.API_VERSION or server_max >= R.MIN_API_VERSION:
+    # Ranges overlap only if *both* hold; `or` would accept anything.
+    if server_min <= R.API_VERSION and server_max >= R.MIN_API_VERSION:
         return
     raise DaemonUnavailable(
         f"Daemon speaks API {server_min}..{server_max}; this build speaks "
@@ -696,13 +707,17 @@ def _check_version(info: Mapping[str, Any]) -> None:
 
 
 def connect_daemon(
-    target: Target,
+    ws: str = "",
     *,
     root: Path | None = None,
     path: Path | None = None,
     autostart: bool = True,
 ) -> DaemonBackend:
-    """Open a daemon-backed backend, starting the daemon if needed."""
+    """Open a backend for a workspace *name*, starting the daemon if needed.
+
+    Only the name travels: the daemon resolves it against local config and
+    ``az`` discovery, so no Azure command runs on this side.
+    """
     from azure_jobs.shared import const
 
     sock_path = path or socket_path()
@@ -716,37 +731,34 @@ def connect_daemon(
     client = DaemonClient(sock_path, project_root)
     try:
         _check_version(client.get(R.info()))
-        registered = Target.from_json(
-            client.put(R.target(target.id), json=target.to_json())
-        )
     except BaseException:
         client.close()
         raise
-    return DaemonBackend(client, registered)
+    return DaemonBackend(client, ws)
 
 
 def open_backend(
-    target: Target,
+    ws: str = "",
     *,
     root: Path | None = None,
     path: Path | None = None,
     autostart: bool = True,
     resilient: bool = True,
 ) -> Any:
-    """Return a backend for *target*.
+    """Return a backend for a workspace *name* (empty = the configured one).
 
     The daemon is the only execution path; there is deliberately no in-process
     mode. If it cannot be reached, this raises with the steps to recover.
     """
     try:
-        remote = connect_daemon(target, root=root, path=path, autostart=autostart)
+        remote = connect_daemon(ws, root=root, path=path, autostart=autostart)
     except Exception as exc:
         raise daemon_required(exc) from exc
     if not resilient:
         return remote
     from azure_jobs.client.resilient import ResilientBackend
 
-    return ResilientBackend(target, remote)
+    return ResilientBackend(remote.workspace, remote)
 
 
 class BackendSessionFactory:
@@ -757,12 +769,51 @@ class BackendSessionFactory:
         self._path = path
 
     def open(self, target: Target) -> Any:
-        return open_backend(target, root=self._root, path=self._path)
+        # The dashboard picks a target from the daemon's own list, so its label
+        # is the workspace name the daemon will resolve again.
+        return open_backend(target.label, root=self._root, path=self._path)
+
+
+class RemoteTargetCatalog:
+    """Workspace discovery, performed by the daemon.
+
+    The client used to shell out to ``az`` here; asking the daemon keeps every
+    Azure call on one side.
+    """
+
+    def __init__(self, *, root: Path | None = None, path: Path | None = None) -> None:
+        self._root = root
+        self._path = path
+
+    def _client(self) -> DaemonClient:
+        from azure_jobs.shared import const
+
+        sock_path = self._path or socket_path()
+        if not _reachable(sock_path):
+            spawn_daemon(sock_path)
+        return DaemonClient(sock_path, Path(self._root or const.AJ_HOME).resolve())
+
+    def configured(self) -> Target | None:
+        client = self._client()
+        try:
+            payload = client.get(R.current_workspace())
+        finally:
+            client.close()
+        return Target.from_json(payload) if payload else None
+
+    def discover(self) -> tuple[Target, ...]:
+        client = self._client()
+        try:
+            rows = client.get(R.workspaces()) or ()
+        finally:
+            client.close()
+        return tuple(Target.from_json(row) for row in rows)
 
 
 __all__ = [
     "BASE_URL",
     "BackendSessionFactory",
+    "RemoteTargetCatalog",
     "DaemonBackend",
     "DaemonClient",
     "RemoteAccount",

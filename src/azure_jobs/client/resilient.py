@@ -17,7 +17,6 @@ import threading
 from typing import Any, Callable
 
 from azure_jobs.shared.contract.errors import DaemonUnavailable, TransportError
-from azure_jobs.shared.contract.models import Target
 
 log = logging.getLogger(__name__)
 
@@ -31,13 +30,13 @@ class ResilientBackend:
 
     def __init__(
         self,
-        target: Target,
+        ws: str,
         remote: Any,
         reconnect: Callable[[], Any] | None = None,
     ) -> None:
-        self.target = target
+        self.workspace = ws
         self._remote = remote
-        self._reconnect = reconnect or (lambda: _reconnect(target))
+        self._reconnect = reconnect or (lambda: _reconnect(ws))
         self._lock = threading.Lock()
         self._generation = 0
 
@@ -161,10 +160,12 @@ class _Port:
         return call
 
 
-def _reconnect(target: Target) -> Any:
+def _reconnect(ws: str) -> Any:
     from azure_jobs.client.connection import connect_daemon
 
-    return connect_daemon(target)
+    # Only the name is kept, so a restarted daemon resolves the workspace
+    # again and rebuilds the context from scratch.
+    return connect_daemon(ws)
 
 
 __all__ = ["TRANSPORT_FAILURES", "ResilientBackend"]
