@@ -11,6 +11,7 @@ import json
 import logging
 import socket
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, Iterator, Mapping
 
 from azure_jobs.shared.contract.errors import TransportError, error_from_json, error_to_json
@@ -140,23 +141,83 @@ class FrameWriter:
                 ) from exc
 
 
+#: Requests handled at once on a single connection. The protocol has always
+#: multiplexed — every request carries an id and the writer is lock-protected —
+#: but handling them serially meant one slow call (a delete polling an LRO for
+#: two minutes, or a submission uploading code) froze everything else the client
+#: had in flight on that socket.
+MAX_CONCURRENT_REQUESTS = 8
+
+
+def _respond(
+    writer: FrameWriter,
+    handler: Callable[[str, Mapping[str, Any]], Any],
+    req_id: Any,
+    method: str,
+    params: Mapping[str, Any],
+) -> None:
+    """Run one request and write its reply. Never raises to the caller."""
+    try:
+        value = handler(method, params)
+    except BaseException as exc:  # noqa: BLE001 - reported to the peer
+        if req_id is not None:
+            try:
+                writer.send(error(req_id, exc))
+            except TransportError:
+                pass
+        return
+    if req_id is None:
+        return
+    try:
+        frame = result(req_id, value)
+    except Exception as exc:  # noqa: BLE001 - a payload bug, not an outage
+        # Encoded here rather than inside writer.send so an unserialisable
+        # result fails one call instead of killing every session on the socket.
+        log.exception("Could not encode the result of %r", method)
+        try:
+            writer.send(
+                error(
+                    req_id,
+                    TypeError(
+                        f"Daemon could not encode the result of {method!r} "
+                        f"({type(exc).__name__}: {exc})"
+                    ),
+                )
+            )
+        except TransportError:
+            pass
+        return
+    try:
+        writer.send(frame)
+    except TransportError:
+        pass
+
+
 def serve_connection(
     sock: socket.socket,
     handler: Callable[[str, Mapping[str, Any]], Any],
     *,
     on_ready: Callable[[FrameWriter], None] | None = None,
     on_close: Callable[[], None] | None = None,
+    max_concurrency: int = MAX_CONCURRENT_REQUESTS,
 ) -> None:
-    """Read requests from *sock*, dispatch to *handler*, write responses.
+    """Read requests from *sock*, dispatch them concurrently, write responses.
 
-    ``handler`` runs on this connection's thread. Errors are converted to
-    JSON-RPC error responses rather than killing the connection, so one bad
-    call cannot take a client's whole session down.
+    Each request runs on a worker so a slow one cannot block the rest of the
+    connection. Ordering between dependent calls is the client's to keep — it
+    already waits for a reply before issuing the next dependent request.
+
+    Errors become JSON-RPC error frames rather than killing the connection, so
+    one bad call cannot take a client's whole session down.
     """
     writer = FrameWriter(sock)
     reader = FrameReader(sock)
     if on_ready is not None:
         on_ready(writer)
+    pool = ThreadPoolExecutor(
+        max_workers=max(1, max_concurrency),
+        thread_name_prefix="aj-req",
+    )
     try:
         while True:
             try:
@@ -170,52 +231,25 @@ def serve_connection(
             params = message.get("params") or {}
             if not method:
                 if req_id is not None:
-                    writer.send(
-                        error(
-                            req_id,
-                            TransportError("Request is missing a method"),
-                            code=INVALID_REQUEST,
-                        )
-                    )
-                continue
-            try:
-                value = handler(method, params)
-            except BaseException as exc:  # noqa: BLE001 - reported to the peer
-                if req_id is not None:
                     try:
-                        writer.send(error(req_id, exc))
+                        writer.send(
+                            error(
+                                req_id,
+                                TransportError("Request is missing a method"),
+                                code=INVALID_REQUEST,
+                            )
+                        )
                     except TransportError:
                         return
-                if isinstance(exc, (KeyboardInterrupt, SystemExit)):
-                    raise
-                continue
-            if req_id is None:
                 continue
             try:
-                frame = result(req_id, value)
-            except Exception as exc:  # noqa: BLE001 - a payload bug, not an outage
-                # Encoding happens here rather than inside writer.send so an
-                # unserialisable result fails one call instead of unwinding
-                # serve_connection and killing every session on this socket.
-                log.exception("Could not encode the result of %r", method)
-                try:
-                    writer.send(
-                        error(
-                            req_id,
-                            TypeError(
-                                f"Daemon could not encode the result of "
-                                f"{method!r} ({type(exc).__name__}: {exc})"
-                            ),
-                        )
-                    )
-                except TransportError:
-                    return
-                continue
-            try:
-                writer.send(frame)
-            except TransportError:
-                return
+                pool.submit(_respond, writer, handler, req_id, method, params)
+            except RuntimeError:
+                return  # pool shutting down
     finally:
+        # In-flight requests may still hold resources this connection owns
+        # (log readers, session tokens), so they must finish before cleanup.
+        pool.shutdown(wait=True)
         if on_close is not None:
             on_close()
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import os
+import select
 import socket
 import struct
 import threading
@@ -201,6 +202,10 @@ class Daemon:
         self._connections = 0
         self._idle_since = time.time()
         self._socket_inode: int | None = None
+        self._wake_r: socket.socket | None = None
+        self._wake_w: socket.socket | None = None
+        self._shutdown_lock = threading.Lock()
+        self._shutdown_done = threading.Event()
         self.started_at = time.time()
 
     # ── lifecycle ────────────────────────────────────────────────────────
@@ -221,8 +226,11 @@ class Daemon:
         server.bind(str(self.socket_path))
         os.chmod(self.socket_path, 0o600)
         server.listen(64)
-        server.settimeout(0.5)
+        server.setblocking(True)
         self._server = server
+        # A socketpair lets shutdown() wake the accept loop immediately instead
+        # of polling a timeout twice a second for the daemon's whole lifetime.
+        self._wake_r, self._wake_w = socket.socketpair()
         try:
             # Remembered so shutdown never unlinks a successor's socket.
             self._socket_inode = os.stat(self.socket_path).st_ino
@@ -237,8 +245,21 @@ class Daemon:
         reaper.start()
         try:
             while not self._stopping.is_set():
+                # Captured once: shutdown() clears the attributes, and reading
+                # them again mid-loop would race with it.
+                server, waker = self._server, self._wake_r
+                if server is None or waker is None:
+                    break
                 try:
-                    conn, _addr = self._server.accept()
+                    ready, _, _ = select.select([server, waker], [], [])
+                except OSError:
+                    if self._stopping.is_set():
+                        break
+                    raise
+                if waker in ready:
+                    break
+                try:
+                    conn, _addr = server.accept()
                 except (TimeoutError, socket.timeout):
                     continue
                 except OSError:
@@ -289,9 +310,26 @@ class Daemon:
         self._threads = [t for t in self._threads if t.is_alive()]
 
     def shutdown(self) -> None:
-        if self._stopping.is_set():
-            return
-        self._stopping.set()
+        """Stop serving and release everything. Safe to call more than once.
+
+        A second caller waits for the first to finish rather than returning
+        early: retire runs this on a background thread, and the accept loop
+        exits as soon as it is woken, so returning early would let the process
+        exit before the socket file was unlinked.
+        """
+        with self._shutdown_lock:
+            if self._shutdown_done.is_set():
+                return
+            self._stopping.set()
+            self._shutdown()
+            self._shutdown_done.set()
+
+    def _shutdown(self) -> None:
+        if self._wake_w is not None:
+            try:
+                self._wake_w.send(b"\0")
+            except OSError:
+                pass
         server, self._server = self._server, None
         if server is not None:
             try:
@@ -306,6 +344,13 @@ class Daemon:
             self._account_touched.clear()
         for session in sessions:
             session.close()
+        for waker in (self._wake_r, self._wake_w):
+            if waker is not None:
+                try:
+                    waker.close()
+                except OSError:
+                    pass
+        self._wake_r = self._wake_w = None
         try:
             # Only remove the socket if it is still the one we bound: a
             # replacement daemon may already own this path.

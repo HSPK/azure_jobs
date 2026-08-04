@@ -256,3 +256,139 @@ def _drain(daemon, timeout: float = 5.0) -> None:
     deadline = time.time() + timeout
     while time.time() < deadline and daemon.outstanding():
         time.sleep(0.02)
+
+
+class TestRequestsAreMultiplexed:
+    """A slow call must not freeze everything else on the same connection.
+
+    The protocol always allowed this — requests carry ids and the writer is
+    lock-protected — but the server used to run handlers inline on the read
+    loop, so the dashboard's whole worker pool serialised behind, say, a delete
+    polling a long-running operation for two minutes.
+    """
+
+    def _slow_daemon(self, local_daemon, seconds=1.0):
+        from azure_jobs.server import daemon as daemon_mod
+
+        daemon_mod._METHODS["daemon.slow"] = lambda d, p, c: (
+            time.sleep(seconds),
+            {"ok": True},
+        )[1]
+        return local_daemon
+
+    def teardown_method(self):
+        from azure_jobs.server import daemon as daemon_mod
+
+        daemon_mod._METHODS.pop("daemon.slow", None)
+
+    def test_a_slow_call_does_not_block_the_connection(self, local_daemon):
+        from azure_jobs.client.connection import RpcConnection, _connect_socket
+
+        daemon = self._slow_daemon(local_daemon, seconds=1.0)
+        conn = RpcConnection(_connect_socket(daemon.socket_path))
+        waited: dict[str, float] = {}
+
+        def slow():
+            conn.call("daemon.slow", {})
+
+        def fast():
+            time.sleep(0.2)
+            started = time.time()
+            conn.call("daemon.ping", {})
+            waited["fast"] = time.time() - started
+
+        threads = [threading.Thread(target=slow), threading.Thread(target=fast)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=15)
+        conn.close()
+        assert waited["fast"] < 0.5, f"ping waited {waited['fast']:.2f}s"
+
+    def test_concurrent_requests_all_get_their_own_reply(self, local_daemon):
+        from azure_jobs.client.connection import RpcConnection, _connect_socket
+
+        conn = RpcConnection(_connect_socket(local_daemon.socket_path))
+        results: list = []
+        errors: list = []
+
+        def call(index: int) -> None:
+            try:
+                results.append(conn.call("daemon.info", {})["pid"])
+            except BaseException as exc:
+                errors.append(exc)
+
+        threads = [threading.Thread(target=call, args=(i,)) for i in range(24)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=15)
+        conn.close()
+        assert not errors
+        assert len(results) == 24
+        assert len(set(results)) == 1
+
+    def test_in_flight_requests_finish_before_the_connection_cleans_up(
+        self, local_daemon
+    ):
+        """Handlers hold log readers and session tokens; cleanup must wait."""
+        import inspect
+
+        from azure_jobs.shared.contract import rpc
+
+        source = inspect.getsource(rpc.serve_connection)
+        assert "pool.shutdown(wait=True)" in source
+        assert source.index("pool.shutdown(wait=True)") < source.index("on_close()")
+
+
+class TestShutdownIsAtomic:
+    """Retire runs shutdown on a background thread the process may outlive."""
+
+    def test_a_second_caller_waits_for_the_first(self, tmp_path):
+        from azure_jobs.server.daemon import Daemon
+
+        from .api_fakes import FakeFactory, FakeTargetCatalog
+
+        runtime = tmp_path / "rt"
+        runtime.mkdir(mode=0o700)
+        daemon = Daemon(
+            runtime / "d.sock",
+            backend_factory=FakeFactory(),
+            target_catalog=FakeTargetCatalog(),
+        )
+        daemon.bind()
+        assert daemon.socket_path.exists()
+
+        done: list[str] = []
+
+        def stop(tag: str) -> None:
+            daemon.shutdown()
+            done.append(tag)
+
+        threads = [
+            threading.Thread(target=stop, args=(str(i),)) for i in range(4)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=10)
+
+        assert len(done) == 4
+        # Every caller observed a *finished* shutdown, not one in progress.
+        assert not daemon.socket_path.exists()
+
+    def test_shutdown_removes_the_socket_before_returning(self, tmp_path):
+        from azure_jobs.server.daemon import Daemon
+
+        from .api_fakes import FakeFactory, FakeTargetCatalog
+
+        runtime = tmp_path / "rt"
+        runtime.mkdir(mode=0o700)
+        daemon = Daemon(
+            runtime / "d.sock",
+            backend_factory=FakeFactory(),
+            target_catalog=FakeTargetCatalog(),
+        )
+        daemon.bind()
+        daemon.shutdown()
+        assert not daemon.socket_path.exists()
