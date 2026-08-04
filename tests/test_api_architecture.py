@@ -309,12 +309,13 @@ def test_the_sdk_covers_every_capability_the_server_offers():
 
 
 def test_the_root_shorthands_reach_the_configured_workspace():
-    """`d.job` and `d.ws(name).job` must be the same namespace, not a copy."""
+    """`d.job`, `d.workspace.job` and `d.ws().job` must be one namespace."""
     from azure_jobs.client.sdk import AjClient
 
     client = AjClient(object())
     for name in ("job", "log", "ds", "env", "queue", "watch"):
         assert getattr(client, name) is getattr(client.workspace, name)
+        assert getattr(client, name) is getattr(client.ws(), name)
 
 
 def test_sdk_ports_satisfy_the_runtime_protocols():

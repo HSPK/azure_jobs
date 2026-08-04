@@ -115,7 +115,19 @@ class WorkspaceNamespace(Namespace):
     lookup: ``d.ws.list()`` enumerates, ``d.ws(name)`` narrows.
     """
 
+    def __init__(self, client: "DaemonClient", default: WorkspaceClient) -> None:
+        super().__init__(client)
+        self._default = default
+
     def __call__(self, ws_name: str = "") -> WorkspaceClient:
+        """Scope to *ws_name*; no name means the one the root already uses.
+
+        Returns the *same* object the root shorthands delegate to, so
+        ``d.ws().job is d.job``. Building a fresh one would quietly discard an
+        explicitly pinned workspace and scope to the configured one instead.
+        """
+        if not ws_name or ws_name == self._default.name:
+            return self._default
         return WorkspaceClient(self._c, ws_name)
 
     def list(self, *, subscription_id: str = "") -> list[Target]:

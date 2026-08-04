@@ -69,6 +69,18 @@ class TestScoping:
         assert isinstance(scoped, WorkspaceClient)
         assert scoped._c is transport
 
+    def test_scoping_to_nothing_returns_the_root_workspace(self, transport):
+        """`d.ws()` must not quietly discard an explicitly pinned workspace."""
+        d = AjClient(transport, workspace="pinned")
+        assert d.ws() is d.workspace
+        assert d.ws().job is d.job
+        assert d.ws().name == "pinned"
+
+    def test_naming_the_current_workspace_reuses_it(self, transport):
+        d = AjClient(transport, workspace="pinned")
+        assert d.ws("pinned") is d.workspace
+        assert d.ws("other") is not d.workspace
+
     def test_root_namespaces_are_the_configured_workspace_namespaces(
         self, transport
     ):

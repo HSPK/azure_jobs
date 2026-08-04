@@ -64,7 +64,6 @@ class AjClient:
         # Subscription-scoped: usable before any workspace is configured.
         self.auth = AuthNamespace(transport)
         self.subscription = SubscriptionNamespace(transport)
-        self.ws = WorkspaceNamespace(transport)
         self.sku = SkuNamespace(transport)
         self.sa = StorageAccountNamespace(transport)
         self.uai = IdentityNamespace(transport)
@@ -76,6 +75,7 @@ class AjClient:
         # so `d.job` is the same object every time, which callers rely on when
         # they hold a namespace across calls.
         self._workspace = WorkspaceClient(transport, workspace)
+        self.ws = WorkspaceNamespace(transport, self._workspace)
 
     @property
     def workspace(self) -> WorkspaceClient:
