@@ -17,12 +17,12 @@ def fetch_jobs_with_progress(
     cutoff_days: int = 0,
 ) -> list[dict[str, Any]]:
     """Single-workspace fetch wrapped with a Rich progress spinner."""
-    from azure_jobs.client.cli._backend import backend
+    from azure_jobs.client.cli._backend import client
     from azure_jobs.client.ui import console
 
-    with backend(ws_name) as api:
+    with client(ws_name) as d:
         with console.status("[bold cyan]Fetching jobs…[/bold cyan]", spinner="dots"):
-            jobs = api.jobs.fetch(limit=n, cutoff_days=cutoff_days)
+            jobs = d.job.list(limit=n, cutoff_days=cutoff_days)
     return [job.to_dict() for job in jobs]
 
 
@@ -32,14 +32,14 @@ def fetch_jobs_all_ws_with_progress(
     cutoff_days: int = 0,
 ) -> list[dict[str, Any]]:
     """All-workspace fetch; inaccessible workspaces are reported, not fatal."""
-    from azure_jobs.client.cli._backend import account
+    from azure_jobs.client.cli._backend import client
     from azure_jobs.client.ui import console, warning
 
-    with account() as api:
+    with client() as d:
         with console.status(
             "[bold cyan]Fetching jobs across workspaces…[/bold cyan]", spinner="dots"
         ):
-            result = api.jobs_all_workspaces(
+            result = d.ws.jobs(
                 limit=n_per_ws, cutoff_days=cutoff_days
             )
 

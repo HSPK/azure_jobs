@@ -77,7 +77,7 @@ class LogsStream(Controller[LogsState]):
 
     @staticmethod
     def _logs_capability(session: object) -> "RangeLogSource":
-        logs = getattr(session, "logs", None)
+        logs = getattr(session, "log", None)
         if logs is None:
             raise RuntimeError("This backend does not provide range logs")
         return logs
@@ -113,7 +113,7 @@ class LogsStream(Controller[LogsState]):
         def initial(token: CancellationToken) -> StreamInitial:
             with handle.lease() as session:
                 logs = self._logs_capability(session)
-                files = logs.list_files(
+                files = logs.list(
                     job,
                     cancelled=lambda: token.cancelled,
                 )

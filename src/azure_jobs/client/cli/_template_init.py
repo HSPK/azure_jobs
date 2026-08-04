@@ -60,15 +60,15 @@ def _sanitise(name: str) -> str:
 
 
 def _pick_account() -> str:
-    from azure_jobs.client.cli._backend import account
+    from azure_jobs.client.cli._backend import client
     from azure_jobs.client.ui import console, dim, warning
 
     with console.status(
         "[bold cyan]Discovering managed identities…[/bold cyan]", spinner="dots"
     ):
         try:
-            with account() as api:
-                uais = api.identities()
+            with client() as d:
+                uais = d.uai.list()
         except click.ClickException:
             # An unreachable daemon already explains how to recover;
             # wrapping it again would bury the instructions.
@@ -166,15 +166,15 @@ def _pick_environment() -> tuple[str, str]:
 
 
 def _pick_storage() -> str:
-    from azure_jobs.client.cli._backend import account
+    from azure_jobs.client.cli._backend import client
     from azure_jobs.client.ui import console, dim, info, warning
 
     with console.status(
         "[bold cyan]Discovering storage accounts…[/bold cyan]", spinner="dots"
     ):
         try:
-            with account() as api:
-                sas = api.storage_accounts()
+            with client() as d:
+                sas = d.sa.list()
         except Exception as exc:
             log.exception("Could not list storage accounts")
             warning(
@@ -227,7 +227,7 @@ def _generate_leaves(
     workspace: dict[str, str],
     force: bool,
 ) -> list[dict[str, str]]:
-    from azure_jobs.client.cli._backend import account
+    from azure_jobs.client.cli._backend import client
     from azure_jobs.client.ui import console, error, warning
 
     with console.status(
@@ -235,8 +235,8 @@ def _generate_leaves(
         spinner="dots",
     ):
         try:
-            with account() as api:
-                vcs = api.vc_quota()
+            with client() as d:
+                vcs = d.quota.list()
         except Exception as exc:
             log.exception("Could not fetch VC quota")
             error(
@@ -296,15 +296,15 @@ def _generate_leaves(
 
 
 def _pick_workspace() -> dict[str, str]:
-    from azure_jobs.client.cli._backend import account
+    from azure_jobs.client.cli._backend import client
     from azure_jobs.client.ui import console, error
 
     with console.status(
         "[bold cyan]Discovering AML workspaces…[/bold cyan]", spinner="dots"
     ):
         try:
-            with account() as api:
-                workspaces = api.workspaces()
+            with client() as d:
+                workspaces = d.ws.list()
         except Exception as exc:
             log.exception("Could not discover workspaces")
             error(

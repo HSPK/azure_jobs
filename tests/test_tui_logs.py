@@ -312,12 +312,14 @@ def test_visual_line_split_preserves_multibyte_character(monkeypatch) -> None:
 
 
 class _Jobs:
+    can_act = True
+
     job = _job()
 
-    def list_page(self, cursor, *, limit, query):
+    def page(self, cursor, *, limit, query):
         return JobPage((self.job,), None)
 
-    def get(self, job):
+    def status(self, job):
         return self.job
 
     def cancel(self, job):
@@ -357,7 +359,7 @@ class _Logs:
         self.fail_tail = fail_tail
         self.readers: list[_Reader] = []
 
-    def list_files(self, job, *, cancelled=None):
+    def list(self, job, *, cancelled=None):
         return ["stdout.log"]
 
     def pick_default(self, files):
@@ -376,9 +378,8 @@ class _Logs:
 class _Session:
     def __init__(self, logs: _Logs) -> None:
         jobs = _Jobs()
-        self.jobs = jobs
-        self.actions = jobs
-        self.logs = logs
+        self.job = jobs
+        self.log = logs
 
     def close(self):
         return None
@@ -391,10 +392,10 @@ class _Catalog:
         label="Target",
     )
 
-    def configured(self):
+    def current(self):
         return self.target
 
-    def discover(self):
+    def list(self):
         return (self.target,)
 
 

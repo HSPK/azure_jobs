@@ -23,15 +23,15 @@ def uai_group() -> None:
 )
 def uai_list(full: bool) -> None:
     """List user-assigned managed identities across accessible subscriptions."""
-    from azure_jobs.client.cli._backend import account
+    from azure_jobs.client.cli._backend import client
     from azure_jobs.client.ui import console, error, get_output_mode, show_uai_table
 
     with console.status(
         "[bold cyan]Discovering managed identities…[/bold cyan]", spinner="dots"
     ):
         try:
-            with account() as api:
-                uais = api.identities()
+            with client() as d:
+                uais = d.uai.list()
         except click.ClickException:
             # An unreachable daemon already explains how to recover;
             # wrapping it again would bury the instructions.

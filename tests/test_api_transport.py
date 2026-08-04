@@ -18,7 +18,7 @@ import pytest
 from azure_jobs.client.connection import (
     DaemonClient,
     _reachable,
-    open_backend,
+    open_client,
     runtime_dir,
     secure_runtime_dir,
     socket_path,
@@ -178,7 +178,7 @@ class TestNoSilentDowngrade:
 
     def test_missing_daemon_raises_with_recovery_steps(self, tmp_path):
         with pytest.raises(DaemonUnavailable) as caught:
-            open_backend(
+            open_client(
                 "ws",
                 root=tmp_path,
                 path=tmp_path / "nothing.sock",
@@ -192,11 +192,11 @@ class TestNoSilentDowngrade:
         self, tmp_path, monkeypatch
     ):
         monkeypatch.setattr(
-            "azure_jobs.client.connection.connect_daemon",
+            "azure_jobs.client.connection.connect_transport",
             lambda *a, **k: (_ for _ in ()).throw(RuntimeError("wedged")),
         )
         with pytest.raises(DaemonUnavailable):
-            open_backend("ws", root=tmp_path)
+            open_client("ws", root=tmp_path)
 
     def test_there_is_no_in_process_escape_hatch(self):
         import inspect

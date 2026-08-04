@@ -133,27 +133,27 @@ class JobsDelete(Controller[JobsState]):
         def delete(token: CancellationToken) -> DeleteResult:
             token.check()
             with handle.lease() as session:
-                capability = getattr(session, "delete_jobs", None)
-                if capability is None:
+                jobs = session.job
+                if not jobs.can_act:
                     raise RuntimeError(
                         "This backend does not support job deletion"
                     )
-                actions = getattr(session, "actions", None)
-                if actions is not None:
-                    try:
-                        current = actions.get(job.ref)
-                    except RestError as exc:
-                        if exc.status_code == 404:
-                            return DeleteResult(job, already_absent=True)
-                        raise
-                    if (
-                        current.ref != job.ref
-                        or current.status not in TERMINAL_STATUSES
-                    ):
-                        raise RuntimeError(
-                            "Job was recreated or became active before deletion"
-                        )
-                capability.delete(
+                # Re-read before deleting: the row on screen may be stale, and
+                # deleting a job that has since restarted would destroy work.
+                try:
+                    current = jobs.status(job.ref)
+                except RestError as exc:
+                    if exc.status_code == 404:
+                        return DeleteResult(job, already_absent=True)
+                    raise
+                if (
+                    current.ref != job.ref
+                    or current.status not in TERMINAL_STATUSES
+                ):
+                    raise RuntimeError(
+                        "Job was recreated or became active before deletion"
+                    )
+                jobs.delete(
                     job.ref,
                     cancelled=lambda: token.cancelled,
                 )

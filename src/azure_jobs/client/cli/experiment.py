@@ -83,15 +83,15 @@ def exp_list(
 @click.option("--ws", "ws_name", default=None, help="Workspace name override")
 def exp_show(name: str, last: int, ws_name: str | None) -> None:
     """Show recent jobs for a specific experiment."""
-    from azure_jobs.client.cli._backend import backend
+    from azure_jobs.client.cli._backend import client
     from azure_jobs.client.ui import console, show_cloud_jobs_table, warning
 
-    with backend(ws_name) as api:
+    with client(ws_name) as d:
         with console.status(
             f"[bold cyan]Fetching jobs for '{name}'…[/bold cyan]",
             spinner="dots",
         ):
-            jobs = api.jobs.fetch(limit=last, experiment=name, max_scan=last * 20)
+            jobs = d.job.list(limit=last, experiment=name, max_scan=last * 20)
 
     matched = [job.to_dict() for job in jobs]
     if not matched:

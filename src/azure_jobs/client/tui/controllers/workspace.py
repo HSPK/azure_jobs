@@ -69,7 +69,7 @@ class WorkspaceController(Controller[WorkspaceState]):
 
     def start(self) -> None:
         try:
-            workspace = self._catalog.configured()
+            workspace = self._catalog.current()
         except Exception as exc:
             log.debug(
                 "Failed to read configured dashboard workspace",
@@ -115,7 +115,7 @@ class WorkspaceController(Controller[WorkspaceState]):
         )
 
     def _discover(self, token: CancellationToken) -> tuple[Target, ...]:
-        result = self._catalog.discover()
+        result = self._catalog.list()
         token.check()
         return result
 
@@ -186,9 +186,9 @@ class WorkspaceController(Controller[WorkspaceState]):
                 token.check()
             return _OpenedSession(
                 SessionHandle(session),
-                can_actions=session.actions is not None,
-                can_delete=getattr(session, "delete_jobs", None) is not None,
-                can_logs=session.logs is not None,
+                can_actions=session.job.can_act,
+                can_delete=session.job.can_act,
+                can_logs=session.log is not None,
             )
 
         self.tasks.run(

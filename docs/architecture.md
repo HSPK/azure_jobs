@@ -152,8 +152,9 @@ src/azure_jobs/
 │   ├── template/, config/, sku.py, journal.py, utils/
 │
 ├── client/          drives and renders — never imports server/
-│   ├── connection.py  httpx client over UDS, auto-spawn, reconnect
-│   ├── discovery.py   asks the daemon what exists in Azure
+│   ├── sdk/           resource namespaces: d.job, d.ws(name).ds, …
+│   ├── connection.py  httpx transport over UDS, auto-spawn, reconnect
+│   ├── discovery.py   interactive setup, fed by the daemon
 │   ├── resilient.py
 │   ├── cli/, tui/, ui/
 │
@@ -196,6 +197,55 @@ than in the CLI process, with progress streamed back as correlated
 `submit.progress` events — a callback cannot cross a socket, and dropping it
 would have made `aj run` less informative than before.
 
+## The client: one SDK, two frontends
+
+The CLI and the dashboard call the same object, organised as resource
+namespaces:
+
+```python
+from azure_jobs.client import connect
+
+with connect() as d:
+    d.auth.status()
+    d.sku.list()
+    d.job.list(limit=20)              # the configured workspace
+    d.ws("other").job.list(limit=20)  # a different one
+    d.ws("other").ds.list()
+```
+
+Namespaces mirror the CLI groups, so `aj ds list` and `d.ds.list()` are the
+same operation under two names rather than two implementations — the reason
+the dashboard and the CLI cannot drift apart. Anything scoped to a workspace
+is reachable both at the root (meaning "the configured workspace") and through
+`d.ws(name)`; `d.job` **is** `d.ws().job`, not a copy. Anything scoped only to
+a subscription (`d.sku`, `d.sa`, `d.uai`, `d.ws`) lives at the root alone,
+because there is no workspace to narrow it to — which is what lets `aj init`
+run before one is configured.
+
+`connection.py` holds only the transport. `sdk/` holds only what the requests
+mean. A namespace never builds a URL by hand: it calls the shared route table,
+so a path typo is an import error rather than a 404 at runtime.
+
+**Why the SDK is written rather than generated.** FastAPI publishes
+`/openapi.json`, and `openapi-python-client` would turn it into a client — but
+into flat per-operation functions, not `d.ws(name).job.list()`, and with
+`dict[str, Any]` results, because the handlers return plain dicts. The
+namespaces *are* the product here; generating them away to regain them by hand
+would leave a build step and no ergonomics.
+
+The schema earns its keep as a *check* instead. `routes.py` single-sources the
+path, but not the verb, the query parameters, or which operations exist —
+`params={"regoin": ...}` against a server declaring `region` type-checks, unit
+tests fine, and silently ignores the filter. So
+`tests/test_openapi_contract.py` drives every namespace against a recording
+transport and asserts each request it produces exists in the served schema,
+with a completeness check so a new operation cannot skip it.
+
+**Retries follow the path, not a port list.** `ResilientClient` records the
+attribute chain (`ws` → call → `job` → `list`) and replays it against a fresh
+connection if the daemon restarts mid-call. Enumerating ports here would mean
+editing this file every time a namespace was added.
+
 ## Transport: HTTP over a Unix socket
 
 The same shape `dockerd` exposes. FastAPI/uvicorn serves, httpx calls.
@@ -203,6 +253,7 @@ The same shape `dockerd` exposes. FastAPI/uvicorn serves, httpx calls.
 | | |
 |---|---|
 | Versioning | by path (`/v1/...`), so an older client keeps working |
+| Resources | one path per resource, so `/openapi.json` can describe the response |
 | Log windows | plain HTTP `Range`, answered `206` — what Range is for |
 | Server push | Server-Sent Events on `/v1/events` |
 | Debugging | `curl --unix-socket … http://d/v1/info`, plus a generated `/openapi.json` |

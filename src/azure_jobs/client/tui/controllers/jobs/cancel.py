@@ -81,19 +81,19 @@ class JobsCancel(Controller[JobsState]):
 
         def cancel(token: CancellationToken) -> CancelResult:
             with handle.lease() as session:
-                if session.actions is None:
+                if not session.job.can_act:
                     raise RuntimeError("This backend does not support cancellation")
-                current = session.actions.get(job.ref)
+                current = session.job.status(job.ref)
                 if current.ref != job.ref:
                     raise RuntimeError(
                         "Job was recreated before cancellation"
                     )
                 if current.status in TERMINAL_STATUSES:
                     return CancelResult(current, True)
-                session.actions.cancel(job.ref)
+                session.job.cancel(job.ref)
                 token.check()
                 try:
-                    final = session.actions.get(job.ref)
+                    final = session.job.status(job.ref)
                     if final.ref != job.ref:
                         return CancelResult(
                             current,

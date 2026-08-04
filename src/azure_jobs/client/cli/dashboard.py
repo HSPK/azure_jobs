@@ -34,10 +34,10 @@ from azure_jobs.client.tui.settings import (
 )
 def dashboard(last: int, page_size: int | None, mouse: bool) -> None:
     """Interactive job dashboard (lazydocker-style TUI)."""
-    from azure_jobs.client.connection import BackendSessionFactory
+    from azure_jobs.client.connection import ClientFactory
     from azure_jobs.client.tui.app import AjDashboard
 
-    session_factory = BackendSessionFactory()
+    session_factory = ClientFactory()
 
     app = AjDashboard(
         last=last,

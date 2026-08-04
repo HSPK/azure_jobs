@@ -77,12 +77,12 @@ def job_list(
     ws_name: str | None,
 ) -> None:
     """List recent jobs in the cloud workspace."""
-    from azure_jobs.client.cli._backend import backend
+    from azure_jobs.client.cli._backend import client
     from azure_jobs.client.ui import console, show_cloud_jobs_table
 
-    with backend(ws_name) as api:
+    with client(ws_name) as d:
         with console.status("[bold cyan]Fetching jobs…[/bold cyan]", spinner="dots"):
-            jobs = api.jobs.fetch(
+            jobs = d.job.list(
                 limit=last,
                 archived=archived,
                 job_type=job_type or "",
@@ -95,18 +95,18 @@ def job_list(
 
 def _fetch_and_show_job(job_id: str, ws_name: str | None = None) -> None:
     from azure_jobs.shared.contract.models import JobRef
-    from azure_jobs.client.cli._backend import backend
+    from azure_jobs.client.cli._backend import client
     from azure_jobs.shared.errors import RestError
     from azure_jobs.client.ui import console, error, show_job_detail
 
     name = resolve_short_id(job_id)
 
     try:
-        with backend(ws_name) as api:
+        with client(ws_name) as d:
             with console.status(
                 "[bold cyan]Fetching job…[/bold cyan]", spinner="dots"
             ):
-                job = api.actions.get(JobRef(name, name)).to_dict()
+                job = d.job.status(JobRef(name, name)).to_dict()
     except RestError as exc:
         if exc.status_code == 404:
             error(f"Job not found: [bold]{name}[/bold]")
@@ -147,7 +147,7 @@ def job_status(job_id: str) -> None:
 def job_cancel(job_id: str) -> None:
     """Cancel a running job."""
     from azure_jobs.shared.contract.models import JobRef
-    from azure_jobs.client.cli._backend import backend
+    from azure_jobs.client.cli._backend import client
     from azure_jobs.client.ui import (
         console,
         get_output_mode,
@@ -160,16 +160,16 @@ def job_cancel(job_id: str) -> None:
     json_mode = get_output_mode() == "json"
     ref = JobRef(azure_name, azure_name)
 
-    with backend() as api:
+    with client() as d:
         with console.status("[bold cyan]Checking job…[/bold cyan]", spinner="dots"):
-            current = api.actions.get(ref).status
+            current = d.job.status(ref).status
         final = current
         if current not in STATUS_TERMINAL:
             with console.status(
                 "[bold cyan]Cancelling job…[/bold cyan]", spinner="dots"
             ):
-                api.actions.cancel(ref)
-                final = api.actions.get(ref).status
+                d.job.cancel(ref)
+                final = d.job.status(ref).status
 
     if current in STATUS_TERMINAL:
         if not json_mode:
@@ -212,7 +212,7 @@ def job_cancel(job_id: str) -> None:
 def job_logs(job_id: str) -> None:
     """Show logs from a job."""
     from azure_jobs.shared.contract.models import JobRef
-    from azure_jobs.client.cli._backend import backend
+    from azure_jobs.client.cli._backend import client
     from azure_jobs.client.ui import (
         console,
         emit_json,
@@ -225,14 +225,14 @@ def job_logs(job_id: str) -> None:
     json_mode = get_output_mode() == "json"
     ref = JobRef(azure_name, azure_name)
 
-    with backend() as api:
+    with client() as d:
         with console.status(
             "[bold cyan]Checking job status…[/bold cyan]", spinner="dots"
         ):
-            job = api.actions.get(ref).to_dict()
+            job = d.job.status(ref).to_dict()
         _status = job.get("status", "")
         downloaded = (
-            api.logs.download(ref) if _status not in _NO_LOG_STATUSES else {}
+            d.log.download(ref) if _status not in _NO_LOG_STATUSES else {}
         )
 
     status = job.get("status", "")

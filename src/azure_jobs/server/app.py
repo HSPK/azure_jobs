@@ -278,25 +278,26 @@ def create_app(state: DaemonState) -> FastAPI:
 
         return StreamingResponse(stream(), media_type="text/event-stream")
 
-    # ── workspaces ───────────────────────────────────────────────────────
+    # ── auth ─────────────────────────────────────────────────────────────
 
-    @app.get(R.subscription())
-    def subscription() -> dict | None:
-        """Which subscription the daemon is logged in to, or ``None``.
+    @app.get(R.auth_status())
+    def auth_status() -> dict:
+        """Sign-in and credential health together.
 
-        The raw ``az account show`` payload, so ``aj auth status`` can show the
-        user and tenant without a second round trip.
+        One resource because they are always read together and one is
+        meaningless without the other: an account with no usable token is not
+        a working sign-in.
         """
-        from azure_jobs.server.discovery import account_show
+        from azure_jobs.server.discovery import account_show, credential_health
 
-        return account_show()
+        account = account_show()
+        return {
+            "signed_in": account is not None,
+            "account": account,
+            "credential": credential_health(),
+        }
 
-    @app.get(R.credential())
-    def credential() -> dict:
-        """Whether the daemon can get a token — it is the one that needs it."""
-        from azure_jobs.server.discovery import credential_health
-
-        return credential_health()
+    # ── workspaces ───────────────────────────────────────────────────────
 
     @app.get(R.workspaces())
     def discover_workspaces(
@@ -455,78 +456,135 @@ def create_app(state: DaemonState) -> FastAPI:
 
     # ── catalog ──────────────────────────────────────────────────────────
 
-    @app.get(R.catalog("{ws}", "{kind}"))
-    def catalog_list(
-        ws: str,
-        kind: str,
-        x_aj_root: str | None = Header(default=None, alias=R.ROOT_HEADER),
-    ) -> Any:
-        catalog = ctx(x_aj_root, ws).backend.catalog
-        if kind == "workspace":
-            return catalog.workspace().to_json()
-        getter = {
-            "datastores": catalog.datastores,
-            "environments": catalog.environments,
-            "computes": catalog.computes,
-            "quota": catalog.quota,
-        }.get(kind)
-        if getter is None:
-            raise HTTPException(status_code=404, detail=f"No catalog {kind!r}")
-        return [item.to_json() for item in getter()]
+    # ── workspace inventory ──────────────────────────────────────────────
+    #
+    # One route per resource rather than a `{kind}` dispatcher: a single path
+    # returning a union of shapes cannot be described in OpenAPI, so neither a
+    # generated client nor `/openapi.json` could say what comes back.
 
-    @app.get(R.catalog_item("{ws}", "{kind}", "{name}"))
-    def catalog_detail(
+    def _catalog(root: str | None, ws: str) -> Any:
+        return ctx(root, ws).backend.catalog
+
+    @app.get(R.workspace_info("{ws}"))
+    def workspace_info(
         ws: str,
-        kind: str,
+        x_aj_root: str | None = Header(default=None, alias=R.ROOT_HEADER),
+    ) -> dict:
+        return _catalog(x_aj_root, ws).workspace().to_json()
+
+    @app.get(R.datastores("{ws}"))
+    def datastores(
+        ws: str,
+        x_aj_root: str | None = Header(default=None, alias=R.ROOT_HEADER),
+    ) -> list[dict]:
+        return [i.to_json() for i in _catalog(x_aj_root, ws).datastores()]
+
+    @app.get(R.datastore("{ws}", "{name}"))
+    def datastore(
+        ws: str,
         name: str,
         x_aj_root: str | None = Header(default=None, alias=R.ROOT_HEADER),
-    ) -> Any:
-        catalog = ctx(x_aj_root, ws).backend.catalog
-        if kind == "datastores":
-            item = catalog.datastore(name)
-            return item.to_json() if item else None
-        if kind == "environments":
-            return [i.to_json() for i in catalog.environment_versions(name)]
-        raise HTTPException(status_code=404, detail=f"No catalog {kind!r}")
+    ) -> dict | None:
+        item = _catalog(x_aj_root, ws).datastore(name)
+        return item.to_json() if item else None
 
-    # ── account ──────────────────────────────────────────────────────────
+    @app.get(R.environments("{ws}"))
+    def environments(
+        ws: str,
+        x_aj_root: str | None = Header(default=None, alias=R.ROOT_HEADER),
+    ) -> list[dict]:
+        return [i.to_json() for i in _catalog(x_aj_root, ws).environments()]
 
-    @app.get(R.account("{kind}"))
-    def account_list(
-        kind: str,
-        subscription_id: str = "",
-        region: str = "",
-        include_zero: bool = False,
-        resource_group: str = "",
-        workspace: str = "",
-        limit: int = 10000,
-        cutoff_days: int = 0,
-    ) -> Any:
-        api = state.account(subscription_id)
-        if kind == "workspace-computes":
-            return api.workspace_computes()
-        if kind == "jobs":
-            return api.jobs_all_workspaces(limit=limit, cutoff_days=cutoff_days)
-        simple = {
-            "subscriptions": api.subscriptions,
-            "workspaces": api.workspaces,
-            "storage-accounts": api.storage_accounts,
-            "identities": api.identities,
-            "singularity-images": api.singularity_images,
-        }
-        if kind in simple:
-            return [item.to_json() for item in simple[kind]()]
-        if kind == "instance-types":
-            return [item.to_json() for item in api.instance_types(region)]
-        if kind == "vc-quota":
-            return [
-                item.to_json() for item in api.vc_quota(include_zero=include_zero)
-            ]
-        if kind == "computes":
-            return [
-                item.to_json() for item in api.computes(resource_group, workspace)
-            ]
-        raise HTTPException(status_code=404, detail=f"No account resource {kind!r}")
+    @app.get(R.environment_versions("{ws}", "{name}"))
+    def environment_versions(
+        ws: str,
+        name: str,
+        x_aj_root: str | None = Header(default=None, alias=R.ROOT_HEADER),
+    ) -> list[dict]:
+        return [
+            i.to_json() for i in _catalog(x_aj_root, ws).environment_versions(name)
+        ]
+
+    @app.get(R.computes("{ws}"))
+    def computes(
+        ws: str,
+        x_aj_root: str | None = Header(default=None, alias=R.ROOT_HEADER),
+    ) -> list[dict]:
+        return [i.to_json() for i in _catalog(x_aj_root, ws).computes()]
+
+    @app.get(R.quota("{ws}"))
+    def workspace_quota(
+        ws: str,
+        x_aj_root: str | None = Header(default=None, alias=R.ROOT_HEADER),
+    ) -> list[dict]:
+        return [i.to_json() for i in _catalog(x_aj_root, ws).quota()]
+
+    # ── subscription inventory ───────────────────────────────────────────
+
+    @app.get(R.subscriptions())
+    def subscriptions() -> list[dict]:
+        return [i.to_json() for i in state.account().subscriptions()]
+
+    @app.get(R.storage_accounts())
+    def storage_accounts(subscription_id: str = Query(default="")) -> list[dict]:
+        return [
+            i.to_json() for i in state.account(subscription_id).storage_accounts()
+        ]
+
+    @app.get(R.identities())
+    def identities(subscription_id: str = Query(default="")) -> list[dict]:
+        return [i.to_json() for i in state.account(subscription_id).identities()]
+
+    @app.get(R.instance_types())
+    def instance_types(
+        region: str = Query(default=""),
+        subscription_id: str = Query(default=""),
+    ) -> list[dict]:
+        return [
+            i.to_json() for i in state.account(subscription_id).instance_types(region)
+        ]
+
+    @app.get(R.images())
+    def images(subscription_id: str = Query(default="")) -> list[dict]:
+        return [
+            i.to_json()
+            for i in state.account(subscription_id).singularity_images()
+        ]
+
+    @app.get(R.vc_quota())
+    def vc_quota(
+        include_zero: bool = Query(default=False),
+        subscription_id: str = Query(default=""),
+    ) -> list[dict]:
+        return [
+            i.to_json()
+            for i in state.account(subscription_id).vc_quota(include_zero=include_zero)
+        ]
+
+    @app.get(R.account_computes())
+    def account_computes(
+        resource_group: str = Query(default=""),
+        workspace: str = Query(default=""),
+        subscription_id: str = Query(default=""),
+    ) -> list[dict]:
+        return [
+            i.to_json()
+            for i in state.account(subscription_id).computes(resource_group, workspace)
+        ]
+
+    @app.get(R.workspace_computes())
+    def workspace_computes(subscription_id: str = Query(default="")) -> dict:
+        return state.account(subscription_id).workspace_computes()
+
+    @app.get(R.all_jobs())
+    def all_jobs(
+        limit: int = Query(default=10000),
+        cutoff_days: int = Query(default=0),
+        subscription_id: str = Query(default=""),
+    ) -> dict:
+        return state.account(subscription_id).jobs_all_workspaces(
+            limit=limit, cutoff_days=cutoff_days
+        )
 
     # ── submissions and queue ────────────────────────────────────────────
 

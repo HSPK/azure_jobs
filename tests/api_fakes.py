@@ -245,3 +245,53 @@ class FakeTargetCatalog:
 
     def discover(self, subscription_id: str = "") -> tuple[Target, ...]:
         return (self._target,)
+
+
+class FakeClient:
+    """A client-shaped fake: the namespaces an ``AjClient`` exposes.
+
+    Wraps a :class:`FakeBackend` so resilience tests can drive the same
+    namespaces the CLI and dashboard use without a socket.
+    """
+
+    _aj_namespace = True
+
+    def __init__(self, backend: "FakeBackend | None" = None) -> None:
+        self.backend = backend or FakeBackend(make_target())
+        self.job = _FakeJobNamespace(self.backend)
+        self.log = self.backend.logs
+        self.closed = False
+
+    def close(self) -> None:
+        self.closed = True
+        self.backend.close()
+
+
+class _FakeJobNamespace:
+    _aj_namespace = True
+    can_act = True
+
+    def __init__(self, backend: "FakeBackend") -> None:
+        self._backend = backend
+
+    def page(self, cursor=None, *, limit=50, query=None):
+        from azure_jobs.shared.contract.models import JobQuerySpec
+
+        return self._backend.jobs.list_page(
+            cursor, limit=limit, query=query or JobQuerySpec()
+        )
+
+    def list(self, **kwargs):
+        return self._backend.jobs.fetch(**kwargs)
+
+    def status(self, job):
+        return self._backend.jobs.get(job)
+
+    def cancel(self, job):
+        return self._backend.jobs.cancel(job)
+
+    def delete(self, job, *, cancelled=None):
+        return self._backend.jobs.delete(job, cancelled=cancelled)
+
+    def submit(self, payload, *, on_event=None):
+        return self._backend.submitter.submit(payload, on_event=on_event)

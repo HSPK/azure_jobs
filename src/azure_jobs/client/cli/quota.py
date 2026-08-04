@@ -38,14 +38,14 @@ def quota_list(backend: str, show_all: bool, full: bool) -> None:
         _show_sing_quotas(show_all, full=full)
 
 def _show_sing_quotas(show_all: bool, *, full: bool = False) -> None:
-    from azure_jobs.client.cli._backend import account
+    from azure_jobs.client.cli._backend import client
     from azure_jobs.client.ui import console, error, show_sing_quota_table
 
-    with account() as api:
+    with client() as d:
         with console.status(
             "[bold cyan]Discovering virtual clusters…[/bold cyan]", spinner="dots"
         ):
-            vcs = api.vc_quota(include_zero=show_all)
+            vcs = d.quota.list(include_zero=show_all)
     if not vcs:
         error("No Singularity virtual clusters found")
         console.print(
@@ -56,7 +56,7 @@ def _show_sing_quotas(show_all: bool, *, full: bool = False) -> None:
 
 def _show_aml_quotas(show_all: bool) -> None:
     from azure_jobs.shared.contract.models import CatalogItem
-    from azure_jobs.client.cli._backend import account
+    from azure_jobs.client.cli._backend import client
     from azure_jobs.client.ui import (
         console,
         error,
@@ -64,12 +64,12 @@ def _show_aml_quotas(show_all: bool) -> None:
         warning,
     )
 
-    with account() as api:
+    with client() as d:
         with console.status(
             "[bold cyan]Discovering AML workspaces…[/bold cyan]", spinner="dots"
         ):
             try:
-                result = api.workspace_computes()
+                result = d.ws.computes()
             except click.ClickException:
                 # The daemon message already tells the user what to do.
                 raise

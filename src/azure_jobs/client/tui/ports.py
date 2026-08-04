@@ -102,11 +102,21 @@ class RangeLogSource(Protocol):
 
 
 @runtime_checkable
+class JobNamespace(JobQuery, JobActions, JobDelete, Protocol):
+    """Everything the dashboard does to a job, under one name.
+
+    ``can_act`` rather than an optional ``actions`` port: the split existed so
+    a read-only backend could omit mutation, and a flag says the same thing
+    without the caller having to hold three objects for one resource.
+    """
+
+    can_act: bool
+
+
+@runtime_checkable
 class DashboardSession(Protocol):
-    jobs: JobQuery
-    actions: JobActions | None
-    delete_jobs: JobDelete | None
-    logs: RangeLogSource | None
+    job: JobNamespace
+    log: RangeLogSource | None
 
     def close(self) -> None: ...
 
@@ -118,9 +128,11 @@ class SessionFactory(Protocol):
 
 @runtime_checkable
 class TargetCatalog(Protocol):
-    def configured(self) -> Target | None: ...
+    """``d.ws``: the workspaces, and which one this project is configured for."""
 
-    def discover(self) -> tuple[Target, ...]: ...
+    def current(self) -> Target | None: ...
+
+    def list(self) -> list[Target]: ...
 
 
 WorkspaceCatalog = TargetCatalog

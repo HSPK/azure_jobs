@@ -50,10 +50,12 @@ _JOBS = [
 
 
 class _FakeJobs:
-    def list_page(self, cursor, *, limit, query):
+    can_act = True
+
+    def page(self, cursor, *, limit, query):
         return JobPage((), None)
 
-    def get(self, job):
+    def status(self, job):
         return Job.from_mapping(
             {"name": job.backend_ref, "status": "Running"},
             job_id=job.id,
@@ -68,7 +70,7 @@ class _FakeJobs:
 
 
 class _FakeLogs:
-    def list_files(self, job, *, cancelled=None):
+    def list(self, job, *, cancelled=None):
         return []
 
     def pick_default(self, files):
@@ -81,10 +83,8 @@ class _FakeLogs:
 class _FakeSession:
     def __init__(self):
         jobs = _FakeJobs()
-        self.jobs = jobs
-        self.actions = jobs
-        self.delete_jobs = jobs
-        self.logs = _FakeLogs()
+        self.job = jobs
+        self.log = _FakeLogs()
 
     def close(self):
         return None
@@ -96,10 +96,10 @@ class _FakeSessionFactory:
 
 
 class _EmptyWorkspaceCatalog:
-    def configured(self):
+    def current(self):
         return None
 
-    def discover(self):
+    def list(self):
         return ()
 
 

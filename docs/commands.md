@@ -80,6 +80,16 @@ aj ws set                        # interactive picker
 aj auth status                   # credential health, as the daemon sees it
 ```
 
+Every command is a thin wrapper over the SDK — `aj ds list` is `d.ds.list()`:
+
+```python
+from azure_jobs.client import connect
+
+with connect() as d:
+    d.job.list(limit=20)
+    d.ws("other").ds.list()
+```
+
 ## Compute, quota, SKUs
 
 ```bash

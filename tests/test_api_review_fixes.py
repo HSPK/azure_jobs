@@ -16,17 +16,17 @@ from pathlib import Path
 import pytest
 
 from azure_jobs.client.connection import (
-    open_backend,
+    open_client,
     secure_runtime_dir,
 )
 from azure_jobs.shared.contract.errors import DaemonUnavailable, TransportError
 from azure_jobs.server.backend import _spec_from_payload
 from azure_jobs.shared.contract.models import JobRef, SubmitOutcome, Target
 from azure_jobs.server.queue import SubmissionQueue
-from azure_jobs.client.resilient import ResilientBackend
+from azure_jobs.client.resilient import ResilientClient
 from azure_jobs.shared.job.spec import JobSpec
 
-from .api_fakes import FakeBackend, make_target
+from .api_fakes import FakeBackend, FakeClient, make_target
 
 
 class TestBackendSpecSurvivesTheWire:
@@ -113,7 +113,7 @@ class TestTransportFailuresAreFast:
 
         started = time.time()
         with pytest.raises(DaemonUnavailable):
-            open_backend(
+            open_client(
                 "ws",
                 root=tmp_path,
                 path=tmp_path / "absent.sock",
@@ -126,7 +126,6 @@ class TestResilientSession:
     """A daemon restart must not end the session, but an outage must surface."""
 
     def _backend(self, remote, replacement=None):
-        target = make_target()
         made: list = []
 
         def reconnect():
@@ -135,62 +134,62 @@ class TestResilientSession:
             made.append(replacement)
             return replacement
 
-        return ResilientBackend(target.label, remote, reconnect), made
+        return ResilientClient(remote, reconnect), made
 
     def test_a_healthy_remote_is_used(self):
-        remote = FakeBackend(make_target())
+        remote = FakeClient()
         backend, made = self._backend(remote)
-        backend.actions.cancel(JobRef("a", "a"))
-        assert remote.jobs.cancelled == ["a"]
+        backend.job.cancel(JobRef("a", "a"))
+        assert remote.backend.jobs.cancelled == ["a"]
         assert made == []
 
     def test_transport_loss_reconnects_and_completes_the_call(self):
-        remote = FakeBackend(make_target())
-        remote.jobs.raises = TransportError("daemon restarted")
-        fresh = FakeBackend(make_target())
+        remote = FakeClient()
+        remote.backend.jobs.raises = TransportError("daemon restarted")
+        fresh = FakeClient()
         backend, made = self._backend(remote, fresh)
-        job = backend.actions.get(JobRef("a", "a"))
+        job = backend.job.status(JobRef("a", "a"))
         assert job.name == "a"
         assert made == [fresh]
 
     def test_later_calls_use_the_new_connection(self):
-        remote = FakeBackend(make_target())
-        remote.jobs.raises = TransportError("daemon restarted")
-        fresh = FakeBackend(make_target())
+        remote = FakeClient()
+        remote.backend.jobs.raises = TransportError("daemon restarted")
+        fresh = FakeClient()
         backend, _ = self._backend(remote, fresh)
-        backend.actions.get(JobRef("a", "a"))
-        backend.actions.cancel(JobRef("b", "b"))
-        assert fresh.jobs.cancelled == ["b"]
+        backend.job.status(JobRef("a", "a"))
+        backend.job.cancel(JobRef("b", "b"))
+        assert fresh.backend.jobs.cancelled == ["b"]
 
     def test_a_failed_reconnect_raises_with_recovery_steps(self):
         """No in-process downgrade: the user is told what to do."""
-        remote = FakeBackend(make_target())
-        remote.jobs.raises = TransportError("daemon gone")
+        remote = FakeClient()
+        remote.backend.jobs.raises = TransportError("daemon gone")
         backend, _ = self._backend(remote, replacement=None)
         with pytest.raises(DaemonUnavailable) as caught:
-            backend.actions.get(JobRef("a", "a"))
+            backend.job.status(JobRef("a", "a"))
         assert "aj daemon start" in str(caught.value)
 
     def test_a_real_backend_error_is_not_retried(self):
         """A 403 must propagate; only transport loss triggers a reconnect."""
         from azure_jobs.shared.errors import RestError
 
-        remote = FakeBackend(make_target())
-        remote.jobs.raises = RestError("denied", status_code=403)
+        remote = FakeClient()
+        remote.backend.jobs.raises = RestError("denied", status_code=403)
         backend, made = self._backend(remote, FakeBackend(make_target()))
         with pytest.raises(RestError):
-            backend.actions.get(JobRef("a", "a"))
+            backend.job.status(JobRef("a", "a"))
         assert made == []
 
     def test_close_releases_the_connection(self):
-        remote = FakeBackend(make_target())
+        remote = FakeClient()
         backend, _ = self._backend(remote)
         backend.close()
         assert remote.closed
 
 
-class TestInProcessIsCapabilityEquivalent:
-    """Falling back must not turn optional ports into AttributeError."""
+class TestServerBackendHasEveryPort:
+    """The server contract keeps its own names; only the client got namespaces."""
 
     def test_queue_and_watcher_are_present(self, monkeypatch):
         from azure_jobs.server.backend import AzureBackend

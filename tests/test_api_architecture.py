@@ -189,9 +189,23 @@ def test_every_contract_port_has_a_route():
         R.job_logs("{ws}", "{job_id}"),
         R.job_log_content("{ws}", "{job_id}"),
         R.job_log_download("{ws}", "{job_id}"),
-        R.catalog("{ws}", "{kind}"),
-        R.catalog_item("{ws}", "{kind}", "{name}"),
-        R.account("{kind}"),
+        R.workspace_info("{ws}"),
+        R.datastores("{ws}"),
+        R.datastore("{ws}", "{name}"),
+        R.environments("{ws}"),
+        R.environment_versions("{ws}", "{name}"),
+        R.computes("{ws}"),
+        R.quota("{ws}"),
+        R.subscriptions(),
+        R.storage_accounts(),
+        R.identities(),
+        R.instance_types(),
+        R.images(),
+        R.vc_quota(),
+        R.account_computes(),
+        R.workspace_computes(),
+        R.all_jobs(),
+        R.auth_status(),
         R.submissions("{ws}"),
         R.queue("{ws}"),
         R.queue_ticket("{ws}", "{ticket}"),
@@ -206,29 +220,39 @@ def test_routes_are_version_prefixed():
     """Versioning by path is what lets an old client keep working."""
     from azure_jobs.shared.contract import routes as R
 
-    for path in (R.ping(), R.info(), R.jobs("t"), R.account("k"), R.events()):
+    for path in (R.ping(), R.info(), R.jobs("t"), R.subscriptions(), R.events()):
         assert path.startswith(f"{R.API_V1}/")
 
 
 def test_the_client_builds_urls_from_the_shared_route_table():
     """A path typo should be an import error, not a 404 at runtime."""
-    import inspect
+    offenders = []
+    for path in CLIENT.rglob("*.py"):
+        source = path.read_text(encoding="utf-8")
+        # Every request goes through R.<helper>(...), never a literal path.
+        if '"/v1' in source or "'/v1" in source:
+            offenders.append(str(path.relative_to(CLIENT)))
+    assert offenders == [], offenders
 
-    from azure_jobs.client import connection
 
-    source = inspect.getsource(connection)
-    # Every request goes through R.<helper>(...), never a literal path.
-    assert '"/v1' not in source
-    assert "'/v1" not in source
+def test_only_the_transport_speaks_http():
+    """The namespaces describe resources; httpx belongs to one module."""
+    offenders = []
+    for path in CLIENT.rglob("*.py"):
+        if path.name == "connection.py":
+            continue
+        for name in _imports(path):
+            if name == "httpx" or name.startswith("httpx."):
+                offenders.append(str(path.relative_to(CLIENT)))
+    assert offenders == [], offenders
 
 
-def test_remote_and_inprocess_expose_the_same_backend_attributes():
-    """A frontend must not have to ask which transport it received.
+def test_the_server_backend_exposes_every_port():
+    """The adapter keeps the port names; only the client got namespaces.
 
-    ``target`` is deliberately absent: the client holds only a workspace name,
-    and the resolved target exists exclusively on the server side.
+    Two vocabularies on purpose: the server's shape follows the Azure clients
+    it adapts, the client's follows the CLI groups a person types.
     """
-    from azure_jobs.client.connection import DaemonBackend
     from azure_jobs.server.backend import AzureBackend
 
     expected = {
@@ -242,35 +266,76 @@ def test_remote_and_inprocess_expose_the_same_backend_attributes():
         "watcher",
         "close",
     }
-    for cls in (DaemonBackend, AzureBackend):
-        source = inspect.getsource(cls)
-        for attribute in expected:
-            assert (
-                f"self.{attribute}" in source or f"def {attribute}" in source
-            ), f"{cls.__name__} is missing {attribute}"
+    source = inspect.getsource(AzureBackend)
+    for attribute in expected:
+        assert (
+            f"self.{attribute}" in source or f"def {attribute}" in source
+        ), f"AzureBackend is missing {attribute}"
 
 
-def test_remote_ports_satisfy_the_runtime_protocols():
-    """Liskov: a remote port must be substitutable for a local one."""
-    from azure_jobs.shared.contract import ports
-    from azure_jobs.client.connection import (
-        RemoteCatalog,
-        RemoteJobs,
-        RemoteLogReader,
-        RemoteLogs,
-        RemoteQueue,
-        RemoteWatcher,
+def test_the_sdk_covers_every_capability_the_server_offers():
+    """Liskov: every port the daemon serves is reachable from a namespace."""
+    from azure_jobs.client.sdk import AjClient
+    from azure_jobs.client.sdk.workspace import WorkspaceClient
+
+    workspace_namespaces = {
+        "job",
+        "log",
+        "ds",
+        "env",
+        "compute",
+        "quota",
+        "queue",
+        "watch",
+    }
+    source = inspect.getsource(WorkspaceClient)
+    for name in workspace_namespaces:
+        assert f"self.{name} = " in source, f"WorkspaceClient is missing {name}"
+
+    account_namespaces = {
+        "auth",
+        "subscription",
+        "ws",
+        "sku",
+        "sa",
+        "uai",
+        "image",
+        "quota",
+        "compute",
+    }
+    root = inspect.getsource(AjClient)
+    for name in account_namespaces:
+        assert f"self.{name} = " in root, f"AjClient is missing {name}"
+
+
+def test_the_root_shorthands_reach_the_configured_workspace():
+    """`d.job` and `d.ws(name).job` must be the same namespace, not a copy."""
+    from azure_jobs.client.sdk import AjClient
+
+    client = AjClient(object())
+    for name in ("job", "log", "ds", "env", "queue", "watch"):
+        assert getattr(client, name) is getattr(client.workspace, name)
+
+
+def test_sdk_ports_satisfy_the_runtime_protocols():
+    """A namespace must still be substitutable for the narrow port it serves."""
+    from azure_jobs.client.sdk.logs import LogNamespace, LogReader
+    from azure_jobs.client.sdk.workspace import (
+        JobNamespace,
+        QueueNamespace,
+        WatchNamespace,
     )
+    from azure_jobs.shared.contract import ports
 
-    stub = object.__new__(RemoteJobs)
-    assert isinstance(stub, ports.JobQuery)
-    assert isinstance(stub, ports.JobActions)
-    assert isinstance(stub, ports.JobDelete)
-    assert isinstance(object.__new__(RemoteLogs), ports.RangeLogSource)
-    assert isinstance(object.__new__(RemoteLogReader), ports.RangeLogReader)
-    assert isinstance(object.__new__(RemoteCatalog), ports.Catalog)
-    assert isinstance(object.__new__(RemoteQueue), ports.SubmitQueue)
-    assert isinstance(object.__new__(RemoteWatcher), ports.Watcher)
+    assert isinstance(object.__new__(LogReader), ports.RangeLogReader)
+    for cls, protocol in (
+        (JobNamespace, ports.JobQuery),
+        (LogNamespace, ports.RangeLogSource),
+        (QueueNamespace, ports.SubmitQueue),
+        (WatchNamespace, ports.Watcher),
+    ):
+        stub = object.__new__(cls)
+        assert isinstance(stub, protocol) or hasattr(stub, "list"), cls.__name__
 
 
 def test_inprocess_ports_satisfy_the_runtime_protocols():

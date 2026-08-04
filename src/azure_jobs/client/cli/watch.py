@@ -12,11 +12,11 @@ import click
 from azure_jobs.client.cli import main
 
 
-def _backend():
-    """Open a daemon-backed session for a queue/watch command."""
-    from azure_jobs.client.cli._backend import backend
+def _client():
+    """Open the SDK root for a queue/watch command."""
+    from azure_jobs.client.cli._backend import client
 
-    return backend()
+    return client()
 
 
 def desktop_notify(title: str, body: str) -> None:
@@ -61,9 +61,9 @@ def watch_add(job_name: str) -> None:
     from azure_jobs.shared.contract.models import JobRef
     from azure_jobs.client.ui import console
 
-    with _backend() as backend:
-        job = backend.actions.get(JobRef(job_name, job_name))
-        backend.watcher.watch(job.ref)
+    with _client() as d:
+        job = d.job.status(JobRef(job_name, job_name))
+        d.watch.add(job.ref)
         console.print(f"Watching {job.label} (currently {job.status or 'unknown'})")
 
 
@@ -74,8 +74,8 @@ def watch_remove(job_name: str) -> None:
     from azure_jobs.shared.contract.models import JobRef
     from azure_jobs.client.ui import console
 
-    with _backend() as backend:
-        backend.watcher.unwatch(JobRef(job_name, job_name))
+    with _client() as d:
+        d.watch.remove(JobRef(job_name, job_name))
         console.print(f"Stopped watching {job_name}")
 
 
@@ -84,8 +84,8 @@ def watch_list() -> None:
     """List jobs the daemon is currently watching."""
     from azure_jobs.client.ui import console
 
-    with _backend() as backend:
-        refs = backend.watcher.watched()
+    with _client() as d:
+        refs = d.watch.list()
     if not refs:
         console.print("Not watching anything")
         return
@@ -104,10 +104,10 @@ def watch_listen(desktop: bool, timeout: float) -> None:
     """Stream notifications for watched jobs until interrupted."""
     from azure_jobs.client.ui import console
 
-    backend = _backend()
+    d = _client()
     deadline = time.time() + timeout if timeout else None
     try:
-        backend.watcher.subscribe(
+        d.watch.subscribe(
             lambda note: _render(note, desktop=desktop, out=console)
         )
         console.print("Listening for job changes (Ctrl-C to stop)…")

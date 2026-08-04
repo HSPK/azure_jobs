@@ -34,10 +34,10 @@ def image_list(query: str | None) -> None:
     show_sing_images_table(images)
 
 def _fetch_sing_images() -> list[dict]:
-    from azure_jobs.client.cli._backend import account
+    from azure_jobs.client.cli._backend import client
 
-    with account() as api:
-        return _parse_images([dict(item.raw) for item in api.singularity_images()])
+    with client() as d:
+        return _parse_images([dict(item.raw) for item in d.image.list()])
 
 
 def _parse_images(raw_images: list[dict]) -> list[dict]:

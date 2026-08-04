@@ -23,12 +23,12 @@ from .api_fakes import make_job
 
 
 class TestThereIsNoInProcessMode:
-    def test_open_backend_has_no_bypass_parameters(self):
+    def test_open_client_has_no_bypass_parameters(self):
         import inspect
 
-        from azure_jobs.client.connection import open_backend
+        from azure_jobs.client.connection import open_client
 
-        params = inspect.signature(open_backend).parameters
+        params = inspect.signature(open_client).parameters
         assert "prefer_daemon" not in params
 
     def test_no_module_offers_an_in_process_client(self):

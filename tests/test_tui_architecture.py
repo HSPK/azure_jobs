@@ -238,22 +238,41 @@ class _ForbiddenDeleteCapability(_DeleteCapability):
         raise RestError("AuthorizationFailed", status_code=403)
 
 
+class _DeleteJobs:
+    """The job namespace a delete test needs: probe, then delete.
+
+    ``status`` echoes back a terminal job for whatever ref is asked about, so
+    the delete preflight passes and the test is about deletion, not staleness.
+    """
+
+    can_act = True
+
+    def __init__(self, capability: "_DeleteCapability") -> None:
+        self._capability = capability
+        self.delete = capability.delete
+
+    def status(self, ref):
+        return _job(ref.backend_ref, status="Completed")
+
+
 class _DeleteSession:
-    def __init__(self, capability: _DeleteCapability) -> None:
-        self.delete_jobs = capability
+    def __init__(self, capability: "_DeleteCapability") -> None:
+        self.job = _DeleteJobs(capability)
 
     def close(self) -> None:
         return None
 
 
 class _AbsentDeleteSession(_DeleteSession):
-    class Actions:
-        def get(self, job):
+    """The job vanished between listing it and confirming the delete."""
+
+    def __init__(self, capability: "_DeleteCapability") -> None:
+        super().__init__(capability)
+
+        def missing(job):
             raise RestError("missing", status_code=404)
 
-    def __init__(self, capability: _DeleteCapability) -> None:
-        super().__init__(capability)
-        self.actions = self.Actions()
+        self.job.status = missing
 
 
 def test_delete_keeps_confirmed_target_when_selection_changes() -> None:
@@ -699,9 +718,17 @@ class _CancelActions:
         self.cancelled.append(job.backend_ref)
 
 
+class _CancelJobs:
+    can_act = True
+
+    def __init__(self, actions: "_CancelActions") -> None:
+        self.status = actions.get
+        self.cancel = actions.cancel
+
+
 class _CancelSession:
-    def __init__(self, actions: _CancelActions) -> None:
-        self.actions = actions
+    def __init__(self, actions: "_CancelActions") -> None:
+        self.job = _CancelJobs(actions)
 
     def close(self) -> None:
         return None
@@ -1249,10 +1276,10 @@ def test_feature_finalizer_failures_do_not_skip_remaining_cleanup() -> None:
 
 def test_app_shutdown_closes_runtime_after_feature_failure() -> None:
     class Catalog:
-        def configured(self):
+        def current(self):
             return None
 
-        def discover(self):
+        def list(self):
             return ()
 
     class Factory:
@@ -1318,10 +1345,10 @@ async def test_feature_key_binding_and_help_use_aggregated_metadata() -> None:
     from textual.widgets import Static
 
     class Catalog:
-        def configured(self):
+        def current(self):
             return None
 
-        def discover(self):
+        def list(self):
             return ()
 
     class Factory:

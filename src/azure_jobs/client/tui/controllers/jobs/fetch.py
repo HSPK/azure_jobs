@@ -70,7 +70,7 @@ class JobsFetcher(Controller[JobsState]):
 
         def fetch(token: CancellationToken) -> JobPage:
             with handle.lease() as session:
-                page = session.jobs.list_page(
+                page = session.job.page(
                     cursor,
                     limit=limit,
                     query=JobQuerySpec(),
@@ -135,9 +135,9 @@ class JobsFetcher(Controller[JobsState]):
 
         def fetch(token: CancellationToken) -> Job:
             with handle.lease() as session:
-                if session.actions is None:
+                if not session.job.can_act:
                     raise RuntimeError("This backend does not support job details")
-                updated = session.actions.get(job.ref)
+                updated = session.job.status(job.ref)
             token.check()
             return updated
 
@@ -191,7 +191,7 @@ class JobsFetcher(Controller[JobsState]):
             with handle.lease() as session:
                 while len(jobs) < limit:
                     token.check()
-                    page = session.jobs.list_page(
+                    page = session.job.page(
                         cursor,
                         limit=min(page_size, limit - len(jobs)),
                         query=JobQuerySpec(),
@@ -261,13 +261,12 @@ class JobsFetcher(Controller[JobsState]):
 
         def probe(token: CancellationToken) -> DeleteProbe:
             with handle.lease() as session:
-                actions = session.actions
-                if actions is None:
+                if not session.job.can_act:
                     raise RuntimeError(
                         "Backend cannot reconcile deletion with an exact GET"
                     )
                 try:
-                    current = actions.get(job.ref)
+                    current = session.job.status(job.ref)
                 except RestError as exc:
                     if exc.status_code == 404:
                         current = None

@@ -170,7 +170,7 @@ def _submit_via_daemon(
     execution path with different auth and different failure modes.
     """
     from azure_jobs.shared.contract.models import SubmitEvent
-    from azure_jobs.client.cli._backend import backend
+    from azure_jobs.client.cli._backend import client
     from azure_jobs.shared.job.spec import JobEvent, JobResult
 
     payload = request.to_dict()
@@ -186,8 +186,8 @@ def _submit_via_daemon(
                 )
             )
 
-        with backend() as api:
-            outcome = api.submitter.submit(payload, on_event=relay)
+        with client() as d:
+            outcome = d.job.submit(payload, on_event=relay)
         return JobResult(
             job_name=outcome.job_name,
             azure_name=outcome.backend_ref,
@@ -202,10 +202,10 @@ def _submit_via_daemon(
 
 def _enqueue(request: JobSpec, name: str) -> None:
     """Hand a built JobSpec to the daemon's queue and report the ticket."""
-    from azure_jobs.client.cli._backend import backend
+    from azure_jobs.client.cli._backend import client
 
-    with backend() as api:
-        entry = api.queue.enqueue(request.to_dict(), name=name)
+    with client() as d:
+        entry = d.job.queue(request.to_dict(), name=name)
     click.echo(f"Queued {name} as {entry.ticket}")
     click.echo(f"  aj queue show {entry.ticket}")
     click.echo(f"  aj queue wait {entry.ticket}")

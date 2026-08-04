@@ -46,14 +46,46 @@ def events() -> str:
 DEFAULT_WORKSPACE = "_"
 
 
-def subscription() -> str:
-    """The Azure subscription the daemon is logged in to."""
-    return f"{API_V1}/subscription"
+def auth_status() -> str:
+    """Sign-in and credential health in one answer, as ``d.auth.status()``."""
+    return f"{API_V1}/auth/status"
 
 
-def credential() -> str:
-    """Health of the credential the daemon would use to call Azure."""
-    return f"{API_V1}/credential"
+def subscriptions() -> str:
+    return f"{API_V1}/subscriptions"
+
+
+def storage_accounts() -> str:
+    return f"{API_V1}/storage-accounts"
+
+
+def identities() -> str:
+    return f"{API_V1}/identities"
+
+
+def instance_types() -> str:
+    return f"{API_V1}/instance-types"
+
+
+def images() -> str:
+    return f"{API_V1}/images"
+
+
+def vc_quota() -> str:
+    return f"{API_V1}/vc-quota"
+
+
+def account_computes() -> str:
+    return f"{API_V1}/computes"
+
+
+def workspace_computes() -> str:
+    return f"{API_V1}/workspace-computes"
+
+
+def all_jobs() -> str:
+    """Jobs across every workspace, which is why it is not workspace-scoped."""
+    return f"{API_V1}/jobs"
 
 
 def workspaces() -> str:
@@ -96,16 +128,33 @@ def job_log_download(name: str, job_id: str) -> str:
     return f"{job_logs(name, job_id)}/download"
 
 
-def catalog(name: str, kind: str) -> str:
-    return f"{workspace(name)}/catalog/{kind}"
+def workspace_info(name: str = DEFAULT_WORKSPACE) -> str:
+    """The full workspace resource, ``properties`` included."""
+    return f"{workspace(name)}/info"
 
 
-def catalog_item(ws: str, kind: str, name: str) -> str:
-    return f"{catalog(ws, kind)}/{name}"
+def datastores(name: str = DEFAULT_WORKSPACE) -> str:
+    return f"{workspace(name)}/datastores"
 
 
-def account(kind: str) -> str:
-    return f"{API_V1}/account/{kind}"
+def datastore(ws: str, name: str) -> str:
+    return f"{datastores(ws)}/{name}"
+
+
+def environments(name: str = DEFAULT_WORKSPACE) -> str:
+    return f"{workspace(name)}/environments"
+
+
+def environment_versions(ws: str, name: str) -> str:
+    return f"{environments(ws)}/{name}/versions"
+
+
+def computes(name: str = DEFAULT_WORKSPACE) -> str:
+    return f"{workspace(name)}/computes"
+
+
+def quota(name: str = DEFAULT_WORKSPACE) -> str:
+    return f"{workspace(name)}/quota"
 
 
 def submissions(name: str = DEFAULT_WORKSPACE) -> str:
@@ -136,16 +185,23 @@ __all__ = [
     "API_V1",
     "API_VERSION",
     "CLIENT_VERSION_HEADER",
+    "DEFAULT_WORKSPACE",
     "MIN_API_VERSION",
     "ROOT_HEADER",
-    "account",
-    "catalog",
-    "catalog_item",
-    "credential",
-    "DEFAULT_WORKSPACE",
+    "account_computes",
+    "all_jobs",
+    "auth_status",
+    "computes",
     "current_workspace",
+    "datastore",
+    "datastores",
+    "environment_versions",
+    "environments",
     "events",
+    "identities",
+    "images",
     "info",
+    "instance_types",
     "job",
     "job_cancel",
     "job_log_content",
@@ -156,12 +212,17 @@ __all__ = [
     "ping",
     "queue",
     "queue_ticket",
+    "quota",
     "retire",
+    "storage_accounts",
     "submissions",
-    "subscription",
-    "workspace",
-    "workspaces",
+    "subscriptions",
+    "vc_quota",
     "watch_job",
     "watch_poll",
     "watches",
+    "workspace",
+    "workspace_computes",
+    "workspace_info",
+    "workspaces",
 ]

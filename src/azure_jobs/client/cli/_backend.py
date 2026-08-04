@@ -1,5 +1,9 @@
 """How every CLI command reaches Azure.
 
+One helper, because there is one client: :func:`client` yields the SDK root,
+and the command picks the namespace it needs. ``aj ds list`` is
+``d.ds.list()`` — the same operation under two names, not two implementations.
+
 Commands must not import ``az_client`` **or run ``az``** (enforced by
 ``tests/test_api_architecture.py``): they name a workspace and the daemon does
 the rest. Resolving a name to a subscription and resource group is discovery,
@@ -12,20 +16,24 @@ recover, rather than silently taking a second path.
 from __future__ import annotations
 
 from contextlib import contextmanager
-from pathlib import Path
 from typing import Any, Iterator
 
 import click
 
 
 @contextmanager
-def backend(ws_name: str | None = None) -> Iterator[Any]:
-    """Open a backend for a workspace name (``None`` = the configured one)."""
-    from azure_jobs.client.connection import open_backend
+def client(ws_name: str | None = None) -> Iterator[Any]:
+    """Yield the SDK root, scoped to *ws_name* (``None`` = the configured one).
+
+    Subscription-scoped namespaces (``d.sku``, ``d.sa``, ``d.uai``, ``d.ws``)
+    work regardless, which is what lets ``aj init`` run before any workspace
+    is configured.
+    """
+    from azure_jobs.client.connection import open_client
     from azure_jobs.shared.contract.errors import DaemonUnavailable
 
     try:
-        handle = open_backend(ws_name or "")
+        handle = open_client(ws_name or "")
     except DaemonUnavailable as exc:
         raise click.ClickException(str(exc)) from exc
     try:
@@ -36,47 +44,4 @@ def backend(ws_name: str | None = None) -> Iterator[Any]:
         handle.close()
 
 
-@contextmanager
-def account(subscription_id: str = "") -> Iterator[Any]:
-    """Open a subscription-scoped port.
-
-    Separate from :func:`backend` because ``aj sku`` / ``aj sa`` / ``aj uai`` /
-    ``aj ws`` must work before any workspace is configured, so there is no
-    workspace to resolve.
-    """
-    from azure_jobs.client.connection import (
-        DaemonClient,
-        RemoteAccount,
-        _reachable,
-        daemon_required,
-        socket_path,
-        spawn_daemon,
-    )
-    from azure_jobs.shared import const
-    from azure_jobs.shared.contract.errors import DaemonUnavailable
-
-    path = socket_path()
-    try:
-        if not _reachable(path):
-            spawn_daemon(path)
-        client = DaemonClient(path, Path(const.AJ_HOME).resolve())
-    except Exception as exc:
-        raise click.ClickException(str(daemon_required(exc))) from exc
-
-    try:
-        yield RemoteAccount(client, subscription_id)
-    except DaemonUnavailable as exc:
-        raise click.ClickException(str(exc)) from exc
-    finally:
-        client.close()
-
-
-@contextmanager
-def workspaces() -> Iterator[Any]:
-    """Workspace discovery, performed by the daemon."""
-    from azure_jobs.client.connection import RemoteTargetCatalog
-
-    yield RemoteTargetCatalog()
-
-
-__all__ = ["account", "backend", "workspaces"]
+__all__ = ["client"]

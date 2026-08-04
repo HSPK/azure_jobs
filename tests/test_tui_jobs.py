@@ -26,11 +26,13 @@ def _job(index: int, status: str = "Running") -> Job:
 
 
 class _PagedJobs:
+    can_act = True
+
     def __init__(self, jobs: list[Job]) -> None:
         self.values = jobs
         self.calls: list[tuple[str | None, int]] = []
 
-    def list_page(self, cursor, *, limit, query) -> JobPage:
+    def page(self, cursor, *, limit, query) -> JobPage:
         token = cursor.token if cursor else None
         self.calls.append((token, limit))
         start = int(token or 0)
@@ -38,8 +40,10 @@ class _PagedJobs:
         following = Cursor(str(end)) if end < len(self.values) else None
         return JobPage(tuple(self.values[start:end]), following)
 
-    def get(self, job) -> Job:
-        return next(value for value in self.values if value.backend_ref == job.backend_ref)
+    def status(self, job) -> Job:
+        return next(
+            value for value in self.values if value.backend_ref == job.backend_ref
+        )
 
     def cancel(self, job) -> None:
         return None
@@ -49,7 +53,7 @@ class _PagedJobs:
 
 
 class _Logs:
-    def list_files(self, job_name, *, cancelled=None):
+    def list(self, job_name, *, cancelled=None):
         return []
 
     def pick_default(self, files):
@@ -61,10 +65,8 @@ class _Logs:
 
 class _Session:
     def __init__(self, jobs: _PagedJobs) -> None:
-        self.jobs = jobs
-        self.actions = jobs
-        self.delete_jobs = jobs
-        self.logs = _Logs()
+        self.job = jobs
+        self.log = _Logs()
         self.closed = False
 
     def close(self) -> None:
@@ -82,10 +84,10 @@ class _Factory:
 class _Catalog:
     workspace = Workspace("sub", "rg", "ws")
 
-    def configured(self):
+    def current(self):
         return self.workspace
 
-    def discover(self):
+    def list(self):
         return (self.workspace,)
 
 
@@ -406,7 +408,7 @@ class _BlockingJobs(_PagedJobs):
         self.started = threading.Event()
         self.release = threading.Event()
 
-    def list_page(self, cursor, *, limit, query) -> JobPage:
+    def page(self, cursor, *, limit, query) -> JobPage:
         self.started.set()
         self.release.wait(2)
         return super().list_page(cursor, limit=limit, query=query)
@@ -438,10 +440,10 @@ async def test_workspace_switch_drops_inflight_old_result(
     )
 
     class Catalog:
-        def configured(self):
+        def current(self):
             return first
 
-        def discover(self):
+        def list(self):
             return (first, second)
 
     app = AjDashboard(
@@ -475,11 +477,18 @@ async def test_optional_capabilities_disable_actions_without_stuck_info(
     monkeypatch.setattr("azure_jobs.shared.const.AJ_CONFIG", tmp_path / "config.json")
     jobs = _PagedJobs([_job(0)])
 
+    class _ReadOnlyJobs:
+        """A namespace that lists but cannot act, so the UI must not offer it."""
+
+        can_act = False
+
+        def __init__(self, inner):
+            self.page = inner.page
+
     class Session:
         def __init__(self):
-            self.jobs = jobs
-            self.actions = None
-            self.logs = None
+            self.job = _ReadOnlyJobs(jobs)
+            self.log = None
 
         def close(self):
             return None
@@ -529,10 +538,10 @@ class _UncertainDeleteJobs(_DeleteJobs):
         self.values = []
         raise DeleteOutcomeUncertain("accepted but monitor unavailable")
 
-    def get(self, job):
+    def status(self, job):
         if not self.values:
             raise RestError("job not found", status_code=404)
-        return super().get(job)
+        return super().status(job)
 
 
 @pytest.mark.asyncio
@@ -713,7 +722,7 @@ async def test_cancel_post_submit_status_failure_triggers_refresh(
             super().__init__([job])
             self.cancelled = False
 
-        def get(self, ref):
+        def status(self, ref):
             if self.cancelled:
                 raise OSError("status unavailable")
             return job
@@ -725,9 +734,8 @@ async def test_cancel_post_submit_status_failure_triggers_refresh(
 
     class Session:
         def __init__(self):
-            self.jobs = actions
-            self.actions = actions
-            self.logs = None
+            self.job = actions
+            self.log = None
 
         def close(self):
             return None

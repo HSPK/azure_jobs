@@ -17,15 +17,15 @@ def sa_group() -> None:
 @sa_group.command(name="list")
 def sa_list() -> None:
     """List storage accounts across accessible subscriptions."""
-    from azure_jobs.client.cli._backend import account
+    from azure_jobs.client.cli._backend import client
     from azure_jobs.client.ui import console, error, show_storage_accounts_table
 
     with console.status(
         "[bold cyan]Discovering storage accounts…[/bold cyan]", spinner="dots"
     ):
         try:
-            with account() as api:
-                accounts = api.storage_accounts()
+            with client() as d:
+                accounts = d.sa.list()
         except click.ClickException:
             # An unreachable daemon already explains how to recover;
             # wrapping it again would bury the instructions.

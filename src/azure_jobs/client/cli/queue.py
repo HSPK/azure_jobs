@@ -9,11 +9,11 @@ import click
 from azure_jobs.client.cli import main
 
 
-def _backend():
-    """Open a daemon-backed session for a queue/watch command."""
-    from azure_jobs.client.cli._backend import backend
+def _client():
+    """Open the SDK root for a queue/watch command."""
+    from azure_jobs.client.cli._backend import client
 
-    return backend()
+    return client()
 
 
 def _age(value: float) -> str:
@@ -37,8 +37,8 @@ def queue_list() -> None:
     """List queued, running and recently finished submissions."""
     from azure_jobs.client.ui import console
 
-    with _backend() as backend:
-        entries = backend.queue.list()
+    with _client() as d:
+        entries = d.queue.list()
     if not entries:
         console.print("Queue is empty")
         return
@@ -57,8 +57,8 @@ def queue_show(ticket: str) -> None:
     """Show one submission in full."""
     from azure_jobs.client.ui import console
 
-    with _backend() as backend:
-        entry = backend.queue.get(ticket)
+    with _client() as d:
+        entry = d.queue.get(ticket)
     if entry is None:
         raise click.ClickException(f"No such ticket: {ticket}")
     console.print(f"ticket   {entry.ticket}")
@@ -79,8 +79,8 @@ def queue_cancel(ticket: str) -> None:
     """Cancel a submission that has not started yet."""
     from azure_jobs.client.ui import console
 
-    with _backend() as backend:
-        cancelled = backend.queue.cancel(ticket)
+    with _client() as d:
+        cancelled = d.queue.cancel(ticket)
     if cancelled:
         console.print(f"Cancelled {ticket}")
         return
@@ -97,10 +97,10 @@ def queue_wait(ticket: str, timeout: float) -> None:
     """Block until a submission reaches a terminal state."""
     from azure_jobs.client.ui import console
 
-    with _backend() as backend:
+    with _client() as d:
         deadline = time.time() + timeout
         while time.time() < deadline:
-            entry = backend.queue.get(ticket)
+            entry = d.queue.get(ticket)
             if entry is None:
                 raise click.ClickException(f"No such ticket: {ticket}")
             if entry.terminal:

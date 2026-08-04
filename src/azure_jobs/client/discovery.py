@@ -7,46 +7,44 @@ active, or which workspaces exist, ask the daemon and render the answer. The
 
 from __future__ import annotations
 
-from pathlib import Path
+from contextlib import contextmanager
 from typing import Any
 
 from azure_jobs.shared.config.models import AJWorkspace
-from azure_jobs.shared.contract import routes as R
 
 
-def _get(path: str, **params: str) -> Any:
-    from azure_jobs.client.connection import (
-        DaemonClient,
-        _check_version,
-        _reachable,
-        daemon_required,
-        socket_path,
-        spawn_daemon,
-    )
-    from azure_jobs.shared import const
+@contextmanager
+def _client() -> Any:
+    """One short-lived client per lookup.
+
+    These run during setup, often before a workspace exists, so holding a
+    connection open across the prompts would pin a daemon context to a
+    half-finished ``aj init``.
+    """
+    from azure_jobs.client.connection import daemon_required, open_client
     from azure_jobs.shared.contract.errors import DaemonUnavailable
 
-    sock = socket_path()
     try:
-        if not _reachable(sock):
-            spawn_daemon(sock)
-        client = DaemonClient(sock, Path(const.AJ_HOME).resolve())
-    except Exception as exc:
-        raise daemon_required(exc) from exc
-    try:
-        _check_version(client.get(R.info()))
-        return client.get(path, params=params or None)
+        handle = open_client()
     except DaemonUnavailable:
         raise
     except Exception as exc:
         raise daemon_required(exc) from exc
+    try:
+        yield handle
     finally:
-        client.close()
+        handle.close()
+
+
+def auth_status() -> dict[str, Any]:
+    """Sign-in and credential health, as the daemon sees them."""
+    with _client() as d:
+        return dict(d.auth.status() or {})
 
 
 def account() -> dict[str, Any] | None:
     """The raw ``az account show`` payload the daemon sees, or ``None``."""
-    return _get(R.subscription())
+    return auth_status().get("account")
 
 
 def subscription() -> dict[str, str] | None:
@@ -62,7 +60,7 @@ def subscription() -> dict[str, str] | None:
 
 def credential() -> dict[str, Any]:
     """Health of the credential the daemon uses to reach Azure."""
-    return _get(R.credential()) or {}
+    return auth_status().get("credential") or {}
 
 
 def workspaces(subscription_id: str = "") -> list[dict[str, str]]:
@@ -75,31 +73,30 @@ def workspaces(subscription_id: str = "") -> list[dict[str, str]]:
     Flattened to the ``name``/``resource_group``/``location`` shape the display
     and prompt code already speaks, rather than leaking ``Target`` upwards.
     """
-    rows = _get(R.workspaces(), subscription_id=subscription_id) or []
-    out: list[dict[str, str]] = []
-    for row in rows:
-        meta = row.get("metadata") or {}
-        out.append(
-            {
-                "name": meta.get("workspace_name") or row.get("label", ""),
-                "resource_group": meta.get("resource_group", ""),
-                "location": meta.get("location", ""),
-                "subscription_id": meta.get("subscription_id", ""),
-            }
-        )
-    return out
+    with _client() as d:
+        found = d.ws.list(subscription_id=subscription_id)
+    return [
+        {
+            "name": target.metadata.get("workspace_name") or target.label,
+            "resource_group": target.metadata.get("resource_group", ""),
+            "location": target.metadata.get("location", ""),
+            "subscription_id": target.metadata.get("subscription_id", ""),
+        }
+        for target in found
+    ]
 
 
 def resolve(name: str | None = None) -> AJWorkspace | None:
     """Resolve a workspace name, or the configured one when *name* is empty."""
-    payload = _get(R.workspace(name or R.DEFAULT_WORKSPACE))
-    if not payload:
+    with _client() as d:
+        target = d.ws.get(name) if name else d.ws.current()
+    if target is None:
         return None
-    meta = payload.get("metadata") or {}
+    meta = target.metadata
     return AJWorkspace(
         subscription_id=meta.get("subscription_id", ""),
         resource_group=meta.get("resource_group", ""),
-        workspace_name=meta.get("workspace_name") or payload.get("label", ""),
+        workspace_name=meta.get("workspace_name") or target.label,
     )
 
 
@@ -210,6 +207,7 @@ def get_workspace_config() -> AJWorkspace:
 
 __all__ = [
     "account",
+    "auth_status",
     "credential",
     "get_workspace_config",
     "pick_workspace",
