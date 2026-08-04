@@ -1,4 +1,4 @@
-"""Tests for :class:`azure_jobs.az_client.ml.jobs.JobsAPI` helpers."""
+"""Tests for :class:`azure_jobs.server.az_client.ml.jobs.JobsAPI` helpers."""
 
 from __future__ import annotations
 
@@ -8,11 +8,11 @@ from unittest.mock import MagicMock, patch
 import pytest
 import requests
 
-from azure_jobs.az_client.ml.jobs import JobsAPI, apply_cutoff
-from azure_jobs.az_client.ml.extract import extract_rest_job
-from azure_jobs.errors import DeleteOutcomeUncertain, RestError
-from azure_jobs.journal import resolve_short_id
-from azure_jobs.utils.time import parse_utc
+from azure_jobs.server.az_client.ml.jobs import JobsAPI, apply_cutoff
+from azure_jobs.server.az_client.ml.extract import extract_rest_job
+from azure_jobs.shared.errors import DeleteOutcomeUncertain, RestError
+from azure_jobs.shared.journal import resolve_short_id
+from azure_jobs.shared.utils.time import parse_utc
 
 
 # ────────────────────────────────────────────────────────────────────────
@@ -21,7 +21,7 @@ from azure_jobs.utils.time import parse_utc
 
 
 def test_resolve_short_id_returns_input_when_no_match():
-    with patch("azure_jobs.journal.read_records", return_value=[]):
+    with patch("azure_jobs.shared.journal.read_records", return_value=[]):
         assert resolve_short_id("abcd1234") == "abcd1234"
 
 
@@ -30,13 +30,13 @@ def test_resolve_short_id_maps_to_azure_name():
         {"id": "abcd1234", "azure_name": "my-job-uuid"},
         {"id": "other", "azure_name": "other-job"},
     ]
-    with patch("azure_jobs.journal.read_records", return_value=records):
+    with patch("azure_jobs.shared.journal.read_records", return_value=records):
         assert resolve_short_id("abcd1234") == "my-job-uuid"
 
 
 def test_resolve_short_id_falls_back_when_azure_name_blank():
     records = [{"id": "abcd1234", "azure_name": ""}]
-    with patch("azure_jobs.journal.read_records", return_value=records):
+    with patch("azure_jobs.shared.journal.read_records", return_value=records):
         assert resolve_short_id("abcd1234") == "abcd1234"
 
 
@@ -225,7 +225,7 @@ def test_delete_calls_encoded_management_url():
     response.headers = {}
     api._ctx.session.delete.return_value = response
 
-    with patch("azure_jobs.az_client.ml.jobs.raise_for_rest_error") as raise_error:
+    with patch("azure_jobs.server.az_client.ml.jobs.raise_for_rest_error") as raise_error:
         api.delete("job/name")
 
     api._ctx.ensure_token.assert_called_once_with()
@@ -245,7 +245,7 @@ def test_delete_404_is_idempotent_success():
     response = MagicMock(status_code=404)
     api._ctx.session.delete.return_value = response
 
-    with patch("azure_jobs.az_client.ml.jobs.raise_for_rest_error") as raise_error:
+    with patch("azure_jobs.server.az_client.ml.jobs.raise_for_rest_error") as raise_error:
         api.delete("missing")
 
     raise_error.assert_not_called()
@@ -273,7 +273,7 @@ def test_delete_initial_http_error_remains_definitive():
 
     with (
         patch(
-            "azure_jobs.az_client.ml.jobs.raise_for_rest_error",
+            "azure_jobs.server.az_client.ml.jobs.raise_for_rest_error",
             side_effect=RestError("forbidden", status_code=403),
         ),
         pytest.raises(RestError, match="forbidden") as raised,
@@ -301,7 +301,7 @@ def test_delete_202_location_completes_on_200():
     api._ctx.session.delete.return_value = accepted
     api._ctx.session.get.return_value = present
 
-    with patch("azure_jobs.az_client.ml.jobs.raise_for_rest_error"):
+    with patch("azure_jobs.server.az_client.ml.jobs.raise_for_rest_error"):
         api.delete("job")
 
     assert api._ctx.session.get.call_count == 1
@@ -326,7 +326,7 @@ def test_delete_lro_uses_non_retry_poll_session():
     poll_session.get.return_value = complete
     api._delete_poll_session_factory = lambda: poll_session
 
-    with patch("azure_jobs.az_client.ml.jobs.raise_for_rest_error"):
+    with patch("azure_jobs.server.az_client.ml.jobs.raise_for_rest_error"):
         api.delete("job")
 
     poll_session.get.assert_called_once()
@@ -350,7 +350,7 @@ def test_delete_202_without_monitor_polls_resource_until_404():
     api._ctx.session.delete.return_value = accepted
     api._ctx.session.get.side_effect = [present, missing]
 
-    with patch("azure_jobs.az_client.ml.jobs.raise_for_rest_error"):
+    with patch("azure_jobs.server.az_client.ml.jobs.raise_for_rest_error"):
         api.delete("job")
 
     assert api._ctx.session.get.call_count == 2
@@ -378,7 +378,7 @@ def test_delete_202_surfaces_failed_operation():
     api._ctx.session.get.return_value = failed
 
     with (
-        patch("azure_jobs.az_client.ml.jobs.raise_for_rest_error"),
+        patch("azure_jobs.server.az_client.ml.jobs.raise_for_rest_error"),
         pytest.raises(RestError, match="retention policy"),
     ):
         api.delete("job")
@@ -406,7 +406,7 @@ def test_delete_operation_monitor_404_is_not_success():
 
     with (
         patch(
-            "azure_jobs.az_client.ml.jobs.raise_for_rest_error",
+            "azure_jobs.server.az_client.ml.jobs.raise_for_rest_error",
             side_effect=raise_error,
         ),
         pytest.raises(DeleteOutcomeUncertain, match="operation monitor missing"),
@@ -433,7 +433,7 @@ def test_delete_operation_monitor_requires_terminal_status():
     api._ctx.session.delete.return_value = accepted
     api._ctx.session.get.side_effect = [pending, succeeded]
 
-    with patch("azure_jobs.az_client.ml.jobs.raise_for_rest_error"):
+    with patch("azure_jobs.server.az_client.ml.jobs.raise_for_rest_error"):
         api.delete("job")
 
     assert api._ctx.session.get.call_count == 2
@@ -455,16 +455,16 @@ def test_delete_retry_after_is_bounded_by_deadline():
     clock = [0.0]
 
     with (
-        patch("azure_jobs.az_client.ml.jobs._DELETE_POLL_TIMEOUT", 1.0),
+        patch("azure_jobs.server.az_client.ml.jobs._DELETE_POLL_TIMEOUT", 1.0),
         patch(
-            "azure_jobs.az_client.ml.jobs.time.monotonic",
+            "azure_jobs.server.az_client.ml.jobs.time.monotonic",
             side_effect=lambda: clock[0],
         ),
         patch(
-            "azure_jobs.az_client.ml.jobs.time.sleep",
+            "azure_jobs.server.az_client.ml.jobs.time.sleep",
             side_effect=lambda delay: clock.__setitem__(0, clock[0] + delay),
         ),
-        patch("azure_jobs.az_client.ml.jobs.raise_for_rest_error"),
+        patch("azure_jobs.server.az_client.ml.jobs.raise_for_rest_error"),
         pytest.raises(DeleteOutcomeUncertain, match="Timed out"),
     ):
         api.delete("job")

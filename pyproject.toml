@@ -15,7 +15,7 @@ dependencies = [
 ]
 
 [project.scripts]
-aj = "azure_jobs.cli:main"
+aj = "azure_jobs.client.cli:main"
 
 [build-system]
 requires = ["hatchling", "hatch-vcs"]

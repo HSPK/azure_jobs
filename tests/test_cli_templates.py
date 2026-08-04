@@ -10,7 +10,7 @@ import pytest
 import yaml
 from click.testing import CliRunner
 
-from azure_jobs.cli import main
+from azure_jobs.client.cli import main
 
 from .helpers import MINIMAL_JOB_CONF, write_template
 
@@ -200,7 +200,7 @@ class TestTemplateDiffCommand:
             # Only git clone is subprocess now; diff uses Python difflib
             if "clone" in cmd:
                 # Create a clone dir that mirrors AJ_HOME so no diffs
-                from azure_jobs import const as _const
+                from azure_jobs.shared import const as _const
 
                 dest = cmd[-1]
                 import shutil as _sh
@@ -213,7 +213,7 @@ class TestTemplateDiffCommand:
                 args=cmd, returncode=0, stdout="", stderr=""
             )
 
-        with patch("azure_jobs.cli.templates.subprocess.run", side_effect=mock_run):
+        with patch("azure_jobs.client.cli.templates.subprocess.run", side_effect=mock_run):
             result = runner.invoke(main, ["template", "diff"])
         assert result.exit_code == 0
         assert "No differences" in result.output
@@ -241,7 +241,7 @@ class TestTemplateDiffCommand:
                 args=cmd, returncode=0, stdout="", stderr=""
             )
 
-        with patch("azure_jobs.cli.templates.subprocess.run", side_effect=mock_run):
+        with patch("azure_jobs.client.cli.templates.subprocess.run", side_effect=mock_run):
             result = runner.invoke(main, ["template", "diff"])
         assert result.exit_code == 0
         # Should contain diff markers

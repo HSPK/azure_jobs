@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from azure_jobs.api.client import spawn_daemon as _REAL_SPAWN_DAEMON
+from azure_jobs.client.connection import spawn_daemon as _REAL_SPAWN_DAEMON
 from unittest.mock import patch
 
 import pytest
@@ -24,7 +24,7 @@ def _isolate_daemon_runtime(tmp_path_factory, monkeypatch):
     monkeypatch.setenv("AJ_RUNTIME_DIR", str(runtime))
     # Nothing may spawn the real `ajd` binary during a unit test.
     monkeypatch.setattr(
-        "azure_jobs.api.client.spawn_daemon",
+        "azure_jobs.client.connection.spawn_daemon",
         lambda path: (_ for _ in ()).throw(
             AssertionError(f"a test tried to spawn a daemon at {path}")
         ),
@@ -35,7 +35,7 @@ def _isolate_daemon_runtime(tmp_path_factory, monkeypatch):
 @pytest.fixture
 def allow_daemon_spawn(monkeypatch):
     """Opt back into spawning a real `ajd`, for tests that verify startup."""
-    import azure_jobs.api.client as client_mod
+    import azure_jobs.client.connection as client_mod
 
     monkeypatch.setattr(client_mod, "spawn_daemon", _REAL_SPAWN_DAEMON)
     return _REAL_SPAWN_DAEMON
@@ -45,7 +45,7 @@ def _serve_daemon(tmp_path, monkeypatch, factory, target):
     """Bind and serve a Daemon over a socket under *tmp_path*."""
     import threading
 
-    from azure_jobs.api.daemon import Daemon
+    from azure_jobs.server.daemon import Daemon
 
     from .api_fakes import FakeTargetCatalog
 
@@ -64,10 +64,10 @@ def _serve_daemon(tmp_path, monkeypatch, factory, target):
     thread.start()
 
     monkeypatch.setattr(
-        "azure_jobs.api.azure.ConfigTargetCatalog.configured", lambda self: target
+        "azure_jobs.shared.targets.ConfigTargetCatalog.configured", lambda self: target
     )
     monkeypatch.setattr(
-        "azure_jobs.api.azure.ConfigTargetCatalog.discover", lambda self: (target,)
+        "azure_jobs.shared.targets.ConfigTargetCatalog.discover", lambda self: (target,)
     )
     daemon.factory = factory
     daemon.target = target
@@ -82,7 +82,7 @@ def cli_daemon(tmp_path, monkeypatch):
     process, those patches still apply, so the tests keep asserting real
     command behaviour while exercising the socket path.
     """
-    from azure_jobs.api.backend import AzureBackendFactory
+    from azure_jobs.server.backend import AzureBackendFactory
 
     from .api_fakes import make_target
 
@@ -118,7 +118,7 @@ def local_daemon(tmp_path, monkeypatch):
 @pytest.fixture(autouse=True)
 def _stub_azure_resolvers():
     """Avoid hitting Azure Resource Graph / ARM during submit pipeline tests."""
-    from azure_jobs.az_client import VCInfo, WorkspaceInfo
+    from azure_jobs.server.az_client import VCInfo, WorkspaceInfo
 
     fake_vc = VCInfo(
         name="stub-vc",
@@ -132,15 +132,15 @@ def _stub_azure_resolvers():
     )
     with (
         patch(
-            "azure_jobs.az_client.arm.vc.VCQuotaAPI.get_by_name",
+            "azure_jobs.server.az_client.arm.vc.VCQuotaAPI.get_by_name",
             return_value=fake_vc,
         ),
         patch(
-            "azure_jobs.az_client.arm.compute.ComputesAPI.get_workspace",
+            "azure_jobs.server.az_client.arm.compute.ComputesAPI.get_workspace",
             return_value=fake_ws,
         ),
         patch(
-            "azure_jobs.az_client.arm.workspace.WorkspacesAPI.get",
+            "azure_jobs.server.az_client.arm.workspace.WorkspacesAPI.get",
             return_value=fake_ws,
         ),
     ):
@@ -152,21 +152,21 @@ def aj_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Create an isolated AJ_HOME directory with all sub-paths wired up."""
     home = tmp_path / ".azure_jobs"
     home.mkdir()
-    monkeypatch.setattr("azure_jobs.const.AJ_HOME", home)
-    monkeypatch.setattr("azure_jobs.const.AJ_CONFIG", home / "aj_config.json")
-    monkeypatch.setattr("azure_jobs.const.AJ_RECORD", home / "record.jsonl")
+    monkeypatch.setattr("azure_jobs.shared.const.AJ_HOME", home)
+    monkeypatch.setattr("azure_jobs.shared.const.AJ_CONFIG", home / "aj_config.json")
+    monkeypatch.setattr("azure_jobs.shared.const.AJ_RECORD", home / "record.jsonl")
 
     template_home = home / "template"
     template_home.mkdir()
-    monkeypatch.setattr("azure_jobs.const.AJ_TEMPLATE_HOME", template_home)
+    monkeypatch.setattr("azure_jobs.shared.const.AJ_TEMPLATE_HOME", template_home)
 
     submission_home = home / "submission"
     submission_home.mkdir()
-    monkeypatch.setattr("azure_jobs.const.AJ_SUBMISSION_HOME", submission_home)
+    monkeypatch.setattr("azure_jobs.shared.const.AJ_SUBMISSION_HOME", submission_home)
 
     dryrun_home = home / "dryrun"
     dryrun_home.mkdir()
-    monkeypatch.setattr("azure_jobs.const.AJ_DRYRUN_HOME", dryrun_home)
+    monkeypatch.setattr("azure_jobs.shared.const.AJ_DRYRUN_HOME", dryrun_home)
 
     return home
 

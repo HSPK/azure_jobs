@@ -14,10 +14,10 @@ from pathlib import Path
 
 import pytest
 
-from azure_jobs.api import MIN_PROTOCOL_VERSION, PROTOCOL_VERSION
-from azure_jobs.api.models import Job, JobRef, SubmitOutcome
-from azure_jobs.api.queue import SubmissionQueue
-from azure_jobs.api.watch import JobWatcher
+from azure_jobs.shared.contract import MIN_PROTOCOL_VERSION, PROTOCOL_VERSION
+from azure_jobs.shared.contract.models import Job, JobRef, SubmitOutcome
+from azure_jobs.server.queue import SubmissionQueue
+from azure_jobs.server.watch import JobWatcher
 
 from .api_fakes import make_job
 
@@ -26,26 +26,26 @@ class TestThereIsNoInProcessMode:
     def test_open_backend_has_no_bypass_parameters(self):
         import inspect
 
-        from azure_jobs.api.client import open_backend
+        from azure_jobs.client.connection import open_backend
 
         params = inspect.signature(open_backend).parameters
         assert "prefer_daemon" not in params
 
     def test_no_module_offers_an_in_process_client(self):
-        import azure_jobs.api.client as client_mod
+        import azure_jobs.client.connection as client_mod
 
         assert not hasattr(client_mod, "daemon_disabled")
         assert "AJ_NO_DAEMON" not in inspect_source(client_mod)
 
     def test_the_cli_never_builds_a_backend_itself(self):
-        from azure_jobs.cli import _backend as cli_backend
+        from azure_jobs.client.cli import _backend as cli_backend
 
         source = inspect_source(cli_backend)
         assert "AzureBackend(" not in source
         assert "AJ_NO_DAEMON" not in source
 
     def test_the_azure_backend_is_not_exported_as_a_client_entry_point(self):
-        from azure_jobs import api
+        from azure_jobs.shared import contract as api
 
         assert not hasattr(api, "AzureBackend")
 
@@ -205,7 +205,7 @@ class TestConnectionResourcesAreBounded:
     """P1: a long-lived daemon accumulated a thread per CLI invocation."""
 
     def test_finished_connection_threads_are_reclaimed(self, local_daemon):
-        from azure_jobs.api.client import RpcConnection, _connect_socket
+        from azure_jobs.client.connection import RpcConnection, _connect_socket
 
         conns = [
             RpcConnection(_connect_socket(local_daemon.socket_path))
@@ -224,13 +224,13 @@ class TestConnectionResourcesAreBounded:
         assert len(local_daemon._threads) <= 2
 
     def test_a_connection_ceiling_exists(self):
-        from azure_jobs.api.daemon import MAX_CONNECTIONS
+        from azure_jobs.server.daemon import MAX_CONNECTIONS
 
         assert MAX_CONNECTIONS > 0
 
 
 def _open_session(daemon):
-    from azure_jobs.api.daemon import aj_version
+    from azure_jobs.shared.version import aj_version
 
     from .api_fakes import make_target
 

@@ -16,18 +16,18 @@ from pathlib import Path
 
 import pytest
 
-from azure_jobs.api import PROTOCOL_VERSION
-from azure_jobs.api.client import (
+from azure_jobs.shared.contract import PROTOCOL_VERSION
+from azure_jobs.client.connection import (
     RpcConnection,
     _connect_socket,
     open_backend,
     runtime_dir,
     socket_path,
 )
-from azure_jobs.api.daemon import Daemon, aj_version
-from azure_jobs.api.errors import DaemonUnavailable, RemoteError, TransportError
-from azure_jobs.api.models import Target
-from azure_jobs.api.rpc import (
+from azure_jobs.server.daemon import Daemon, aj_version
+from azure_jobs.shared.contract.errors import DaemonUnavailable, RemoteError, TransportError
+from azure_jobs.shared.contract.models import Target
+from azure_jobs.shared.contract.rpc import (
     MAX_FRAME_BYTES,
     FrameReader,
     FrameTooLarge,
@@ -38,7 +38,7 @@ from azure_jobs.api.rpc import (
     request,
     result,
 )
-from azure_jobs.errors import RestError
+from azure_jobs.shared.errors import RestError
 
 from .api_fakes import FakeFactory, FakeTargetCatalog, make_target
 
@@ -292,9 +292,9 @@ class TestNoSilentDowngrade:
             def __init__(self, target):
                 raise AssertionError("must not run in-process implicitly")
 
-        monkeypatch.setattr("azure_jobs.api.backend.AzureBackend", Fake)
+        monkeypatch.setattr("azure_jobs.server.backend.AzureBackend", Fake)
         monkeypatch.setattr(
-            "azure_jobs.api.client.connect_daemon",
+            "azure_jobs.client.connection.connect_daemon",
             lambda *a, **k: (_ for _ in ()).throw(RuntimeError("wedged")),
         )
         with pytest.raises(DaemonUnavailable):
@@ -304,7 +304,7 @@ class TestNoSilentDowngrade:
         """The daemon is the only execution path; no env var bypasses it."""
         import inspect
 
-        from azure_jobs.api import client
+        from azure_jobs.client import connection as client
 
         source = inspect.getsource(client)
         assert "AJ_NO_DAEMON" not in source
@@ -315,7 +315,7 @@ class TestNoSilentDowngrade:
         self, tmp_path, monkeypatch, allow_daemon_spawn
     ):
         """Autostart must actually produce a working daemon, then be cleanable."""
-        from azure_jobs.api.client import connect_daemon
+        from azure_jobs.client.connection import connect_daemon
 
         monkeypatch.setenv("AJ_RUNTIME_DIR", str(tmp_path))
         sock = tmp_path / "daemon.sock"
@@ -336,7 +336,7 @@ class TestNoSilentDowngrade:
                 time.sleep(0.05)
 
     def test_connect_without_autostart_reports_unavailable(self, tmp_path):
-        from azure_jobs.api.client import connect_daemon
+        from azure_jobs.client.connection import connect_daemon
 
         with pytest.raises(DaemonUnavailable):
             connect_daemon(

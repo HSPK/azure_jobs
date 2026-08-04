@@ -6,14 +6,14 @@ import io
 import json
 import sys
 
-from azure_jobs.utils.ui import (
+from azure_jobs.client.ui import (
     Column,
     TableView,
     get_output_mode,
     render_table,
     set_output_mode,
 )
-from azure_jobs.utils.ui.tables import show_sing_images_table
+from azure_jobs.client.ui.tables import show_sing_images_table
 
 
 def _capture_stdout(fn) -> str:

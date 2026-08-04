@@ -15,19 +15,19 @@ from pathlib import Path
 
 import pytest
 
-from azure_jobs.api.client import (
+from azure_jobs.client.connection import (
     CALL_TIMEOUT,
     RpcConnection,
     _connect_socket,
     _secure_runtime_dir,
     open_backend,
 )
-from azure_jobs.api.errors import DaemonUnavailable, TransportError
-from azure_jobs.api.backend import _spec_from_payload
-from azure_jobs.api.models import JobRef, SubmitOutcome, Target
-from azure_jobs.api.queue import SubmissionQueue
-from azure_jobs.api.resilient import ResilientBackend
-from azure_jobs.job.spec import JobSpec
+from azure_jobs.shared.contract.errors import DaemonUnavailable, TransportError
+from azure_jobs.server.backend import _spec_from_payload
+from azure_jobs.shared.contract.models import JobRef, SubmitOutcome, Target
+from azure_jobs.server.queue import SubmissionQueue
+from azure_jobs.client.resilient import ResilientBackend
+from azure_jobs.shared.job.spec import JobSpec
 
 from .api_fakes import FakeBackend, make_target
 
@@ -37,17 +37,17 @@ class TestBackendSpecSurvivesTheWire:
 
     @pytest.mark.parametrize("service", ["aml", "sing", "volcano"])
     def test_typed_opts_are_rebuilt(self, service):
-        import azure_jobs.backend.azureml  # noqa: F401  (registers aml/sing)
-        import azure_jobs.backend.volcano  # noqa: F401  (registers volcano)
-        from azure_jobs.backend import get_backend
+        import azure_jobs.server.submit.azureml  # noqa: F401  (registers aml/sing)
+        import azure_jobs.server.submit.volcano  # noqa: F401  (registers volcano)
+        from azure_jobs.server.submit import get_backend
 
         opts = get_backend(service).build_spec_backend(None) if False else None
         if service == "volcano":
-            from azure_jobs.backend.volcano.opts import VolcanoOpts
+            from azure_jobs.shared.opts.volcano import VolcanoOpts
 
             opts = VolcanoOpts(queue="q", cpus_per_node=4, memory="16Gi")
         else:
-            from azure_jobs.backend.azureml.opts import AmlOpts
+            from azure_jobs.shared.opts.aml import AmlOpts
 
             opts = AmlOpts(compute="gpu-cluster")
 
@@ -58,14 +58,14 @@ class TestBackendSpecSurvivesTheWire:
         assert rebuilt.backend_spec == opts
 
     def test_a_backend_without_opts_stays_none(self):
-        import azure_jobs.backend.amlt  # noqa: F401
+        import azure_jobs.server.submit.amlt  # noqa: F401
 
         spec = JobSpec(name="j", service="amlt")
         payload = json.loads(json.dumps(spec.to_dict()))
         assert _spec_from_payload(payload).backend_spec is None
 
     def test_storage_mounts_survive(self):
-        from azure_jobs.job.spec import StorageMount
+        from azure_jobs.shared.job.spec import StorageMount
 
         spec = JobSpec(
             name="j",
@@ -99,7 +99,7 @@ class TestRuntimeDirectoryIsTrusted:
         _secure_runtime_dir(target)
 
     def test_daemon_refuses_to_bind_in_a_shared_dir(self, tmp_path):
-        from azure_jobs.api.daemon import Daemon
+        from azure_jobs.server.daemon import Daemon
 
         shared = tmp_path / "shared"
         shared.mkdir(mode=0o777)
@@ -202,7 +202,7 @@ class TestResilientSession:
 
     def test_a_real_backend_error_is_not_retried(self):
         """A 403 must propagate; only transport loss triggers a reconnect."""
-        from azure_jobs.errors import RestError
+        from azure_jobs.shared.errors import RestError
 
         remote = FakeBackend(make_target())
         remote.jobs.raises = RestError("denied", status_code=403)
@@ -222,7 +222,7 @@ class TestInProcessIsCapabilityEquivalent:
     """Falling back must not turn optional ports into AttributeError."""
 
     def test_queue_and_watcher_are_present(self, monkeypatch):
-        from azure_jobs.api.backend import AzureBackend
+        from azure_jobs.server.backend import AzureBackend
 
         class _Client:
             jobs = object()
@@ -234,7 +234,7 @@ class TestInProcessIsCapabilityEquivalent:
                 pass
 
         monkeypatch.setattr(
-            "azure_jobs.api.backend._open_client", lambda target: _Client()
+            "azure_jobs.server.backend._open_client", lambda target: _Client()
         )
         backend = AzureBackend(make_target())
         try:
@@ -265,14 +265,14 @@ class TestTokenCacheIdentity:
     """A cached token must not outlive the login it was issued for."""
 
     def test_key_changes_when_the_azure_profile_changes(self, tmp_path, monkeypatch):
-        from azure_jobs.az_client import auth
+        from azure_jobs.server.az_client import auth
 
         home = tmp_path / "home"
         (home / ".azure").mkdir(parents=True)
         profile = home / ".azure" / "azureProfile.json"
         profile.write_text('{"subscriptions": [{"id": "a"}]}', encoding="utf-8")
         monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
-        monkeypatch.setattr("azure_jobs.const.AJ_CACHE_HOME", tmp_path / "cache")
+        monkeypatch.setattr("azure_jobs.shared.const.AJ_CACHE_HOME", tmp_path / "cache")
 
         before = auth._token_cache_path("scope://a")
         time.sleep(0.01)
@@ -281,9 +281,9 @@ class TestTokenCacheIdentity:
         assert before != after
 
     def test_key_changes_with_an_explicit_subscription(self, tmp_path, monkeypatch):
-        from azure_jobs.az_client import auth
+        from azure_jobs.server.az_client import auth
 
-        monkeypatch.setattr("azure_jobs.const.AJ_CACHE_HOME", tmp_path / "cache")
+        monkeypatch.setattr("azure_jobs.shared.const.AJ_CACHE_HOME", tmp_path / "cache")
         monkeypatch.delenv("AZURE_SUBSCRIPTION_ID", raising=False)
         before = auth._token_cache_path("scope://a")
         monkeypatch.setenv("AZURE_SUBSCRIPTION_ID", "other-sub")
@@ -294,7 +294,7 @@ class TestSocketOwnership:
     """A retiring daemon must not delete its successor's socket."""
 
     def test_shutdown_leaves_a_replacement_socket_alone(self, tmp_path):
-        from azure_jobs.api.daemon import Daemon
+        from azure_jobs.server.daemon import Daemon
 
         from .api_fakes import FakeFactory, FakeTargetCatalog
 
@@ -324,7 +324,7 @@ class TestDesktopNotificationEscaping:
     """A job display_name is attacker-controlled on a shared workspace."""
 
     def test_osascript_receives_arguments_not_spliced_source(self, monkeypatch):
-        from azure_jobs.cli import watch as watch_mod
+        from azure_jobs.client.cli import watch as watch_mod
 
         calls: list[list[str]] = []
         monkeypatch.setattr(watch_mod.sys, "platform", "darwin")
@@ -342,7 +342,7 @@ class TestDesktopNotificationEscaping:
         assert hostile in cmd[3:], "payload should travel as an argv entry"
 
     def test_notify_send_uses_a_terminator(self, monkeypatch):
-        from azure_jobs.cli import watch as watch_mod
+        from azure_jobs.client.cli import watch as watch_mod
 
         calls: list[list[str]] = []
         monkeypatch.setattr(watch_mod.sys, "platform", "linux")
@@ -359,7 +359,7 @@ class TestDaemonFailureIsReportedNotWorkedAround:
 
     @pytest.fixture
     def _wired(self, tmp_path, monkeypatch):
-        from azure_jobs.api.models import Target
+        from azure_jobs.shared.contract.models import Target
 
         monkeypatch.setenv("AJ_RUNTIME_DIR", str(tmp_path))
         target = Target.create(
@@ -373,11 +373,11 @@ class TestDaemonFailureIsReportedNotWorkedAround:
             },
         )
         monkeypatch.setattr(
-            "azure_jobs.api.azure.ConfigTargetCatalog.configured",
+            "azure_jobs.shared.targets.ConfigTargetCatalog.configured",
             lambda self: target,
         )
         monkeypatch.setattr(
-            "azure_jobs.api.client.spawn_daemon",
+            "azure_jobs.client.connection.spawn_daemon",
             lambda path: (_ for _ in ()).throw(RuntimeError("daemon missing")),
         )
 
@@ -395,7 +395,7 @@ class TestDaemonFailureIsReportedNotWorkedAround:
     def test_commands_report_the_daemon_not_a_traceback(self, _wired, command):
         from click.testing import CliRunner
 
-        from azure_jobs.cli import main
+        from azure_jobs.client.cli import main
 
         result = CliRunner().invoke(main, command)
         assert result.exit_code != 0
@@ -407,7 +407,7 @@ class TestDaemonFailureIsReportedNotWorkedAround:
         """A command's own error handler must not bury the instructions."""
         from click.testing import CliRunner
 
-        from azure_jobs.cli import main
+        from azure_jobs.client.cli import main
 
         result = CliRunner().invoke(main, ["sa", "list"])
         assert result.output.count("The aj daemon is unavailable") == 1
@@ -418,7 +418,7 @@ class TestWorkspaceComputesShape:
     """Regression: `aj quota --aml` crashed on dataclasses where dicts were promised."""
 
     def _account(self, monkeypatch, pairs):
-        from azure_jobs.api.backend import AzureAccount
+        from azure_jobs.server.backend import AzureAccount
 
         class _Arm:
             class workspace:
@@ -445,11 +445,11 @@ class TestWorkspaceComputesShape:
         def fake_arm(subscription_id):
             yield _Arm()
 
-        monkeypatch.setattr("azure_jobs.api.backend._arm", fake_arm)
+        monkeypatch.setattr("azure_jobs.server.backend._arm", fake_arm)
         return AzureAccount("sub")
 
     def test_pairs_are_plain_json_ready_dicts(self, monkeypatch):
-        from azure_jobs.az_client import ComputeInfo, WorkspaceInfo
+        from azure_jobs.server.az_client import ComputeInfo, WorkspaceInfo
 
         ws = WorkspaceInfo(
             name="ws", resource_group="rg", subscription_id="s", location="eastus"
@@ -472,7 +472,7 @@ class TestWorkspaceComputesShape:
     def test_subscriptions_carry_their_id_as_the_name(self, monkeypatch):
         from contextlib import contextmanager
 
-        from azure_jobs.api.backend import AzureAccount
+        from azure_jobs.server.backend import AzureAccount
 
         class _Arm:
             class subscriptions:
@@ -484,7 +484,7 @@ class TestWorkspaceComputesShape:
         def fake_arm(subscription_id):
             yield _Arm()
 
-        monkeypatch.setattr("azure_jobs.api.backend._arm", fake_arm)
+        monkeypatch.setattr("azure_jobs.server.backend._arm", fake_arm)
         items = AzureAccount().subscriptions()
         assert [i.name for i in items] == ["sub-aaa", "sub-bbb"]
 
@@ -496,8 +496,8 @@ class TestUnencodableResultIsolation:
         import socket as socket_mod
         import threading as threading_mod
 
-        from azure_jobs.api.rpc import FrameReader, FrameWriter, request, serve_connection
-        from azure_jobs.az_client import WorkspaceInfo
+        from azure_jobs.shared.contract.rpc import FrameReader, FrameWriter, request, serve_connection
+        from azure_jobs.server.az_client import WorkspaceInfo
 
         server, client = socket_mod.socketpair()
 
@@ -527,7 +527,7 @@ class TestWorkspaceOverrideResolution:
     """`--ws` must prefer the configured subscription, not `az account show`."""
 
     def test_ws_override_goes_through_resolve_workspace(self, monkeypatch):
-        from azure_jobs.config import AJWorkspace
+        from azure_jobs.shared.config import AJWorkspace
 
         calls: list[str] = []
 
@@ -539,14 +539,14 @@ class TestWorkspaceOverrideResolution:
                 workspace_name=name,
             )
 
-        monkeypatch.setattr("azure_jobs.config.resolve_workspace", fake_resolve)
+        monkeypatch.setattr("azure_jobs.shared.config.resolve_workspace", fake_resolve)
         monkeypatch.setattr(
-            "azure_jobs.api.azure.ConfigTargetCatalog.discover",
+            "azure_jobs.shared.targets.ConfigTargetCatalog.discover",
             lambda self: (_ for _ in ()).throw(
                 AssertionError("must not discover for --ws")
             ),
         )
-        from azure_jobs.cli._backend import configured_target
+        from azure_jobs.client.cli._backend import configured_target
 
         target = configured_target("other-ws")
         assert calls == ["other-ws"]
@@ -556,7 +556,7 @@ class TestWorkspaceOverrideResolution:
 
 class TestCatalogItemIsUsableInCollections:
     def test_a_dict_backed_item_is_hashable(self):
-        from azure_jobs.api.models import CatalogItem
+        from azure_jobs.shared.contract.models import CatalogItem
 
         item = CatalogItem("compute", "gpu", {"vm_size": "ND96"})
         assert len({item, CatalogItem("compute", "gpu", {"other": 1})}) == 1

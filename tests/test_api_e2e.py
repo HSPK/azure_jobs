@@ -17,9 +17,9 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
-from azure_jobs.api import PROTOCOL_VERSION
-from azure_jobs.api.client import RpcConnection, _connect_socket
-from azure_jobs.api.daemon import aj_version
+from azure_jobs.shared.contract import PROTOCOL_VERSION
+from azure_jobs.client.connection import RpcConnection, _connect_socket
+from azure_jobs.shared.version import aj_version
 
 from .api_fakes import make_target
 
@@ -42,7 +42,7 @@ def live_daemon(tmp_path):
         [
             sys.executable,
             "-m",
-            "azure_jobs.api.daemon_main",
+            "azure_jobs.server.main",
             "--socket",
             str(sock),
             "--idle-timeout",
@@ -111,8 +111,8 @@ class TestLiveDaemonProcess:
     def test_a_client_below_the_range_is_refused_by_the_real_process(
         self, live_daemon
     ):
-        from azure_jobs.api import MIN_PROTOCOL_VERSION
-        from azure_jobs.api.errors import ProtocolMismatch
+        from azure_jobs.shared.contract import MIN_PROTOCOL_VERSION
+        from azure_jobs.shared.contract.errors import ProtocolMismatch
 
         sock, _ = live_daemon
         conn = RpcConnection(_connect_socket(sock))
@@ -155,7 +155,7 @@ class TestLiveDaemonProcess:
 
 class TestDaemonCli:
     def test_status_reports_no_daemon_when_absent(self, tmp_path, monkeypatch):
-        from azure_jobs.cli.daemon import daemon_status
+        from azure_jobs.client.cli.daemon import daemon_status
 
         monkeypatch.setenv("AJ_RUNTIME_DIR", str(tmp_path))
         result = CliRunner().invoke(daemon_status, [])
@@ -163,7 +163,7 @@ class TestDaemonCli:
         assert "No daemon running" in result.output
 
     def test_status_reports_a_live_daemon(self, live_daemon, monkeypatch):
-        from azure_jobs.cli.daemon import daemon_status
+        from azure_jobs.client.cli.daemon import daemon_status
 
         sock, proc = live_daemon
         monkeypatch.setenv("AJ_RUNTIME_DIR", str(sock.parent))
@@ -173,7 +173,7 @@ class TestDaemonCli:
         assert "sessions" in result.output
 
     def test_status_flags_a_stale_socket(self, tmp_path, monkeypatch):
-        from azure_jobs.cli.daemon import daemon_status
+        from azure_jobs.client.cli.daemon import daemon_status
 
         monkeypatch.setenv("AJ_RUNTIME_DIR", str(tmp_path))
         (tmp_path / "daemon.sock").write_text("", encoding="utf-8")
@@ -182,7 +182,7 @@ class TestDaemonCli:
         assert "stale" in result.output
 
     def test_stop_removes_a_stale_socket(self, tmp_path, monkeypatch):
-        from azure_jobs.cli.daemon import daemon_stop
+        from azure_jobs.client.cli.daemon import daemon_stop
 
         monkeypatch.setenv("AJ_RUNTIME_DIR", str(tmp_path))
         stale = tmp_path / "daemon.sock"
@@ -194,7 +194,7 @@ class TestDaemonCli:
     def test_start_then_stop_round_trip(
         self, tmp_path, monkeypatch, allow_daemon_spawn
     ):
-        from azure_jobs.cli.daemon import daemon_start, daemon_status, daemon_stop
+        from azure_jobs.client.cli.daemon import daemon_start, daemon_status, daemon_stop
 
         monkeypatch.setenv("AJ_RUNTIME_DIR", str(tmp_path))
         runner = CliRunner()
@@ -217,11 +217,11 @@ class TestDaemonCli:
         self, tmp_path, monkeypatch
     ):
         """A missing daemon must be an actionable message, not a traceback."""
-        from azure_jobs.cli.queue import queue_list
+        from azure_jobs.client.cli.queue import queue_list
 
         monkeypatch.setenv("AJ_RUNTIME_DIR", str(tmp_path))
         monkeypatch.setattr(
-            "azure_jobs.api.azure.ConfigTargetCatalog.configured",
+            "azure_jobs.shared.targets.ConfigTargetCatalog.configured",
             lambda self: None,
         )
         result = CliRunner().invoke(queue_list, [])

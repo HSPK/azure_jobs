@@ -5,12 +5,13 @@ from __future__ import annotations
 import pytest
 from click.testing import CliRunner
 
-from azure_jobs.cli import main
-from azure_jobs.az_client.arm import InstanceTypeInfo, VCInfo
-from azure_jobs.errors import SkuResolveError
-from azure_jobs.backend.azureml.sku import (
+from azure_jobs.client.cli import main
+from azure_jobs.server.az_client.arm import InstanceTypeInfo, VCInfo
+from azure_jobs.shared.errors import SkuResolveError
+from azure_jobs.server.submit.azureml.sku_match import match_instance_type
+from azure_jobs.shared.sku import (
     SkuSpec,
-    match_instance_type,
+
 )
 
 # ---------------------------------------------------------------------------
@@ -86,7 +87,7 @@ class TestSkuSpecParse:
 
 class TestRowToInfo:
     def test_parses_scratch_storage(self):
-        from azure_jobs.az_client.arm.instance_types import _row_to_info
+        from azure_jobs.server.az_client.arm.instance_types import _row_to_info
 
         row = {
             "name": "Singularity.ND96isr_H100_v5",
@@ -106,7 +107,7 @@ class TestRowToInfo:
         assert info.nvlink is True
 
     def test_scratch_missing(self):
-        from azure_jobs.az_client.arm.instance_types import _row_to_info
+        from azure_jobs.server.az_client.arm.instance_types import _row_to_info
 
         row = {
             "name": "Singularity.E16ads_v5",
@@ -201,7 +202,7 @@ _SERIES_HW = {
 
 
 def _vc(name="vc", series=("Eadsv5", "NDAMv4", "NDv4")):
-    from azure_jobs.az_client.arm import SeriesQuota, SlaTierQuota
+    from azure_jobs.server.az_client.arm import SeriesQuota, SlaTierQuota
 
     vc = VCInfo(
         name=name,

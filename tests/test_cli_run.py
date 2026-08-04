@@ -7,15 +7,20 @@ import pytest
 import yaml
 from click.testing import CliRunner
 
-from azure_jobs.cli import main
-from azure_jobs.cli.run import resolve_name
-from azure_jobs.backend.azureml.sku import resolve_sku
-from azure_jobs.job import JobResult
+from azure_jobs.client.cli import main
+from azure_jobs.client.cli.run import resolve_name
+from azure_jobs.shared.sku import resolve_sku
+from azure_jobs.shared.job import JobResult
 
 from .helpers import MINIMAL_JOB_CONF, write_template
 
 
 class TestRunCommand:
+    @pytest.fixture(autouse=True)
+    def _daemon(self, cli_daemon):
+        """Submission runs in the daemon now, so these need one serving."""
+        yield cli_daemon
+
     def test_no_template_specified(self, aj_env):
         """When no -t and no default in config, should error."""
         aj_env["config_fp"].write_text("{}")
@@ -239,7 +244,7 @@ class TestRunCommand:
             job_name="test-job", status="submitted", portal_url="https://example.com"
         )
         with patch(
-            "azure_jobs.backend.azureml.entry.submit", return_value=mock_result
+            "azure_jobs.server.submit.azureml.entry.submit", return_value=mock_result
         ):
             result = runner.invoke(main, ["run", "echo", "hello"])
         assert result.exit_code == 0
@@ -303,6 +308,11 @@ class TestResolveName:
 
 
 class TestRunErrorPaths:
+    @pytest.fixture(autouse=True)
+    def _daemon(self, cli_daemon):
+        """Submission runs in the daemon now, so these need one serving."""
+        yield cli_daemon
+
     def test_missing_jobs_in_template(self, aj_env):
         """Template with no jobs key should give a clear error."""
         conf = {"description": "placeholder"}
@@ -343,7 +353,7 @@ class TestRunErrorPaths:
             job_name="test", status="failed", error="auth failed"
         )
         with patch(
-            "azure_jobs.backend.azureml.entry.submit", return_value=mock_result
+            "azure_jobs.server.submit.azureml.entry.submit", return_value=mock_result
         ):
             result = runner.invoke(main, ["run", "echo", "hello"])
         assert result.exit_code != 0
@@ -371,7 +381,7 @@ class TestRunErrorPaths:
             job_name="test", status="failed", error="compute not found"
         )
         with patch(
-            "azure_jobs.backend.azureml.entry.submit", return_value=mock_result
+            "azure_jobs.server.submit.azureml.entry.submit", return_value=mock_result
         ):
             runner.invoke(main, ["run", "echo", "hello"])
         assert aj_env["record_fp"].exists()

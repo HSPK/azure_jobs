@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from azure_jobs.backend.volcano import (
+from azure_jobs.server.submit.volcano import (
     BlobUploader,
     BlobUploadOpts,
     CodeUploadResult,
@@ -18,16 +18,16 @@ from azure_jobs.backend.volcano import (
     pick_uploader,
     resolve_namespace,
 )
-from azure_jobs.backend.volcano.config import VolcanoConfig
-from azure_jobs.backend.volcano.entry import submit_via_volcano
-from azure_jobs.backend.volcano.uploaders import blob as blob_mod
-from azure_jobs.backend.volcano.uploaders._scripts import load_script
-from azure_jobs.errors import ConfigError
-from azure_jobs.job.spec import (
+from azure_jobs.server.submit.volcano.config import VolcanoConfig
+from azure_jobs.server.submit.volcano.entry import submit_via_volcano
+from azure_jobs.server.submit.volcano.uploaders import blob as blob_mod
+from azure_jobs.server.submit.volcano.uploaders._scripts import load_script
+from azure_jobs.shared.errors import ConfigError
+from azure_jobs.shared.job.spec import (
     JobResult,
     JobSpec,
 )
-from azure_jobs.template.models import Template
+from azure_jobs.shared.template.models import Template
 
 
 def _blob_extra(**blob: object) -> dict:
@@ -48,7 +48,7 @@ class TestExtraField:
 
     def test_build_job_spec_passes_extra_through_untouched(self, tmp_path: Path):
         """build_job_spec must passthrough _extra opaquely; backend refines add their own slot."""
-        from azure_jobs.job import build_job_spec
+        from azure_jobs.shared.job import build_job_spec
 
         extra = {
             "code_upload": {
@@ -87,7 +87,7 @@ class TestExtraField:
         assert spec.extra["future_feature"] == extra["future_feature"]
         # The Volcano backend's typed config lives in the dedicated
         # backend_spec slot, NOT in extra (extra is _extra passthrough).
-        from azure_jobs.backend.volcano.opts import VolcanoOpts
+        from azure_jobs.shared.opts.volcano import VolcanoOpts
 
         assert isinstance(spec.backend_spec, VolcanoOpts)
         assert "volcano" not in spec.extra
@@ -95,7 +95,7 @@ class TestExtraField:
         assert not hasattr(spec, "code_upload")
 
     def test_default_backend_spec_is_typed(self, tmp_path: Path):
-        from azure_jobs.job import build_job_spec
+        from azure_jobs.shared.job import build_job_spec
 
         tmpl = Template.from_dict({"jobs": [{"name": "j", "sku": "x"}]})
         spec = build_job_spec(
@@ -111,7 +111,7 @@ class TestExtraField:
         )
         # Default service is "aml" → AML build_spec_backend produces a
         # typed AmlOpts in the dedicated backend_spec slot.
-        from azure_jobs.backend.azureml.opts import AmlOpts
+        from azure_jobs.shared.opts.aml import AmlOpts
 
         assert isinstance(spec.backend_spec, AmlOpts)
         assert spec.backend_spec.identity == "managed"
@@ -151,8 +151,8 @@ class TestPickUploader:
 
     def test_register_uploader_is_gone(self):
         """Two-strategy if/else dispatch — no register_uploader to misuse."""
-        import azure_jobs.backend.volcano as _vol
-        import azure_jobs.backend.volcano.uploaders as _up
+        import azure_jobs.server.submit.volcano as _vol
+        import azure_jobs.server.submit.volcano.uploaders as _up
 
         assert not hasattr(_vol, "register_uploader")
         assert not hasattr(_up, "register_uploader")
@@ -199,7 +199,7 @@ class TestUploaderDispatchRemoved:
     """Sanity: the old registry-like API has been deleted."""
 
     def test_no_register_or_strategies_dict(self):
-        import azure_jobs.backend.volcano.uploaders as _up
+        import azure_jobs.server.submit.volcano.uploaders as _up
 
         for gone in ("_STRATEGIES", "register_uploader", "available_strategies",
                      "get_code_uploader", "strategy_from_extra"):
@@ -229,7 +229,7 @@ class TestKubectlExecUploader:
         spec = JobSpec(name="j-abc", service="volcano")
         u = KubectlExecUploader()
         with patch(
-            "azure_jobs.backend.volcano.uploaders.kubectl_exec.upload_code_to_pvc",
+            "azure_jobs.server.submit.volcano.uploaders.kubectl_exec.upload_code_to_pvc",
             return_value=(True, ""),
         ) as m:
             r = u.prepare(cfg, spec, namespace="ns")
@@ -243,7 +243,7 @@ class TestKubectlExecUploader:
         spec = JobSpec(name="j-abc", service="volcano")
         u = KubectlExecUploader()
         with patch(
-            "azure_jobs.backend.volcano.uploaders.kubectl_exec.upload_code_to_pvc",
+            "azure_jobs.server.submit.volcano.uploaders.kubectl_exec.upload_code_to_pvc",
             return_value=(False, "kubectl apply exit=1\nstderr: Forbidden"),
         ):
             r = u.prepare(cfg, spec, namespace="ns")
@@ -254,7 +254,7 @@ class TestKubectlExecUploader:
         cfg = _vol_cfg(code_dir=str(tmp_path), pvc_name="", pvc_mount_dir="")
         spec = JobSpec(name="j-abc", service="volcano")
         with patch(
-            "azure_jobs.backend.volcano.uploaders.kubectl_exec.upload_code_to_pvc"
+            "azure_jobs.server.submit.volcano.uploaders.kubectl_exec.upload_code_to_pvc"
         ) as m:
             r = KubectlExecUploader().prepare(cfg, spec, namespace="ns")
         assert m.called is False
@@ -404,7 +404,7 @@ class TestSubmitViaVolcanoStrategyDispatch:
     @pytest.fixture(autouse=True)
     def _kubectl_present(self):
         with patch(
-            "azure_jobs.backend.volcano.entry.shutil.which",
+            "azure_jobs.server.submit.volcano.entry.shutil.which",
             return_value="/usr/bin/kubectl",
         ):
             yield
@@ -416,10 +416,10 @@ class TestSubmitViaVolcanoStrategyDispatch:
         fake_uploader.prepare.return_value = uploader_result
 
         with patch(
-            "azure_jobs.backend.volcano.entry.pick_uploader",
+            "azure_jobs.server.submit.volcano.entry.pick_uploader",
             return_value=fake_uploader,
         ), patch(
-            "azure_jobs.backend.volcano.entry.subprocess.run"
+            "azure_jobs.server.submit.volcano.entry.subprocess.run"
         ) as m_run:
             m_run.return_value = subprocess.CompletedProcess(
                 args=["kubectl"], returncode=0, stdout="job created", stderr=""
@@ -469,7 +469,7 @@ class TestResolveNamespace:
         cfg = _vol_cfg()
         cfg.namespace = ""
         with patch(
-            "azure_jobs.backend.volcano.config.subprocess.run",
+            "azure_jobs.server.submit.volcano.config.subprocess.run",
             side_effect=FileNotFoundError("kubectl"),
         ):
             assert resolve_namespace(cfg) == "default"
@@ -512,7 +512,7 @@ class TestRenderAmltDoesNotLeakExtra:
     """JobSpec.extra is aj-only — it must never reach the amlt-bound YAML."""
 
     def test_extra_does_not_appear_in_rendered_yaml(self, tmp_path: Path):
-        from azure_jobs.job import build_job_spec, render_amlt_yaml
+        from azure_jobs.shared.job import build_job_spec, render_amlt_yaml
 
         tmpl = Template.from_dict(
             {

@@ -6,11 +6,11 @@ import asyncio
 
 import pytest
 
-from azure_jobs.tui.app import AjDashboard
-from azure_jobs.tui.events import EventBus, LogsChanged
-from azure_jobs.tui.log_store import LogsStore
-from azure_jobs.tui.models import Job, Target
-from azure_jobs.tui.ports import Cursor, JobPage, LogChunk
+from azure_jobs.client.tui.app import AjDashboard
+from azure_jobs.client.tui.events import EventBus, LogsChanged
+from azure_jobs.client.tui.log_store import LogsStore
+from azure_jobs.client.tui.models import Job, Target
+from azure_jobs.client.tui.ports import Cursor, JobPage, LogChunk
 
 
 def _job(name: str = "job") -> Job:
@@ -54,7 +54,7 @@ def test_log_store_preserves_exact_offsets_and_partial_utf8() -> None:
 
 
 def test_log_store_trims_at_real_byte_boundaries(monkeypatch) -> None:
-    monkeypatch.setattr("azure_jobs.tui.log_store.MAX_BUFFER_BYTES", 8)
+    monkeypatch.setattr("azure_jobs.client.tui.log_store.MAX_BUFFER_BYTES", 8)
     store = _store()
     request = store.begin_stream("")
     assert request is not None
@@ -72,7 +72,7 @@ def test_log_store_trims_at_real_byte_boundaries(monkeypatch) -> None:
 
 
 def test_exact_newline_boundary_keeps_complete_newest_line(monkeypatch) -> None:
-    monkeypatch.setattr("azure_jobs.tui.log_store.MAX_BUFFER_BYTES", 4)
+    monkeypatch.setattr("azure_jobs.client.tui.log_store.MAX_BUFFER_BYTES", 4)
     store = _store()
     request = store.begin_stream("log")
     assert request is not None
@@ -113,7 +113,7 @@ def test_log_windows_restore_per_target_job_and_file() -> None:
 
 
 def test_backfill_requires_unchanged_exact_head(monkeypatch) -> None:
-    monkeypatch.setattr("azure_jobs.tui.log_store.MAX_BUFFER_BYTES", 5)
+    monkeypatch.setattr("azure_jobs.client.tui.log_store.MAX_BUFFER_BYTES", 5)
     store = _store()
     request = store.begin_stream("stdout.log")
     assert request is not None
@@ -147,7 +147,7 @@ def test_backfill_is_blocked_while_reconnect_initial_is_loading() -> None:
 def test_capacity_limited_backfill_cannot_report_false_progress(
     monkeypatch,
 ) -> None:
-    monkeypatch.setattr("azure_jobs.tui.log_store.MAX_BUFFER_BYTES", 5)
+    monkeypatch.setattr("azure_jobs.client.tui.log_store.MAX_BUFFER_BYTES", 5)
     store = _store()
     request = store.begin_stream("stdout.log")
     assert request is not None
@@ -172,7 +172,7 @@ def test_capacity_limited_backfill_cannot_report_false_progress(
 
 
 def test_exact_boundary_backfill_keeps_valid_suffix(monkeypatch) -> None:
-    monkeypatch.setattr("azure_jobs.tui.log_store.MAX_BUFFER_BYTES", 8)
+    monkeypatch.setattr("azure_jobs.client.tui.log_store.MAX_BUFFER_BYTES", 8)
     store = _store()
     request = store.begin_stream("log")
     assert request is not None
@@ -263,7 +263,7 @@ def test_idle_poll_does_not_project_retained_window(monkeypatch) -> None:
 
 
 def test_visual_projection_is_capped_for_newline_heavy_logs(monkeypatch) -> None:
-    monkeypatch.setattr("azure_jobs.tui.log_store.MAX_VISUAL_LINES", 5)
+    monkeypatch.setattr("azure_jobs.client.tui.log_store.MAX_VISUAL_LINES", 5)
 
     lines = LogsStore._project_bytes(
         b"\n".join(str(index).encode() for index in range(100)),
@@ -303,7 +303,7 @@ def test_backfill_event_preserves_scroll_intent() -> None:
 
 
 def test_visual_line_split_preserves_multibyte_character(monkeypatch) -> None:
-    monkeypatch.setattr("azure_jobs.tui.log_store.MAX_LOG_LINE_BYTES", 4)
+    monkeypatch.setattr("azure_jobs.client.tui.log_store.MAX_LOG_LINE_BYTES", 4)
 
     assert LogsStore._project_bytes(
         "a€b".encode(),
@@ -419,7 +419,7 @@ async def test_live_stream_does_not_park_worker_and_backfill_is_isolated(
     tmp_path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setattr("azure_jobs.const.AJ_CONFIG", tmp_path / "config.json")
+    monkeypatch.setattr("azure_jobs.shared.const.AJ_CONFIG", tmp_path / "config.json")
     logs = _Logs()
     app = AjDashboard(
         last=1,
@@ -454,7 +454,7 @@ async def test_log_transport_errors_are_not_reported_as_idle(
     tmp_path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setattr("azure_jobs.const.AJ_CONFIG", tmp_path / "config.json")
+    monkeypatch.setattr("azure_jobs.shared.const.AJ_CONFIG", tmp_path / "config.json")
     logs = _Logs(fail_tail=True)
     app = AjDashboard(
         last=1,
@@ -480,7 +480,7 @@ async def test_cached_running_log_reconnects_when_reopened(
     tmp_path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setattr("azure_jobs.const.AJ_CONFIG", tmp_path / "config.json")
+    monkeypatch.setattr("azure_jobs.shared.const.AJ_CONFIG", tmp_path / "config.json")
     logs = _Logs()
     app = AjDashboard(
         last=1,
@@ -508,7 +508,7 @@ async def test_backfill_error_preserves_valid_window(
     tmp_path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setattr("azure_jobs.const.AJ_CONFIG", tmp_path / "config.json")
+    monkeypatch.setattr("azure_jobs.shared.const.AJ_CONFIG", tmp_path / "config.json")
     logs = _Logs()
     app = AjDashboard(
         last=1,
@@ -538,9 +538,9 @@ async def test_rapid_saves_create_distinct_files(
     tmp_path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setattr("azure_jobs.const.AJ_CONFIG", tmp_path / "config.json")
+    monkeypatch.setattr("azure_jobs.shared.const.AJ_CONFIG", tmp_path / "config.json")
     monkeypatch.setattr(
-        "azure_jobs.tui.controllers.logs.buffer.AJ_LOGS_HOME",
+        "azure_jobs.client.tui.controllers.logs.buffer.AJ_LOGS_HOME",
         tmp_path / "logs",
     )
     fsync_calls: list[int] = []
@@ -551,7 +551,7 @@ async def test_rapid_saves_create_distinct_files(
         real_fsync(fd)
 
     monkeypatch.setattr(
-        "azure_jobs.tui.controllers.logs.buffer.os.fsync",
+        "azure_jobs.client.tui.controllers.logs.buffer.os.fsync",
         tracked_fsync,
     )
     logs = _Logs()
@@ -584,7 +584,7 @@ async def test_same_window_rerender_captures_live_scroll_position(
     tmp_path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setattr("azure_jobs.const.AJ_CONFIG", tmp_path / "config.json")
+    monkeypatch.setattr("azure_jobs.shared.const.AJ_CONFIG", tmp_path / "config.json")
     logs = _Logs()
     app = AjDashboard(
         last=1,
@@ -618,7 +618,7 @@ async def test_pause_captures_viewport_for_cached_resume(
     tmp_path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setattr("azure_jobs.const.AJ_CONFIG", tmp_path / "config.json")
+    monkeypatch.setattr("azure_jobs.shared.const.AJ_CONFIG", tmp_path / "config.json")
     logs = _Logs()
     app = AjDashboard(
         last=1,
@@ -652,7 +652,7 @@ async def test_selected_status_update_preserves_backfilled_window(
     tmp_path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setattr("azure_jobs.const.AJ_CONFIG", tmp_path / "config.json")
+    monkeypatch.setattr("azure_jobs.shared.const.AJ_CONFIG", tmp_path / "config.json")
     logs = _Logs()
     app = AjDashboard(
         last=1,
@@ -717,8 +717,8 @@ def test_poll_catches_up_immediately_while_remote_data_remains() -> None:
         def notify(self, *args, **kwargs):
             return None
 
-    from azure_jobs.tui.controllers.logs.stream import LogsStream
-    from azure_jobs.tui.runtime import TaskRunner
+    from azure_jobs.client.tui.controllers.logs.stream import LogsStream
+    from azure_jobs.client.tui.runtime import TaskRunner
 
     stream = LogsStream(
         UI(),

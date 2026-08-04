@@ -139,92 +139,56 @@ Highlights:
 
 ## Client / server split
 
-`aj` runs frontends against one capability contract, and the daemon is the only
-thing that executes it. There is deliberately no in-process mode: a second path
-drifts from the first and makes behaviour depend on invisible state.
+Three top-level layers, enforced by `tests/test_api_architecture.py`:
 
 ```
-cli/   tui/   (future web/, vscode/)      frontends — import only api/
-  └────────────┬──────────────────────┘
-        api/                              the contract
-        ├── ports.py     capability Protocols
-        ├── models.py    transport-neutral values + JSON codec
-        ├── errors.py    cross-process exception preservation
-        ├── rpc.py       line-delimited JSON-RPC 2.0 framing
-        ├── azure.py     Azure implementations of the ports
-        ├── typed.py     type-tagged codec for rich payloads
-        ├── backend.py   Azure implementation — daemon-side only
-        ├── resilient.py reconnect-once session facade
-        ├── queue.py     serial submission queue with a journal
-        ├── watch.py     background polling + notifications
-        ├── daemon.py    server: sessions, dispatch table, reader handles
-        └── client.py    remote backend + fallback
+src/azure_jobs/
+├── shared/          vocabulary both sides speak — imports neither side
+│   ├── contract/      ports, models, errors, rpc, typed codec
+│   ├── types/         Azure value objects (quota rows, workspaces, SKUs)
+│   ├── opts/          typed backend options + spec-hook registration
+│   ├── spec.py        how a job is *described*
+│   ├── job/           JobSpec and how to build one
+│   ├── template/, config/, sku.py, targets.py, journal.py, utils/
+│
+├── client/          drives and renders — never imports server/
+│   ├── connection.py  JSON-RPC client, auto-spawn, reconnect
+│   ├── resilient.py
+│   ├── cli/, tui/, ui/
+│
+└── server/          executes — never imports client/
+    ├── daemon.py, main.py
+    ├── backend.py     the Azure implementation of the contract
+    ├── azure.py, queue.py, watch.py, concurrent.py
+    ├── az_client/     the SDK layer
+    └── submit/        how a job is *run*
 ```
 
-`api/` is the lower layer: `tui/` and `cli/` depend on it, never the reverse, and
-nothing under `cli/` may import `az_client` (both guarded by
-`tests/test_api_architecture.py`). The daemon does not reimplement anything — it
-serves `InProcessBackend` over a socket, so one fix covers both transports.
+The invariants, each with a test:
 
-**Rich payloads.** Catalog rows are not plain records: `SeriesQuota` has
-`has_any_quota()` and `VCInfo` nests quota objects, which the display layer
-calls. `typed.py` tags such values on the way out and rebuilds them from an
-allowlist on the way in — the same approach `errors.py` uses for exception
-types. An unregistered tag degrades to a plain dict.
+| Rule | Why |
+|---|---|
+| `client` never imports `server` | everything it needs is on the wire |
+| `server` never imports `client` | the daemon runs headless |
+| `shared` imports neither | it is the vocabulary, not a participant |
+| the SDK appears only under `server/` | only the server executes |
+| `rich`/`textual` appear only under `client/` | rendering is not the daemon's job |
 
-**Transport.** Line-delimited JSON-RPC 2.0 over a Unix socket, stdlib only, so
-the minimal dependency set is preserved. Frames are capped (a 16 MiB log window
-base64-inflates to ~22 MB). Server pushes are JSON-RPC notifications.
+Measured after the split: `client → shared` 88 edges, `server → shared` 83,
+`client ↔ server` **zero**. The package root re-exports across layers as a lazy
+`__getattr__` facade, which is the public SDK surface rather than a dependency.
 
-**Multi-tenancy.** `AJ_HOME` defaults to `./.azure_jobs`, so state is per
-project directory. One user-level daemon therefore keys sessions by
-`(absolute project root, target id)` and serves every checkout, instead of one
-process per project.
+**Describing a job vs running one.** The client builds a `JobSpec` from a local
+template, so the typed `Opts` and the name rules live in `shared/spec.py`; the
+submit functions live in `server/submit`. Splitting the old combined registry
+this way is what let `job/build.py` stay shared without dragging the SDK along.
+`sku.py` split the same way: parsing shorthand is shared, matching it against
+real instance types needs ARM and stayed server-side.
 
-**Safety.** The socket is `0600` inside a `0700` directory, and both ends check
-the peer uid (`SO_PEERCRED`) — a predictable `/tmp` path must not let another
-local user plant a socket and capture submission payloads. Credentials live only
-in RAM; idle sessions are reaped (30 min) and an idle daemon exits (1 h), since
-one that starts on demand must also stop on its own. A handshake compares
-protocol and `aj` version; a stale daemon is retired and respawned, so
-`pipx upgrade` cannot leave a mismatched pair running.
-
-**No second path.** If the daemon cannot be reached, commands fail with the
-recovery steps. A daemon that dies mid-session is reconnected to once; a second
-failure is an outage and reaches the caller.
-
-**Versioning.** The client sends the newest protocol it speaks and both sides
-use the highest they share, within `MIN_PROTOCOL_VERSION..PROTOCOL_VERSION`.
-A differing `aj` version is recorded but never fatal — Docker negotiates a range
-for the same reason: forcing a restart on every upgrade would interrupt whatever
-the daemon is running.
-
-**Retiring never abandons work.** A submission the daemon accepted has no other
-owner, so `daemon.retire` refuses new connections and then waits for the queue
-to drain rather than hard-stopping. `aj daemon stop` reports how many
-submissions it is waiting for; `--force` gives up on them explicitly.
-
-**Bounded resources.** Connection threads are reaped and capped
-(`MAX_CONNECTIONS`), since a daemon that lives for days would otherwise
-accumulate one per CLI invocation.
-
-**Errors.** The wire carries the exception *type*, so frontend code such as
-`except RestError as exc: exc.status_code` keeps working when the work happened
-in the daemon. Unknown types degrade to `RemoteError` with the original name
-preserved. Tracebacks cross only when `AJ_DEBUG=1`.
-
-**Queue.** `aj run --queue` returns a ticket immediately; the daemon runs the
-submission after the client exits. Submissions are serial (they upload code and
-mutate remote state) and journalled, so a restart does not lose pending work. A
-submission interrupted mid-flight is marked failed rather than silently re-run,
-because its remote outcome is unknown.
-
-**Watching.** The daemon polls watched jobs and pushes transitions to
-subscribers — the one capability a client cannot provide for itself. Watches are
-journalled, so a restart does not silently drop them, and a job that finished
-while the daemon was down still produces its notification. Watching an
-already-finished job answers immediately rather than going silent.
-
+**Everything runs in the daemon.** `aj run` submits through `submit.run` rather
+than in the CLI process, with progress streamed back as correlated
+`submit.progress` pushes — a callback cannot cross a socket, and dropping it
+would have made `aj run` less informative than before.
 
 ## TUI
 - **Blob credential fallback**: SAS → SharedKey → AAD bearer. If the storage

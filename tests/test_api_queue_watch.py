@@ -7,7 +7,7 @@ import time
 
 import pytest
 
-from azure_jobs.api.models import (
+from azure_jobs.shared.contract.models import (
     CANCELLED,
     DONE,
     FAILED,
@@ -17,8 +17,8 @@ from azure_jobs.api.models import (
     Notification,
     SubmitOutcome,
 )
-from azure_jobs.api.queue import MAX_HISTORY, SubmissionQueue
-from azure_jobs.api.watch import (
+from azure_jobs.server.queue import MAX_HISTORY, SubmissionQueue
+from azure_jobs.server.watch import (
     TOPIC_DONE,
     TOPIC_STATUS,
     JobWatcher,
@@ -239,8 +239,8 @@ class TestQueuePersistence:
         entry = first.enqueue({"name": "job-1"})
         # Simulate the daemon dying while the submission was in flight.
         with first._lock:
-            from azure_jobs.api.queue import _replace
-            from azure_jobs.api.models import RUNNING
+            from azure_jobs.server.queue import _replace
+            from azure_jobs.shared.contract.models import RUNNING
 
             first._entries[entry.ticket] = _replace(
                 first._entries[entry.ticket], state=RUNNING

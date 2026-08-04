@@ -8,13 +8,13 @@ from unittest.mock import MagicMock, patch
 import pytest
 from click.testing import CliRunner
 
-from azure_jobs.cli import main
+from azure_jobs.client.cli import main
 
 
 @pytest.fixture(autouse=True)
 def _mock_find_az():
     """Ensure tests don't depend on ``az`` being installed."""
-    with patch("azure_jobs.config.find_az", return_value="az"):
+    with patch("azure_jobs.shared.config.find_az", return_value="az"):
         yield
 
 
@@ -49,7 +49,7 @@ class TestAuthStatus:
 
     def test_logged_in(self, runner: CliRunner) -> None:
         """Shows user, subscription, and workspace when logged in."""
-        from azure_jobs.config import AJConfig, AJWorkspace
+        from azure_jobs.shared.config import AJConfig, AJWorkspace
 
         ws_cfg = AJConfig(
             workspace=AJWorkspace(
@@ -65,7 +65,7 @@ class TestAuthStatus:
             patch("subprocess.run", return_value=_mock_az_account_show()),
             patch("azure.identity.AzureCliCredential") as mock_cred_cls,
             patch(
-                "azure_jobs.config.read_config",
+                "azure_jobs.shared.config.read_config",
                 return_value=ws_cfg,
             ),
         ):
@@ -95,7 +95,7 @@ class TestAuthStatus:
 
     def test_no_workspace(self, runner: CliRunner) -> None:
         """Shows 'Not configured' when workspace not set."""
-        from azure_jobs.config import AJConfig
+        from azure_jobs.shared.config import AJConfig
 
         mock_token = MagicMock()
         mock_token.token = "fake-token"
@@ -104,7 +104,7 @@ class TestAuthStatus:
             patch("subprocess.run", return_value=_mock_az_account_show()),
             patch("azure.identity.AzureCliCredential") as mock_cred_cls,
             patch(
-                "azure_jobs.config.read_config",
+                "azure_jobs.shared.config.read_config",
                 return_value=AJConfig(),
             ),
         ):
@@ -116,13 +116,13 @@ class TestAuthStatus:
 
     def test_sdk_credential_failure(self, runner: CliRunner) -> None:
         """Shows SDK credential error when token fetch fails."""
-        from azure_jobs.config import AJConfig
+        from azure_jobs.shared.config import AJConfig
 
         with (
             patch("subprocess.run", return_value=_mock_az_account_show()),
             patch("azure.identity.AzureCliCredential") as mock_cred_cls,
             patch(
-                "azure_jobs.config.read_config",
+                "azure_jobs.shared.config.read_config",
                 return_value=AJConfig(),
             ),
         ):

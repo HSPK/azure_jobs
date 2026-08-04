@@ -5,7 +5,7 @@ from __future__ import annotations
 import requests
 import pytest
 
-from azure_jobs.tui.adapters.azureml import AzureRangeLogReader
+from azure_jobs.server.azure import AzureRangeLogReader
 
 
 class _Session:

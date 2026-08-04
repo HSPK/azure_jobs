@@ -12,29 +12,29 @@ from pathlib import Path
 
 import pytest
 
-from azure_jobs.errors import RestError
-from azure_jobs.tui.bindings import (
+from azure_jobs.shared.errors import RestError
+from azure_jobs.client.tui.bindings import (
     COMMAND_BINDINGS,
     CommandBinding,
     CommandHandler,
     CommandRegistry,
 )
-from azure_jobs.tui.controllers.jobs.cancel import JobsCancel
-from azure_jobs.tui.controllers.jobs.delete import JobsDelete
-from azure_jobs.tui.app import AjDashboard
-from azure_jobs.tui.events import (
+from azure_jobs.client.tui.controllers.jobs.cancel import JobsCancel
+from azure_jobs.client.tui.controllers.jobs.delete import JobsDelete
+from azure_jobs.client.tui.app import AjDashboard
+from azure_jobs.client.tui.events import (
     EventBus,
     JobActionCommitted,
     JobDeleted,
     JobSelectionChanged,
     JobsChanged,
 )
-from azure_jobs.tui.features import Feature, FeatureRegistry
-from azure_jobs.tui.log_store import LogsStore
-from azure_jobs.tui.models import Job, Target
-from azure_jobs.tui.ports import Cursor, JobPage
-from azure_jobs.tui.runtime import SessionHandle, TaskRunner
-from azure_jobs.tui.stores import JobsStore
+from azure_jobs.client.tui.features import Feature, FeatureRegistry
+from azure_jobs.client.tui.log_store import LogsStore
+from azure_jobs.client.tui.models import Job, Target
+from azure_jobs.client.tui.ports import Cursor, JobPage
+from azure_jobs.client.tui.runtime import SessionHandle, TaskRunner
+from azure_jobs.client.tui.stores import JobsStore
 
 
 def _job(name: str, **values) -> Job:
@@ -761,7 +761,7 @@ def test_cancel_keeps_confirmed_target_across_selection_and_refresh() -> None:
 
 
 def test_controllers_depend_on_ports_not_concrete_app() -> None:
-    root = Path(__file__).parents[1] / "src" / "azure_jobs" / "tui" / "controllers"
+    root = Path(__file__).parents[1] / "src" / "azure_jobs" / "client" / "tui" / "controllers"
     violations: list[str] = []
     for path in root.rglob("*.py"):
         source = path.read_text()
@@ -775,15 +775,15 @@ def test_controllers_depend_on_ports_not_concrete_app() -> None:
             ):
                 violations.append(str(path.relative_to(root)))
             if isinstance(node, ast.ImportFrom) and node.module:
-                if node.module.startswith("azure_jobs.az_client"):
+                if node.module.startswith("azure_jobs.server.az_client"):
                     violations.append(str(path.relative_to(root)))
-                if node.module == "azure_jobs.tui.ui":
+                if node.module == "azure_jobs.client.tui.ui":
                     violations.append(str(path.relative_to(root)))
     assert violations == []
 
 
 def test_controllers_cannot_assign_store_state() -> None:
-    root = Path(__file__).parents[1] / "src" / "azure_jobs" / "tui" / "controllers"
+    root = Path(__file__).parents[1] / "src" / "azure_jobs" / "client" / "tui" / "controllers"
     violations: list[str] = []
     for path in root.rglob("*.py"):
         tree = ast.parse(path.read_text())
@@ -1288,7 +1288,7 @@ def test_log_store_imports_without_controller_import_order() -> None:
         [
             sys.executable,
             "-c",
-            "from azure_jobs.tui.log_store import LogsStore; print(LogsStore.__name__)",
+            "from azure_jobs.client.tui.log_store import LogsStore; print(LogsStore.__name__)",
         ],
         capture_output=True,
         text=True,
@@ -1304,6 +1304,7 @@ def test_run_history_uses_no_nested_executor() -> None:
         Path(__file__).parents[1]
         / "src"
         / "azure_jobs"
+        / "server"
         / "az_client"
         / "ml"
         / "run_history.py"
@@ -1360,6 +1361,7 @@ def test_dashboard_cli_does_not_force_process_exit() -> None:
         Path(__file__).parents[1]
         / "src"
         / "azure_jobs"
+        / "client"
         / "cli"
         / "dashboard.py"
     )

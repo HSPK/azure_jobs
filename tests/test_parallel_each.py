@@ -1,11 +1,11 @@
-"""Tests for :func:`azure_jobs.utils.concurrent.parallel_each`."""
+"""Tests for :func:`azure_jobs.server.concurrent.parallel_each`."""
 
 from __future__ import annotations
 
 import threading
 import time
 
-from azure_jobs.utils.concurrent import parallel_each
+from azure_jobs.server.concurrent import parallel_each
 
 
 def test_empty_input_returns_empty_lists():

@@ -7,9 +7,9 @@ from unittest.mock import patch
 
 import pytest
 
-from azure_jobs.tui.models import Job, Workspace
-from azure_jobs.tui.ports import JobPage, LogChunk
-from azure_jobs.tui.runtime import SessionHandle
+from azure_jobs.client.tui.models import Job, Workspace
+from azure_jobs.client.tui.ports import JobPage, LogChunk
+from azure_jobs.client.tui.runtime import SessionHandle
 
 # Two sample cloud job dicts (no local records involved)
 _JOBS = [
@@ -108,8 +108,8 @@ def _dash(tmp_path: Path):
     """Create an AjDashboard pre-loaded with cloud job data (no Azure calls)."""
     cf = tmp_path / "aj_config.json"
     cf.write_text("{}")
-    with patch("azure_jobs.const.AJ_CONFIG", cf):
-        from azure_jobs.tui.app import AjDashboard
+    with patch("azure_jobs.shared.const.AJ_CONFIG", cf):
+        from azure_jobs.client.tui.app import AjDashboard
 
         app = AjDashboard(
             last=10,
@@ -213,8 +213,8 @@ async def test_initial_focus_is_info_and_job_list_is_display_only(_dash) -> None
 async def test_empty(tmp_path: Path) -> None:
     cf = tmp_path / "aj_config.json"
     cf.write_text("{}")
-    with patch("azure_jobs.const.AJ_CONFIG", cf):
-        from azure_jobs.tui.app import AjDashboard
+    with patch("azure_jobs.shared.const.AJ_CONFIG", cf):
+        from azure_jobs.client.tui.app import AjDashboard
 
         app = AjDashboard(
             last=10,
@@ -289,7 +289,7 @@ async def test_escape_opens_help(_dash) -> None:
         await pilot.pause()
         _dash.action_command("app.escape")
         await pilot.pause()
-        from azure_jobs.tui.components import HelpScreen
+        from azure_jobs.client.tui.components import HelpScreen
 
         screens = [s for s in _dash.screen_stack if isinstance(s, HelpScreen)]
         assert len(screens) == 1
@@ -320,7 +320,7 @@ async def test_workspace_picker(_dash) -> None:
         _dash.target_store.configured(ws_a)
         _dash.action_command("workspace.pick")
         await pilot.pause()
-        from azure_jobs.tui.components import PickerModal
+        from azure_jobs.client.tui.components import PickerModal
 
         screens = [s for s in _dash.screen_stack if isinstance(s, PickerModal)]
         assert len(screens) == 1
@@ -350,7 +350,7 @@ async def test_switch_workspace(_dash) -> None:
 
 
 def test_make_option_display_name() -> None:
-    from azure_jobs.tui.helpers import make_option
+    from azure_jobs.client.tui.helpers import make_option
 
     opt = make_option(
         {"name": "azure_j1", "display_name": "cool-job", "status": "Running"}
@@ -360,13 +360,13 @@ def test_make_option_display_name() -> None:
 
 
 def test_trunc_short() -> None:
-    from azure_jobs.tui.helpers import trunc
+    from azure_jobs.client.tui.helpers import trunc
 
     assert trunc("short") == "short"
 
 
 def test_trunc_long() -> None:
-    from azure_jobs.tui.helpers import NAME_MAX, trunc
+    from azure_jobs.client.tui.helpers import NAME_MAX, trunc
 
     long_name = "a" * 100
     result = trunc(long_name)
@@ -375,7 +375,7 @@ def test_trunc_long() -> None:
 
 
 def test_make_option_truncates_long_name() -> None:
-    from azure_jobs.tui.helpers import make_option
+    from azure_jobs.client.tui.helpers import make_option
 
     long_name = "very-long-job-name-that-exceeds-the-maximum-width-limit"
     opt = make_option({"name": "id", "display_name": long_name, "status": "Running"})
@@ -417,7 +417,7 @@ async def test_page_loaded_appends(_dash) -> None:
 
 
 def test_info_block_sections() -> None:
-    from azure_jobs.tui.helpers import info_block
+    from azure_jobs.client.tui.helpers import info_block
 
     job = {
         "name": "j1",
@@ -441,7 +441,7 @@ def test_info_block_sections() -> None:
 
 def test_info_block_new_fields() -> None:
     """Info block shows type, description, tags, environment, command, error."""
-    from azure_jobs.tui.helpers import info_block
+    from azure_jobs.client.tui.helpers import info_block
 
     job = {
         "name": "j2",
@@ -474,7 +474,7 @@ def test_info_block_new_fields() -> None:
 @pytest.mark.asyncio
 async def test_cancel_shows_modal(_dash) -> None:
     """Pressing cancel opens the confirmation modal."""
-    from azure_jobs.tui.runtime import SessionHandle
+    from azure_jobs.client.tui.runtime import SessionHandle
 
     async with _dash.run_test(size=(120, 30)) as pilot:
         await _load_jobs(_dash, pilot)
@@ -482,7 +482,7 @@ async def test_cancel_shows_modal(_dash) -> None:
         _dash.workspace._session = SessionHandle(_FakeSession())
         _dash.action_command("jobs.cancel")
         await pilot.pause()
-        from azure_jobs.tui.components import ConfirmCancel
+        from azure_jobs.client.tui.components import ConfirmCancel
 
         screens = [s for s in _dash.screen_stack if isinstance(s, ConfirmCancel)]
         assert len(screens) == 1
@@ -497,7 +497,7 @@ async def test_cancel_shows_modal(_dash) -> None:
 async def test_delete_shows_irreversible_modal_and_footer_binding(_dash) -> None:
     from textual.widgets import Static
 
-    from azure_jobs.tui.components import ConfirmDelete
+    from azure_jobs.client.tui.components import ConfirmDelete
 
     async with _dash.run_test(size=(120, 30)) as pilot:
         await _load_jobs(_dash, pilot)
@@ -596,7 +596,7 @@ async def test_status_picker_modal(_dash) -> None:
         await pilot.pause()
         _dash.action_command("jobs.status")
         await pilot.pause()
-        from azure_jobs.tui.components import PickerModal
+        from azure_jobs.client.tui.components import PickerModal
 
         screens = [s for s in _dash.screen_stack if isinstance(s, PickerModal)]
         assert len(screens) == 1
@@ -678,7 +678,7 @@ def test_picker_modal_instantiation() -> None:
     """_PickerModal can be instantiated with items and current value."""
     from rich.text import Text
 
-    from azure_jobs.tui.components import PickerItem, PickerModal
+    from azure_jobs.client.tui.components import PickerItem, PickerModal
 
     items = [
         PickerItem("", Text("All")),
@@ -790,7 +790,7 @@ async def test_empty_selection_clears_hidden_log_content(_dash) -> None:
 @pytest.mark.asyncio
 async def test_log_viewer_has_vim_bindings(_dash) -> None:
     """LogViewer supports j/k line scroll and g/G jump."""
-    from azure_jobs.tui.components import LogViewer
+    from azure_jobs.client.tui.components import LogViewer
 
     async with _dash.run_test(size=(120, 30)) as pilot:
         await _load_jobs(_dash, pilot)
@@ -881,7 +881,7 @@ async def test_error_lines_inline(_dash) -> None:
 @pytest.mark.asyncio
 async def test_log_viewer_wrap_disabled(_dash) -> None:
     """Log viewer has wrap=False (line numbers conflict with wrapping)."""
-    from azure_jobs.tui.components import LogViewer
+    from azure_jobs.client.tui.components import LogViewer
 
     async with _dash.run_test(size=(120, 30)) as pilot:
         await pilot.pause()

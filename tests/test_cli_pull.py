@@ -7,8 +7,8 @@ from unittest.mock import patch
 import pytest
 from click.testing import CliRunner
 
-from azure_jobs.cli import main
-from azure_jobs.cli.pull import resolve_repo_url
+from azure_jobs.client.cli import main
+from azure_jobs.client.cli.pull import resolve_repo_url
 
 
 class TestPullCommand:
@@ -23,7 +23,7 @@ class TestPullCommand:
             json.dumps({"repo_id": "https://example.com/repo.git"})
         )
         runner = CliRunner()
-        with patch("azure_jobs.cli.pull.subprocess.run") as mock_run:
+        with patch("azure_jobs.client.cli.pull.subprocess.run") as mock_run:
             mock_run.return_value.returncode = 0
             result = runner.invoke(main, ["pull", "-f"])
         assert result.exit_code == 0
@@ -33,7 +33,7 @@ class TestPullCommand:
     def test_pull_succeeds_when_home_exists(self, aj_env):
         """Pull is an incremental sync — existing AJ_HOME is OK."""
         runner = CliRunner()
-        with patch("azure_jobs.cli.pull.subprocess.run") as mock_run:
+        with patch("azure_jobs.client.cli.pull.subprocess.run") as mock_run:
             mock_run.return_value.returncode = 0
             result = runner.invoke(
                 main, ["pull", "https://example.com/repo.git"]
@@ -48,7 +48,7 @@ class TestPullCommand:
         record_before = aj_env["record_fp"].read_text()
 
         runner = CliRunner()
-        with patch("azure_jobs.cli.pull.subprocess.run") as mock_run:
+        with patch("azure_jobs.client.cli.pull.subprocess.run") as mock_run:
             mock_run.return_value.returncode = 0
             result = runner.invoke(
                 main, ["pull", "-f", "https://example.com/repo.git"]
@@ -64,7 +64,7 @@ class TestPullCommand:
         """Pull must never write back to aj_config.json."""
         original = aj_env["config_fp"].read_text()
         runner = CliRunner()
-        with patch("azure_jobs.cli.pull.subprocess.run") as mock_run:
+        with patch("azure_jobs.client.cli.pull.subprocess.run") as mock_run:
             mock_run.return_value.returncode = 0
             runner.invoke(main, ["pull", "-f", "https://example.com/repo.git"])
         assert aj_env["config_fp"].read_text() == original
@@ -106,7 +106,7 @@ class TestPullCommand:
                 )
             return real_run(cmd, **kwargs)
 
-        with patch("azure_jobs.cli.pull.subprocess.run", side_effect=_fake_run):
+        with patch("azure_jobs.client.cli.pull.subprocess.run", side_effect=_fake_run):
             result = runner.invoke(
                 main, ["pull", "-f", "https://example.com/repo.git"]
             )
@@ -121,7 +121,7 @@ class TestPullCommand:
 
     def test_pull_shorthand_expands_to_ssh(self, aj_env):
         runner = CliRunner()
-        with patch("azure_jobs.cli.pull.subprocess.run") as mock_run:
+        with patch("azure_jobs.client.cli.pull.subprocess.run") as mock_run:
             mock_run.return_value.returncode = 0
             result = runner.invoke(main, ["pull", "-f", "user/repo"])
         assert result.exit_code == 0
@@ -129,7 +129,7 @@ class TestPullCommand:
 
     def test_pull_full_url_unchanged(self, aj_env):
         runner = CliRunner()
-        with patch("azure_jobs.cli.pull.subprocess.run") as mock_run:
+        with patch("azure_jobs.client.cli.pull.subprocess.run") as mock_run:
             mock_run.return_value.returncode = 0
             result = runner.invoke(main, ["pull", "-f", "https://example.com/repo.git"])
         assert result.exit_code == 0
@@ -137,7 +137,7 @@ class TestPullCommand:
 
     def test_template_pull_subcommand(self, aj_env):
         runner = CliRunner()
-        with patch("azure_jobs.cli.pull.subprocess.run") as mock_run:
+        with patch("azure_jobs.client.cli.pull.subprocess.run") as mock_run:
             mock_run.return_value.returncode = 0
             result = runner.invoke(main, ["template", "pull", "-f", "user/repo"])
         assert result.exit_code == 0
@@ -178,7 +178,7 @@ class TestPullErrorPaths:
     def test_pull_clone_failure(self, aj_env):
         runner = CliRunner()
         with patch(
-            "azure_jobs.cli.pull.subprocess.run",
+            "azure_jobs.client.cli.pull.subprocess.run",
             side_effect=subprocess.CalledProcessError(
                 128, "git", stderr="fatal: repo not found"
             ),
@@ -209,7 +209,7 @@ class TestPushCommand:
             json.dumps({"repo_id": "git@github.com:u/r.git"})
         )
         runner = CliRunner()
-        with patch("azure_jobs.cli.pull.subprocess.run") as mock_run:
+        with patch("azure_jobs.client.cli.pull.subprocess.run") as mock_run:
             # clone returns ok, status returns empty (no changes)
             mock_run.return_value = subprocess.CompletedProcess(
                 args=[], returncode=0, stdout="", stderr=""
@@ -241,10 +241,10 @@ class TestPushCommand:
             )
 
         with patch(
-            "azure_jobs.cli.pull.subprocess.run", side_effect=mock_run_side_effect
+            "azure_jobs.client.cli.pull.subprocess.run", side_effect=mock_run_side_effect
         ):
-            with patch("azure_jobs.cli.pull.shutil.copytree"):
-                with patch("azure_jobs.cli.pull.shutil.copy2"):
+            with patch("azure_jobs.client.cli.pull.shutil.copytree"):
+                with patch("azure_jobs.client.cli.pull.shutil.copy2"):
                     result = runner.invoke(main, ["push", "-m", "test update"])
         assert result.exit_code == 0
         assert "pushed" in result.output.lower()
@@ -255,7 +255,7 @@ class TestPushCommand:
         )
         runner = CliRunner()
         with patch(
-            "azure_jobs.cli.pull.subprocess.run",
+            "azure_jobs.client.cli.pull.subprocess.run",
             side_effect=subprocess.CalledProcessError(
                 128, "git", stderr="fatal: auth failed"
             ),
@@ -284,10 +284,10 @@ class TestPushCommand:
             )
 
         with patch(
-            "azure_jobs.cli.pull.subprocess.run", side_effect=mock_run_side_effect
+            "azure_jobs.client.cli.pull.subprocess.run", side_effect=mock_run_side_effect
         ):
-            with patch("azure_jobs.cli.pull.shutil.copytree"):
-                with patch("azure_jobs.cli.pull.shutil.copy2"):
+            with patch("azure_jobs.client.cli.pull.shutil.copytree"):
+                with patch("azure_jobs.client.cli.pull.shutil.copy2"):
                     result = runner.invoke(main, ["push", "-m", "my custom msg"])
         assert result.exit_code == 0
         assert commit_msg == "my custom msg"

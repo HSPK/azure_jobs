@@ -11,9 +11,9 @@ from unittest.mock import patch
 
 import pytest
 
-from azure_jobs.az_client import auth
-from azure_jobs.job.spec import JobSpec
-from azure_jobs.journal import JobRecord, log_record, read_records
+from azure_jobs.server.az_client import auth
+from azure_jobs.shared.job.spec import JobSpec
+from azure_jobs.shared.journal import JobRecord, log_record, read_records
 
 
 class _Token:
@@ -32,7 +32,7 @@ class _Credential:
 
 @pytest.fixture
 def cache_home(tmp_path, monkeypatch):
-    monkeypatch.setattr("azure_jobs.const.AJ_CACHE_HOME", tmp_path / "cache")
+    monkeypatch.setattr("azure_jobs.shared.const.AJ_CACHE_HOME", tmp_path / "cache")
     return tmp_path / "cache"
 
 
@@ -103,7 +103,7 @@ class TestTokenCache:
 
     def test_an_unwritable_cache_dir_does_not_break_auth(self, cache_home, monkeypatch):
         monkeypatch.setattr(
-            "azure_jobs.const.AJ_CACHE_HOME", "/proc/definitely-not-writable"
+            "azure_jobs.shared.const.AJ_CACHE_HOME", "/proc/definitely-not-writable"
         )
         _Credential.calls = 0
         with patch("azure.identity.AzureCliCredential", _Credential):
@@ -112,7 +112,7 @@ class TestTokenCache:
 
 
 def _append_worker(record_path: str, index: int) -> None:
-    import azure_jobs.const as const_mod
+    import azure_jobs.shared.const as const_mod
 
     const_mod.AJ_RECORD = __import__("pathlib").Path(record_path)
     for i in range(20):
@@ -129,7 +129,7 @@ class TestJournalConcurrency:
     def test_concurrent_appends_do_not_corrupt_the_journal(self, tmp_path, monkeypatch):
         """The daemon queue and a CLI can append at the same time."""
         record = tmp_path / "record.jsonl"
-        monkeypatch.setattr("azure_jobs.const.AJ_RECORD", record)
+        monkeypatch.setattr("azure_jobs.shared.const.AJ_RECORD", record)
 
         ctx = multiprocessing.get_context("spawn")
         procs = [
@@ -147,7 +147,7 @@ class TestJournalConcurrency:
 
     def test_records_round_trip(self, tmp_path, monkeypatch):
         record = tmp_path / "record.jsonl"
-        monkeypatch.setattr("azure_jobs.const.AJ_RECORD", record)
+        monkeypatch.setattr("azure_jobs.shared.const.AJ_RECORD", record)
         log_record(
             JobRecord(
                 request=JobSpec(name="only"),

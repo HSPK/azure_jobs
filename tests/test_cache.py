@@ -7,12 +7,12 @@ from pathlib import Path
 
 import pytest
 
-from azure_jobs.utils import cache
+from azure_jobs.shared.utils import cache
 
 
 @pytest.fixture
 def cache_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    monkeypatch.setattr("azure_jobs.const.AJ_CACHE_HOME", tmp_path / "cache")
+    monkeypatch.setattr("azure_jobs.shared.const.AJ_CACHE_HOME", tmp_path / "cache")
     return tmp_path / "cache"
 
 

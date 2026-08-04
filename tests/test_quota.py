@@ -7,16 +7,16 @@ from unittest.mock import MagicMock, patch
 import pytest
 from click.testing import CliRunner
 
-from azure_jobs.cli import main
-from azure_jobs.az_client.ml import vm_sku_label as _vm_sku_label
-from azure_jobs.errors import ConfigError
-from azure_jobs.az_client.arm import (
+from azure_jobs.client.cli import main
+from azure_jobs.shared.types.vm_gpu import vm_sku_label as _vm_sku_label
+from azure_jobs.shared.errors import ConfigError
+from azure_jobs.server.az_client.arm import (
     SeriesQuota,
     SlaTierQuota,
     VCInfo,
     parse_managed_quotas,
 )
-from azure_jobs.utils.ui.quota_tables import (
+from azure_jobs.client.ui.quota_tables import (
     _fmt_nodes,
     _portal_compute_url,
 )
@@ -203,7 +203,7 @@ _MOCK_VC_RESPONSE = {
 
 def _make_arm_client():
     """Construct a real ``AzureARMClient`` with namespaces stubbed."""
-    from azure_jobs.az_client import AzureARMClient
+    from azure_jobs.server.az_client import AzureARMClient
 
     client = AzureARMClient()
     client.subscriptions.list = MagicMock()
@@ -299,7 +299,7 @@ class TestQuotaListCli:
 
     def setup_method(self):
         self.runner = CliRunner()
-        self._arm_patcher = patch("azure_jobs.az_client.AzureARMClient")
+        self._arm_patcher = patch("azure_jobs.server.az_client.AzureARMClient")
         self.arm_cls = self._arm_patcher.start()
         self.arm = self.arm_cls.return_value
         # ``load_vcs_with_quotas`` now calls ``arm.vc.quota.list(...)`` which
@@ -362,12 +362,12 @@ class TestQuotaListCli:
         result = self.runner.invoke(main, ["ql"])
         assert "No Singularity" in result.output
 
-    @patch("azure_jobs.cli.quota._show_aml_quotas")
+    @patch("azure_jobs.client.cli.quota._show_aml_quotas")
     def test_aml_flag_routes_to_aml(self, mock_aml):
         self.runner.invoke(main, ["quota", "list", "--aml"])
         mock_aml.assert_called_once_with(False)
 
-    @patch("azure_jobs.cli.quota._show_aml_quotas")
+    @patch("azure_jobs.client.cli.quota._show_aml_quotas")
     def test_aml_all_flag(self, mock_aml):
         self.runner.invoke(main, ["quota", "list", "--aml", "--all"])
         mock_aml.assert_called_once_with(True)

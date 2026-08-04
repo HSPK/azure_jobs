@@ -1,8 +1,8 @@
-"""Tests for the stats aggregation helpers in :mod:`azure_jobs.utils.stats`."""
+"""Tests for the stats aggregation helpers in :mod:`azure_jobs.shared.utils.stats`."""
 
 from __future__ import annotations
 
-from azure_jobs.utils.stats import (
+from azure_jobs.shared.utils.stats import (
     aggregate_by_compute,
     aggregate_by_experiment,
     aggregate_by_user,

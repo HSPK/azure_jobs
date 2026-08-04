@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from azure_jobs.utils.naming import sanitize_dns1035
+from azure_jobs.shared.utils.naming import sanitize_dns1035
 
 
 class TestSanitizeDns1035:

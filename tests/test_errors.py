@@ -1,11 +1,11 @@
-"""Tests for azure_jobs.errors and log filtering."""
+"""Tests for azure_jobs.shared.errors and log filtering."""
 
 from __future__ import annotations
 
 import pytest
 
-from azure_jobs.az_client.ml.logs import filter_log_lines
-from azure_jobs.errors import (
+from azure_jobs.server.az_client.ml.logs import filter_log_lines
+from azure_jobs.shared.errors import (
     NETWORK_LIKE_ERRORS,
     AJError,
     AuthError,

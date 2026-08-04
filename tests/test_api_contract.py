@@ -14,12 +14,12 @@ from pathlib import Path
 
 import pytest
 
-from azure_jobs.api import PROTOCOL_VERSION
-from azure_jobs.api.client import DaemonBackend, RpcConnection, _connect_socket
-from azure_jobs.api.daemon import Daemon, aj_version
-from azure_jobs.api.errors import ProtocolMismatch, RemoteError
-from azure_jobs.api.models import JobQuerySpec, JobRef, Target
-from azure_jobs.errors import RestError
+from azure_jobs.shared.contract import PROTOCOL_VERSION
+from azure_jobs.client.connection import DaemonBackend, RpcConnection, _connect_socket
+from azure_jobs.server.daemon import Daemon, aj_version
+from azure_jobs.shared.contract.errors import ProtocolMismatch, RemoteError
+from azure_jobs.shared.contract.models import JobQuerySpec, JobRef, Target
+from azure_jobs.shared.errors import RestError
 
 from .api_fakes import FakeFactory, FakeTargetCatalog, make_target
 
@@ -216,7 +216,7 @@ class TestErrorSemantics:
 class TestProtocolCoverage:
     def test_every_port_method_has_a_daemon_method(self):
         """A capability the contract exposes must be reachable over the wire."""
-        from azure_jobs.api.daemon import METHODS
+        from azure_jobs.server.daemon import METHODS
 
         required = {
             "jobs.list_page",
@@ -282,7 +282,7 @@ class TestSessionHandshake:
             harness.close()
 
     def test_a_client_below_the_supported_range_is_refused(self):
-        from azure_jobs.api import MIN_PROTOCOL_VERSION
+        from azure_jobs.shared.contract import MIN_PROTOCOL_VERSION
 
         harness = _over_daemon()
         try:
@@ -422,8 +422,8 @@ class TestRichPayloadsSurviveTheTransport:
     """Catalog rows carry behaviour, not just fields."""
 
     def test_nested_objects_and_methods_survive(self):
-        from azure_jobs.api.models import CatalogItem
-        from azure_jobs.az_client import SeriesQuota, VCInfo
+        from azure_jobs.shared.contract.models import CatalogItem
+        from azure_jobs.server.az_client import SeriesQuota, VCInfo
 
         quota = SeriesQuota(series="NDH100v5", accelerator="H100", gpu_memory=80)
         quota.set_tier("Premium", 64, 32)
@@ -443,8 +443,8 @@ class TestRichPayloadsSurviveTheTransport:
         assert restored.quotas[0].has_any_quota() is True
 
     def test_an_unregistered_type_degrades_to_a_dict(self):
-        from azure_jobs.api.models import CatalogItem
-        from azure_jobs.api.typed import TAG
+        from azure_jobs.shared.contract.models import CatalogItem
+        from azure_jobs.shared.contract.typed import TAG
 
         payload = {TAG: "SomethingUnknown", "a": 1}
         restored = CatalogItem.from_json(
@@ -453,7 +453,7 @@ class TestRichPayloadsSurviveTheTransport:
         assert restored.raw == {"a": 1}
 
     def test_plain_dicts_are_untouched(self):
-        from azure_jobs.api.models import CatalogItem
+        from azure_jobs.shared.contract.models import CatalogItem
 
         item = CatalogItem("datastore", "ds", {"name": "ds", "is_default": True})
         assert CatalogItem.from_json(item.to_json()).raw == item.raw
@@ -471,7 +471,7 @@ class TestWorkspaceResourcePort:
         """Regression guard: aj init must not read them from the projection."""
         import inspect
 
-        from azure_jobs.az_client.arm.workspace import WorkspacesAPI
+        from azure_jobs.server.az_client.arm.workspace import WorkspacesAPI
 
         source = inspect.getsource(WorkspacesAPI.list)
         assert "project name, resourceGroup, subscriptionId, location" in source

@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from azure_jobs.utils.fs import walk_code
-from azure_jobs.utils.ignore import IgnoreMatcher
+from azure_jobs.shared.utils.fs import walk_code
+from azure_jobs.shared.utils.ignore import IgnoreMatcher
 
 # ---------------------------------------------------------------------------
 # IgnoreMatcher: basic gitignore semantics

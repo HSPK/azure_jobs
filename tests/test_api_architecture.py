@@ -13,16 +13,20 @@ from pathlib import Path
 
 import pytest
 
-API = Path(__file__).parents[1] / "src" / "azure_jobs" / "api"
+SRC = Path(__file__).parents[1] / "src" / "azure_jobs"
+SHARED = SRC / "shared"
+CONTRACT = SHARED / "contract"
+CLIENT = SRC / "client"
+SERVER = SRC / "server"
 
 #: Files that define the contract itself. Implementations may import more.
 CONTRACT_FILES = ("ports.py", "models.py", "errors.py", "rpc.py")
 
 FORBIDDEN_IN_CONTRACT = (
-    "azure_jobs.az_client",
-    "azure_jobs.tui",
-    "azure_jobs.backend",
-    "azure_jobs.cli",
+    "azure_jobs.server.az_client",
+    "azure_jobs.client.tui",
+    "azure_jobs.server.submit",
+    "azure_jobs.client.cli",
     "textual",
     "rich",
     "azure.identity",
@@ -44,7 +48,7 @@ def test_contract_files_are_transport_and_sdk_free(filename):
     """The contract must not know about Azure, Textual, or any transport."""
     violations = [
         name
-        for name in _imports(API / filename)
+        for name in _imports(CONTRACT / filename)
         for forbidden in FORBIDDEN_IN_CONTRACT
         if name == forbidden or name.startswith(f"{forbidden}.")
     ]
@@ -54,7 +58,7 @@ def test_contract_files_are_transport_and_sdk_free(filename):
 def test_models_do_not_import_a_socket_or_http_stack():
     """Values travel over any transport; they must not embed one."""
     for filename in ("models.py", "ports.py"):
-        names = _imports(API / filename)
+        names = _imports(CONTRACT / filename)
         assert "socket" not in names
         assert "requests" not in names
         assert "http" not in names
@@ -68,21 +72,21 @@ def test_api_never_depends_on_a_frontend():
     which made the daemon depend on the dashboard.
     """
     offenders = []
-    for path in API.rglob("*.py"):
+    for path in SERVER.rglob("*.py"):
         for name in _imports(path):
-            if name.startswith(("azure_jobs.tui", "azure_jobs.cli")):
+            if name.startswith(("azure_jobs.client.tui", "azure_jobs.client.cli")):
                 offenders.append(f"{path.name}: {name}")
     assert offenders == [], offenders
 
 
 def test_there_is_one_canonical_job_model():
     """Two Job classes would silently diverge across the transport."""
-    from azure_jobs.api.models import Job as ApiJob
-    from azure_jobs.api.models import JobRef as ApiJobRef
-    from azure_jobs.api.models import Target as ApiTarget
-    from azure_jobs.tui.models import Job as TuiJob
-    from azure_jobs.tui.models import JobRef as TuiJobRef
-    from azure_jobs.tui.models import Target as TuiTarget
+    from azure_jobs.shared.contract.models import Job as ApiJob
+    from azure_jobs.shared.contract.models import JobRef as ApiJobRef
+    from azure_jobs.shared.contract.models import Target as ApiTarget
+    from azure_jobs.client.tui.models import Job as TuiJob
+    from azure_jobs.client.tui.models import JobRef as TuiJobRef
+    from azure_jobs.client.tui.models import Target as TuiTarget
 
     assert TuiJob is ApiJob
     assert TuiJobRef is ApiJobRef
@@ -90,27 +94,90 @@ def test_there_is_one_canonical_job_model():
 
 
 #: The Azure adapter layer. Everything else in api/ reaches Azure through it.
-AZURE_ADAPTER_FILES = ("backend.py", "azure.py", "typed.py")
+AZURE_ADAPTER_FILES = ("backend.py", "azure.py")
 
 
-def test_only_the_azure_adapter_talks_to_az_client():
-    """The SDK stays in one layer, so the daemon cannot drift from direct calls."""
+def _layer_of(path: Path) -> str:
+    rel = path.relative_to(SRC)
+    return rel.parts[0] if len(rel.parts) > 1 else "root"
+
+
+def _azure_jobs_imports(path: Path) -> list[str]:
+    return [n for n in _imports(path) if n.startswith("azure_jobs")]
+
+
+def test_the_sdk_lives_only_in_the_server_layer():
+    """Only the server executes, so only it may reach the Azure SDK."""
     offenders = []
-    for path in API.rglob("*.py"):
-        if path.name in AZURE_ADAPTER_FILES:
+    for layer, root in (("shared", SHARED), ("client", CLIENT)):
+        for path in root.rglob("*.py"):
+            for name in _azure_jobs_imports(path):
+                if "az_client" in name:
+                    offenders.append(f"{layer}/{path.name}: {name}")
+    assert offenders == [], offenders
+
+
+def test_the_server_never_imports_the_client():
+    """The daemon must run headless; importing UI code would couple them."""
+    offenders = [
+        f"{path.relative_to(SERVER)}: {name}"
+        for path in SERVER.rglob("*.py")
+        for name in _azure_jobs_imports(path)
+        if name.startswith("azure_jobs.client")
+    ]
+    assert offenders == [], offenders
+
+
+def test_the_client_never_imports_the_server():
+    """Everything the client needs is on the wire, not in the server package."""
+    offenders = [
+        f"{path.relative_to(CLIENT)}: {name}"
+        for path in CLIENT.rglob("*.py")
+        for name in _azure_jobs_imports(path)
+        if name.startswith("azure_jobs.server")
+    ]
+    assert offenders == [], offenders
+
+
+def test_shared_depends_on_neither_side():
+    """Shared code is the vocabulary both sides speak; it cannot know either."""
+    offenders = [
+        f"{path.relative_to(SHARED)}: {name}"
+        for path in SHARED.rglob("*.py")
+        for name in _azure_jobs_imports(path)
+        if name.startswith(("azure_jobs.client", "azure_jobs.server"))
+    ]
+    assert offenders == [], offenders
+
+
+def test_rendering_is_client_only():
+    """Rich/Textual are presentation; the daemon must not depend on them."""
+    offenders = []
+    for layer, root in (("shared", SHARED), ("server", SERVER)):
+        for path in root.rglob("*.py"):
+            for name in _imports(path):
+                if name.split(".")[0] in ("rich", "textual"):
+                    offenders.append(f"{layer}/{path.name}: {name}")
+    assert offenders == [], offenders
+
+
+def test_within_the_server_only_the_adapter_reaches_the_sdk_directly():
+    """daemon/queue/watch go through backend.py, so one place owns the SDK."""
+    allowed = {"backend.py", "azure.py"}
+    offenders = []
+    for path in SERVER.glob("*.py"):
+        if path.name in allowed:
             continue
-        for name in _imports(path):
-            if name.startswith("azure_jobs.az_client"):
+        for name in _azure_jobs_imports(path):
+            if "az_client" in name or name.startswith("azure_jobs.server.submit"):
                 offenders.append(f"{path.name}: {name}")
-    # daemon.py and client.py may not reach the SDK directly; they go through
-    # the adapter or the wire respectively.
     assert offenders == [], offenders
 
 
 def test_every_contract_port_is_reachable_over_the_wire():
     """A capability that exists only in-process breaks transport parity."""
-    from azure_jobs.api import ports
-    from azure_jobs.api.daemon import METHODS
+    from azure_jobs.shared.contract import ports
+    from azure_jobs.server.daemon import METHODS
 
     # Ports whose methods must each map to a daemon method.
     mapping = {
@@ -134,8 +201,8 @@ def test_every_contract_port_is_reachable_over_the_wire():
 
 def test_remote_and_inprocess_expose_the_same_backend_attributes():
     """A frontend must not have to ask which transport it received."""
-    from azure_jobs.api.client import DaemonBackend
-    from azure_jobs.api.backend import AzureBackend
+    from azure_jobs.client.connection import DaemonBackend
+    from azure_jobs.server.backend import AzureBackend
 
     expected = {
         "target",
@@ -159,8 +226,8 @@ def test_remote_and_inprocess_expose_the_same_backend_attributes():
 
 def test_remote_ports_satisfy_the_runtime_protocols():
     """Liskov: a remote port must be substitutable for a local one."""
-    from azure_jobs.api import ports
-    from azure_jobs.api.client import (
+    from azure_jobs.shared.contract import ports
+    from azure_jobs.client.connection import (
         RemoteCatalog,
         RemoteJobs,
         RemoteLogReader,
@@ -181,8 +248,8 @@ def test_remote_ports_satisfy_the_runtime_protocols():
 
 
 def test_inprocess_ports_satisfy_the_runtime_protocols():
-    from azure_jobs.api import ports
-    from azure_jobs.api.backend import AzureCatalog, AzureJobs, AzureLogs
+    from azure_jobs.shared.contract import ports
+    from azure_jobs.server.backend import AzureCatalog, AzureJobs, AzureLogs
 
     stub = object.__new__(AzureJobs)
     assert isinstance(stub, ports.JobQuery)
@@ -194,7 +261,7 @@ def test_inprocess_ports_satisfy_the_runtime_protocols():
 
 def test_daemon_dispatch_has_no_if_elif_chain_on_method_names():
     """Dispatch is a table; adding a method must not mean editing a branch."""
-    source = (API / "daemon.py").read_text(encoding="utf-8")
+    source = (SERVER / "daemon.py").read_text(encoding="utf-8")
     tree = ast.parse(source)
     dispatch = next(
         node
@@ -207,13 +274,13 @@ def test_daemon_dispatch_has_no_if_elif_chain_on_method_names():
 
 
 def test_every_daemon_method_is_registered_in_one_table():
-    from azure_jobs.api.daemon import METHODS, _METHODS
+    from azure_jobs.server.daemon import METHODS, _METHODS
 
     assert set(METHODS) == set(_METHODS)
     assert len(METHODS) == len(set(METHODS))
 
 
-CLI = Path(__file__).parents[1] / "src" / "azure_jobs" / "cli"
+CLI = CLIENT / "cli"
 
 
 def test_cli_never_imports_az_client():
@@ -225,8 +292,8 @@ def test_cli_never_imports_az_client():
     offenders = []
     for path in CLI.rglob("*.py"):
         for name in _imports(path):
-            if name == "azure_jobs.az_client" or name.startswith(
-                "azure_jobs.az_client."
+            if name == "azure_jobs.server.az_client" or name.startswith(
+                "azure_jobs.server.az_client."
             ):
                 offenders.append(f"{path.name}: {name}")
     assert offenders == [], offenders
@@ -244,8 +311,8 @@ def test_cli_does_not_construct_azure_clients():
 
 
 def test_every_account_port_method_is_reachable_over_the_wire():
-    from azure_jobs.api import ports
-    from azure_jobs.api.daemon import METHODS
+    from azure_jobs.shared.contract import ports
+    from azure_jobs.server.daemon import METHODS
 
     missing = [
         f"account.{name}"
@@ -259,7 +326,7 @@ def test_every_account_port_method_is_reachable_over_the_wire():
 
 def test_catalog_item_does_not_shadow_payload_keys():
     """`kind` is a storage-account attribute, so the field is `category`."""
-    from azure_jobs.api.models import CatalogItem
+    from azure_jobs.shared.contract.models import CatalogItem
 
     item = CatalogItem("storage_account", "sa", {"kind": "StorageV2", "sku": "LRS"})
     assert item.category == "storage_account"

@@ -6,16 +6,16 @@ from typing import Any
 
 import pytest
 
-from azure_jobs.backend import (
-    BackendEntry,
-    get_backend,
-    list_backends,
-    register_backend,
+from azure_jobs.shared.spec import (
+    SpecHooks,
+    get_spec_hooks,
+    known_services,
+    register_spec,
 )
-from azure_jobs.errors import BackendError
-from azure_jobs.job import build_job_spec
-from azure_jobs.job.spec import JobResult, JobSpec
-from azure_jobs.template.models import Template
+from azure_jobs.shared.errors import BackendError
+from azure_jobs.shared.job import build_job_spec
+from azure_jobs.shared.job.spec import JobResult, JobSpec
+from azure_jobs.shared.template.models import Template
 
 
 def _fake_submit(req: JobSpec, *, on_event=None) -> JobResult:  # noqa: ARG001
@@ -58,7 +58,7 @@ class TestBuildSpecBackendIsTheOnlyDispatch:
         # Volcano build_spec_backend sanitised the name (no _, no .)
         assert "_" not in spec.name and "." not in spec.name
         # And populated extra["volcano"] with a typed VolcanoOpts:
-        from azure_jobs.backend.volcano import VolcanoOpts
+        from azure_jobs.shared.opts.volcano import VolcanoOpts
 
         vol = spec.backend_spec
         assert isinstance(vol, VolcanoOpts)
@@ -136,7 +136,7 @@ class TestBackendRegistryAcceptsBuildSpecBackend:
 
     def teardown_method(self):
         # The registry is process-global; undo our test registration.
-        from azure_jobs.backend import _REGISTRY
+        from azure_jobs.shared.spec import _HOOKS as _REGISTRY
 
         _REGISTRY.pop("test-foo", None)
 
@@ -149,11 +149,9 @@ class TestBackendRegistryAcceptsBuildSpecBackend:
         def _normalize_foo(name: str) -> str:
             return f"foo--{name}"
 
-        register_backend(
+        register_spec(
             "test-foo",
-            _fake_submit,
-            label="Foo",
-            build_spec_backend=_build_foo,
+build_spec_backend=_build_foo,
             normalize_job_name=_normalize_foo,
         )
 
@@ -175,7 +173,9 @@ class TestBackendRegistryAcceptsBuildSpecBackend:
         assert spec.env_vars["AJ_NAME"] == "foo--j"
 
     def test_backend_without_hooks_uses_noop(self, tmp_path):
-        register_backend("test-foo", _fake_submit, label="Foo")  # no hooks
+        register_spec(
+            "test-foo",
+)  # no hooks
 
         tmpl = _build_tmpl(service="test-foo", subscription_id="sub")
         spec = build_job_spec(
@@ -196,7 +196,7 @@ class TestBackendRegistryAcceptsBuildSpecBackend:
 
     def test_unknown_service_raises_backend_error(self, tmp_path):
         tmpl = _build_tmpl(service="does-not-exist")
-        with pytest.raises(BackendError, match="No submission backend"):
+        with pytest.raises(BackendError, match="No job description registered"):
             build_job_spec(
                 tmpl,
                 name="j",
@@ -217,7 +217,7 @@ class TestBuildPyHasNoServiceSpecificBranches:
         import re
         from pathlib import Path
 
-        import azure_jobs.job.build as build_mod
+        import azure_jobs.shared.job.build as build_mod
 
         src = Path(build_mod.__file__).read_text(encoding="utf-8")
         # Strip comments and docstrings so we only inspect runtime code.
@@ -229,12 +229,11 @@ class TestBuildPyHasNoServiceSpecificBranches:
         )
 
 
-class TestBackendEntryShape:
+class TestSpecHooksShape:
     def test_built_in_backends_have_entries(self):
-        names = [e.name for e in list_backends()]
-        assert {"aml", "sing", "volcano"}.issubset(set(names))
+        assert {"aml", "sing", "volcano"}.issubset(set(known_services()))
 
     def test_entry_has_build_spec_backend_callable(self):
-        e = get_backend("volcano")
-        assert isinstance(e, BackendEntry)
+        e = get_spec_hooks("volcano")
+        assert isinstance(e, SpecHooks)
         assert callable(e.build_spec_backend)
