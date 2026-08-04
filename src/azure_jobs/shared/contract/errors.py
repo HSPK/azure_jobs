@@ -39,6 +39,15 @@ class ProtocolMismatch(TransportError):
     """The daemon speaks a different protocol than this client."""
 
 
+class DaemonStartupRefused(DaemonUnavailable):
+    """The daemon started and then declined to serve, explaining why.
+
+    Distinct from a plain :class:`DaemonUnavailable` because it already carries
+    the fix (usually ``az login``); telling the user to "start the daemon"
+    instead would send them the wrong way.
+    """
+
+
 class RemoteError(AJError):
     """An error whose concrete type is not reconstructible on this side."""
 
@@ -66,6 +75,7 @@ _RECONSTRUCTIBLE: dict[str, type[BaseException]] = {
         WorkspaceError,
         TransportError,
         DaemonUnavailable,
+        DaemonStartupRefused,
         ProtocolMismatch,
         RemoteError,
         ValueError,

@@ -11,6 +11,9 @@ from pathlib import Path
 
 from azure_jobs.server.runner import DAEMON_IDLE_SHUTDOWN, Daemon
 
+#: Distinct from a bind failure so a caller can tell "sign in" from "in use".
+AUTH_EXIT_CODE = 2
+
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="ajd", description="aj background daemon")
@@ -34,12 +37,30 @@ def main(argv: list[str] | None = None) -> int:
         help="Exit after this many seconds with nothing to do (0 = never)",
     )
     parser.add_argument("--log-level", default=os.getenv("AJ_LOG_LEVEL", "WARNING"))
+    parser.add_argument(
+        "--skip-login-check",
+        action="store_true",
+        help="Start without verifying Azure sign-in (for tests)",
+    )
     args = parser.parse_args(argv)
 
     logging.basicConfig(
         level=getattr(logging, str(args.log_level).upper(), logging.WARNING),
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
+
+    if not args.skip_login_check:
+        from azure_jobs.server.discovery import require_login
+        from azure_jobs.shared.errors import AJError
+
+        try:
+            require_login()
+        except AJError as exc:
+            # Refuse to start rather than let every command fail separately:
+            # the daemon is the only execution path, so a daemon that cannot
+            # authenticate has nothing useful to serve.
+            print(f"ajd: {exc}", file=sys.stderr)
+            return AUTH_EXIT_CODE
 
     daemon = Daemon(
         Path(args.socket),

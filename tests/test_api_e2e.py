@@ -20,6 +20,7 @@ from click.testing import CliRunner
 
 from azure_jobs.shared.contract import routes as R
 from azure_jobs.client.connection import DaemonClient, _reachable
+from azure_jobs.shared.contract.errors import DaemonUnavailable
 from azure_jobs.shared.version import aj_version
 
 from .api_fakes import make_target
@@ -61,6 +62,9 @@ def live_daemon(tmp_path):
             str(sock),
             "--idle-timeout",
             "300",
+            # The sign-in gate is exercised directly in TestLoginIsRequired;
+            # these tests are about the process, and CI has no Azure session.
+            "--skip-login-check",
         ],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -273,3 +277,66 @@ class TestQueueOverTheRealDaemon:
             assert names == ["job-a"]
         finally:
             second.close()
+
+
+class TestLoginIsRequired:
+    """The daemon refuses to start without a usable Azure sign-in.
+
+    It is the only execution path, so starting anyway would turn one clear
+    "sign in" message into a different confusing failure per command.
+    """
+
+    def _run(self, tmp_path, monkeypatch, *, account, token_error=""):
+        from azure_jobs.server import main as main_mod
+
+        monkeypatch.setattr(
+            "azure_jobs.server.discovery.az_cli.account_show", lambda: account
+        )
+        monkeypatch.setattr(
+            "azure_jobs.server.discovery.credential.credential_health",
+            lambda: {
+                "ok": not token_error,
+                "error": token_error,
+                "missing_package": False,
+            },
+        )
+        return main_mod.main(["--socket", str(tmp_path / "d.sock")])
+
+    def test_it_exits_when_not_signed_in(self, tmp_path, monkeypatch, capsys):
+        code = self._run(tmp_path, monkeypatch, account=None)
+        assert code == 2
+        message = capsys.readouterr().err
+        assert "az login" in message
+        assert not (tmp_path / "d.sock").exists()
+
+    def test_it_exits_when_the_token_cannot_be_acquired(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        code = self._run(
+            tmp_path,
+            monkeypatch,
+            account={"user": {"name": "me@example.com"}},
+            token_error="ClientAuthenticationError: expired",
+        )
+        assert code == 2
+        message = capsys.readouterr().err
+        assert "expired" in message
+        assert "me@example.com" in message
+
+    def test_the_client_reports_why_the_daemon_would_not_start(
+        self, tmp_path, monkeypatch, allow_daemon_spawn
+    ):
+        """A refusal must reach the user, not surface as a bare timeout."""
+        from azure_jobs.client import connection
+
+        runtime = tmp_path / "rt"
+        runtime.mkdir(mode=0o700)
+        monkeypatch.setenv("AJ_RUNTIME_DIR", str(runtime))
+        # No Azure CLI on PATH, so the spawned daemon cannot sign in.
+        monkeypatch.setenv("PATH", str(tmp_path / "empty"))
+
+        with pytest.raises(DaemonUnavailable) as caught:
+            allow_daemon_spawn(runtime / "daemon.sock")
+        message = str(caught.value)
+        assert "exited with status 2" in message
+        assert "az login" in message

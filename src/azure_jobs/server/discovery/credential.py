@@ -38,4 +38,43 @@ def credential_health() -> dict[str, Any]:
     }
 
 
-__all__ = ["credential_health"]
+def require_login() -> None:
+    """Raise unless Azure is signed in and a token can be minted.
+
+    Checked once at daemon startup rather than on the first request: every
+    command runs through the daemon, so a daemon that cannot authenticate can
+    only fail each of them one at a time, with a different message each time.
+
+    Two checks, because they fail differently: ``az account show`` answers
+    "signed in at all", while acquiring a token catches an expired or
+    unusable session that still looks signed in.
+    """
+    from azure_jobs.shared.errors import AuthError
+
+    from .az_cli import account_show
+
+    account = account_show()
+    if account is None:
+        raise AuthError(
+            "Not signed in to Azure (or the Azure CLI is not installed).\n"
+            "  Sign in with: az login\n"
+            "  Install it:   https://aka.ms/installazurecli"
+        )
+
+    health = credential_health()
+    if health.get("missing_package"):
+        raise AuthError(
+            "azure-identity is not installed, so no token can be acquired.\n"
+            "  Install it with: pip install azure-identity"
+        )
+    if not health.get("ok"):
+        raise AuthError(
+            "Signed in as "
+            f"{account.get('user', {}).get('name', 'unknown')} but no token "
+            "could be acquired.\n"
+            f"  {health.get('error') or 'Unknown credential failure'}\n"
+            "  Refresh the session with: az login"
+        )
+
+
+__all__ = ["credential_health", "require_login"]

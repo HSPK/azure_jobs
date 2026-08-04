@@ -127,54 +127,29 @@ class TestAuthStatus:
 
 
 # ---------------------------------------------------------------------------
-# aj auth login
+# aj auth surface
 # ---------------------------------------------------------------------------
 
 
-class TestAuthLogin:
-    def test_delegates_to_az_login(self, runner: CliRunner) -> None:
-        with patch("subprocess.run") as mock_run:
-            result = runner.invoke(main, ["auth", "login"])
-        assert result.exit_code == 0
-        mock_run.assert_called_once_with(["az", "login"], check=False)
+class TestAuthIsReadOnly:
+    """Signing in is `az login`; aj does not wrap it.
 
-    def test_az_missing(self, runner: CliRunner) -> None:
-        with patch("subprocess.run", side_effect=FileNotFoundError):
-            result = runner.invoke(main, ["auth", "login"])
+    The daemon holds its own credential and refuses to start without one, so a
+    client-side `aj auth login` would both duplicate `az` and authenticate the
+    wrong process.
+    """
+
+    @pytest.mark.parametrize("removed", ["login", "logout"])
+    def test_the_mutating_commands_are_gone(
+        self, runner: CliRunner, removed: str
+    ) -> None:
+        result = runner.invoke(main, ["auth", removed])
         assert result.exit_code != 0
 
-
-# ---------------------------------------------------------------------------
-# aj auth logout
-# ---------------------------------------------------------------------------
-
-
-class TestAuthLogout:
-    def test_success(self, runner: CliRunner) -> None:
-        mock = MagicMock()
-        mock.returncode = 0
-        with patch("subprocess.run", return_value=mock):
-            result = runner.invoke(main, ["auth", "logout"])
+    def test_help_offers_only_status(self, runner: CliRunner) -> None:
+        result = runner.invoke(main, ["auth", "--help"])
         assert result.exit_code == 0
-        assert "Logged out" in result.output
-
-    def test_failure(self, runner: CliRunner) -> None:
-        mock = MagicMock()
-        mock.returncode = 1
-        mock.stderr = "Already logged out"
-        with patch("subprocess.run", return_value=mock):
-            result = runner.invoke(main, ["auth", "logout"])
-        assert result.exit_code != 0
-
-
-# ---------------------------------------------------------------------------
-# aj auth (subcommand help)
-# ---------------------------------------------------------------------------
-
-
-def test_auth_help(runner: CliRunner) -> None:
-    result = runner.invoke(main, ["auth", "--help"])
-    assert result.exit_code == 0
-    assert "status" in result.output
-    assert "login" in result.output
-    assert "logout" in result.output
+        listed = result.output.split("Commands:", 1)[1]
+        assert [line.split()[0] for line in listed.splitlines() if line.strip()] == [
+            "status"
+        ]

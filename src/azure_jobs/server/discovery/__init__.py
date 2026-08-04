@@ -9,7 +9,7 @@ from .az_cli import (
     detect_workspaces,
     find_az,
 )
-from .credential import credential_health
+from .credential import credential_health, require_login
 from .workspace import configured_workspace, resolve_workspace
 
 __all__ = [

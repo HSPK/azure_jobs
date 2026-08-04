@@ -77,8 +77,7 @@ See [configuration.md](configuration.md) for template syntax, inheritance, and m
 ```bash
 aj ws list                       # workspaces in subscription
 aj ws set                        # interactive picker
-aj auth status                   # credential health
-aj auth login                    # delegate to az login
+aj auth status                   # credential health, as the daemon sees it
 ```
 
 ## Compute, quota, SKUs

@@ -324,9 +324,9 @@ def test_cli_does_not_construct_azure_clients():
     assert offenders == [], offenders
 
 
-#: ``az login``/``az logout`` need a terminal the daemon does not have, so the
-#: client owns them. Nothing else may reach for the Azure CLI.
-AZ_EXEMPT = {"auth.py"}
+#: No exemptions: signing in is `az login`, run by the user, so there is no
+#: longer any client code that needs the Azure CLI at all.
+AZ_EXEMPT: set[str] = set()
 
 
 def test_the_client_never_acquires_an_azure_token():

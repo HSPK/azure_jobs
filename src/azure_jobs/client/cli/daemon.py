@@ -63,6 +63,7 @@ def daemon_start() -> None:
     """Start the daemon if it is not already running."""
     from azure_jobs.client.connection import socket_path, spawn_daemon
     from azure_jobs.client.ui import console
+    from azure_jobs.shared.contract.errors import DaemonUnavailable
 
     path = socket_path()
     try:
@@ -73,7 +74,11 @@ def daemon_start() -> None:
         return
     except Exception:
         pass
-    spawn_daemon(path)
+    try:
+        spawn_daemon(path)
+    except DaemonUnavailable as exc:
+        # Chiefly a refused sign-in, which is actionable — a traceback is not.
+        raise click.ClickException(str(exc)) from exc
     conn = _client(path)
     try:
         info = conn.get(R.info())

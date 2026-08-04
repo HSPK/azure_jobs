@@ -229,9 +229,15 @@ and reading the active subscription are all `az` calls, so they are endpoints
 client-side subprocesses. Credential health (`/v1/credential`) is asked of the
 daemon too, because the daemon's token is the one that matters. That is why
 `shared/config` holds only local file config: everything that shells out lives
-in `server/discovery/`, guarded by `tests/test_api_architecture.py`. The single
-exception is `aj auth login` / `logout`, which need an interactive terminal the
-daemon does not have.
+in `server/discovery/`, guarded by `tests/test_api_architecture.py` with no
+exemptions.
+
+**Signing in is `az login`.** `aj auth` is read-only: the daemon is a separate
+process with its own credential, so a client-side login would authenticate the
+wrong one. Instead the daemon verifies at startup that it can acquire a token
+and exits with status 2 if it cannot. The client keeps the spawned process's
+output in `<runtime>/daemon.log` and reports it, so an autostart that refuses
+reads as "run az login" rather than as a spawn timeout.
 
 A domain failure keeps its type across the wire: an unresolvable workspace
 arrives as `WorkspaceError`, not `TransportError`, so `ResilientBackend` does

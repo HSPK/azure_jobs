@@ -26,6 +26,7 @@ import httpx
 
 from azure_jobs.shared.contract import routes as R
 from azure_jobs.shared.contract.errors import (
+    DaemonStartupRefused,
     DaemonUnavailable,
     TransportError,
     error_from_json,
@@ -54,6 +55,11 @@ CONNECT_TIMEOUT = 5.0
 CALL_TIMEOUT = 1800.0
 SPAWN_TIMEOUT = 15.0
 
+#: The spawned daemon's own output, kept so a startup refusal (for example, no
+#: Azure sign-in) reaches the user instead of a bare timeout.
+DAEMON_LOG_NAME = "daemon.log"
+DAEMON_LOG_TAIL_LINES = 20
+
 #: Any host works over a UDS transport; it exists only to form a URL.
 BASE_URL = "http://aj-daemon"
 
@@ -73,7 +79,14 @@ def socket_path() -> Path:
 
 
 def daemon_required(exc: BaseException) -> DaemonUnavailable:
-    """Explain how to recover from an unreachable daemon."""
+    """Explain how to recover from an unreachable daemon.
+
+    An exception that already says what to do is passed through: the daemon
+    refusing to start because Azure is not signed in needs ``az login``, and
+    burying that under "run aj daemon start" points the user the wrong way.
+    """
+    if isinstance(exc, DaemonStartupRefused):
+        return exc
     return DaemonUnavailable(
         f"The aj daemon is unavailable ({type(exc).__name__}: {exc}).\n"
         "  Start it with:    aj daemon start\n"
@@ -665,6 +678,17 @@ def _reachable(path: Path) -> bool:
         sock.close()
 
 
+def _spawn_failure(exit_code: int, log_path: Path) -> str:
+    """Explain an exit before the socket appeared, using what it printed."""
+    try:
+        output = log_path.read_text(encoding="utf-8", errors="replace").strip()
+    except OSError:
+        output = ""
+    tail = "\n".join(output.splitlines()[-DAEMON_LOG_TAIL_LINES:])
+    reason = tail or f"no output; see {log_path}"
+    return f"The aj daemon exited with status {exit_code} before it could serve:\n{reason}"
+
+
 def spawn_daemon(path: Path) -> None:
     """Start the daemon detached, guarded by a lock so racing CLIs spawn one."""
     secure_runtime_dir(path.parent)
@@ -676,19 +700,37 @@ def spawn_daemon(path: Path) -> None:
         fcntl.flock(fd, fcntl.LOCK_EX)
         if _reachable(path):
             return  # someone else won the race
-        subprocess.Popen(
-            [sys.executable, "-m", "azure_jobs.server.main", "--socket", str(path)],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            stdin=subprocess.DEVNULL,
-            start_new_session=True,
-        )
+
+        # Kept, not discarded: the daemon refuses to start when Azure is not
+        # signed in, and "did not answer within 20s" would hide the reason.
+        log_path = path.parent / DAEMON_LOG_NAME
+        # Truncated per spawn: appending would let a stale failure be reported
+        # as the reason this one did not start.
+        log_fd = os.open(str(log_path), os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
+        log_file = os.fdopen(log_fd, "wb", buffering=0)
+        try:
+            proc = subprocess.Popen(
+                [sys.executable, "-m", "azure_jobs.server.main", "--socket", str(path)],
+                stdout=log_file,
+                stderr=log_file,
+                stdin=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        finally:
+            log_file.close()
+
         deadline = time.time() + SPAWN_TIMEOUT
         while time.time() < deadline:
             if _reachable(path):
                 return
+            exit_code = proc.poll()
+            if exit_code is not None:
+                raise DaemonStartupRefused(_spawn_failure(exit_code, log_path))
             time.sleep(0.05)
-        raise DaemonUnavailable(f"Daemon did not answer within {SPAWN_TIMEOUT:g}s")
+        raise DaemonUnavailable(
+            f"Daemon did not answer within {SPAWN_TIMEOUT:g}s. "
+            f"Its output is in {log_path}"
+        )
     finally:
         os.close(fd)
 

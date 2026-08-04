@@ -95,6 +95,26 @@ class _LazyGroup(click.Group):
         for mod_path in set(self._MODULE_TO_COMMANDS) | {self._ALIASES_MODULE}:
             importlib.import_module(mod_path, package=__name__)
 
+    def invoke(self, ctx: click.Context) -> Any:
+        """Render a domain failure as a message, never as a traceback.
+
+        One place rather than a ``try`` per command: any command can reach the
+        daemon, so any command can fail because it is not running or Azure is
+        not signed in, and every one of those must read as instructions.
+        ``AJ_DEBUG=1`` still gets the traceback.
+        """
+        from azure_jobs.shared.errors import AJError
+
+        try:
+            return super().invoke(ctx)
+        except AJError as exc:
+            log.debug("Command failed", exc_info=exc)
+            if os.getenv("AJ_DEBUG", "").strip().lower() not in _FALSY_ENV_VALUES | {
+                ""
+            }:
+                raise
+            raise click.ClickException(str(exc)) from exc
+
 @click.group(cls=_LazyGroup)
 @click.version_option(package_name="azure_jobs")
 @click.option(
