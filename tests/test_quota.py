@@ -292,6 +292,11 @@ class TestListVirtualClusters:
 
 
 class TestQuotaListCli:
+    @pytest.fixture(autouse=True)
+    def _daemon(self, cli_daemon):
+        """Commands reach Azure only through the daemon now."""
+        yield cli_daemon
+
     def setup_method(self):
         self.runner = CliRunner()
         self._arm_patcher = patch("azure_jobs.az_client.AzureARMClient")

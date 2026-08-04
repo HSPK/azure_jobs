@@ -139,9 +139,9 @@ Highlights:
 
 ## Client / server split
 
-`aj` runs frontends against one capability contract. Every command executes
-through the daemon; the in-process backend is what the daemon itself runs, and
-what `AJ_NO_DAEMON=1` selects explicitly.
+`aj` runs frontends against one capability contract, and the daemon is the only
+thing that executes it. There is deliberately no in-process mode: a second path
+drifts from the first and makes behaviour depend on invisible state.
 
 ```
 cli/   tui/   (future web/, vscode/)      frontends — import only api/
@@ -153,7 +153,7 @@ cli/   tui/   (future web/, vscode/)      frontends — import only api/
         ├── rpc.py       line-delimited JSON-RPC 2.0 framing
         ├── azure.py     Azure implementations of the ports
         ├── typed.py     type-tagged codec for rich payloads
-        ├── inprocess.py direct backend — the Azure adapter layer
+        ├── backend.py   Azure implementation — daemon-side only
         ├── resilient.py reconnect-once session facade
         ├── queue.py     serial submission queue with a journal
         ├── watch.py     background polling + notifications
@@ -189,11 +189,24 @@ one that starts on demand must also stop on its own. A handshake compares
 protocol and `aj` version; a stale daemon is retired and respawned, so
 `pipx upgrade` cannot leave a mismatched pair running.
 
-**No silent downgrade.** If the daemon cannot be reached, commands fail with the
-recovery steps rather than quietly running in-process — a silent fallback hides
-a broken daemon and makes behaviour depend on invisible state. A daemon that
-dies mid-session is reconnected to once; a second failure is an outage and
-reaches the caller. `AJ_NO_DAEMON=1` is the explicit opt-out.
+**No second path.** If the daemon cannot be reached, commands fail with the
+recovery steps. A daemon that dies mid-session is reconnected to once; a second
+failure is an outage and reaches the caller.
+
+**Versioning.** The client sends the newest protocol it speaks and both sides
+use the highest they share, within `MIN_PROTOCOL_VERSION..PROTOCOL_VERSION`.
+A differing `aj` version is recorded but never fatal — Docker negotiates a range
+for the same reason: forcing a restart on every upgrade would interrupt whatever
+the daemon is running.
+
+**Retiring never abandons work.** A submission the daemon accepted has no other
+owner, so `daemon.retire` refuses new connections and then waits for the queue
+to drain rather than hard-stopping. `aj daemon stop` reports how many
+submissions it is waiting for; `--force` gives up on them explicitly.
+
+**Bounded resources.** Connection threads are reaped and capped
+(`MAX_CONNECTIONS`), since a daemon that lives for days would otherwise
+accumulate one per CLI invocation.
 
 **Errors.** The wire carries the exception *type*, so frontend code such as
 `except RestError as exc: exc.status_code` keeps working when the work happened
@@ -207,8 +220,10 @@ submission interrupted mid-flight is marked failed rather than silently re-run,
 because its remote outcome is unknown.
 
 **Watching.** The daemon polls watched jobs and pushes transitions to
-subscribers — the one capability an in-process CLI structurally cannot offer.
-Watching an already-finished job answers immediately rather than going silent.
+subscribers — the one capability a client cannot provide for itself. Watches are
+journalled, so a restart does not silently drop them, and a job that finished
+while the daemon was down still produces its notification. Watching an
+already-finished job answers immediately rather than going silent.
 
 
 ## TUI

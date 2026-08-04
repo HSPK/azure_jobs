@@ -20,7 +20,6 @@ from azure_jobs.api import PROTOCOL_VERSION
 from azure_jobs.api.client import (
     RpcConnection,
     _connect_socket,
-    daemon_disabled,
     open_backend,
     runtime_dir,
     socket_path,
@@ -280,12 +279,10 @@ class TestNoSilentDowngrade:
                 make_target(),
                 root=tmp_path,
                 path=tmp_path / "nothing.sock",
-                prefer_daemon=True,
                 autostart=False,
             )
         message = str(caught.value)
         assert "aj daemon start" in message
-        assert "AJ_NO_DAEMON=1" in message
         assert "AJ_DEBUG=1" in message
 
     def test_a_wedged_daemon_raises_rather_than_degrading(
@@ -295,8 +292,7 @@ class TestNoSilentDowngrade:
             def __init__(self, target):
                 raise AssertionError("must not run in-process implicitly")
 
-        monkeypatch.delenv("AJ_NO_DAEMON", raising=False)
-        monkeypatch.setattr("azure_jobs.api.inprocess.InProcessBackend", Fake)
+        monkeypatch.setattr("azure_jobs.api.backend.AzureBackend", Fake)
         monkeypatch.setattr(
             "azure_jobs.api.client.connect_daemon",
             lambda *a, **k: (_ for _ in ()).throw(RuntimeError("wedged")),
@@ -304,18 +300,20 @@ class TestNoSilentDowngrade:
         with pytest.raises(DaemonUnavailable):
             open_backend(make_target(), root=tmp_path)
 
-    def test_explicit_opt_out_is_still_honoured(self, tmp_path, monkeypatch):
-        """AJ_NO_DAEMON is a deliberate choice, not a silent downgrade."""
+    def test_there_is_no_in_process_escape_hatch(self):
+        """The daemon is the only execution path; no env var bypasses it."""
+        import inspect
 
-        class Fake:
-            def __init__(self, target):
-                self.target = target
+        from azure_jobs.api import client
 
-        monkeypatch.setattr("azure_jobs.api.inprocess.InProcessBackend", Fake)
-        monkeypatch.setenv("AJ_NO_DAEMON", "1")
-        assert isinstance(open_backend(make_target(), root=tmp_path), Fake)
+        source = inspect.getsource(client)
+        assert "AJ_NO_DAEMON" not in source
+        assert "daemon_disabled" not in source
+        assert not hasattr(client, "daemon_disabled")
 
-    def test_spawned_daemon_serves_a_real_session(self, tmp_path, monkeypatch):
+    def test_spawned_daemon_serves_a_real_session(
+        self, tmp_path, monkeypatch, allow_daemon_spawn
+    ):
         """Autostart must actually produce a working daemon, then be cleanable."""
         from azure_jobs.api.client import connect_daemon
 
@@ -336,27 +334,6 @@ class TestNoSilentDowngrade:
             deadline = time.time() + 10
             while time.time() < deadline and sock.exists():
                 time.sleep(0.05)
-
-    def test_env_var_disables_the_daemon_entirely(self, monkeypatch):
-        monkeypatch.setenv("AJ_NO_DAEMON", "1")
-        assert daemon_disabled() is True
-        monkeypatch.setenv("AJ_NO_DAEMON", "0")
-        assert daemon_disabled() is False
-        monkeypatch.delenv("AJ_NO_DAEMON", raising=False)
-        assert daemon_disabled() is False
-
-    def test_prefer_daemon_false_never_touches_the_socket(self, tmp_path, monkeypatch):
-        def explode(*args, **kwargs):
-            raise AssertionError("should not have tried to connect")
-
-        monkeypatch.setattr("azure_jobs.api.client.connect_daemon", explode)
-
-        class Fake:
-            def __init__(self, target):
-                self.target = target
-
-        monkeypatch.setattr("azure_jobs.api.inprocess.InProcessBackend", Fake)
-        assert isinstance(open_backend(make_target(), prefer_daemon=False), Fake)
 
     def test_connect_without_autostart_reports_unavailable(self, tmp_path):
         from azure_jobs.api.client import connect_daemon

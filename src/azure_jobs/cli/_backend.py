@@ -4,10 +4,9 @@ Commands must not import ``az_client`` directly (enforced by
 ``tests/test_api_architecture.py``): they go through the capability contract so
 the work happens in the daemon.
 
-If the daemon cannot be reached the command fails with an actionable message
-rather than quietly running in-process — a silent downgrade hides a broken
-daemon and makes behaviour depend on invisible state. ``AJ_NO_DAEMON=1`` is the
-explicit way to opt out.
+The daemon is the only execution path; there is no in-process mode. If it
+cannot be reached the command fails with the steps needed to recover, rather
+than silently taking a second path that would drift from the first.
 """
 
 from __future__ import annotations
@@ -91,18 +90,11 @@ def account(subscription_id: str = "") -> Iterator[Any]:
         RemoteAccount,
         RpcConnection,
         _connect_socket,
-        daemon_disabled,
         daemon_required,
         socket_path,
         spawn_daemon,
     )
     from azure_jobs.api.errors import DaemonUnavailable
-
-    if daemon_disabled():
-        from azure_jobs.api.inprocess import AzureAccount
-
-        yield AzureAccount(subscription_id)
-        return
 
     path = socket_path()
     try:

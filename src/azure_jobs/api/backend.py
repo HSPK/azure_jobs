@@ -1,8 +1,8 @@
-"""Direct, in-process implementation of the capability contract.
+"""The Azure implementation of the capability contract.
 
-This is the only place that talks to ``az_client``. The daemon does not
-reimplement anything: it serves *this* backend over a socket, so a bug fixed
-here is fixed for both transports.
+This is what the daemon runs, and the only place that talks to ``az_client``.
+Clients never construct it: they reach it over the socket, so there is exactly
+one execution path and no mode that behaves subtly differently.
 """
 
 from __future__ import annotations
@@ -483,7 +483,7 @@ def _spec_from_payload(payload: dict) -> Any:
     return spec
 
 
-class InProcessBackend:
+class AzureBackend:
     """Capability facade backed by direct ``az_client`` calls."""
 
     def __init__(
@@ -506,9 +506,8 @@ class InProcessBackend:
             str(target.metadata.get('subscription_id') or '')
         )
         self.submitter = LocalSubmitter(target)
-        # A local queue/watcher so an in-process backend is capability-
-        # equivalent to the daemon-backed one, which matters both when the
-        # daemon serves this backend and under AJ_NO_DAEMON=1.
+        # The queue and watcher belong to the daemon's session, which is
+        # what makes them outlive the client that asked for the work.
         self.queue = queue if queue is not None else self._local_queue()
         self.watcher = watcher if watcher is not None else self._local_watcher()
 
@@ -548,23 +547,23 @@ def _open_client(target: Target) -> Any:
     return create_rest_client(configured)
 
 
-class InProcessFactory:
-    """``BackendFactory`` that never leaves this process."""
+class AzureBackendFactory:
+    """Opens an :class:`AzureBackend` per target. Daemon-side only."""
 
     def __init__(self, *, queue: Any = None, watcher: Any = None) -> None:
         self._queue = queue
         self._watcher = watcher
 
-    def open(self, target: Target) -> InProcessBackend:
-        return InProcessBackend(target, queue=self._queue, watcher=self._watcher)
+    def open(self, target: Target) -> AzureBackend:
+        return AzureBackend(target, queue=self._queue, watcher=self._watcher)
 
 
 __all__ = [
     "AzureAccount",
+    "AzureBackend",
+    "AzureBackendFactory",
     "AzureCatalog",
     "AzureJobs",
     "AzureLogs",
-    "InProcessBackend",
-    "InProcessFactory",
     "LocalSubmitter",
 ]

@@ -23,14 +23,14 @@ Press `→` on the final loaded page to fetch another page from Azure.
 ## Background daemon
 
 Every command executes through a local daemon, which shares authentication,
-watches jobs, and runs the submission queue. It starts on demand. If it cannot
-be reached the command fails with the recovery steps rather than silently
-running in-process; `AJ_NO_DAEMON=1` is the explicit opt-out.
+watches jobs, and runs the submission queue. It starts on demand. There is no
+in-process mode: if the daemon cannot be reached, the command fails with the
+steps needed to recover.
 
 ```bash
 aj daemon status                 # is one running, and what is it doing
 aj daemon start / stop / restart # restart after upgrading aj
-AJ_NO_DAEMON=1 aj job list       # bypass it entirely
+aj daemon stop --force           # stop even if submissions are running
 ```
 
 ### Submission queue

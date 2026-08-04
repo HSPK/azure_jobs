@@ -18,7 +18,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
-from azure_jobs.api import PROTOCOL_VERSION
+from azure_jobs.api import MIN_PROTOCOL_VERSION, PROTOCOL_VERSION
 from azure_jobs.api.errors import ProtocolMismatch
 from azure_jobs.api.models import (
     CatalogItem,
@@ -40,6 +40,10 @@ REAP_INTERVAL = 60.0
 #: The daemon starts on demand, so it must also stop on its own. Without this
 #: a single `aj dash` would leave a background process alive until reboot.
 DAEMON_IDLE_SHUTDOWN = 60 * 60.0
+
+#: A long-lived daemon must not accumulate a thread per CLI invocation, nor let
+#: one client open unbounded connections.
+MAX_CONNECTIONS = 128
 
 
 def aj_version() -> str:
@@ -74,6 +78,7 @@ class Session:
         self.watcher = JobWatcher(
             self._get_job,
             interval=watch_interval,
+            journal_path=root / "daemon" / f"watch-{target.id[:16]}.json",
         )
         self.queue.subscribe(self._on_queue_change)
 
@@ -249,6 +254,13 @@ class Daemon:
                     log.warning("Rejected a connection from another uid")
                     conn.close()
                     continue
+                self._reap_threads()
+                if len(self._threads) >= MAX_CONNECTIONS:
+                    log.warning(
+                        "Refusing a connection: %d already open", len(self._threads)
+                    )
+                    conn.close()
+                    continue
                 thread = threading.Thread(
                     target=self._serve_client,
                     args=(conn,),
@@ -273,6 +285,10 @@ class Daemon:
             # then the remaining control.
             return True
         return uid == os.getuid()
+
+    def _reap_threads(self) -> None:
+        """Drop finished connection threads so the list cannot grow forever."""
+        self._threads = [t for t in self._threads if t.is_alive()]
 
     def shutdown(self) -> None:
         if self._stopping.is_set():
@@ -395,13 +411,20 @@ class Daemon:
     # ── session helpers ──────────────────────────────────────────────────
 
     def open_session(self, params: Mapping[str, Any], conn: Connection) -> Any:
-        protocol = int(params.get("protocol") or 0)
+        # The client sends the newest protocol it speaks; both sides then use
+        # the highest version they have in common. A differing ``aj`` version is
+        # recorded but never fatal, so upgrading the CLI cannot kill a daemon
+        # that is mid-submission.
+        requested = int(params.get("protocol") or 0)
         version = str(params.get("aj_version") or "")
         mine = aj_version()
-        if protocol != PROTOCOL_VERSION or (version and version != mine):
+        negotiated = min(requested, PROTOCOL_VERSION)
+        if negotiated < MIN_PROTOCOL_VERSION:
             raise ProtocolMismatch(
-                f"Daemon speaks protocol {PROTOCOL_VERSION} of aj {mine}; "
-                f"client speaks protocol {protocol} of aj {version or 'unknown'}"
+                f"Daemon speaks protocol {MIN_PROTOCOL_VERSION}..."
+                f"{PROTOCOL_VERSION} (aj {mine}); client asked for {requested} "
+                f"(aj {version or 'unknown'}). Restart it with "
+                "'aj daemon restart'."
             )
         root = Path(str(params.get("root") or ".")).resolve()
         target = Target.from_json(params.get("target") or {})
@@ -426,7 +449,9 @@ class Daemon:
         conn.tokens.append(token)
         return {
             "session": token,
-            "protocol": PROTOCOL_VERSION,
+            "protocol": negotiated,
+            "min_protocol": MIN_PROTOCOL_VERSION,
+            "max_protocol": PROTOCOL_VERSION,
             "aj_version": mine,
             "target": target.to_json(),
         }
@@ -434,9 +459,9 @@ class Daemon:
     def _open_backend(self, target: Target) -> Any:
         if self._factory is not None:
             return self._factory.open(target)
-        from azure_jobs.api.inprocess import InProcessFactory
+        from azure_jobs.api.backend import AzureBackendFactory
 
-        return InProcessFactory().open(target)
+        return AzureBackendFactory().open(target)
 
     def revoke_session(self, token: str) -> None:
         """Invalidate one session token and drop the reference it held.
@@ -466,7 +491,7 @@ class Daemon:
     def _make_account(self, subscription_id: str) -> Any:
         if self._account_factory is not None:
             return self._account_factory(subscription_id)
-        from azure_jobs.api.inprocess import AzureAccount
+        from azure_jobs.api.backend import AzureAccount
 
         return AzureAccount(subscription_id)
 
@@ -493,24 +518,51 @@ class Daemon:
             "pid": os.getpid(),
             "aj_version": aj_version(),
             "protocol": PROTOCOL_VERSION,
+            "min_protocol": MIN_PROTOCOL_VERSION,
             "sessions": sessions,
             "uptime": time.time() - self.started_at,
             "socket": str(self.socket_path),
             "retiring": self._retiring,
         }
 
-    def retire(self) -> dict[str, Any]:
-        """Stop accepting connections and exit once work drains."""
-        self._retiring = True
-        threading.Thread(target=self._retire_when_idle, daemon=True).start()
-        return {"retiring": True}
+    def retire(self, *, drain_timeout: float | None = None) -> dict[str, Any]:
+        """Stop accepting connections and exit once the work drains.
 
-    def _retire_when_idle(self) -> None:
-        deadline = time.time() + 30.0
-        while time.time() < deadline:
-            with self._lock:
-                busy = any(s.busy() for s in self._sessions.values())
-            if not busy:
+        A submission the daemon accepted has no other owner, so retiring must
+        never cut it short: without a deadline this waits indefinitely, and the
+        caller sees how much is still outstanding.
+        """
+        self._retiring = True
+        pending = self.outstanding()
+        threading.Thread(
+            target=self._retire_when_drained,
+            args=(drain_timeout,),
+            daemon=True,
+        ).start()
+        return {"retiring": True, "outstanding": pending}
+
+    def outstanding(self) -> int:
+        """Submissions the daemon still owes an outcome for."""
+        with self._lock:
+            sessions = list(self._sessions.values())
+        return sum(
+            1
+            for session in sessions
+            for entry in session.queue.list()
+            if not entry.terminal
+        )
+
+    def _retire_when_drained(self, drain_timeout: float | None) -> None:
+        deadline = None if drain_timeout is None else time.time() + drain_timeout
+        while not self._stopping.is_set():
+            if self.outstanding() == 0:
+                break
+            if deadline is not None and time.time() >= deadline:
+                log.warning(
+                    "Retiring with %d submission(s) still running; "
+                    "their outcome will be unknown",
+                    self.outstanding(),
+                )
                 break
             time.sleep(0.2)
         self.shutdown()
@@ -536,7 +588,8 @@ def _m_info(daemon: Daemon, params: Mapping[str, Any], conn: Connection) -> Any:
 
 
 def _m_retire(daemon: Daemon, params: Mapping[str, Any], conn: Connection) -> Any:
-    return daemon.retire()
+    raw = params.get("drain_timeout")
+    return daemon.retire(drain_timeout=float(raw) if raw else None)
 
 
 def _m_session_open(daemon: Daemon, params: Mapping[str, Any], conn: Connection) -> Any:

@@ -83,10 +83,15 @@ def daemon_start() -> None:
 @click.option(
     "--force",
     is_flag=True,
-    help="Signal the process instead of waiting for work to drain",
+    help="Stop even if submissions are still running (their outcome is lost)",
 )
-def daemon_stop(force: bool) -> None:
-    """Stop the daemon, letting in-flight work finish first."""
+@click.option(
+    "--timeout",
+    default=0.0,
+    help="Give up waiting after N seconds (0 = wait as long as it takes)",
+)
+def daemon_stop(force: bool, timeout: float) -> None:
+    """Stop the daemon, letting in-flight submissions finish first."""
     from azure_jobs.api.client import socket_path
     from azure_jobs.utils.ui import console
 
@@ -102,18 +107,30 @@ def daemon_stop(force: bool) -> None:
         return
     try:
         info = conn.call("daemon.info", {})
-        conn.call("daemon.retire", {})
+        retired = conn.call(
+            "daemon.retire",
+            {"drain_timeout": timeout if (force or timeout) else None},
+        )
     finally:
         conn.close()
+
+    outstanding = int(retired.get("outstanding") or 0)
+    if outstanding and not force:
+        console.print(
+            f"Waiting for {outstanding} running submission(s) to finish… "
+            "(--force stops now and loses their outcome)"
+        )
     if force:
         try:
             os.kill(int(info["pid"]), signal.SIGTERM)
         except (OSError, ValueError, KeyError):
             pass
-    deadline = time.time() + 30
+    deadline = time.time() + (timeout or 600)
     while time.time() < deadline and path.exists():
         time.sleep(0.1)
-    console.print("Daemon stopped" if not path.exists() else "Daemon is still draining work")
+    console.print(
+        "Daemon stopped" if not path.exists() else "Daemon is still draining work"
+    )
 
 
 @daemon.command(name="restart")

@@ -263,7 +263,27 @@ class TestProtocolCoverage:
 
 
 class TestSessionHandshake:
-    def test_protocol_mismatch_is_refused(self):
+    def test_a_newer_client_negotiates_down(self):
+        """Like Docker: agree on the highest version both sides speak."""
+        harness = _over_daemon()
+        try:
+            result = harness.rpc.call(
+                "session.open",
+                {
+                    "root": str(harness.tmp),
+                    "protocol": PROTOCOL_VERSION + 99,
+                    "aj_version": aj_version(),
+                    "target": make_target().to_json(),
+                },
+            )
+            assert result["protocol"] == PROTOCOL_VERSION
+            assert result["session"]
+        finally:
+            harness.close()
+
+    def test_a_client_below_the_supported_range_is_refused(self):
+        from azure_jobs.api import MIN_PROTOCOL_VERSION
+
         harness = _over_daemon()
         try:
             with pytest.raises(ProtocolMismatch):
@@ -271,7 +291,7 @@ class TestSessionHandshake:
                     "session.open",
                     {
                         "root": str(harness.tmp),
-                        "protocol": PROTOCOL_VERSION + 99,
+                        "protocol": MIN_PROTOCOL_VERSION - 1,
                         "aj_version": aj_version(),
                         "target": make_target().to_json(),
                     },
@@ -279,19 +299,20 @@ class TestSessionHandshake:
         finally:
             harness.close()
 
-    def test_version_skew_is_refused(self):
+    def test_an_aj_version_difference_does_not_break_the_session(self):
+        """Upgrading aj must not force a restart that kills running work."""
         harness = _over_daemon()
         try:
-            with pytest.raises(ProtocolMismatch):
-                harness.rpc.call(
-                    "session.open",
-                    {
-                        "root": str(harness.tmp),
-                        "protocol": PROTOCOL_VERSION,
-                        "aj_version": "0.0.0-ancient",
-                        "target": make_target().to_json(),
-                    },
-                )
+            result = harness.rpc.call(
+                "session.open",
+                {
+                    "root": str(harness.tmp),
+                    "protocol": PROTOCOL_VERSION,
+                    "aj_version": "0.0.0-ancient",
+                    "target": make_target().to_json(),
+                },
+            )
+            assert result["session"]
         finally:
             harness.close()
 

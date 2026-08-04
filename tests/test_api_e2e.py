@@ -89,7 +89,29 @@ class TestLiveDaemonProcess:
             time.sleep(0.05)
         assert not sock.exists()
 
-    def test_a_protocol_mismatch_is_refused_by_the_real_process(self, live_daemon):
+    def test_a_newer_client_negotiates_down_against_the_real_process(
+        self, live_daemon
+    ):
+        sock, _ = live_daemon
+        conn = RpcConnection(_connect_socket(sock))
+        try:
+            result = conn.call(
+                "session.open",
+                {
+                    "root": "/tmp",
+                    "protocol": PROTOCOL_VERSION + 1,
+                    "aj_version": aj_version(),
+                    "target": make_target().to_json(),
+                },
+            )
+            assert result["protocol"] == PROTOCOL_VERSION
+        finally:
+            conn.close()
+
+    def test_a_client_below_the_range_is_refused_by_the_real_process(
+        self, live_daemon
+    ):
+        from azure_jobs.api import MIN_PROTOCOL_VERSION
         from azure_jobs.api.errors import ProtocolMismatch
 
         sock, _ = live_daemon
@@ -100,7 +122,7 @@ class TestLiveDaemonProcess:
                     "session.open",
                     {
                         "root": "/tmp",
-                        "protocol": PROTOCOL_VERSION + 1,
+                        "protocol": MIN_PROTOCOL_VERSION - 1,
                         "aj_version": aj_version(),
                         "target": make_target().to_json(),
                     },
@@ -169,7 +191,9 @@ class TestDaemonCli:
         assert result.exit_code == 0
         assert not stale.exists()
 
-    def test_start_then_stop_round_trip(self, tmp_path, monkeypatch):
+    def test_start_then_stop_round_trip(
+        self, tmp_path, monkeypatch, allow_daemon_spawn
+    ):
         from azure_jobs.cli.daemon import daemon_start, daemon_status, daemon_stop
 
         monkeypatch.setenv("AJ_RUNTIME_DIR", str(tmp_path))

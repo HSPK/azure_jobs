@@ -97,29 +97,13 @@ class TestListCommand:
         assert "b2" not in result.output
 
 @pytest.fixture(autouse=True)
-def _configured_workspace(monkeypatch):
-    """Commands resolve a target before opening a backend."""
-    from azure_jobs.api.models import Target
+def _daemon(cli_daemon):
+    """Commands now reach Azure only through the daemon.
 
-    target = Target.create(
-        backend="azureml",
-        native_id="sub/rg/ws",
-        label="ws",
-        detail="rg",
-        metadata={
-            "subscription_id": "sub",
-            "resource_group": "rg",
-            "workspace_name": "ws",
-        },
-    )
-    monkeypatch.setattr(
-        "azure_jobs.api.azure.ConfigTargetCatalog.configured",
-        lambda self: target,
-    )
-    monkeypatch.setattr(
-        "azure_jobs.api.azure.ConfigTargetCatalog.discover",
-        lambda self: (target,),
-    )
+    ``cli_daemon`` serves the real backend in this process, so the
+    ``az_client`` patches in these tests still take effect.
+    """
+    yield cli_daemon
 
 
 class TestJobListCommand:

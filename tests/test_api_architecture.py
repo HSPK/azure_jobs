@@ -90,7 +90,7 @@ def test_there_is_one_canonical_job_model():
 
 
 #: The Azure adapter layer. Everything else in api/ reaches Azure through it.
-AZURE_ADAPTER_FILES = ("inprocess.py", "azure.py", "typed.py")
+AZURE_ADAPTER_FILES = ("backend.py", "azure.py", "typed.py")
 
 
 def test_only_the_azure_adapter_talks_to_az_client():
@@ -135,7 +135,7 @@ def test_every_contract_port_is_reachable_over_the_wire():
 def test_remote_and_inprocess_expose_the_same_backend_attributes():
     """A frontend must not have to ask which transport it received."""
     from azure_jobs.api.client import DaemonBackend
-    from azure_jobs.api.inprocess import InProcessBackend
+    from azure_jobs.api.backend import AzureBackend
 
     expected = {
         "target",
@@ -149,7 +149,7 @@ def test_remote_and_inprocess_expose_the_same_backend_attributes():
         "watcher",
         "close",
     }
-    for cls in (DaemonBackend, InProcessBackend):
+    for cls in (DaemonBackend, AzureBackend):
         source = inspect.getsource(cls)
         for attribute in expected:
             assert (
@@ -182,7 +182,7 @@ def test_remote_ports_satisfy_the_runtime_protocols():
 
 def test_inprocess_ports_satisfy_the_runtime_protocols():
     from azure_jobs.api import ports
-    from azure_jobs.api.inprocess import AzureCatalog, AzureJobs, AzureLogs
+    from azure_jobs.api.backend import AzureCatalog, AzureJobs, AzureLogs
 
     stub = object.__new__(AzureJobs)
     assert isinstance(stub, ports.JobQuery)

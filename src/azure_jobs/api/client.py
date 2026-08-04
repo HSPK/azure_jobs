@@ -62,10 +62,6 @@ def socket_path() -> Path:
     return runtime_dir() / "daemon.sock"
 
 
-def daemon_disabled() -> bool:
-    return os.getenv("AJ_NO_DAEMON", "") not in ("", "0", "false", "False")
-
-
 class RpcConnection:
     """Thread-safe request/response over one socket, with server pushes."""
 
@@ -747,22 +743,16 @@ def open_backend(
     *,
     root: Path | None = None,
     path: Path | None = None,
-    prefer_daemon: bool | None = None,
     autostart: bool = True,
     resilient: bool = True,
 ) -> Any:
     """Return a backend for *target*.
 
-    The daemon is the execution path. If it cannot be reached, this raises with
-    an actionable message rather than quietly running in-process: a silent
-    downgrade hides a broken daemon and makes behaviour depend on invisible
-    state. Set ``AJ_NO_DAEMON=1`` to choose in-process execution explicitly.
+    The daemon is the only execution path. There is deliberately no in-process
+    mode: a second path would drift from the first and make behaviour depend on
+    invisible state. If the daemon cannot be reached, this raises with the
+    steps needed to recover.
     """
-    from azure_jobs.api.inprocess import InProcessBackend
-
-    use_daemon = (not daemon_disabled()) if prefer_daemon is None else prefer_daemon
-    if not use_daemon:
-        return InProcessBackend(target)
     try:
         remote = connect_daemon(target, root=root, path=path, autostart=autostart)
     except Exception as exc:
@@ -778,10 +768,9 @@ def daemon_required(exc: BaseException) -> DaemonUnavailable:
     """Explain how to recover from an unreachable daemon."""
     return DaemonUnavailable(
         f"The aj daemon is unavailable ({type(exc).__name__}: {exc}).\n"
-        "  Start it with:      aj daemon start\n"
-        "  Inspect it with:    aj daemon status\n"
-        "  Run without it:     AJ_NO_DAEMON=1 aj <command>\n"
-        "  Full traceback:     AJ_DEBUG=1 aj <command>"
+        "  Start it with:    aj daemon start\n"
+        "  Inspect it with:  aj daemon status\n"
+        "  Full traceback:   AJ_DEBUG=1 aj <command>"
     )
 
 
@@ -795,21 +784,14 @@ class BackendSessionFactory:
     def __init__(
         self,
         *,
-        prefer_daemon: bool | None = None,
         root: Path | None = None,
         path: Path | None = None,
     ) -> None:
-        self._prefer_daemon = prefer_daemon
         self._root = root
         self._path = path
 
     def open(self, target: Target) -> Any:
-        return open_backend(
-            target,
-            root=self._root,
-            path=self._path,
-            prefer_daemon=self._prefer_daemon,
-        )
+        return open_backend(target, root=self._root, path=self._path)
 
 
 __all__ = [
@@ -825,7 +807,6 @@ __all__ = [
     "RemoteWatcher",
     "RpcConnection",
     "connect_daemon",
-    "daemon_disabled",
     "open_backend",
     "runtime_dir",
     "socket_path",

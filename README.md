@@ -120,9 +120,9 @@ torchrun \
 ### Background daemon
 
 All commands run through a local daemon, which shares authentication, watches
-jobs in the background, and runs the submission queue. It starts on demand. If
-it is unavailable a command **fails with the recovery steps** rather than
-quietly running in-process; use `AJ_NO_DAEMON=1` to opt out explicitly.
+jobs in the background, and runs the submission queue. It starts on demand.
+There is no in-process mode — if it is unavailable a command **fails with the
+recovery steps** rather than silently taking a different path.
 
 ```bash
 aj run --queue -t <template> <command>   # returns a ticket; daemon runs it
@@ -134,7 +134,7 @@ aj watch listen                          # stream changes + OS notifications
 
 aj daemon status                         # inspect it
 aj daemon restart                        # after upgrading aj
-AJ_NO_DAEMON=1 aj job list               # bypass it entirely
+aj daemon stop                           # waits for running submissions
 ```
 
 Interactive TUI dashboard for browsing and managing cloud jobs.

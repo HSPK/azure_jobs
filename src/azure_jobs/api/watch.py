@@ -6,9 +6,12 @@ open, which is the one capability an in-process CLI structurally cannot offer.
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 import threading
 import time
+from pathlib import Path
 from typing import Callable
 
 from azure_jobs.api.models import Job, JobRef, Notification
@@ -35,19 +38,72 @@ class JobWatcher:
         interval: float = DEFAULT_INTERVAL,
         autostart: bool = True,
         clock: Callable[[], float] = time.time,
+        journal_path: Path | None = None,
     ) -> None:
         self._get_job = get_job
         self._interval = max(MIN_INTERVAL, interval)
         self._clock = clock
+        self._journal_path = journal_path
         self._lock = threading.Lock()
+        self._io_lock = threading.Lock()
         self._wake = threading.Condition(self._lock)
         self._watched: dict[str, JobRef] = {}
         self._last_status: dict[str, str] = {}
         self._sinks: list[Callable[[Notification], None]] = []
         self._stopping = False
         self._thread: threading.Thread | None = None
+        self._restore()
         if autostart:
             self.start()
+
+    # ── persistence ──────────────────────────────────────────────────────
+
+    def _persist(self) -> None:
+        """Watches must outlive the daemon.
+
+        "Tell me when this finishes" is the one thing a client cannot do for
+        itself, so losing the list on restart would quietly break the feature
+        users rely on most.
+        """
+        if self._journal_path is None:
+            return
+        with self._lock:
+            payload = {
+                "watched": [ref.to_json() for ref in self._watched.values()],
+                "last_status": dict(self._last_status),
+            }
+        with self._io_lock:
+            try:
+                self._journal_path.parent.mkdir(parents=True, exist_ok=True)
+                os.chmod(self._journal_path.parent, 0o700)
+                tmp = self._journal_path.with_name(
+                    f"{self._journal_path.name}.{os.getpid()}.tmp"
+                )
+                fd = os.open(str(tmp), os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
+                with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                    json.dump(payload, handle)
+                tmp.replace(self._journal_path)
+            except Exception:
+                log.exception("Failed to persist watched jobs")
+
+    def _restore(self) -> None:
+        if self._journal_path is None or not self._journal_path.exists():
+            return
+        try:
+            payload = json.loads(self._journal_path.read_text(encoding="utf-8"))
+        except Exception:
+            log.exception("Failed to restore watched jobs")
+            return
+        for value in payload.get("watched") or ():
+            try:
+                ref = JobRef.from_json(value)
+            except Exception:
+                continue
+            if ref.id:
+                self._watched[ref.id] = ref
+        # Statuses are re-observed rather than trusted: a job may have finished
+        # while the daemon was down, and the user still wants to hear about it.
+        self._last_status.clear()
 
     # ── lifecycle ────────────────────────────────────────────────────────
 
@@ -90,11 +146,13 @@ class JobWatcher:
         with self._lock:
             self._watched[job.id] = job
             self._wake.notify_all()
+        self._persist()
 
     def unwatch(self, job: JobRef) -> None:
         with self._lock:
             self._watched.pop(job.id, None)
             self._last_status.pop(job.id, None)
+        self._persist()
 
     def watched(self) -> list[JobRef]:
         with self._lock:
@@ -148,6 +206,8 @@ class JobWatcher:
             if terminal:
                 self._watched.pop(ref.id, None)
                 self._last_status.pop(ref.id, None)
+        if terminal:
+            self._persist()
         if first and not terminal:
             # A first non-terminal observation only establishes a baseline; it
             # would be wrong to claim the job just changed.

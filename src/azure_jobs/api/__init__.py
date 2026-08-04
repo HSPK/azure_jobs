@@ -49,7 +49,13 @@ from azure_jobs.api.ports import (
     Watcher,
 )
 
+#: The wire protocol this build speaks.
 PROTOCOL_VERSION = 1
+
+#: The oldest protocol this build can still serve. Negotiating a range, as
+#: Docker does, means an aj upgrade does not force a daemon restart — which
+#: would otherwise interrupt whatever the daemon is running.
+MIN_PROTOCOL_VERSION = 1
 
 # Registers the Azure value types so tagged payloads rebuild with their
 # behaviour intact on whichever side of the socket decodes them.
@@ -79,6 +85,7 @@ __all__ = [
     "LogChunk",
     "Notification",
     "NotificationSink",
+    "MIN_PROTOCOL_VERSION",
     "PROTOCOL_VERSION",
     "ProtocolMismatch",
     "QUEUED",

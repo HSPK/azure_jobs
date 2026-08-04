@@ -23,7 +23,7 @@ from azure_jobs.api.client import (
     open_backend,
 )
 from azure_jobs.api.errors import DaemonUnavailable, TransportError
-from azure_jobs.api.inprocess import _spec_from_payload
+from azure_jobs.api.backend import _spec_from_payload
 from azure_jobs.api.models import JobRef, SubmitOutcome, Target
 from azure_jobs.api.queue import SubmissionQueue
 from azure_jobs.api.resilient import ResilientBackend
@@ -222,7 +222,7 @@ class TestInProcessIsCapabilityEquivalent:
     """Falling back must not turn optional ports into AttributeError."""
 
     def test_queue_and_watcher_are_present(self, monkeypatch):
-        from azure_jobs.api.inprocess import InProcessBackend
+        from azure_jobs.api.backend import AzureBackend
 
         class _Client:
             jobs = object()
@@ -234,9 +234,9 @@ class TestInProcessIsCapabilityEquivalent:
                 pass
 
         monkeypatch.setattr(
-            "azure_jobs.api.inprocess._open_client", lambda target: _Client()
+            "azure_jobs.api.backend._open_client", lambda target: _Client()
         )
-        backend = InProcessBackend(make_target())
+        backend = AzureBackend(make_target())
         try:
             assert backend.queue is not None
             assert backend.watcher is not None
@@ -362,7 +362,6 @@ class TestDaemonFailureIsReportedNotWorkedAround:
         from azure_jobs.api.models import Target
 
         monkeypatch.setenv("AJ_RUNTIME_DIR", str(tmp_path))
-        monkeypatch.delenv("AJ_NO_DAEMON", raising=False)
         target = Target.create(
             backend="azureml",
             native_id="s/r/w",
@@ -402,7 +401,6 @@ class TestDaemonFailureIsReportedNotWorkedAround:
         assert result.exit_code != 0
         assert "The aj daemon is unavailable" in result.output
         assert "aj daemon start" in result.output
-        assert "AJ_NO_DAEMON=1" in result.output
         assert "Traceback (most recent call last)" not in result.output
 
     def test_the_message_is_not_wrapped_twice(self, _wired):
@@ -420,7 +418,7 @@ class TestWorkspaceComputesShape:
     """Regression: `aj quota --aml` crashed on dataclasses where dicts were promised."""
 
     def _account(self, monkeypatch, pairs):
-        from azure_jobs.api.inprocess import AzureAccount
+        from azure_jobs.api.backend import AzureAccount
 
         class _Arm:
             class workspace:
@@ -447,7 +445,7 @@ class TestWorkspaceComputesShape:
         def fake_arm(subscription_id):
             yield _Arm()
 
-        monkeypatch.setattr("azure_jobs.api.inprocess._arm", fake_arm)
+        monkeypatch.setattr("azure_jobs.api.backend._arm", fake_arm)
         return AzureAccount("sub")
 
     def test_pairs_are_plain_json_ready_dicts(self, monkeypatch):
@@ -474,7 +472,7 @@ class TestWorkspaceComputesShape:
     def test_subscriptions_carry_their_id_as_the_name(self, monkeypatch):
         from contextlib import contextmanager
 
-        from azure_jobs.api.inprocess import AzureAccount
+        from azure_jobs.api.backend import AzureAccount
 
         class _Arm:
             class subscriptions:
@@ -486,7 +484,7 @@ class TestWorkspaceComputesShape:
         def fake_arm(subscription_id):
             yield _Arm()
 
-        monkeypatch.setattr("azure_jobs.api.inprocess._arm", fake_arm)
+        monkeypatch.setattr("azure_jobs.api.backend._arm", fake_arm)
         items = AzureAccount().subscriptions()
         assert [i.name for i in items] == ["sub-aaa", "sub-bbb"]
 
