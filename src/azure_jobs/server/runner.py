@@ -54,7 +54,6 @@ class Daemon:
         *,
         backend_factory: Any = None,
         target_catalog: Any = None,
-        account_factory: Any = None,
         idle_timeout: float = 30 * 60.0,
         watch_interval: float = 20.0,
         shutdown_when_idle: float = DAEMON_IDLE_SHUTDOWN,
@@ -63,7 +62,6 @@ class Daemon:
         self.state = DaemonState(
             backend_factory=backend_factory,
             target_catalog=target_catalog,
-            account_factory=account_factory,
             watch_interval=watch_interval,
             idle_timeout=idle_timeout,
             shutdown_when_idle=shutdown_when_idle,

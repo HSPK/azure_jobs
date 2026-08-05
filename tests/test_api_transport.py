@@ -235,7 +235,7 @@ class TestEventDelivery:
             client, received = self._subscribed(daemon, tmp_path, target)
             client.post(R.watches(target.label), json={"id": "a", "backend_ref": "a"})
             client.post(R.watch_poll(target.id))
-            factory.backends[0].jobs.status = "Completed"
+            factory.apis[0].job.current_status = "Completed"
             client.post(R.watch_poll(target.id))
 
             deadline = time.time() + 10
@@ -379,7 +379,7 @@ class TestContextLifetime:
             assert daemon.state.contexts.count() == 0
             client.get(R.jobs(target.label), params={"limit": 1})
             assert daemon.state.contexts.count() == 1
-            assert len(factory.backends) == 1
+            assert len(factory.apis) == 1
         finally:
             daemon.shutdown()
 
@@ -389,7 +389,7 @@ class TestContextLifetime:
             client = _client(daemon, tmp_path)
             for _ in range(5):
                 client.get(R.jobs(target.label), params={"limit": 1})
-            assert len(factory.backends) == 1
+            assert len(factory.apis) == 1
         finally:
             daemon.shutdown()
 
@@ -404,7 +404,7 @@ class TestContextLifetime:
                 client.get(R.jobs(target.label), params={"limit": 1})
                 client.close()
             assert daemon.state.contexts.count() == 2
-            assert len(factory.backends) == 2
+            assert len(factory.apis) == 2
         finally:
             daemon.shutdown()
 
@@ -416,7 +416,7 @@ class TestContextLifetime:
             client.close()
             time.sleep(0.05)
             assert daemon.reap_idle() == 1
-            assert factory.backends[0].closed is True
+            assert factory.apis[0].closed is True
         finally:
             daemon.shutdown()
 

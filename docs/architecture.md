@@ -168,11 +168,11 @@ src/azure_jobs/
 └── server/          executes — never imports client/
     ├── app.py         FastAPI routes
     ├── runner.py      uvicorn on a Unix socket + lifecycle
-    ├── context.py     per (root, workspace) backend/queue/watcher
+    ├── context.py     per (root, workspace) resources/queue/watcher
     ├── discovery/     the only place `az` is executed
     ├── targets.py     workspace name → target
     ├── main.py
-    ├── backend.py     the Azure implementation of the contract
+    ├── backend.py     wire-model adapters + cross-workspace aggregations
     ├── azure.py, queue.py, watch.py, concurrent.py
     ├── az_client/     the SDK layer
     └── submit/        how a job is *run*
@@ -204,6 +204,29 @@ real instance types needs ARM and stayed server-side.
 than in the CLI process, with progress streamed back as correlated
 `submit.progress` events — a callback cannot cross a socket, and dropping it
 would have made `aj run` less informative than before.
+
+**The request path is resource-shaped end to end.** There is no generic
+backend/catalog facade between FastAPI and Azure:
+
+```text
+d.job.list()
+  → GET /v2/workspaces/{ws}/jobs:fetch
+  → Context.job.list()
+  → AzureWorkspaceClient.job.fetch()
+```
+
+Account resources are flatter still:
+
+```text
+d.sku.list()
+  → GET /v2/instance-types
+  → AzureClient.sku.list()
+```
+
+`Context` owns queue/watch persistence and aliases the resolved workspace
+resources directly. `backend.py` remains only where translation is real:
+Azure job rows → wire `Job`, range-log readers, `CatalogItem` tagging, submit
+payload reconstruction, and cross-workspace aggregation.
 
 ## The client: one SDK, two frontends
 

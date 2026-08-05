@@ -53,11 +53,13 @@ class FakeJobs:
         self.pages = pages or [[make_job("a"), make_job("b")], [make_job("c")]]
         self.cancelled: list[str] = []
         self.deleted: list[str] = []
-        self.status = "Running"
+        self.current_status = "Running"
         self.raises: BaseException | None = None
+        self.submit_calls: list[dict] = []
+        self.submit_fail = False
         self.lock = threading.Lock()
 
-    def list_page(
+    def page(
         self,
         cursor: Cursor | None,
         *,
@@ -71,11 +73,11 @@ class FakeJobs:
         nxt = Cursor(str(index + 1)) if index + 1 < len(self.pages) else None
         return JobPage(jobs=jobs, next_cursor=nxt)
 
-    def get(self, job: JobRef) -> Job:
+    def status(self, job: JobRef) -> Job:
         if self.raises is not None:
             raise self.raises
         with self.lock:
-            return make_job(job.backend_ref, self.status)
+            return make_job(job.backend_ref, self.current_status)
 
     def cancel(self, job: JobRef) -> None:
         if self.raises is not None:
@@ -87,7 +89,7 @@ class FakeJobs:
             raise self.raises
         self.deleted.append(job.backend_ref)
 
-    def fetch(
+    def list(
         self,
         *,
         limit: int,
@@ -107,6 +109,21 @@ class FakeJobs:
         if status:
             jobs = [j for j in jobs if j.status.lower() == status.lower()]
         return jobs[:limit]
+
+    def submit(self, payload: dict, *, on_event: Any = None) -> SubmitOutcome:
+        self.submit_calls.append(dict(payload))
+        if self.submit_fail:
+            return SubmitOutcome(
+                job_name=str(payload.get("name") or "j"),
+                status="failed",
+                error="submission refused",
+            )
+        return SubmitOutcome(
+            job_name=str(payload.get("name") or "j"),
+            backend_ref="azure-name",
+            status="submitted",
+            note="ok",
+        )
 
 
 class FakeReader:
@@ -135,7 +152,7 @@ class FakeLogs:
         self.blob = blob
         self.readers: list[FakeReader] = []
 
-    def list_files(self, job: JobRef, *, cancelled: Any = None) -> list[str]:
+    def list(self, job: JobRef, *, cancelled: Any = None) -> list[str]:
         return ["user_logs/std_log.txt", "system_logs/other.txt"]
 
     def pick_default(self, files: list[str]) -> str:
@@ -150,8 +167,46 @@ class FakeLogs:
         return {"content": self.blob.decode("utf-8", "replace"), "error": ""}
 
 
-class FakeCatalog:
-    def workspace(self) -> CatalogItem:
+class FakeDatastores:
+    def list(self) -> list[CatalogItem]:
+        return [CatalogItem("datastore", "ds1", {"is_default": True})]
+
+    def get(self, name: str) -> CatalogItem | None:
+        return CatalogItem("datastore", name, {"name": name, "is_default": True})
+
+
+class FakeEnvironments:
+    def versions(self, name: str) -> list[CatalogItem]:
+        return [CatalogItem("environment_version", name, {"version": "3"})]
+
+    def list(self) -> list[CatalogItem]:
+        return [CatalogItem("environment", "env1", {"version": "3"})]
+
+
+class FakeComputes:
+    def list(self) -> list[CatalogItem]:
+        return [CatalogItem("compute", "gpu-cluster", {"vm_size": "ND96"})]
+
+
+class FakeQuota:
+    def list(self) -> list[CatalogItem]:
+        return [CatalogItem("quota", "NDv4", {"limit": 100})]
+
+
+class FakeWorkspaceAPI:
+    """In-process workspace API with the same resource shape as the server."""
+
+    def __init__(self, target: Target) -> None:
+        self.target = target
+        self.job = FakeJobs()
+        self.log = FakeLogs()
+        self.ds = FakeDatastores()
+        self.env = FakeEnvironments()
+        self.compute = FakeComputes()
+        self.quota = FakeQuota()
+        self.closed = False
+
+    def info(self) -> CatalogItem:
         return CatalogItem(
             "workspace",
             "ws",
@@ -166,74 +221,18 @@ class FakeCatalog:
             },
         )
 
-    def datastores(self) -> list[CatalogItem]:
-        return [CatalogItem("datastore", "ds1", {"is_default": True})]
-
-    def datastore(self, name: str) -> CatalogItem | None:
-        return CatalogItem("datastore", name, {"name": name, "is_default": True})
-
-    def environment_versions(self, name: str) -> list[CatalogItem]:
-        return [CatalogItem("environment_version", name, {"version": "3"})]
-
-    def environments(self) -> list[CatalogItem]:
-        return [CatalogItem("environment", "env1", {"version": "3"})]
-
-    def computes(self) -> list[CatalogItem]:
-        return [CatalogItem("compute", "gpu-cluster", {"vm_size": "ND96"})]
-
-    def quota(self) -> list[CatalogItem]:
-        return [CatalogItem("quota", "NDv4", {"limit": 100})]
-
-
-class FakeSubmitter:
-    def __init__(self) -> None:
-        self.calls: list[dict] = []
-        self.fail = False
-
-    def submit(self, payload: dict, *, on_event: Any = None) -> SubmitOutcome:
-        self.calls.append(dict(payload))
-        if self.fail:
-            return SubmitOutcome(
-                job_name=str(payload.get("name") or "j"),
-                status="failed",
-                error="submission refused",
-            )
-        return SubmitOutcome(
-            job_name=str(payload.get("name") or "j"),
-            backend_ref="azure-name",
-            status="submitted",
-            note="ok",
-        )
-
-
-class FakeBackend:
-    """In-process backend satisfying the whole contract."""
-
-    def __init__(self, target: Target) -> None:
-        self.target = target
-        jobs = FakeJobs()
-        self.jobs = jobs
-        self.actions = jobs
-        self.delete_jobs = jobs
-        self.logs = FakeLogs()
-        self.catalog = FakeCatalog()
-        self.submitter = FakeSubmitter()
-        self.queue = None
-        self.watcher = None
-        self.closed = False
-
     def close(self) -> None:
         self.closed = True
 
 
 class FakeFactory:
     def __init__(self) -> None:
-        self.backends: list[FakeBackend] = []
+        self.apis: list[FakeWorkspaceAPI] = []
 
-    def open(self, target: Target) -> FakeBackend:
-        backend = FakeBackend(target)
-        self.backends.append(backend)
-        return backend
+    def open(self, target: Target) -> FakeWorkspaceAPI:
+        api = FakeWorkspaceAPI(target)
+        self.apis.append(api)
+        return api
 
 
 class FakeTargetCatalog:

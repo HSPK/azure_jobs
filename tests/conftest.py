@@ -97,12 +97,12 @@ def cli_daemon(tmp_path, monkeypatch):
     process, those patches still apply, so the tests keep asserting real
     command behaviour while exercising the socket path.
     """
-    from azure_jobs.server.backend import AzureBackendFactory
+    from azure_jobs.server.backend import WorkspaceAPIFactory
 
     from .api_fakes import make_target
 
     daemon, thread = _serve_daemon(
-        tmp_path, monkeypatch, AzureBackendFactory(), make_target()
+        tmp_path, monkeypatch, WorkspaceAPIFactory(), make_target()
     )
     try:
         yield daemon

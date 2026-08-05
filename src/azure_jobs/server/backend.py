@@ -31,22 +31,22 @@ EventSink = Callable[[SubmitEvent], None] | None
 log = logging.getLogger(__name__)
 
 
-class AzureJobs:
-    """Job listing, inspection, cancellation and deletion."""
+class WorkspaceJobs:
+    """Wire-facing job resource for one workspace."""
 
-    def __init__(self, client: Any, target_id: str) -> None:
+    def __init__(self, client: Any, target: Target) -> None:
         self._api = client.job
-        self._target_id = target_id
+        self._target = target
 
     def _job(self, value: dict) -> Job:
         name = str(value.get("name") or "")
         return Job.from_mapping(
             value,
-            job_id=f"{self._target_id}:{name}",
+            job_id=f"{self._target.id}:{name}",
             backend_ref=name,
         )
 
-    def list_page(
+    def page(
         self,
         cursor: Cursor | None,
         *,
@@ -63,7 +63,7 @@ class AzureJobs:
             next_cursor=Cursor(next_link) if next_link else None,
         )
 
-    def get(self, job: JobRef) -> Job:
+    def status(self, job: JobRef) -> Job:
         return self._job(self._api.get(job.backend_ref))
 
     def cancel(self, job: JobRef) -> None:
@@ -72,7 +72,7 @@ class AzureJobs:
     def delete(self, job: JobRef, *, cancelled: Cancelled = None) -> None:
         self._api.delete(job.backend_ref, cancelled=cancelled)
 
-    def fetch(
+    def list(
         self,
         *,
         limit: int,
@@ -111,14 +111,47 @@ class AzureJobs:
         )
         return [self._job(value) for value in values]
 
+    def submit(
+        self,
+        payload: dict,
+        *,
+        on_event: EventSink = None,
+    ) -> SubmitOutcome:
+        from azure_jobs.server.submit import get_backend
+        from azure_jobs.shared.job.spec import JobEvent
 
-class AzureLogs:
-    """Range-capable log source."""
+        spec = _spec_from_payload(payload)
+        backend = get_backend(spec.service)
+
+        def relay(event: JobEvent) -> None:
+            if on_event is not None:
+                on_event(
+                    SubmitEvent(
+                        kind=event.kind,
+                        detail=event.detail,
+                        completed=event.completed,
+                        total=event.total,
+                    )
+                )
+
+        result = backend.fn(spec, on_event=relay)
+        return SubmitOutcome(
+            job_name=result.job_name,
+            backend_ref=result.azure_name,
+            status=result.status,
+            portal_url=result.portal_url,
+            error=result.error,
+            note=result.note,
+        )
+
+
+class WorkspaceLogs:
+    """Range-capable log resource for one workspace."""
 
     def __init__(self, client: Any) -> None:
         self._api = client.log
 
-    def list_files(self, job: JobRef, *, cancelled: Cancelled = None) -> list[str]:
+    def list(self, job: JobRef, *, cancelled: Cancelled = None) -> list[str]:
         return self._api.list_files(job.backend_ref, cancelled=cancelled)
 
     def pick_default(self, files: list[str]) -> str:
@@ -137,237 +170,140 @@ class AzureLogs:
         return {"content": content or "", "error": error or ""}
 
 
-class AzureCatalog:
-    """Workspace inventory used by the CLI listing commands."""
+class WorkspaceDatastores:
+    def __init__(self, client: Any) -> None:
+        self._api = client.ds
 
-    def __init__(self, client: Any, target: Target) -> None:
-        self._client = client
-        self._target = target
-
-    def workspace(self) -> CatalogItem:
-        info = self._client.info() or {}
-        return CatalogItem(
-            "workspace",
-            str(info.get("name") or self._target.label),
-            info,
-        )
-
-    def datastores(self) -> list[CatalogItem]:
+    def list(self) -> list[CatalogItem]:
         return [
             CatalogItem("datastore", _name_of(item), item)
-            for item in _as_dicts(self._client.ds.list())
+            for item in _as_dicts(self._api.list())
         ]
 
-    def datastore(self, name: str) -> CatalogItem | None:
-        value = self._client.ds.get(name)
+    def get(self, name: str) -> CatalogItem | None:
+        value = self._api.get(name)
         if not value:
             return None
         data = _as_dicts([value])[0]
         return CatalogItem("datastore", (_name_of(data) or name), data)
 
-    def environments(self) -> list[CatalogItem]:
+
+class WorkspaceEnvironments:
+    def __init__(self, client: Any) -> None:
+        self._api = client.env
+
+    def list(self) -> list[CatalogItem]:
         return [
             CatalogItem("environment", _name_of(item), item)
-            for item in _as_dicts(self._client.env.list())
+            for item in _as_dicts(self._api.list())
         ]
 
-    def environment_versions(self, name: str) -> list[CatalogItem]:
+    def versions(self, name: str) -> list[CatalogItem]:
         return [
             CatalogItem("environment_version", (_name_of(item) or name), item)
-            for item in _as_dicts(self._client.env.list_versions(name))
+            for item in _as_dicts(self._api.list_versions(name))
         ]
 
-    def computes(self) -> list[CatalogItem]:
+
+class WorkspaceComputes:
+    def __init__(self, azure: Any, target: Target) -> None:
+        self._azure = azure
+        self._target = target
+
+    def list(self) -> list[CatalogItem]:
         metadata = self._target.metadata
-        with _azure() as az:
-            values = az.compute.list(
-                str(metadata.get("subscription_id") or ""),
-                str(metadata.get("resource_group") or ""),
-                str(metadata.get("workspace_name") or ""),
-            )
+        values = self._azure.compute.list(
+            str(metadata.get("subscription_id") or ""),
+            str(metadata.get("resource_group") or ""),
+            str(metadata.get("workspace_name") or ""),
+        )
         return [
             CatalogItem("compute", _name_of(item), item)
             for item in _as_dicts(values)
         ]
 
-    def quota(self) -> list[CatalogItem]:
+
+class WorkspaceQuota:
+    def __init__(self, azure: Any, target: Target) -> None:
+        self._azure = azure
+        self._target = target
+
+    def list(self) -> list[CatalogItem]:
         metadata = self._target.metadata
         subscription_id = str(metadata.get("subscription_id") or "")
-        with _azure() as az:
-            values = az.quota.list(
-                [subscription_id] if subscription_id else None
-            )
+        values = self._azure.quota.list(
+            [subscription_id] if subscription_id else None
+        )
         return [
             CatalogItem("quota", _name_of(item), item)
             for item in _as_dicts(values)
         ]
 
 
-class AzureAccount:
-    """Subscription-scoped inventory that works before a workspace exists."""
+def workspace_computes(subscription_id: str = "") -> dict[str, Any]:
+    failures: list[str] = []
+    with azure_client() as az:
+        workspaces = az.ws.list([subscription_id] if subscription_id else None)
+        if not workspaces:
+            return {"pairs": [], "failures": []}
 
-    def __init__(self, subscription_id: str = "") -> None:
-        self._subscription_id = subscription_id
+        def on_fail(workspace: Any, exc: BaseException) -> None:
+            failures.append(getattr(workspace, "name", str(workspace)))
+            log.debug("Skipping workspace", exc_info=True)
 
-    def _sub(self, override: str = "") -> str:
-        return override or self._subscription_id
-
-    def subscriptions(self) -> list[CatalogItem]:
-        """``az.subscription.list()`` returns bare ids, not records."""
-        subscription_id = self._sub()
-        with _azure() as az:
-            values = [subscription_id] if subscription_id else az.subscription.list()
-        return [
-            CatalogItem("subscription", str(value), {"id": str(value)})
-            for value in values or ()
-        ]
-
-    def workspaces(self, subscription_id: str = "") -> list[CatalogItem]:
-        subscription_id = self._sub(subscription_id)
-        with _azure() as az:
-            values = az.ws.list([subscription_id] if subscription_id else None)
-        return [
-            CatalogItem("workspace", _name_of(item), item)
-            for item in _as_dicts(values)
-        ]
-
-    def storage_accounts(self, subscription_id: str = "") -> list[CatalogItem]:
-        subscription_id = self._sub(subscription_id)
-        with _azure() as az:
-            values = az.sa.list([subscription_id] if subscription_id else None)
-        return [
-            CatalogItem("storage_account", _name_of(item), item)
-            for item in _as_dicts(values)
-        ]
-
-    def identities(self, subscription_id: str = "") -> list[CatalogItem]:
-        subscription_id = self._sub(subscription_id)
-        with _azure() as az:
-            values = az.uai.list([subscription_id] if subscription_id else None)
-        return [
-            CatalogItem("identity", _name_of(item), item)
-            for item in _as_dicts(values)
-        ]
-
-    def instance_types(
-        self, region: str = "", subscription_id: str = ""
-    ) -> list[CatalogItem]:
-        with _azure() as az:
-            values = az.sku.list(
-                region,
-                subscription_id=self._sub(subscription_id),
-            )
-        return [
-            CatalogItem("instance_type", _name_of(item), item)
-            for item in _as_dicts(values)
-        ]
-
-    def vc_quota(
-        self, *, include_zero: bool = False, subscription_id: str = ""
-    ) -> list[CatalogItem]:
-        subscription_id = self._sub(subscription_id)
-        with _azure() as az:
-            values = az.quota.list(
-                [subscription_id] if subscription_id else None,
-                include_zero=include_zero,
-            )
-        return [
-            CatalogItem("vc_quota", _name_of(item), item)
-            for item in _as_dicts(values)
-        ]
-
-    def computes(
-        self,
-        resource_group: str,
-        workspace: str,
-        subscription_id: str = "",
-    ) -> list[CatalogItem]:
-        subscription_id = self._sub(subscription_id)
-        if not (subscription_id and resource_group and workspace):
-            return []
-        with _azure() as az:
-            values = az.compute.list(subscription_id, resource_group, workspace)
-        return [
-            CatalogItem("compute", _name_of(item), item)
-            for item in _as_dicts(values)
-        ]
-
-
-    def singularity_images(self) -> list[CatalogItem]:
-        """Singularity base images, searched across accessible subscriptions."""
-        subscription_id = self._sub()
-        with _azure() as az:
-            values = az.image.list([subscription_id] if subscription_id else None)
-        return [
-            CatalogItem("singularity_image", _image_name(entry), entry)
-            for entry in values
-        ]
-
-
-    def workspace_computes(self) -> dict[str, Any]:
-        failures: list[str] = []
-        subscription_id = self._sub()
-        with _azure() as az:
-            workspaces = az.ws.list([subscription_id] if subscription_id else None)
-            if not workspaces:
-                return {"pairs": [], "failures": []}
-
-            def on_fail(workspace: Any, exc: BaseException) -> None:
-                failures.append(getattr(workspace, "name", str(workspace)))
-                log.debug("Skipping workspace", exc_info=True)
-
-            results = az.compute.list_all(
-                workspaces=workspaces,
-                on_workspace_failure=on_fail,
-            )
-        # The port documents plain dicts here, and quota.py reads them with
-        # .get(); handing back dataclasses breaks both that and json.dumps.
-        pairs = [
-            {
-                "workspace": _plain(workspace),
-                "computes": [_plain(c) for c in clusters],
-            }
-            for workspace, clusters in results
-        ]
-        return {"pairs": pairs, "failures": failures}
-
-    def jobs_all_workspaces(
-        self, *, limit: int, cutoff_days: int = 0
-    ) -> dict[str, Any]:
-        from datetime import datetime, timedelta, timezone
-
-        from azure_jobs.server.az_client import fetch_jobs_all_workspaces
-
-        cutoff = (
-            datetime.now(timezone.utc) - timedelta(days=cutoff_days)
-            if cutoff_days > 0
-            else None
+        results = az.compute.list_all(
+            workspaces=workspaces,
+            on_workspace_failure=on_fail,
         )
-        failures: list[str] = []
-        subscription_id = self._sub()
-        with _azure() as az:
-            workspaces = az.ws.list([subscription_id] if subscription_id else None)
-            if not workspaces:
-                return {"jobs": [], "failures": []}
+    pairs = [
+        {
+            "workspace": _plain(workspace),
+            "computes": [_plain(c) for c in clusters],
+        }
+        for workspace, clusters in results
+    ]
+    return {"pairs": pairs, "failures": failures}
 
-            def on_fail(workspace: Any, exc: BaseException) -> None:
-                name = getattr(workspace, "name", str(workspace))
-                failures.append(name)
-                log.debug(
-                    "Skipping workspace %s (%s: %s)",
-                    name,
-                    type(exc).__name__,
-                    exc,
-                    exc_info=True,
-                )
 
-            jobs = fetch_jobs_all_workspaces(
-                limit,
-                cutoff_utc=cutoff,
-                workspaces=workspaces,
-                on_workspace_failure=on_fail,
+def jobs_all_workspaces(
+    subscription_id: str = "",
+    *,
+    limit: int,
+    cutoff_days: int = 0,
+) -> dict[str, Any]:
+    from datetime import datetime, timedelta, timezone
+
+    from azure_jobs.server.az_client import fetch_jobs_all_workspaces
+
+    cutoff = (
+        datetime.now(timezone.utc) - timedelta(days=cutoff_days)
+        if cutoff_days > 0
+        else None
+    )
+    failures: list[str] = []
+    with azure_client() as az:
+        workspaces = az.ws.list([subscription_id] if subscription_id else None)
+        if not workspaces:
+            return {"jobs": [], "failures": []}
+
+        def on_fail(workspace: Any, exc: BaseException) -> None:
+            name = getattr(workspace, "name", str(workspace))
+            failures.append(name)
+            log.debug(
+                "Skipping workspace %s (%s: %s)",
+                name,
+                type(exc).__name__,
+                exc,
+                exc_info=True,
             )
-        return {"jobs": [_plain(job) for job in jobs], "failures": failures}
+
+        jobs = fetch_jobs_all_workspaces(
+            limit,
+            cutoff_utc=cutoff,
+            workspaces=workspaces,
+            on_workspace_failure=on_fail,
+        )
+    return {"jobs": [_plain(job) for job in jobs], "failures": failures}
 
 
 def _image_name(entry: dict) -> str:
@@ -376,7 +312,7 @@ def _image_name(entry: dict) -> str:
 
 
 @contextmanager
-def _azure() -> Any:
+def azure_client() -> Any:
     from azure_jobs.server.az_client import AzureClient
 
     client = AzureClient()
@@ -386,6 +322,27 @@ def _azure() -> Any:
         close = getattr(client, "close", None)
         if callable(close):
             close()
+
+
+def catalog_items(category: str, values: Any) -> list[CatalogItem]:
+    return [
+        CatalogItem(category, _name_of(value), value)
+        for value in _as_dicts(values)
+    ]
+
+
+def subscription_items(values: Any) -> list[CatalogItem]:
+    return [
+        CatalogItem("subscription", str(value), {"id": str(value)})
+        for value in values or ()
+    ]
+
+
+def image_items(values: Any) -> list[CatalogItem]:
+    return [
+        CatalogItem("singularity_image", _image_name(value), value)
+        for value in values or ()
+    ]
 
 
 def _as_dicts(values: Any) -> list[Any]:
@@ -416,41 +373,6 @@ def _name_of(value: Any) -> str:
     if isinstance(value, dict):
         return str(value.get("name") or "")
     return str(getattr(value, "name", "") or "")
-
-
-class LocalSubmitter:
-    """Run a submission through the existing backend registry."""
-
-    def __init__(self, target: Target) -> None:
-        self._target = target
-
-    def submit(self, payload: dict, *, on_event: EventSink = None) -> SubmitOutcome:
-        from azure_jobs.server.submit import get_backend
-        from azure_jobs.shared.job.spec import JobEvent
-
-        spec = _spec_from_payload(payload)
-        backend = get_backend(spec.service)
-
-        def relay(event: JobEvent) -> None:
-            if on_event is not None:
-                on_event(
-                    SubmitEvent(
-                        kind=event.kind,
-                        detail=event.detail,
-                        completed=event.completed,
-                        total=event.total,
-                    )
-                )
-
-        result = backend.fn(spec, on_event=relay)
-        return SubmitOutcome(
-            job_name=result.job_name,
-            backend_ref=result.azure_name,
-            status=result.status,
-            portal_url=result.portal_url,
-            error=result.error,
-            note=result.note,
-        )
 
 
 def _spec_from_payload(payload: dict) -> Any:
@@ -488,55 +410,42 @@ def _spec_from_payload(payload: dict) -> Any:
     return spec
 
 
-class AzureBackend:
-    """Capability facade backed by direct ``az_client`` calls."""
+class WorkspaceAPI:
+    """Server resource namespaces for one resolved workspace."""
 
     def __init__(
         self,
         target: Target,
         *,
         client: Any = None,
-        queue: Any = None,
-        watcher: Any = None,
+        azure: Any = None,
     ) -> None:
+        from azure_jobs.server.az_client import AzureClient
+
         self.target = target
         self._client = client if client is not None else _open_client(target)
-        jobs = AzureJobs(self._client, target.id)
-        self.jobs = jobs
-        self.actions = jobs
-        self.delete_jobs = jobs
-        self.logs = AzureLogs(self._client)
-        self.catalog = AzureCatalog(self._client, target)
-        self.account = AzureAccount(
-            str(target.metadata.get('subscription_id') or '')
+        self._azure = azure if azure is not None else AzureClient()
+        self.job = WorkspaceJobs(self._client, target)
+        self.log = WorkspaceLogs(self._client)
+        self.ds = WorkspaceDatastores(self._client)
+        self.env = WorkspaceEnvironments(self._client)
+        self.compute = WorkspaceComputes(self._azure, target)
+        self.quota = WorkspaceQuota(self._azure, target)
+
+    def info(self) -> CatalogItem:
+        value = self._client.info() or {}
+        return CatalogItem(
+            "workspace",
+            str(value.get("name") or self.target.label),
+            value,
         )
-        self.submitter = LocalSubmitter(target)
-        # The queue and watcher belong to the daemon's session, which is
-        # what makes them outlive the client that asked for the work.
-        self.queue = queue if queue is not None else self._local_queue()
-        self.watcher = watcher if watcher is not None else self._local_watcher()
-
-    def _local_queue(self) -> Any:
-        from azure_jobs.server.queue import SubmissionQueue
-
-        return SubmissionQueue(self.submitter.submit)
-
-    def _local_watcher(self) -> Any:
-        from azure_jobs.server.watch import JobWatcher
-
-        return JobWatcher(self.actions.get, autostart=False)
 
     def close(self) -> None:
-        for service in (self.queue, self.watcher):
-            stop = getattr(service, "stop", None)
-            if callable(stop):
-                try:
-                    stop()
-                except Exception:
-                    log.debug("Failed to stop a local service", exc_info=True)
-        close = getattr(self._client, "close", None)
-        if callable(close):
-            close()
+        for client in (self._client, self._azure):
+            try:
+                client.close()
+            except Exception:
+                log.debug("Failed to close a workspace API client", exc_info=True)
 
 
 def _open_client(target: Target) -> Any:
@@ -558,23 +467,26 @@ def _open_client(target: Target) -> Any:
     return AzureWorkspaceClient(**values)
 
 
-class AzureBackendFactory:
-    """Opens an :class:`AzureBackend` per target. Daemon-side only."""
+class WorkspaceAPIFactory:
+    """Construction seam used by the context registry and tests."""
 
-    def __init__(self, *, queue: Any = None, watcher: Any = None) -> None:
-        self._queue = queue
-        self._watcher = watcher
-
-    def open(self, target: Target) -> AzureBackend:
-        return AzureBackend(target, queue=self._queue, watcher=self._watcher)
+    def open(self, target: Target) -> WorkspaceAPI:
+        return WorkspaceAPI(target)
 
 
 __all__ = [
-    "AzureAccount",
-    "AzureBackend",
-    "AzureBackendFactory",
-    "AzureCatalog",
-    "AzureJobs",
-    "AzureLogs",
-    "LocalSubmitter",
+    "WorkspaceAPI",
+    "WorkspaceAPIFactory",
+    "WorkspaceComputes",
+    "WorkspaceDatastores",
+    "WorkspaceEnvironments",
+    "WorkspaceJobs",
+    "WorkspaceLogs",
+    "WorkspaceQuota",
+    "azure_client",
+    "catalog_items",
+    "image_items",
+    "jobs_all_workspaces",
+    "subscription_items",
+    "workspace_computes",
 ]

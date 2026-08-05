@@ -39,7 +39,7 @@ class _Harness:
     @property
     def served(self):
         """The fake the server is actually driving."""
-        return self.factory.backends[0]
+        return self.factory.apis[0]
 
     def close(self):
         try:
@@ -116,11 +116,11 @@ class TestJobsPort:
 
     def test_cancel_reaches_the_backend(self, harness):
         harness.backend.job.cancel(JobRef("a", "a"))
-        assert harness.served.jobs.cancelled == ["a"]
+        assert harness.served.job.cancelled == ["a"]
 
     def test_delete_reaches_the_backend(self, harness):
         harness.backend.job.delete(JobRef("b", "b"))
-        assert harness.served.jobs.deleted == ["b"]
+        assert harness.served.job.deleted == ["b"]
 
 
 class TestLogsPort:
@@ -131,7 +131,7 @@ class TestLogsPort:
 
     def test_tail_returns_exact_bytes_and_offsets(self, harness):
         reader = harness.backend.log.open(JobRef("a", "a"), "std_log.txt")
-        blob = harness.served.logs.blob
+        blob = harness.served.log.blob
         chunk = reader.tail(50)
         assert chunk.data == blob[-50:]
         assert (chunk.start, chunk.end, chunk.total_size) == (
@@ -142,13 +142,13 @@ class TestLogsPort:
 
     def test_read_after_and_range(self, harness):
         reader = harness.backend.log.open(JobRef("a", "a"), "std_log.txt")
-        blob = harness.served.logs.blob
+        blob = harness.served.log.blob
         assert reader.read_after(10, 20).data == blob[10:30]
         assert reader.read_range(5, 15).data == blob[5:15]
 
     def test_binary_payload_survives_the_transport(self, harness):
         """Log bytes are not text; base64 framing must not mangle them."""
-        harness.served.logs.blob = bytes(range(256)) * 4
+        harness.served.log.blob = bytes(range(256)) * 4
         reader = harness.backend.log.open(JobRef("a", "a"), "std_log.txt")
         assert reader.read_range(0, 256).data == bytes(range(256))
 
@@ -157,8 +157,8 @@ class TestLogsPort:
         reader = harness.backend.log.open(JobRef("a", "a"), "std_log.txt")
         reader.tail(16)
         reader.close()
-        assert harness.served.logs.readers
-        assert all(r.closed for r in harness.served.logs.readers)
+        assert harness.served.log.readers
+        assert all(r.closed for r in harness.served.log.readers)
 
 
 class TestCatalogPort:
@@ -182,7 +182,7 @@ class TestSubmitPort:
         assert outcome.backend_ref == "azure-name"
 
     def test_failed_submission_is_not_an_exception(self, harness):
-        harness.served.submitter.fail = True
+        harness.served.job.submit_fail = True
         outcome = harness.backend.job.submit({"name": "job-2"})
         assert not outcome.succeeded
         assert outcome.error == "submission refused"
@@ -191,7 +191,7 @@ class TestSubmitPort:
 class TestErrorSemantics:
     def test_typed_error_survives_the_transport(self, harness):
         """`except RestError as exc: exc.status_code` must keep working."""
-        harness.served.jobs.raises = RestError("denied", status_code=403)
+        harness.served.job.raises = RestError("denied", status_code=403)
         with pytest.raises(RestError) as caught:
             harness.backend.job.status(JobRef("a", "a"))
         assert caught.value.status_code == 403
@@ -201,7 +201,7 @@ class TestErrorSemantics:
         class Exotic(Exception):
             pass
 
-        harness.served.jobs.raises = Exotic("something specific happened")
+        harness.served.job.raises = Exotic("something specific happened")
         with pytest.raises(Exception) as caught:
             harness.backend.job.status(JobRef("a", "a"))
         assert "something specific happened" in str(caught.value)
@@ -209,10 +209,10 @@ class TestErrorSemantics:
             assert caught.value.remote_type == "Exotic"
 
     def test_backend_stays_usable_after_an_error(self, harness):
-        harness.served.jobs.raises = RestError("boom", status_code=500)
+        harness.served.job.raises = RestError("boom", status_code=500)
         with pytest.raises(RestError):
             harness.backend.job.status(JobRef("a", "a"))
-        harness.served.jobs.raises = None
+        harness.served.job.raises = None
         assert harness.backend.job.status(JobRef("a", "a")).name == "a"
 
 
@@ -324,7 +324,7 @@ class TestApiVersioning:
                     R.jobs(target.label), params={"limit": 1}
                 )
             # One backend: the context is cached per (root, workspace).
-            assert len(harness.factory.backends) == 1
+            assert len(harness.factory.apis) == 1
         finally:
             harness.close()
 

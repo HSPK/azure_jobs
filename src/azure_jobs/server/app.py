@@ -21,6 +21,14 @@ from typing import Any
 from fastapi import Body, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
+from azure_jobs.server.backend import (
+    azure_client,
+    catalog_items,
+    image_items,
+    jobs_all_workspaces as collect_jobs_all_workspaces,
+    subscription_items,
+    workspace_computes as collect_workspace_computes,
+)
 from azure_jobs.server.context import ContextRegistry
 from azure_jobs.shared.contract import routes as R
 from azure_jobs.shared.contract.errors import error_to_json
@@ -83,7 +91,6 @@ class DaemonState:
         *,
         backend_factory: Any = None,
         target_catalog: Any = None,
-        account_factory: Any = None,
         watch_interval: float = 20.0,
         idle_timeout: float = 30 * 60.0,
         shutdown_when_idle: float = 60 * 60.0,
@@ -97,9 +104,6 @@ class DaemonState:
             publish=self.events.publish,
             resolver=self.resolve_workspace,
         )
-        self._account_factory = account_factory
-        self._accounts: dict[str, Any] = {}
-        self._lock = threading.Lock()
         self.started_at = time.time()
         self.retiring = False
         self.shutdown_when_idle = shutdown_when_idle
@@ -142,21 +146,6 @@ class DaemonState:
             "Run `aj ws list` to see available workspaces."
         )
 
-    def account(self, subscription_id: str = "") -> Any:
-        with self._lock:
-            api = self._accounts.get(subscription_id)
-            if api is None:
-                api = self._make_account(subscription_id)
-                self._accounts[subscription_id] = api
-            return api
-
-    def _make_account(self, subscription_id: str) -> Any:
-        if self._account_factory is not None:
-            return self._account_factory(subscription_id)
-        from azure_jobs.server.backend import AzureAccount
-
-        return AzureAccount(subscription_id)
-
     def info(self) -> dict[str, Any]:
         return {
             "pid": os.getpid(),
@@ -172,8 +161,6 @@ class DaemonState:
 
     def close(self) -> None:
         self.contexts.close()
-        with self._lock:
-            self._accounts.clear()
 
 
 def _root_of(header: str | None) -> Path:
@@ -340,7 +327,7 @@ def create_app(state: DaemonState) -> FastAPI:
         include_archived: bool = False,
         x_aj_root: str | None = Header(default=None, alias=R.ROOT_HEADER),
     ) -> dict:
-        page = ctx(x_aj_root, ws).backend.jobs.list_page(
+        page = ctx(x_aj_root, ws).job.page(
             Cursor(cursor) if cursor else None,
             limit=limit,
             query=JobQuerySpec(include_archived=include_archived),
@@ -360,7 +347,7 @@ def create_app(state: DaemonState) -> FastAPI:
         max_scan: int = 0,
         x_aj_root: str | None = Header(default=None, alias=R.ROOT_HEADER),
     ) -> list[dict]:
-        jobs = ctx(x_aj_root, ws).backend.jobs.fetch(
+        jobs = ctx(x_aj_root, ws).job.list(
             limit=limit,
             archived=archived,
             job_type=job_type,
@@ -380,7 +367,7 @@ def create_app(state: DaemonState) -> FastAPI:
         x_aj_root: str | None = Header(default=None, alias=R.ROOT_HEADER),
     ) -> dict:
         ref = JobRef(job_id, backend_ref or job_id)
-        return ctx(x_aj_root, ws).backend.actions.get(ref).to_json()
+        return ctx(x_aj_root, ws).job.status(ref).to_json()
 
     @app.post(R.job_cancel("{ws}", "{job_id}"))
     def cancel_job(
@@ -390,7 +377,7 @@ def create_app(state: DaemonState) -> FastAPI:
         x_aj_root: str | None = Header(default=None, alias=R.ROOT_HEADER),
     ) -> dict:
         ref = JobRef(job_id, backend_ref or job_id)
-        ctx(x_aj_root, ws).backend.actions.cancel(ref)
+        ctx(x_aj_root, ws).job.cancel(ref)
         return {"cancelled": True}
 
     @app.delete(R.job("{ws}", "{job_id}"))
@@ -401,7 +388,7 @@ def create_app(state: DaemonState) -> FastAPI:
         x_aj_root: str | None = Header(default=None, alias=R.ROOT_HEADER),
     ) -> dict:
         ref = JobRef(job_id, backend_ref or job_id)
-        ctx(x_aj_root, ws).backend.delete_jobs.delete(ref)
+        ctx(x_aj_root, ws).job.delete(ref)
         return {"deleted": True}
 
     # ── logs ─────────────────────────────────────────────────────────────
@@ -414,7 +401,7 @@ def create_app(state: DaemonState) -> FastAPI:
         x_aj_root: str | None = Header(default=None, alias=R.ROOT_HEADER),
     ) -> list[str]:
         ref = JobRef(job_id, backend_ref or job_id)
-        return ctx(x_aj_root, ws).backend.logs.list_files(ref)
+        return ctx(x_aj_root, ws).log.list(ref)
 
     @app.get(R.job_log_content("{ws}", "{job_id}"))
     def read_log(
@@ -427,7 +414,7 @@ def create_app(state: DaemonState) -> FastAPI:
     ) -> Response:
         """Byte ranges are what HTTP is for, so a log window is just a 206."""
         ref = JobRef(job_id, backend_ref or job_id)
-        reader = ctx(x_aj_root, ws).backend.logs.open(ref, path)
+        reader = ctx(x_aj_root, ws).log.open(ref, path)
         try:
             chunk = _read_range(reader, range_header)
         finally:
@@ -452,9 +439,7 @@ def create_app(state: DaemonState) -> FastAPI:
         x_aj_root: str | None = Header(default=None, alias=R.ROOT_HEADER),
     ) -> dict:
         ref = JobRef(job_id, backend_ref or job_id)
-        return ctx(x_aj_root, ws).backend.logs.download(ref)
-
-    # ── catalog ──────────────────────────────────────────────────────────
+        return ctx(x_aj_root, ws).log.download(ref)
 
     # ── workspace inventory ──────────────────────────────────────────────
     #
@@ -462,22 +447,19 @@ def create_app(state: DaemonState) -> FastAPI:
     # returning a union of shapes cannot be described in OpenAPI, so neither a
     # generated client nor `/openapi.json` could say what comes back.
 
-    def _catalog(root: str | None, ws: str) -> Any:
-        return ctx(root, ws).backend.catalog
-
     @app.get(R.workspace_info("{ws}"))
     def workspace_info(
         ws: str,
         x_aj_root: str | None = Header(default=None, alias=R.ROOT_HEADER),
     ) -> dict:
-        return _catalog(x_aj_root, ws).workspace().to_json()
+        return ctx(x_aj_root, ws).info().to_json()
 
     @app.get(R.datastores("{ws}"))
     def datastores(
         ws: str,
         x_aj_root: str | None = Header(default=None, alias=R.ROOT_HEADER),
     ) -> list[dict]:
-        return [i.to_json() for i in _catalog(x_aj_root, ws).datastores()]
+        return [i.to_json() for i in ctx(x_aj_root, ws).ds.list()]
 
     @app.get(R.datastore("{ws}", "{name}"))
     def datastore(
@@ -485,7 +467,7 @@ def create_app(state: DaemonState) -> FastAPI:
         name: str,
         x_aj_root: str | None = Header(default=None, alias=R.ROOT_HEADER),
     ) -> dict | None:
-        item = _catalog(x_aj_root, ws).datastore(name)
+        item = ctx(x_aj_root, ws).ds.get(name)
         return item.to_json() if item else None
 
     @app.get(R.environments("{ws}"))
@@ -493,7 +475,7 @@ def create_app(state: DaemonState) -> FastAPI:
         ws: str,
         x_aj_root: str | None = Header(default=None, alias=R.ROOT_HEADER),
     ) -> list[dict]:
-        return [i.to_json() for i in _catalog(x_aj_root, ws).environments()]
+        return [i.to_json() for i in ctx(x_aj_root, ws).env.list()]
 
     @app.get(R.environment_versions("{ws}", "{name}"))
     def environment_versions(
@@ -502,7 +484,7 @@ def create_app(state: DaemonState) -> FastAPI:
         x_aj_root: str | None = Header(default=None, alias=R.ROOT_HEADER),
     ) -> list[dict]:
         return [
-            i.to_json() for i in _catalog(x_aj_root, ws).environment_versions(name)
+            i.to_json() for i in ctx(x_aj_root, ws).env.versions(name)
         ]
 
     @app.get(R.computes("{ws}"))
@@ -510,56 +492,63 @@ def create_app(state: DaemonState) -> FastAPI:
         ws: str,
         x_aj_root: str | None = Header(default=None, alias=R.ROOT_HEADER),
     ) -> list[dict]:
-        return [i.to_json() for i in _catalog(x_aj_root, ws).computes()]
+        return [i.to_json() for i in ctx(x_aj_root, ws).compute.list()]
 
     @app.get(R.quota("{ws}"))
     def workspace_quota(
         ws: str,
         x_aj_root: str | None = Header(default=None, alias=R.ROOT_HEADER),
     ) -> list[dict]:
-        return [i.to_json() for i in _catalog(x_aj_root, ws).quota()]
+        return [i.to_json() for i in ctx(x_aj_root, ws).quota.list()]
 
     # ── subscription inventory ───────────────────────────────────────────
 
     @app.get(R.subscriptions())
     def subscriptions() -> list[dict]:
-        return [i.to_json() for i in state.account().subscriptions()]
+        with azure_client() as azure:
+            values = azure.subscription.list()
+        return [item.to_json() for item in subscription_items(values)]
 
     @app.get(R.storage_accounts())
     def storage_accounts(subscription_id: str = Query(default="")) -> list[dict]:
-        return [
-            i.to_json() for i in state.account(subscription_id).storage_accounts()
-        ]
+        with azure_client() as azure:
+            values = azure.sa.list([subscription_id] if subscription_id else None)
+        return [i.to_json() for i in catalog_items("storage_account", values)]
 
     @app.get(R.identities())
     def identities(subscription_id: str = Query(default="")) -> list[dict]:
-        return [i.to_json() for i in state.account(subscription_id).identities()]
+        with azure_client() as azure:
+            values = azure.uai.list([subscription_id] if subscription_id else None)
+        return [i.to_json() for i in catalog_items("identity", values)]
 
     @app.get(R.instance_types())
     def instance_types(
         region: str = Query(default=""),
         subscription_id: str = Query(default=""),
     ) -> list[dict]:
-        return [
-            i.to_json() for i in state.account(subscription_id).instance_types(region)
-        ]
+        with azure_client() as azure:
+            values = azure.sku.list(region, subscription_id=subscription_id)
+        return [i.to_json() for i in catalog_items("instance_type", values)]
 
     @app.get(R.images())
     def images(subscription_id: str = Query(default="")) -> list[dict]:
-        return [
-            i.to_json()
-            for i in state.account(subscription_id).singularity_images()
-        ]
+        with azure_client() as azure:
+            values = azure.image.list(
+                [subscription_id] if subscription_id else None
+            )
+        return [i.to_json() for i in image_items(values)]
 
     @app.get(R.vc_quota())
     def vc_quota(
         include_zero: bool = Query(default=False),
         subscription_id: str = Query(default=""),
     ) -> list[dict]:
-        return [
-            i.to_json()
-            for i in state.account(subscription_id).vc_quota(include_zero=include_zero)
-        ]
+        with azure_client() as azure:
+            values = azure.quota.list(
+                [subscription_id] if subscription_id else None,
+                include_zero=include_zero,
+            )
+        return [i.to_json() for i in catalog_items("vc_quota", values)]
 
     @app.get(R.account_computes())
     def account_computes(
@@ -567,14 +556,19 @@ def create_app(state: DaemonState) -> FastAPI:
         workspace: str = Query(default=""),
         subscription_id: str = Query(default=""),
     ) -> list[dict]:
-        return [
-            i.to_json()
-            for i in state.account(subscription_id).computes(resource_group, workspace)
-        ]
+        if not (subscription_id and resource_group and workspace):
+            return []
+        with azure_client() as azure:
+            values = azure.compute.list(
+                subscription_id,
+                resource_group,
+                workspace,
+            )
+        return [i.to_json() for i in catalog_items("compute", values)]
 
     @app.get(R.workspace_computes())
     def workspace_computes(subscription_id: str = Query(default="")) -> dict:
-        return state.account(subscription_id).workspace_computes()
+        return collect_workspace_computes(subscription_id)
 
     @app.get(R.all_jobs())
     def all_jobs(
@@ -582,8 +576,10 @@ def create_app(state: DaemonState) -> FastAPI:
         cutoff_days: int = Query(default=0),
         subscription_id: str = Query(default=""),
     ) -> dict:
-        return state.account(subscription_id).jobs_all_workspaces(
-            limit=limit, cutoff_days=cutoff_days
+        return collect_jobs_all_workspaces(
+            subscription_id,
+            limit=limit,
+            cutoff_days=cutoff_days,
         )
 
     # ── submissions and queue ────────────────────────────────────────────
@@ -604,7 +600,7 @@ def create_app(state: DaemonState) -> FastAPI:
                     {"stream": stream_id, "event": event.to_json()},
                 )
 
-        outcome = context.backend.submitter.submit(
+        outcome = context.job.submit(
             dict(body.get("payload") or {}),
             on_event=relay if stream_id else None,
         )

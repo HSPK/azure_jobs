@@ -260,30 +260,24 @@ def test_only_the_transport_speaks_http():
     assert offenders == [], offenders
 
 
-def test_the_server_backend_exposes_every_port():
-    """The adapter keeps the port names; only the client got namespaces.
+def test_context_and_server_api_use_the_client_resource_shape():
+    """Routes reach resource namespaces directly, without a backend facade."""
+    from azure_jobs.server.backend import WorkspaceAPI
+    from azure_jobs.server.context import Context
 
-    Two vocabularies on purpose: the server's shape follows the Azure clients
-    it adapts, the client's follows the CLI groups a person types.
-    """
-    from azure_jobs.server.backend import AzureBackend
-
-    expected = {
-        "jobs",
-        "actions",
-        "delete_jobs",
-        "logs",
-        "catalog",
-        "submitter",
-        "queue",
-        "watcher",
-        "close",
-    }
-    source = inspect.getsource(AzureBackend)
+    expected = {"job", "log", "ds", "env", "compute", "quota", "info", "close"}
+    source = inspect.getsource(WorkspaceAPI)
     for attribute in expected:
         assert (
             f"self.{attribute}" in source or f"def {attribute}" in source
-        ), f"AzureBackend is missing {attribute}"
+        ), f"WorkspaceAPI is missing {attribute}"
+    for legacy in ("jobs", "actions", "delete_jobs", "logs", "catalog", "submitter"):
+        assert f"self.{legacy}" not in source
+
+    context_source = inspect.getsource(Context)
+    assert "self.backend" not in context_source
+    for name in ("job", "log", "ds", "env", "compute", "quota"):
+        assert f"self.{name} = api.{name}" in context_source
 
 
 def test_server_azure_clients_follow_the_public_sdk_namespace_shape():

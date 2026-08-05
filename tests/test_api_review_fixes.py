@@ -154,34 +154,6 @@ class TestTransportFailuresAreNotReplayed:
         assert transport.calls == 1
 
 
-class TestServerBackendHasEveryPort:
-    """The server contract keeps its own names; only the client got namespaces."""
-
-    def test_queue_and_watcher_are_present(self, monkeypatch):
-        from azure_jobs.server.backend import AzureBackend
-
-        class _Client:
-            job = object()
-            log = object()
-            ds = object()
-            env = object()
-
-            def close(self):
-                pass
-
-        monkeypatch.setattr(
-            "azure_jobs.server.backend._open_client", lambda target: _Client()
-        )
-        backend = AzureBackend(make_target())
-        try:
-            assert backend.queue is not None
-            assert backend.watcher is not None
-            assert backend.queue.list() == []
-            assert backend.watcher.watched() == []
-        finally:
-            backend.close()
-
-
 class TestQueueJournalPermissions:
     def test_journal_is_not_world_readable(self, tmp_path):
         """It stores JobSpec.env_vars, where users keep API tokens."""
@@ -353,9 +325,7 @@ class TestDaemonFailureIsReportedNotWorkedAround:
 class TestWorkspaceComputesShape:
     """Regression: `aj quota --aml` crashed on dataclasses where dicts were promised."""
 
-    def _account(self, monkeypatch, pairs):
-        from azure_jobs.server.backend import AzureAccount
-
+    def _patch_azure(self, monkeypatch, pairs):
         class _Azure:
             class ws:
                 @staticmethod
@@ -377,8 +347,9 @@ class TestWorkspaceComputesShape:
         def fake_azure():
             yield _Azure()
 
-        monkeypatch.setattr("azure_jobs.server.backend._azure", fake_azure)
-        return AzureAccount("sub")
+        monkeypatch.setattr(
+            "azure_jobs.server.backend.azure_client", fake_azure
+        )
 
     def test_pairs_are_plain_json_ready_dicts(self, monkeypatch):
         from azure_jobs.shared.types.azure import ComputeInfo, WorkspaceInfo
@@ -392,8 +363,10 @@ class TestWorkspaceComputesShape:
             subscription_id="s",
             workspace_name="ws",
         )
-        account = self._account(monkeypatch, [(ws, [compute])])
-        result = account.workspace_computes()
+        from azure_jobs.server.backend import workspace_computes
+
+        self._patch_azure(monkeypatch, [(ws, [compute])])
+        result = workspace_computes("sub")
         pair = result["pairs"][0]
 
         # quota.py reads these with .get(), and the daemon json.dumps them.
@@ -401,23 +374,10 @@ class TestWorkspaceComputesShape:
         assert pair["computes"][0].get("name") == "gpu"
         json.dumps(result)
 
-    def test_subscriptions_carry_their_id_as_the_name(self, monkeypatch):
-        from contextlib import contextmanager
+    def test_subscriptions_carry_their_id_as_the_name(self):
+        from azure_jobs.server.backend import subscription_items
 
-        from azure_jobs.server.backend import AzureAccount
-
-        class _Azure:
-            class subscription:
-                @staticmethod
-                def list():
-                    return ["sub-aaa", "sub-bbb"]  # bare ids, not records
-
-        @contextmanager
-        def fake_azure():
-            yield _Azure()
-
-        monkeypatch.setattr("azure_jobs.server.backend._azure", fake_azure)
-        items = AzureAccount().subscriptions()
+        items = subscription_items(["sub-aaa", "sub-bbb"])
         assert [i.name for i in items] == ["sub-aaa", "sub-bbb"]
 
 
@@ -450,13 +410,13 @@ class TestHandlerErrorsDoNotKillTheConnection:
         try:
             client = DaemonClient(daemon.socket_path, tmp_path)
             client.get(R.jobs(target.label), params={"limit": 1})
-            factory.backends[0].jobs.raises = RuntimeError("backend exploded")
+            factory.apis[0].job.raises = RuntimeError("backend exploded")
 
             with pytest.raises(Exception) as caught:
                 client.get(R.job(target.id, "a"), params={"backend_ref": "a"})
             assert "exploded" in str(caught.value)
 
-            factory.backends[0].jobs.raises = None
+            factory.apis[0].job.raises = None
             assert client.get(R.ping())["pong"] is True
             client.close()
         finally:

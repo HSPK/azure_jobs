@@ -25,14 +25,14 @@ CONTEXT_IDLE_TIMEOUT = 30 * 60.0
 
 
 class Context:
-    """One project root + target: its backend, queue and watcher."""
+    """One project root + target and its resource namespaces."""
 
     def __init__(
         self,
         key: tuple[str, str],
         root: Path,
         target: Target,
-        backend: Any,
+        api: Any,
         *,
         watch_interval: float,
         publish: Callable[[Notification], None],
@@ -40,26 +40,27 @@ class Context:
         self.key = key
         self.root = root
         self.target = target
-        self.backend = backend
+        self._api = api
+        self.job = api.job
+        self.log = api.log
+        self.ds = api.ds
+        self.env = api.env
+        self.compute = api.compute
+        self.quota = api.quota
+        self.info = api.info
         self.touched = time.time()
         self._publish = publish
         self.queue = SubmissionQueue(
-            self._submit,
+            self.job.submit,
             journal_path=root / "daemon" / f"queue-{target.id[:16]}.json",
         )
         self.watcher = JobWatcher(
-            self._get_job,
+            self.job.status,
             interval=watch_interval,
             journal_path=root / "daemon" / f"watch-{target.id[:16]}.json",
         )
         self.watcher.subscribe(publish)
         self.queue.subscribe(self._on_queue_change)
-
-    def _submit(self, payload: dict) -> Any:
-        return self.backend.submitter.submit(payload)
-
-    def _get_job(self, ref: JobRef) -> Any:
-        return self.backend.actions.get(ref)
 
     def _on_queue_change(self, entry: QueuedJob) -> None:
         self._publish(
@@ -88,9 +89,9 @@ class Context:
         self.queue.stop()
         self.watcher.stop()
         try:
-            self.backend.close()
+            self._api.close()
         except Exception:
-            log.exception("Failed to close the backend for %s", self.key)
+            log.exception("Failed to close the workspace API for %s", self.key)
 
 
 #: Bounded so a long-lived daemon cannot accumulate one entry per name typed.
@@ -162,7 +163,7 @@ class ContextRegistry:
                     key,
                     root,
                     target,
-                    self._open_backend(target),
+                    self._open_api(target),
                     watch_interval=self._watch_interval,
                     publish=self._publish,
                 )
@@ -170,12 +171,12 @@ class ContextRegistry:
             ctx.touch()
             return ctx
 
-    def _open_backend(self, target: Target) -> Any:
+    def _open_api(self, target: Target) -> Any:
         if self._factory is not None:
             return self._factory.open(target)
-        from azure_jobs.server.backend import AzureBackendFactory
+        from azure_jobs.server.backend import WorkspaceAPIFactory
 
-        return AzureBackendFactory().open(target)
+        return WorkspaceAPIFactory().open(target)
 
     # ── lifecycle ────────────────────────────────────────────────────────
 

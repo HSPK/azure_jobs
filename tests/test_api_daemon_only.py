@@ -41,13 +41,13 @@ class TestThereIsNoInProcessMode:
         from azure_jobs.client import cli
 
         source = inspect_source(cli)
-        assert "AzureBackend(" not in source
+        assert "WorkspaceAPI(" not in source
         assert "AJ_NO_DAEMON" not in source
 
     def test_the_azure_backend_is_not_exported_as_a_client_entry_point(self):
         from azure_jobs.shared import contract as api
 
-        assert not hasattr(api, "AzureBackend")
+        assert not hasattr(api, "WorkspaceAPI")
 
 
 def inspect_source(module) -> str:
@@ -274,15 +274,15 @@ class TestRequestsAreMultiplexed:
         client = DaemonClient(local_daemon.socket_path, local_daemon.socket_path.parent)
         client.get(R.jobs(target.label), params={"limit": 1})
 
-        backend = local_daemon.factory.backends[0]
+        api = local_daemon.factory.apis[0]
         gate = threading.Event()
-        original = backend.jobs.get
+        original = api.job.status
 
         def slow(ref):
             gate.wait(timeout=10)
             return original(ref)
 
-        backend.jobs.get = slow
+        api.job.status = slow
         waited: dict[str, float] = {}
 
         def slow_call():
