@@ -1,6 +1,8 @@
-# REST API
+# Azure REST clients
 
-`aj` calls Azure ML and ARM directly over HTTPS — no `azure-ai-ml` SDK.
+The daemon calls Azure ML and ARM directly over HTTPS — no `azure-ai-ml` SDK.
+The CLI and public SDK call the daemon's `/v2` FastAPI surface instead; see
+[architecture.md](architecture.md) for that request path and OpenAPI contract.
 
 ## Auth
 

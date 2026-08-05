@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from azure_jobs.shared.types.logs import _LOG_PRIORITY, pick_default_log
+from azure_jobs.shared.logs import order_log_files, pick_default_log
 
 import logging
 from collections.abc import Callable
@@ -177,13 +177,7 @@ class LogsAPI:
     ) -> list[str]:
         """Return sorted list of log file paths for a job."""
         urls = self.get_urls(job_name, cancelled=cancelled)
-        paths = [
-            p
-            for p in urls
-            if p.endswith((".txt", ".log", ".out", ".err")) or "/std_log" in p
-        ]
-        paths.sort(key=lambda p: (p.rsplit("/", 1)[0] if "/" in p else "", p))
-        return paths
+        return order_log_files(list(urls))
 
     def download(self, job_name: str) -> tuple[str, str]:
         """Download and return log content for a job."""
@@ -192,19 +186,12 @@ class LogsAPI:
             if not urls:
                 return "", ""
 
-            for prefix in _LOG_PRIORITY:
-                for path in sorted(p for p in urls if p.startswith(prefix)):
-                    resp = requests.get(urls[path], timeout=60)
-                    resp.raise_for_status()
-                    return _filter_content(resp.text), ""
-
-            for name, url in sorted(urls.items()):
-                if name.endswith(".txt"):
-                    resp = requests.get(url, timeout=60)
-                    resp.raise_for_status()
-                    return _filter_content(resp.text), ""
-
-            return "", ""
+            selected = pick_default_log(list(urls))
+            if not selected:
+                return "", ""
+            resp = requests.get(urls[selected], timeout=60)
+            resp.raise_for_status()
+            return _filter_content(resp.text), ""
         except (requests.RequestException, OSError) as exc:
             return "", str(exc)[:500]
 
@@ -217,5 +204,4 @@ __all__ = [
     "LogStreamer",
     "LogsAPI",
     "filter_log_lines",
-    "pick_default_log",
 ]

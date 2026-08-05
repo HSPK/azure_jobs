@@ -165,37 +165,29 @@ page to fetch the next server page; pagination is not capped by `--last`.
 
 ## Use as a Python SDK
 
-The same engine the CLI uses is exposed at the package root, so you can build and submit jobs from your own scripts:
+The CLI and dashboard use the same daemon-backed client exposed at the package
+root:
 
 ```python
-from azure_jobs import (
-    Template,
-    build_job_spec,
-    submit_via,           # dispatches on spec.service; submit_via_amlt for the amlt CLI path
-    get_workspace_config,
-)
+from azure_jobs import connect
 
-template = Template.from_conf_path(".azure_jobs/template/gpu.yaml")
-spec = build_job_spec(
-    template,
-    name="my-job", sid="abc123", sku="2xA100-80GB",
-    user_command="train.py", user_args=(),
-    workspace=get_workspace_config(),
-    template_name="gpu", nodes=2, processes=8,
-    code_dir="/path/to/project",  # defaults to os.getcwd()
-)
-result = submit_via(spec)
-print(result.status, result.portal_url)
+with connect() as d:
+    for job in d.job.list(limit=20):
+        print(job.name, job.status)
+
+    other = d.ws("FastAML")
+    print([store.name for store in other.ds.list()])
 ```
 
-See [docs/sdk.md](docs/sdk.md) for the full surface and a `submit_and_record` example.
+See [docs/sdk.md](docs/sdk.md) for workspace scoping, submission, queue and log
+namespaces.
 
 ## Documentation
 
 | Document | Contents |
 |----------|----------|
 | [Commands](docs/commands.md) | `aj job`, `aj template`, `aj quota`, `aj sku`, `aj dash`, ... |
-| [SDK](docs/sdk.md) | Programmatic submission API |
+| [SDK](docs/sdk.md) | Daemon-backed Python API |
 | [Architecture](docs/architecture.md) | Module layout, submission flow, backends |
 | [Configuration](docs/configuration.md) | Templates, inheritance, merge rules, SKU formats |
 | [REST API](docs/rest-api.md) | REST client design, endpoints, job body shape |

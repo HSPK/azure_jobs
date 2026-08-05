@@ -152,7 +152,7 @@ class WorkspaceLogs:
         return self._api.list_files(job.backend_ref, cancelled=cancelled)
 
     def pick_default(self, files: list[str]) -> str:
-        from azure_jobs.server.az_client.ml.logs import pick_default_log
+        from azure_jobs.shared.logs import pick_default_log
 
         return pick_default_log(files)
 

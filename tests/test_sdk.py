@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import pytest
 
+import azure_jobs
 from azure_jobs.sdk import AjClient
 from azure_jobs.sdk.workspace import WorkspaceClient
 
@@ -198,3 +199,8 @@ class TestLifecycle:
         with AjClient(transport) as d:
             assert d.auth is not None
         assert transport.closed
+
+
+def test_every_root_export_is_resolvable() -> None:
+    for name in azure_jobs.__all__:
+        assert getattr(azure_jobs, name) is not None, name

@@ -73,7 +73,7 @@ class LogNamespace(WorkspaceNamespaceBase):
 
     def pick_default(self, files: list[str]) -> str:
         """Which file to show first, decided by a shared rule, not the server."""
-        from azure_jobs.shared.types.logs import pick_default_log
+        from azure_jobs.shared.logs import pick_default_log
 
         return pick_default_log(files)
 

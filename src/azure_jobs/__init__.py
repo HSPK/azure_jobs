@@ -20,11 +20,8 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
     "build_job_spec": ("azure_jobs.shared.job", "build_job_spec"),
     "render_amlt_yaml": ("azure_jobs.shared.job", "render_amlt_yaml"),
     "write_amlt_yaml": ("azure_jobs.shared.job", "write_amlt_yaml"),
-    "submit_via": ("azure_jobs.server.submit", "submit_via"),
-    "submit_via_amlt": ("azure_jobs.server.submit", "submit_via_amlt"),
     "submit_and_record": ("azure_jobs.client.cli.runner", "submit_and_record"),
     "register_backend": ("azure_jobs.server.submit", "register_backend"),
-    "list_backends": ("azure_jobs.server.submit", "list_backends"),
     "JobRecord": ("azure_jobs.shared.journal", "JobRecord"),
     "log_record": ("azure_jobs.shared.journal", "log_record"),
     "read_records": ("azure_jobs.shared.journal", "read_records"),
@@ -54,10 +51,7 @@ if TYPE_CHECKING:
         resolve_short_id,
     )
     from azure_jobs.server.submit import (
-        list_backends,
         register_backend,
-        submit_via,
-        submit_via_amlt,
     )
     from azure_jobs.shared.job import (
         StorageMount,
@@ -82,11 +76,8 @@ __all__ = [
     "build_job_spec",
     "render_amlt_yaml",
     "write_amlt_yaml",
-    "submit_via",
     "submit_and_record",
-    "submit_via_amlt",
     "register_backend",
-    "list_backends",
     "JobRecord",
     "log_record",
     "read_records",

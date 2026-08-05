@@ -174,6 +174,15 @@ def test_rendering_is_client_only():
     assert offenders == [], offenders
 
 
+def test_sdk_and_server_share_one_public_log_policy() -> None:
+    sdk = (SDK / "logs.py").read_text(encoding="utf-8")
+    server = (SERVER / "az_client" / "ml" / "logs.py").read_text(encoding="utf-8")
+    resources = (SERVER / "resources.py").read_text(encoding="utf-8")
+    for source in (sdk, server, resources):
+        assert "azure_jobs.shared.logs" in source
+        assert "_LOG_PRIORITY" not in source
+
+
 def test_within_the_server_only_the_adapter_reaches_the_sdk_directly():
     """Daemon routes reach Azure through the resource adapters."""
     allowed = {"resources.py", "azure.py"}
