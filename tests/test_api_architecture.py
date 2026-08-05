@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import ast
 import inspect
-import re
 from pathlib import Path
 
 import pytest
@@ -23,7 +22,7 @@ SERVER = SRC / "server"
 CLI = CLIENT / "cli"
 
 #: Files that define the contract itself. Implementations may import more.
-CONTRACT_FILES = ("models.py", "errors.py", "routes.py")
+CONTRACT_FILES = ("models.py", "errors.py", "http.py")
 
 FORBIDDEN_IN_CONTRACT = (
     "azure_jobs.server.az_client",
@@ -188,64 +187,11 @@ def test_within_the_server_only_the_adapter_reaches_the_sdk_directly():
     assert offenders == [], offenders
 
 
-def test_every_contract_port_has_a_route():
-    """A capability that exists only in-process breaks transport parity."""
-    from azure_jobs.server.app import DaemonState, create_app
-    from azure_jobs.shared.contract import routes as R
+def test_http_contract_is_versioned() -> None:
+    from azure_jobs.shared.contract import http
 
-    paths = {getattr(r, "path", "") for r in create_app(DaemonState()).routes}
-    required = {
-        R.jobs("{ws}"),
-        R.jobs_fetch("{ws}"),
-        R.job("{ws}", "{job_id}"),
-        R.job_cancel("{ws}", "{job_id}"),
-        R.job_logs("{ws}", "{job_id}"),
-        R.job_log_content("{ws}", "{job_id}"),
-        R.job_log_download("{ws}", "{job_id}"),
-        R.workspace_info("{ws}"),
-        R.datastores("{ws}"),
-        R.datastore("{ws}", "{name}"),
-        R.environments("{ws}"),
-        R.environment_versions("{ws}", "{name}"),
-        R.computes("{ws}"),
-        R.quota("{ws}"),
-        R.subscriptions(),
-        R.storage_accounts(),
-        R.identities(),
-        R.instance_types(),
-        R.images(),
-        R.vc_quota(),
-        R.account_computes(),
-        R.workspace_computes(),
-        R.all_jobs(),
-        R.auth_status(),
-        R.submissions("{ws}"),
-        R.queue("{ws}"),
-        R.queue_ticket("{ws}", "{ticket}"),
-        R.watches("{ws}"),
-        R.watch_job("{ws}", "{job_id}"),
-        R.events(),
-    }
-    assert required <= paths, required - paths
-
-
-def test_routes_are_version_prefixed():
-    """Versioning by path is what lets an old client keep working."""
-    from azure_jobs.shared.contract import routes as R
-
-    for path in (R.ping(), R.info(), R.jobs("t"), R.subscriptions(), R.events()):
-        assert path.startswith(f"{R.API_PREFIX}/")
-
-
-def test_the_sdk_builds_urls_from_the_shared_route_table():
-    """A path typo should be an import error, not a 404 at runtime."""
-    offenders = []
-    for path in SDK.rglob("*.py"):
-        source = path.read_text(encoding="utf-8")
-        # Every request goes through R.<helper>(...), never a literal path.
-        if re.search(r"""["']/v\d+""", source):
-            offenders.append(str(path.relative_to(SDK)))
-    assert offenders == [], offenders
+    assert http.API_PREFIX == f"/v{http.API_VERSION}"
+    assert http.MIN_API_VERSION <= http.API_VERSION
 
 
 def test_only_the_transport_speaks_http():

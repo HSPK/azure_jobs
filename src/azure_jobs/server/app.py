@@ -30,7 +30,7 @@ from azure_jobs.server.backend import (
     workspace_computes as collect_workspace_computes,
 )
 from azure_jobs.server.context import ContextRegistry
-from azure_jobs.shared.contract import routes as R
+from azure_jobs.shared.contract import http as H
 from azure_jobs.shared.contract.errors import error_to_json
 from azure_jobs.shared.errors import AJError, AuthError, WorkspaceError
 from azure_jobs.shared.contract.models import (
@@ -131,7 +131,7 @@ class DaemonState:
 
             return resolve_named(name, root)
 
-        if not name or name == R.DEFAULT_WORKSPACE:
+        if not name or name == H.DEFAULT_WORKSPACE:
             target = catalog.configured()
             if target is None:
                 raise WorkspaceError(
@@ -150,8 +150,8 @@ class DaemonState:
         return {
             "pid": os.getpid(),
             "aj_version": aj_version(),
-            "api_version": R.API_VERSION,
-            "min_api_version": R.MIN_API_VERSION,
+            "api_version": H.API_VERSION,
+            "min_api_version": H.MIN_API_VERSION,
             "contexts": self.contexts.count(),
             "uptime": time.time() - self.started_at,
             "retiring": self.retiring,
@@ -166,13 +166,13 @@ class DaemonState:
 def _root_of(header: str | None) -> Path:
     if not header:
         raise HTTPException(
-            status_code=400, detail=f"Missing the {R.ROOT_HEADER} header"
+            status_code=400, detail=f"Missing the {H.ROOT_HEADER} header"
         )
     return Path(header).resolve()
 
 
 def create_app(state: DaemonState) -> FastAPI:
-    app = FastAPI(title="aj daemon", version=str(R.API_VERSION))
+    app = FastAPI(title="aj daemon", version=str(H.API_VERSION))
     app.state.daemon = state
 
     def ctx(root: str | None, ws: str) -> Any:
@@ -220,15 +220,15 @@ def create_app(state: DaemonState) -> FastAPI:
 
     # ── daemon ───────────────────────────────────────────────────────────
 
-    @app.get(R.ping())
+    @app.get("/v2/ping")
     def ping() -> dict:
         return {"pong": True}
 
-    @app.get(R.info())
+    @app.get("/v2/info")
     def info() -> dict:
         return state.info()
 
-    @app.post(R.retire())
+    @app.post("/v2/retire")
     def retire(body: dict = Body(default={})) -> dict:
         raw = body.get("drain_timeout")
         timeout = float(raw) if raw else None
@@ -239,7 +239,7 @@ def create_app(state: DaemonState) -> FastAPI:
         ).start()
         return {"retiring": True, "outstanding": outstanding}
 
-    @app.get(R.events())
+    @app.get("/v2/events")
     async def events(request: Request) -> StreamingResponse:
         channel = state.events.subscribe()
 
@@ -267,7 +267,7 @@ def create_app(state: DaemonState) -> FastAPI:
 
     # ── auth ─────────────────────────────────────────────────────────────
 
-    @app.get(R.auth_status())
+    @app.get("/v2/auth/status")
     def auth_status() -> dict:
         """Sign-in and credential health together.
 
@@ -286,10 +286,10 @@ def create_app(state: DaemonState) -> FastAPI:
 
     # ── workspaces ───────────────────────────────────────────────────────
 
-    @app.get(R.workspaces())
+    @app.get("/v2/workspaces")
     def discover_workspaces(
         subscription_id: str = Query(default=""),
-        x_aj_root: str | None = Header(default=None, alias=R.ROOT_HEADER),
+        x_aj_root: str | None = Header(default=None, alias=H.ROOT_HEADER),
     ) -> list[dict]:
         """Discovery shells out to ``az``; that is exactly why it lives here.
 
@@ -300,10 +300,10 @@ def create_app(state: DaemonState) -> FastAPI:
         catalog = state.catalog(_root_of(x_aj_root))
         return [t.to_json() for t in catalog.discover(subscription_id)]
 
-    @app.get(R.workspace("{ws}"))
+    @app.get("/v2/workspaces/{ws}")
     def workspace_detail(
         ws: str,
-        x_aj_root: str | None = Header(default=None, alias=R.ROOT_HEADER),
+        x_aj_root: str | None = Header(default=None, alias=H.ROOT_HEADER),
     ) -> dict | None:
         """Resolve a workspace by name, for the calling project.
 
@@ -312,20 +312,20 @@ def create_app(state: DaemonState) -> FastAPI:
         whether setup has happened without handling an error.
         """
         root = _root_of(x_aj_root)
-        if ws == R.DEFAULT_WORKSPACE:
+        if ws == H.DEFAULT_WORKSPACE:
             target = state.catalog(root).configured()
             return target.to_json() if target else None
         return state.resolve_workspace(root, ws).to_json()
 
     # ── jobs ─────────────────────────────────────────────────────────────
 
-    @app.get(R.jobs("{ws}"))
+    @app.get("/v2/workspaces/{ws}/jobs")
     def list_jobs(
         ws: str,
         cursor: str | None = None,
         limit: int = 50,
         include_archived: bool = False,
-        x_aj_root: str | None = Header(default=None, alias=R.ROOT_HEADER),
+        x_aj_root: str | None = Header(default=None, alias=H.ROOT_HEADER),
     ) -> dict:
         page = ctx(x_aj_root, ws).job.page(
             Cursor(cursor) if cursor else None,
@@ -334,7 +334,7 @@ def create_app(state: DaemonState) -> FastAPI:
         )
         return page.to_json()
 
-    @app.get(R.jobs_fetch("{ws}"))
+    @app.get("/v2/workspaces/{ws}/jobs:fetch")
     def fetch_jobs(
         ws: str,
         limit: int = 50,
@@ -345,7 +345,7 @@ def create_app(state: DaemonState) -> FastAPI:
         status: str = "",
         cutoff_days: int = 0,
         max_scan: int = 0,
-        x_aj_root: str | None = Header(default=None, alias=R.ROOT_HEADER),
+        x_aj_root: str | None = Header(default=None, alias=H.ROOT_HEADER),
     ) -> list[dict]:
         jobs = ctx(x_aj_root, ws).job.list(
             limit=limit,
@@ -359,33 +359,33 @@ def create_app(state: DaemonState) -> FastAPI:
         )
         return [job.to_json() for job in jobs]
 
-    @app.get(R.job("{ws}", "{job_id}"))
+    @app.get("/v2/workspaces/{ws}/jobs/{job_id}")
     def get_job(
         ws: str,
         job_id: str,
         backend_ref: str = "",
-        x_aj_root: str | None = Header(default=None, alias=R.ROOT_HEADER),
+        x_aj_root: str | None = Header(default=None, alias=H.ROOT_HEADER),
     ) -> dict:
         ref = JobRef(job_id, backend_ref or job_id)
         return ctx(x_aj_root, ws).job.status(ref).to_json()
 
-    @app.post(R.job_cancel("{ws}", "{job_id}"))
+    @app.post("/v2/workspaces/{ws}/jobs/{job_id}/cancel")
     def cancel_job(
         ws: str,
         job_id: str,
         backend_ref: str = "",
-        x_aj_root: str | None = Header(default=None, alias=R.ROOT_HEADER),
+        x_aj_root: str | None = Header(default=None, alias=H.ROOT_HEADER),
     ) -> dict:
         ref = JobRef(job_id, backend_ref or job_id)
         ctx(x_aj_root, ws).job.cancel(ref)
         return {"cancelled": True}
 
-    @app.delete(R.job("{ws}", "{job_id}"))
+    @app.delete("/v2/workspaces/{ws}/jobs/{job_id}")
     def delete_job(
         ws: str,
         job_id: str,
         backend_ref: str = "",
-        x_aj_root: str | None = Header(default=None, alias=R.ROOT_HEADER),
+        x_aj_root: str | None = Header(default=None, alias=H.ROOT_HEADER),
     ) -> dict:
         ref = JobRef(job_id, backend_ref or job_id)
         ctx(x_aj_root, ws).job.delete(ref)
@@ -393,24 +393,24 @@ def create_app(state: DaemonState) -> FastAPI:
 
     # ── logs ─────────────────────────────────────────────────────────────
 
-    @app.get(R.job_logs("{ws}", "{job_id}"))
+    @app.get("/v2/workspaces/{ws}/jobs/{job_id}/logs")
     def list_logs(
         ws: str,
         job_id: str,
         backend_ref: str = "",
-        x_aj_root: str | None = Header(default=None, alias=R.ROOT_HEADER),
+        x_aj_root: str | None = Header(default=None, alias=H.ROOT_HEADER),
     ) -> list[str]:
         ref = JobRef(job_id, backend_ref or job_id)
         return ctx(x_aj_root, ws).log.list(ref)
 
-    @app.get(R.job_log_content("{ws}", "{job_id}"))
+    @app.get("/v2/workspaces/{ws}/jobs/{job_id}/logs/content")
     def read_log(
         ws: str,
         job_id: str,
         path: str = Query(...),
         backend_ref: str = "",
         range_header: str | None = Header(default=None, alias="Range"),
-        x_aj_root: str | None = Header(default=None, alias=R.ROOT_HEADER),
+        x_aj_root: str | None = Header(default=None, alias=H.ROOT_HEADER),
     ) -> Response:
         """Byte ranges are what HTTP is for, so a log window is just a 206."""
         ref = JobRef(job_id, backend_ref or job_id)
@@ -431,12 +431,12 @@ def create_app(state: DaemonState) -> FastAPI:
             headers=headers,
         )
 
-    @app.get(R.job_log_download("{ws}", "{job_id}"))
+    @app.get("/v2/workspaces/{ws}/jobs/{job_id}/logs/download")
     def download_logs(
         ws: str,
         job_id: str,
         backend_ref: str = "",
-        x_aj_root: str | None = Header(default=None, alias=R.ROOT_HEADER),
+        x_aj_root: str | None = Header(default=None, alias=H.ROOT_HEADER),
     ) -> dict:
         ref = JobRef(job_id, backend_ref or job_id)
         return ctx(x_aj_root, ws).log.download(ref)
@@ -447,81 +447,81 @@ def create_app(state: DaemonState) -> FastAPI:
     # returning a union of shapes cannot be described in OpenAPI, so neither a
     # generated client nor `/openapi.json` could say what comes back.
 
-    @app.get(R.workspace_info("{ws}"))
+    @app.get("/v2/workspaces/{ws}/info")
     def workspace_info(
         ws: str,
-        x_aj_root: str | None = Header(default=None, alias=R.ROOT_HEADER),
+        x_aj_root: str | None = Header(default=None, alias=H.ROOT_HEADER),
     ) -> dict:
         return ctx(x_aj_root, ws).info().to_json()
 
-    @app.get(R.datastores("{ws}"))
+    @app.get("/v2/workspaces/{ws}/datastores")
     def datastores(
         ws: str,
-        x_aj_root: str | None = Header(default=None, alias=R.ROOT_HEADER),
+        x_aj_root: str | None = Header(default=None, alias=H.ROOT_HEADER),
     ) -> list[dict]:
         return [i.to_json() for i in ctx(x_aj_root, ws).ds.list()]
 
-    @app.get(R.datastore("{ws}", "{name}"))
+    @app.get("/v2/workspaces/{ws}/datastores/{name}")
     def datastore(
         ws: str,
         name: str,
-        x_aj_root: str | None = Header(default=None, alias=R.ROOT_HEADER),
+        x_aj_root: str | None = Header(default=None, alias=H.ROOT_HEADER),
     ) -> dict | None:
         item = ctx(x_aj_root, ws).ds.get(name)
         return item.to_json() if item else None
 
-    @app.get(R.environments("{ws}"))
+    @app.get("/v2/workspaces/{ws}/environments")
     def environments(
         ws: str,
-        x_aj_root: str | None = Header(default=None, alias=R.ROOT_HEADER),
+        x_aj_root: str | None = Header(default=None, alias=H.ROOT_HEADER),
     ) -> list[dict]:
         return [i.to_json() for i in ctx(x_aj_root, ws).env.list()]
 
-    @app.get(R.environment_versions("{ws}", "{name}"))
+    @app.get("/v2/workspaces/{ws}/environments/{name}/versions")
     def environment_versions(
         ws: str,
         name: str,
-        x_aj_root: str | None = Header(default=None, alias=R.ROOT_HEADER),
+        x_aj_root: str | None = Header(default=None, alias=H.ROOT_HEADER),
     ) -> list[dict]:
         return [
             i.to_json() for i in ctx(x_aj_root, ws).env.versions(name)
         ]
 
-    @app.get(R.computes("{ws}"))
+    @app.get("/v2/workspaces/{ws}/computes")
     def computes(
         ws: str,
-        x_aj_root: str | None = Header(default=None, alias=R.ROOT_HEADER),
+        x_aj_root: str | None = Header(default=None, alias=H.ROOT_HEADER),
     ) -> list[dict]:
         return [i.to_json() for i in ctx(x_aj_root, ws).compute.list()]
 
-    @app.get(R.quota("{ws}"))
+    @app.get("/v2/workspaces/{ws}/quota")
     def workspace_quota(
         ws: str,
-        x_aj_root: str | None = Header(default=None, alias=R.ROOT_HEADER),
+        x_aj_root: str | None = Header(default=None, alias=H.ROOT_HEADER),
     ) -> list[dict]:
         return [i.to_json() for i in ctx(x_aj_root, ws).quota.list()]
 
     # ── subscription inventory ───────────────────────────────────────────
 
-    @app.get(R.subscriptions())
+    @app.get("/v2/subscriptions")
     def subscriptions() -> list[dict]:
         with azure_client() as azure:
             values = azure.subscription.list()
         return [item.to_json() for item in subscription_items(values)]
 
-    @app.get(R.storage_accounts())
+    @app.get("/v2/storage-accounts")
     def storage_accounts(subscription_id: str = Query(default="")) -> list[dict]:
         with azure_client() as azure:
             values = azure.sa.list([subscription_id] if subscription_id else None)
         return [i.to_json() for i in catalog_items("storage_account", values)]
 
-    @app.get(R.identities())
+    @app.get("/v2/identities")
     def identities(subscription_id: str = Query(default="")) -> list[dict]:
         with azure_client() as azure:
             values = azure.uai.list([subscription_id] if subscription_id else None)
         return [i.to_json() for i in catalog_items("identity", values)]
 
-    @app.get(R.instance_types())
+    @app.get("/v2/instance-types")
     def instance_types(
         region: str = Query(default=""),
         subscription_id: str = Query(default=""),
@@ -530,7 +530,7 @@ def create_app(state: DaemonState) -> FastAPI:
             values = azure.sku.list(region, subscription_id=subscription_id)
         return [i.to_json() for i in catalog_items("instance_type", values)]
 
-    @app.get(R.images())
+    @app.get("/v2/images")
     def images(subscription_id: str = Query(default="")) -> list[dict]:
         with azure_client() as azure:
             values = azure.image.list(
@@ -538,7 +538,7 @@ def create_app(state: DaemonState) -> FastAPI:
             )
         return [i.to_json() for i in image_items(values)]
 
-    @app.get(R.vc_quota())
+    @app.get("/v2/vc-quota")
     def vc_quota(
         include_zero: bool = Query(default=False),
         subscription_id: str = Query(default=""),
@@ -550,7 +550,7 @@ def create_app(state: DaemonState) -> FastAPI:
             )
         return [i.to_json() for i in catalog_items("vc_quota", values)]
 
-    @app.get(R.account_computes())
+    @app.get("/v2/computes")
     def account_computes(
         resource_group: str = Query(default=""),
         workspace: str = Query(default=""),
@@ -566,11 +566,11 @@ def create_app(state: DaemonState) -> FastAPI:
             )
         return [i.to_json() for i in catalog_items("compute", values)]
 
-    @app.get(R.workspace_computes())
+    @app.get("/v2/workspace-computes")
     def workspace_computes(subscription_id: str = Query(default="")) -> dict:
         return collect_workspace_computes(subscription_id)
 
-    @app.get(R.all_jobs())
+    @app.get("/v2/jobs")
     def all_jobs(
         limit: int = Query(default=10000),
         cutoff_days: int = Query(default=0),
@@ -584,11 +584,11 @@ def create_app(state: DaemonState) -> FastAPI:
 
     # ── submissions and queue ────────────────────────────────────────────
 
-    @app.post(R.submissions("{ws}"))
+    @app.post("/v2/workspaces/{ws}/submissions")
     def submit(
         ws: str,
         body: dict = Body(...),
-        x_aj_root: str | None = Header(default=None, alias=R.ROOT_HEADER),
+        x_aj_root: str | None = Header(default=None, alias=H.ROOT_HEADER),
     ) -> dict:
         context = ctx(x_aj_root, ws)
         stream_id = str(body.get("stream") or "")
@@ -606,76 +606,76 @@ def create_app(state: DaemonState) -> FastAPI:
         )
         return outcome.to_json()
 
-    @app.get(R.queue("{ws}"))
+    @app.get("/v2/workspaces/{ws}/queue")
     def queue_list(
         ws: str,
-        x_aj_root: str | None = Header(default=None, alias=R.ROOT_HEADER),
+        x_aj_root: str | None = Header(default=None, alias=H.ROOT_HEADER),
     ) -> list[dict]:
         return [e.to_json() for e in ctx(x_aj_root, ws).queue.list()]
 
-    @app.post(R.queue("{ws}"))
+    @app.post("/v2/workspaces/{ws}/queue")
     def queue_enqueue(
         ws: str,
         body: dict = Body(...),
-        x_aj_root: str | None = Header(default=None, alias=R.ROOT_HEADER),
+        x_aj_root: str | None = Header(default=None, alias=H.ROOT_HEADER),
     ) -> dict:
         entry = ctx(x_aj_root, ws).queue.enqueue(
             dict(body.get("payload") or {}), name=str(body.get("name") or "")
         )
         return entry.to_json()
 
-    @app.get(R.queue_ticket("{ws}", "{ticket}"))
+    @app.get("/v2/workspaces/{ws}/queue/{ticket}")
     def queue_get(
         ws: str,
         ticket: str,
-        x_aj_root: str | None = Header(default=None, alias=R.ROOT_HEADER),
+        x_aj_root: str | None = Header(default=None, alias=H.ROOT_HEADER),
     ) -> dict | None:
         entry = ctx(x_aj_root, ws).queue.get(ticket)
         if entry is None:
             raise HTTPException(status_code=404, detail=f"No such ticket {ticket!r}")
         return entry.to_json()
 
-    @app.delete(R.queue_ticket("{ws}", "{ticket}"))
+    @app.delete("/v2/workspaces/{ws}/queue/{ticket}")
     def queue_cancel(
         ws: str,
         ticket: str,
-        x_aj_root: str | None = Header(default=None, alias=R.ROOT_HEADER),
+        x_aj_root: str | None = Header(default=None, alias=H.ROOT_HEADER),
     ) -> dict:
         return {"cancelled": ctx(x_aj_root, ws).queue.cancel(ticket)}
 
     # ── watches ──────────────────────────────────────────────────────────
 
-    @app.get(R.watches("{ws}"))
+    @app.get("/v2/workspaces/{ws}/watches")
     def watch_list(
         ws: str,
-        x_aj_root: str | None = Header(default=None, alias=R.ROOT_HEADER),
+        x_aj_root: str | None = Header(default=None, alias=H.ROOT_HEADER),
     ) -> list[dict]:
         return [r.to_json() for r in ctx(x_aj_root, ws).watcher.watched()]
 
-    @app.post(R.watches("{ws}"))
+    @app.post("/v2/workspaces/{ws}/watches")
     def watch_add(
         ws: str,
         body: dict = Body(...),
-        x_aj_root: str | None = Header(default=None, alias=R.ROOT_HEADER),
+        x_aj_root: str | None = Header(default=None, alias=H.ROOT_HEADER),
     ) -> dict:
         ctx(x_aj_root, ws).watcher.watch(JobRef.from_json(body))
         return {"watching": True}
 
-    @app.delete(R.watch_job("{ws}", "{job_id}"))
+    @app.delete("/v2/workspaces/{ws}/watches/{job_id}")
     def watch_remove(
         ws: str,
         job_id: str,
         backend_ref: str = "",
-        x_aj_root: str | None = Header(default=None, alias=R.ROOT_HEADER),
+        x_aj_root: str | None = Header(default=None, alias=H.ROOT_HEADER),
     ) -> dict:
         ref = JobRef(job_id, backend_ref or job_id)
         ctx(x_aj_root, ws).watcher.unwatch(ref)
         return {"watching": False}
 
-    @app.post(R.watch_poll("{ws}"))
+    @app.post("/v2/workspaces/{ws}/watches:poll")
     def watch_poll(
         ws: str,
-        x_aj_root: str | None = Header(default=None, alias=R.ROOT_HEADER),
+        x_aj_root: str | None = Header(default=None, alias=H.ROOT_HEADER),
     ) -> list[dict]:
         return [n.to_json() for n in ctx(x_aj_root, ws).watcher.poll_once()]
 

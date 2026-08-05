@@ -24,7 +24,7 @@ from typing import Any, Callable, Mapping
 
 import httpx
 
-from azure_jobs.shared.contract import routes as R
+from azure_jobs.shared.contract import http as H
 from azure_jobs.shared.contract.errors import (
     DaemonStartupRefused,
     DaemonUnavailable,
@@ -135,8 +135,8 @@ class DaemonClient:
             base_url=BASE_URL,
             timeout=httpx.Timeout(CALL_TIMEOUT, connect=CONNECT_TIMEOUT),
             headers={
-                R.ROOT_HEADER: str(root),
-                R.CLIENT_VERSION_HEADER: aj_version(),
+                H.ROOT_HEADER: str(root),
+                H.CLIENT_VERSION_HEADER: aj_version(),
             },
         )
         self._sinks: list[NotificationSink] = []
@@ -185,7 +185,7 @@ class DaemonClient:
         message = f"{method} {url} returned {response.status_code}" + (
             f": {detail}" if detail else ""
         )
-        if response.status_code == 404 and url.startswith(R.API_PREFIX):
+        if response.status_code == 404 and url.startswith(H.API_PREFIX):
             # A route this build knows about is missing, so the daemon is
             # almost certainly an older process that predates it. Say so:
             # a bare 404 sends people looking for a missing job instead.
@@ -252,7 +252,7 @@ class DaemonClient:
             try:
                 with self._http.stream(
                     "GET",
-                    R.events(),
+                    "/v2/events",
                     timeout=httpx.Timeout(None, connect=CONNECT_TIMEOUT),
                 ) as response:
                     for line in response.iter_lines():
@@ -381,11 +381,11 @@ def _check_version(info: Mapping[str, Any]) -> None:
     server_max = int(info.get("api_version") or 0)
     server_min = int(info.get("min_api_version") or server_max)
     # Ranges overlap only if *both* hold; `or` would accept anything.
-    if server_min <= R.API_VERSION and server_max >= R.MIN_API_VERSION:
+    if server_min <= H.API_VERSION and server_max >= H.MIN_API_VERSION:
         return
     raise DaemonUnavailable(
         f"Daemon speaks API {server_min}..{server_max}; this build speaks "
-        f"{R.MIN_API_VERSION}..{R.API_VERSION}. Run 'aj daemon restart'."
+        f"{H.MIN_API_VERSION}..{H.API_VERSION}. Run 'aj daemon restart'."
     )
 
 
@@ -412,7 +412,7 @@ def connect_transport(
 
     client = DaemonClient(sock_path, project_root)
     try:
-        _check_version(client.get(R.info()))
+        _check_version(client.get("/v2/info"))
     except BaseException:
         client.close()
         raise

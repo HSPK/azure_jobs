@@ -147,7 +147,7 @@ Three top-level layers, enforced by `tests/test_api_architecture.py`:
 ```
 src/azure_jobs/
 ├── shared/          vocabulary both sides speak — imports neither side
-│   ├── contract/      wire models, errors, routes, typed codec
+│   ├── contract/      wire models, errors, HTTP constants, typed codec
 │   ├── types/         Azure value objects (quota rows, workspaces, SKUs)
 │   ├── opts/          typed backend options + spec-hook registration
 │   ├── spec.py        how a job is *described*
@@ -256,8 +256,8 @@ run before one is configured.
 The top-level `sdk/` owns both the small transport and what requests mean. The
 frontends import `connect()` directly; there is no CLI context-manager wrapper,
 session factory, workspace-catalog adapter, or reconnect proxy in between. A
-namespace never builds a URL by hand: it calls the shared route table, so a
-path typo is an import error rather than a 404 at runtime.
+namespace sends the resource path directly; FastAPI declares the same literal
+path on the server.
 
 **Why the SDK is written rather than generated.** FastAPI publishes
 `/openapi.json`, and `openapi-python-client` would turn it into a client — but
@@ -266,10 +266,9 @@ into flat per-operation functions, not `d.ws(name).job.list()`, and with
 namespaces *are* the product here; generating them away to regain them by hand
 would leave a build step and no ergonomics.
 
-The schema earns its keep as a *check* instead. `routes.py` single-sources the
-path, but not the verb, the query parameters, or which operations exist —
-`params={"regoin": ...}` against a server declaring `region` type-checks, unit
-tests fine, and silently ignores the filter. So
+The OpenAPI schema is the drift check. `params={"regoin": ...}` against a
+server declaring `region` would otherwise type-check and silently ignore the
+filter. So
 `tests/test_openapi_contract.py` drives every namespace against a recording
 transport and asserts each request it produces exists in the served schema,
 with a completeness check so a new operation cannot skip it.

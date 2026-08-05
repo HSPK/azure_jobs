@@ -10,7 +10,6 @@ from pathlib import Path
 import click
 
 from azure_jobs.client.cli import main
-from azure_jobs.shared.contract import routes as R
 from azure_jobs.shared.contract.errors import TransportError
 
 _LEGACY_INFO = "/v1/info"
@@ -42,7 +41,7 @@ def _fallback_404(primary, legacy):
 
 def _info(conn):
     return _fallback_404(
-        lambda: conn.get(R.info()),
+        lambda: conn.get("/v2/info"),
         lambda: conn.get(_LEGACY_INFO),
     )
 
@@ -50,7 +49,7 @@ def _info(conn):
 def _retire(conn, *, timeout: float):
     body = {"drain_timeout": timeout or None}
     return _fallback_404(
-        lambda: conn.post(R.retire(), json=body),
+        lambda: conn.post("/v2/retire", json=body),
         lambda: conn.post(_LEGACY_RETIRE, json=body),
     )
 

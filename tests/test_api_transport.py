@@ -25,7 +25,7 @@ from azure_jobs.sdk._transport import (
     verify_socket,
 )
 from azure_jobs.server.runner import Daemon, bind_socket
-from azure_jobs.shared.contract import routes as R
+from azure_jobs.shared.contract import http as H
 from azure_jobs.shared.contract.errors import DaemonUnavailable
 
 from .api_fakes import FakeFactory, FakeTargetCatalog, make_target
@@ -100,10 +100,10 @@ class TestDaemonLifecycle:
     def test_info_reports_identity_and_api_range(self, tmp_path):
         daemon, _, _ = _serve(tmp_path)
         try:
-            info = _client(daemon, tmp_path).get(R.info())
+            info = _client(daemon, tmp_path).get("/v2/info")
             assert info["pid"] == os.getpid()
-            assert info["api_version"] == R.API_VERSION
-            assert info["min_api_version"] == R.MIN_API_VERSION
+            assert info["api_version"] == H.API_VERSION
+            assert info["min_api_version"] == H.MIN_API_VERSION
         finally:
             daemon.shutdown()
 
@@ -132,7 +132,7 @@ class TestDaemonLifecycle:
     def test_a_retiring_daemon_reports_what_it_waits_for(self, tmp_path):
         daemon, _, _ = _serve(tmp_path)
         try:
-            result = _client(daemon, tmp_path).post(R.retire(), json={})
+            result = _client(daemon, tmp_path).post("/v2/retire", json={})
             assert result["retiring"] is True
             assert result["outstanding"] == 0
         finally:
@@ -143,9 +143,9 @@ class TestDaemonLifecycle:
         try:
             client = _client(daemon, tmp_path)
             with pytest.raises(Exception):
-                client.get(R.jobs("no-such-target"))
+                client.get("/v2/workspaces/no-such-target/jobs")
             # The same pooled connection must still work.
-            assert client.get(R.ping())["pong"] is True
+            assert client.get("/v2/ping")["pong"] is True
         finally:
             daemon.shutdown()
 
@@ -158,7 +158,7 @@ class TestDaemonLifecycle:
 
             def hammer() -> None:
                 try:
-                    results.append(client.get(R.info())["pid"])
+                    results.append(client.get("/v2/info")["pid"])
                 except BaseException as exc:
                     errors.append(exc)
 
@@ -233,10 +233,13 @@ class TestEventDelivery:
         daemon, factory, target = _serve(tmp_path, watch_interval=0.05)
         try:
             client, received = self._subscribed(daemon, tmp_path, target)
-            client.post(R.watches(target.label), json={"id": "a", "backend_ref": "a"})
-            client.post(R.watch_poll(target.id))
+            client.post(
+                f"/v2/workspaces/{target.label}/watches",
+                json={"id": "a", "backend_ref": "a"},
+            )
+            client.post(f"/v2/workspaces/{target.id}/watches:poll")
             factory.apis[0].job.current_status = "Completed"
-            client.post(R.watch_poll(target.id))
+            client.post(f"/v2/workspaces/{target.id}/watches:poll")
 
             deadline = time.time() + 10
             while time.time() < deadline and not received:
@@ -252,7 +255,7 @@ class TestEventDelivery:
         try:
             client, received = self._subscribed(daemon, tmp_path, target)
             client.post(
-                R.queue(target.label),
+                f"/v2/workspaces/{target.label}/queue",
                 json={"payload": {"name": "job-1"}, "name": "job-1"},
             )
             deadline = time.time() + 10
@@ -272,7 +275,7 @@ class TestEventDelivery:
             dying.close()
 
             survivor = _client(daemon, tmp_path)
-            assert survivor.get(R.ping())["pong"] is True
+            assert survivor.get("/v2/ping")["pong"] is True
             survivor.close()
         finally:
             daemon.shutdown()
@@ -335,7 +338,9 @@ class TestWorkspaceResolutionIsPerProject:
             for root, expected in ((alpha, "ws-alpha"), (beta, "ws-beta")):
                 client = DaemonClient(daemon.socket_path, root)
                 try:
-                    resolved = client.get(R.workspace(R.DEFAULT_WORKSPACE))
+                    resolved = client.get(
+                        f"/v2/workspaces/{H.DEFAULT_WORKSPACE}"
+                    )
                     assert resolved["label"] == expected
                     assert resolved["metadata"]["subscription_id"] == f"sub-{expected}"
                 finally:
@@ -352,11 +357,11 @@ class TestWorkspaceResolutionIsPerProject:
         try:
             client = DaemonClient(daemon.socket_path, root)
             try:
-                first = client.get(R.workspace(R.DEFAULT_WORKSPACE))
+                first = client.get(f"/v2/workspaces/{H.DEFAULT_WORKSPACE}")
                 assert first["label"] == "ws-before"
                 time.sleep(0.01)  # a distinct mtime, so the cache must notice
                 self._config(root, "ws-after")
-                second = client.get(R.workspace(R.DEFAULT_WORKSPACE))
+                second = client.get(f"/v2/workspaces/{H.DEFAULT_WORKSPACE}")
                 assert second["label"] == "ws-after"
             finally:
                 client.close()
@@ -377,7 +382,10 @@ class TestContextLifetime:
         try:
             client = _client(daemon, tmp_path)
             assert daemon.state.contexts.count() == 0
-            client.get(R.jobs(target.label), params={"limit": 1})
+            client.get(
+                f"/v2/workspaces/{target.label}/jobs",
+                params={"limit": 1},
+            )
             assert daemon.state.contexts.count() == 1
             assert len(factory.apis) == 1
         finally:
@@ -388,7 +396,10 @@ class TestContextLifetime:
         try:
             client = _client(daemon, tmp_path)
             for _ in range(5):
-                client.get(R.jobs(target.label), params={"limit": 1})
+                client.get(
+                    f"/v2/workspaces/{target.label}/jobs",
+                    params={"limit": 1},
+                )
             assert len(factory.apis) == 1
         finally:
             daemon.shutdown()
@@ -401,7 +412,10 @@ class TestContextLifetime:
             other.mkdir()
             for root in (tmp_path, other):
                 client = DaemonClient(daemon.socket_path, root)
-                client.get(R.jobs(target.label), params={"limit": 1})
+                client.get(
+                    f"/v2/workspaces/{target.label}/jobs",
+                    params={"limit": 1},
+                )
                 client.close()
             assert daemon.state.contexts.count() == 2
             assert len(factory.apis) == 2
@@ -412,7 +426,10 @@ class TestContextLifetime:
         daemon, factory, target = _serve(tmp_path, idle_timeout=0.0)
         try:
             client = _client(daemon, tmp_path)
-            client.get(R.jobs(target.label), params={"limit": 1})
+            client.get(
+                f"/v2/workspaces/{target.label}/jobs",
+                params={"limit": 1},
+            )
             client.close()
             time.sleep(0.05)
             assert daemon.reap_idle() == 1
@@ -424,7 +441,10 @@ class TestContextLifetime:
         daemon, _, target = _serve(tmp_path, idle_timeout=0.0)
         try:
             client = _client(daemon, tmp_path)
-            client.post(R.watches(target.label), json={"id": "a", "backend_ref": "a"})
+            client.post(
+                f"/v2/workspaces/{target.label}/watches",
+                json={"id": "a", "backend_ref": "a"},
+            )
             client.close()
             time.sleep(0.05)
             assert daemon.reap_idle() == 0

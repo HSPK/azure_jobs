@@ -86,10 +86,10 @@ def resolve_named(name: str = "", root: Path | None = None) -> Target:
     the same workspace name exists in more than one subscription.
     """
     from azure_jobs.server.discovery import resolve_workspace
-    from azure_jobs.shared.contract import routes as R
+    from azure_jobs.shared.contract.http import DEFAULT_WORKSPACE
     from azure_jobs.shared.errors import WorkspaceError
 
-    if not name or name == R.DEFAULT_WORKSPACE:
+    if not name or name == DEFAULT_WORKSPACE:
         target = ConfigTargetCatalog(root).configured()
         if target is not None:
             return target

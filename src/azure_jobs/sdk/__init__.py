@@ -84,9 +84,7 @@ class AjClient:
 
     def info(self) -> dict[str, Any]:
         """What the daemon reports about itself: pid, version, uptime."""
-        from azure_jobs.shared.contract import routes as R
-
-        return dict(self._c.get(R.info()) or {})
+        return dict(self._c.get("/v2/info") or {})
 
     def close(self) -> None:
         self._c.close()

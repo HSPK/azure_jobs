@@ -17,7 +17,7 @@ from typing import Any, Callable
 from azure_jobs.server.queue import SubmissionQueue
 from azure_jobs.server.watch import TOPIC_QUEUE, JobWatcher
 from azure_jobs.shared.contract.models import JobRef, Notification, QueuedJob, Target
-from azure_jobs.shared.contract.routes import DEFAULT_WORKSPACE
+from azure_jobs.shared.contract.http import DEFAULT_WORKSPACE
 
 log = logging.getLogger(__name__)
 

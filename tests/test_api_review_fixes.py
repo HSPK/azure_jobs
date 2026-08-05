@@ -389,7 +389,6 @@ class TestHandlerErrorsDoNotKillTheConnection:
 
         from azure_jobs.sdk._transport import DaemonClient, _reachable
         from azure_jobs.server.runner import Daemon
-        from azure_jobs.shared.contract import routes as R
 
         from .api_fakes import FakeFactory, FakeTargetCatalog
 
@@ -409,15 +408,21 @@ class TestHandlerErrorsDoNotKillTheConnection:
             time.sleep(0.02)
         try:
             client = DaemonClient(daemon.socket_path, tmp_path)
-            client.get(R.jobs(target.label), params={"limit": 1})
+            client.get(
+                f"/v2/workspaces/{target.label}/jobs",
+                params={"limit": 1},
+            )
             factory.apis[0].job.raises = RuntimeError("backend exploded")
 
             with pytest.raises(Exception) as caught:
-                client.get(R.job(target.id, "a"), params={"backend_ref": "a"})
+                client.get(
+                    f"/v2/workspaces/{target.id}/jobs/a",
+                    params={"backend_ref": "a"},
+                )
             assert "exploded" in str(caught.value)
 
             factory.apis[0].job.raises = None
-            assert client.get(R.ping())["pong"] is True
+            assert client.get("/v2/ping")["pong"] is True
             client.close()
         finally:
             daemon.shutdown()

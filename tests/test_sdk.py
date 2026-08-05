@@ -11,7 +11,6 @@ import pytest
 
 from azure_jobs.sdk import AjClient
 from azure_jobs.sdk.workspace import WorkspaceClient
-from azure_jobs.shared.contract import routes as R
 
 
 class _RecordingTransport:
@@ -53,11 +52,11 @@ class TestScoping:
 
     def test_root_shorthands_use_the_default_workspace(self, transport):
         AjClient(transport).ds.list()
-        assert transport.paths == [R.datastores(R.DEFAULT_WORKSPACE)]
+        assert transport.paths == ["/v2/workspaces/_/datastores"]
 
     def test_a_named_workspace_changes_only_the_path(self, transport):
         AjClient(transport).ws("other").ds.list()
-        assert transport.paths == [R.datastores("other")]
+        assert transport.paths == ["/v2/workspaces/other/datastores"]
 
     def test_the_keyword_form_matches_the_positional_one(self, transport):
         d = AjClient(transport)
@@ -90,7 +89,12 @@ class TestScoping:
 
     def test_an_explicit_default_workspace_is_honoured(self, transport):
         AjClient(transport, workspace="pinned").job.list(limit=1)
-        assert transport.paths == [R.jobs_fetch("pinned")]
+        assert transport.paths == ["/v2/workspaces/pinned/jobs:fetch"]
+
+    def test_an_empty_workspace_lookup_uses_the_default_sentinel(self, transport):
+        transport.reply = None
+        assert AjClient(transport).ws.get("") is None
+        assert transport.paths == ["/v2/workspaces/_"]
 
 
 class TestSubscriptionScopedNamespaces:
@@ -99,18 +103,18 @@ class TestSubscriptionScopedNamespaces:
     @pytest.mark.parametrize(
         "call, expected",
         [
-            (lambda d: d.auth.status(), R.auth_status()),
-            (lambda d: d.subscription.list(), R.subscriptions()),
-            (lambda d: d.sku.list(), R.instance_types()),
-            (lambda d: d.sa.list(), R.storage_accounts()),
-            (lambda d: d.uai.list(), R.identities()),
-            (lambda d: d.image.list(), R.images()),
-            (lambda d: d.quota.list(), R.vc_quota()),
-            (lambda d: d.compute.list(), R.account_computes()),
-            (lambda d: d.ws.list(), R.workspaces()),
-            (lambda d: d.ws.current(), R.current_workspace()),
-            (lambda d: d.ws.jobs(limit=1), R.all_jobs()),
-            (lambda d: d.ws.computes(), R.workspace_computes()),
+            (lambda d: d.auth.status(), "/v2/auth/status"),
+            (lambda d: d.subscription.list(), "/v2/subscriptions"),
+            (lambda d: d.sku.list(), "/v2/instance-types"),
+            (lambda d: d.sa.list(), "/v2/storage-accounts"),
+            (lambda d: d.uai.list(), "/v2/identities"),
+            (lambda d: d.image.list(), "/v2/images"),
+            (lambda d: d.quota.list(), "/v2/vc-quota"),
+            (lambda d: d.compute.list(), "/v2/computes"),
+            (lambda d: d.ws.list(), "/v2/workspaces"),
+            (lambda d: d.ws.current(), "/v2/workspaces/_"),
+            (lambda d: d.ws.jobs(limit=1), "/v2/jobs"),
+            (lambda d: d.ws.computes(), "/v2/workspace-computes"),
         ],
     )
     def test_each_reaches_its_own_resource(self, transport, call, expected):
@@ -123,21 +127,21 @@ class TestWorkspaceScopedNamespaces:
     @pytest.mark.parametrize(
         "call, expected",
         [
-            (lambda d: d.ds.list(), R.datastores(R.DEFAULT_WORKSPACE)),
-            (lambda d: d.ds.get("x"), R.datastore(R.DEFAULT_WORKSPACE, "x")),
-            (lambda d: d.env.list(), R.environments(R.DEFAULT_WORKSPACE)),
+            (lambda d: d.ds.list(), "/v2/workspaces/_/datastores"),
+            (lambda d: d.ds.get("x"), "/v2/workspaces/_/datastores/x"),
+            (lambda d: d.env.list(), "/v2/workspaces/_/environments"),
             (
                 lambda d: d.env.versions("e"),
-                R.environment_versions(R.DEFAULT_WORKSPACE, "e"),
+                "/v2/workspaces/_/environments/e/versions",
             ),
             (
                 lambda d: d.workspace.compute.list(),
-                R.computes(R.DEFAULT_WORKSPACE),
+                "/v2/workspaces/_/computes",
             ),
-            (lambda d: d.workspace.quota.list(), R.quota(R.DEFAULT_WORKSPACE)),
-            (lambda d: d.queue.list(), R.queue(R.DEFAULT_WORKSPACE)),
-            (lambda d: d.watch.list(), R.watches(R.DEFAULT_WORKSPACE)),
-            (lambda d: d.job.list(limit=1), R.jobs_fetch(R.DEFAULT_WORKSPACE)),
+            (lambda d: d.workspace.quota.list(), "/v2/workspaces/_/quota"),
+            (lambda d: d.queue.list(), "/v2/workspaces/_/queue"),
+            (lambda d: d.watch.list(), "/v2/workspaces/_/watches"),
+            (lambda d: d.job.list(limit=1), "/v2/workspaces/_/jobs:fetch"),
         ],
     )
     def test_each_reaches_its_own_resource(self, transport, call, expected):
@@ -154,21 +158,21 @@ class TestWorkspaceScopedNamespaces:
         d = AjClient(transport)
         d.job.status("run-1")
         method, url, kwargs = transport.calls[0]
-        assert url == R.job(R.DEFAULT_WORKSPACE, "run-1")
+        assert url == "/v2/workspaces/_/jobs/run-1"
         assert kwargs["params"]["backend_ref"] == "run-1"
 
     def test_queueing_a_job_posts_to_the_queue(self, transport):
         transport.reply = {"ticket": "t1", "state": "queued"}
         AjClient(transport).job.queue({"name": "j"}, name="j")
         method, url, kwargs = transport.calls[0]
-        assert (method, url) == ("POST", R.queue(R.DEFAULT_WORKSPACE))
+        assert (method, url) == ("POST", "/v2/workspaces/_/queue")
         assert kwargs["json"] == {"payload": {"name": "j"}, "name": "j"}
 
     def test_submitting_a_job_posts_to_submissions(self, transport):
         transport.reply = {"job_name": "j", "status": "submitted"}
         AjClient(transport).job.submit({"name": "j"})
         method, url, _ = transport.calls[0]
-        assert (method, url) == ("POST", R.submissions(R.DEFAULT_WORKSPACE))
+        assert (method, url) == ("POST", "/v2/workspaces/_/submissions")
 
 
 class TestEmptyParametersAreNotSent:

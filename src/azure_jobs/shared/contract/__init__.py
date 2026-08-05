@@ -1,4 +1,4 @@
-"""HTTP contract: wire models, typed errors, routes, and payload codecs.
+"""HTTP contract: wire models, typed errors, constants, and payload codecs.
 
 The concrete resource surface is described by FastAPI's OpenAPI document.
 There is deliberately no parallel Python ``Protocol`` hierarchy to keep in

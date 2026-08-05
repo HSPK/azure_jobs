@@ -10,7 +10,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from azure_jobs.sdk._resource import WorkspaceNamespaceBase, as_ref
-from azure_jobs.shared.contract import routes as R
 from azure_jobs.shared.contract.models import JobRef, LogChunk
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -34,7 +33,7 @@ class LogReader:
 
     def _read(self, range_header: str) -> LogChunk:
         response = self._c.get(
-            R.job_log_content(self._ws, self._job.id),
+            f"/v2/workspaces/{self._ws}/jobs/{self._job.id}/logs/content",
             params={"path": self._path, "backend_ref": self._job.backend_ref},
             headers={"Range": range_header},
         )
@@ -66,7 +65,8 @@ class LogNamespace(WorkspaceNamespaceBase):
         ref = as_ref(job)
         return list(
             self._c.get(
-                R.job_logs(self._ws, ref.id), params={"backend_ref": ref.backend_ref}
+                f"/v2/workspaces/{self._ws}/jobs/{ref.id}/logs",
+                params={"backend_ref": ref.backend_ref},
             )
             or ()
         )
@@ -86,7 +86,7 @@ class LogNamespace(WorkspaceNamespaceBase):
         ref = as_ref(job)
         return dict(
             self._c.get(
-                R.job_log_download(self._ws, ref.id),
+                f"/v2/workspaces/{self._ws}/jobs/{ref.id}/logs/download",
                 params={"backend_ref": ref.backend_ref},
             )
             or {}

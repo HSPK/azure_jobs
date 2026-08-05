@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any, Callable
 
 from azure_jobs.sdk._resource import WorkspaceNamespaceBase, as_ref
 from azure_jobs.sdk.logs import LogNamespace
-from azure_jobs.shared.contract import routes as R
+from azure_jobs.shared.contract.http import DEFAULT_WORKSPACE
 from azure_jobs.shared.contract.models import (
     CatalogItem,
     Cursor,
@@ -56,7 +56,9 @@ class JobNamespace(WorkspaceNamespaceBase):
         }
         if cursor:
             params["cursor"] = cursor.token
-        return JobPage.from_json(self._c.get(R.jobs(self._ws), params=params))
+        return JobPage.from_json(
+            self._c.get(f"/v2/workspaces/{self._ws}/jobs", params=params)
+        )
 
     def list(
         self,
@@ -77,7 +79,7 @@ class JobNamespace(WorkspaceNamespaceBase):
         rows that fail the filter off the wire entirely.
         """
         rows = self._c.get(
-            R.jobs_fetch(self._ws),
+            f"/v2/workspaces/{self._ws}/jobs:fetch",
             params={
                 "limit": limit,
                 "archived": archived,
@@ -95,18 +97,25 @@ class JobNamespace(WorkspaceNamespaceBase):
         """One job as the backend currently sees it."""
         ref = as_ref(job)
         return Job.from_json(
-            self._c.get(R.job(self._ws, ref.id), params={"backend_ref": ref.backend_ref})
+            self._c.get(
+                f"/v2/workspaces/{self._ws}/jobs/{ref.id}",
+                params={"backend_ref": ref.backend_ref},
+            )
         )
 
     def cancel(self, job: JobRef | str) -> None:
         ref = as_ref(job)
         self._c.post(
-            R.job_cancel(self._ws, ref.id), params={"backend_ref": ref.backend_ref}
+            f"/v2/workspaces/{self._ws}/jobs/{ref.id}/cancel",
+            params={"backend_ref": ref.backend_ref},
         )
 
     def delete(self, job: JobRef | str, *, cancelled: object = None) -> None:
         ref = as_ref(job)
-        self._c.delete(R.job(self._ws, ref.id), params={"backend_ref": ref.backend_ref})
+        self._c.delete(
+            f"/v2/workspaces/{self._ws}/jobs/{ref.id}",
+            params={"backend_ref": ref.backend_ref},
+        )
 
     def submit(self, payload: dict, *, on_event: EventSink = None) -> SubmitOutcome:
         """Run a submission now, reporting progress as it goes.
@@ -129,7 +138,10 @@ class JobNamespace(WorkspaceNamespaceBase):
             )
         try:
             return SubmitOutcome.from_json(
-                self._c.post(R.submissions(self._ws), json=body)
+                self._c.post(
+                    f"/v2/workspaces/{self._ws}/submissions",
+                    json=body,
+                )
             )
         finally:
             if unsubscribe is not None:
@@ -142,7 +154,10 @@ class JobNamespace(WorkspaceNamespaceBase):
         closing the terminal does not abandon it.
         """
         return QueuedJob.from_json(
-            self._c.post(R.queue(self._ws), json={"payload": payload, "name": name})
+            self._c.post(
+                f"/v2/workspaces/{self._ws}/queue",
+                json={"payload": payload, "name": name},
+            )
         )
 
 
@@ -150,13 +165,18 @@ class QueueNamespace(WorkspaceNamespaceBase):
     """``d.queue`` — submissions the daemon is running on our behalf."""
 
     def list(self) -> list[QueuedJob]:
-        return [QueuedJob.from_json(r) for r in self._c.get(R.queue(self._ws)) or ()]
+        return [
+            QueuedJob.from_json(row)
+            for row in self._c.get(f"/v2/workspaces/{self._ws}/queue") or ()
+        ]
 
     def get(self, ticket: str) -> QueuedJob | None:
         from azure_jobs.shared.contract.errors import TransportError
 
         try:
-            return QueuedJob.from_json(self._c.get(R.queue_ticket(self._ws, ticket)))
+            return QueuedJob.from_json(
+                self._c.get(f"/v2/workspaces/{self._ws}/queue/{ticket}")
+            )
         except TransportError as exc:
             if "404" in str(exc):
                 return None
@@ -164,7 +184,10 @@ class QueueNamespace(WorkspaceNamespaceBase):
 
     def cancel(self, ticket: str) -> bool:
         return bool(
-            (self._c.delete(R.queue_ticket(self._ws, ticket)) or {}).get("cancelled")
+            (
+                self._c.delete(f"/v2/workspaces/{self._ws}/queue/{ticket}")
+                or {}
+            ).get("cancelled")
         )
 
 
@@ -175,26 +198,33 @@ class WatchNamespace(WorkspaceNamespaceBase):
         return self._c.subscribe(sink)
 
     def add(self, job: JobRef | str) -> None:
-        self._c.post(R.watches(self._ws), json=as_ref(job).to_json())
+        self._c.post(
+            f"/v2/workspaces/{self._ws}/watches",
+            json=as_ref(job).to_json(),
+        )
 
     def remove(self, job: JobRef | str) -> None:
         ref = as_ref(job)
         self._c.delete(
-            R.watch_job(self._ws, ref.id), params={"backend_ref": ref.backend_ref}
+            f"/v2/workspaces/{self._ws}/watches/{ref.id}",
+            params={"backend_ref": ref.backend_ref},
         )
 
     def list(self) -> list[JobRef]:
-        return [JobRef.from_json(r) for r in self._c.get(R.watches(self._ws)) or ()]
+        return [
+            JobRef.from_json(row)
+            for row in self._c.get(f"/v2/workspaces/{self._ws}/watches") or ()
+        ]
 
 
 class DatastoreNamespace(WorkspaceNamespaceBase):
     """``d.ds`` — the workspace's datastores."""
 
     def list(self) -> list[CatalogItem]:
-        return self._items(R.datastores(self._ws))
+        return self._items(f"/v2/workspaces/{self._ws}/datastores")
 
     def get(self, name: str) -> CatalogItem | None:
-        row = self._c.get(R.datastore(self._ws, name))
+        row = self._c.get(f"/v2/workspaces/{self._ws}/datastores/{name}")
         return CatalogItem.from_json(row) if row else None
 
 
@@ -202,24 +232,26 @@ class EnvironmentNamespace(WorkspaceNamespaceBase):
     """``d.env`` — the workspace's environments."""
 
     def list(self) -> list[CatalogItem]:
-        return self._items(R.environments(self._ws))
+        return self._items(f"/v2/workspaces/{self._ws}/environments")
 
     def versions(self, name: str) -> list[CatalogItem]:
-        return self._items(R.environment_versions(self._ws, name))
+        return self._items(
+            f"/v2/workspaces/{self._ws}/environments/{name}/versions"
+        )
 
 
 class WorkspaceComputeNamespace(WorkspaceNamespaceBase):
     """``d.compute`` — compute targets in this workspace."""
 
     def list(self) -> list[CatalogItem]:
-        return self._items(R.computes(self._ws))
+        return self._items(f"/v2/workspaces/{self._ws}/computes")
 
 
 class WorkspaceQuotaNamespace(WorkspaceNamespaceBase):
     """``d.quota`` — quota as this workspace sees it."""
 
     def list(self) -> list[CatalogItem]:
-        return self._items(R.quota(self._ws))
+        return self._items(f"/v2/workspaces/{self._ws}/quota")
 
 
 class WorkspaceClient:
@@ -232,7 +264,7 @@ class WorkspaceClient:
 
     def __init__(self, client: "DaemonClient", ws: str = "") -> None:
         self._c = client
-        self.name = ws or R.DEFAULT_WORKSPACE
+        self.name = ws or DEFAULT_WORKSPACE
         self.job = JobNamespace(client, self.name)
         self.log = LogNamespace(client, self.name)
         self.ds = DatastoreNamespace(client, self.name)
@@ -249,7 +281,9 @@ class WorkspaceClient:
         name/group/subscription/location, so it cannot answer questions about
         ``properties.storageAccount``.
         """
-        return CatalogItem.from_json(self._c.get(R.workspace_info(self.name)))
+        return CatalogItem.from_json(
+            self._c.get(f"/v2/workspaces/{self.name}/info")
+        )
 
     def close(self) -> None:
         """A scoped workspace does not own the root client's connection."""

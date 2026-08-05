@@ -1,10 +1,8 @@
 """Every SDK call must match an operation the daemon actually serves.
 
-``routes.py`` single-sources the *path*, which is why a typo there is an
-import error. It does not single-source the verb, the query parameters, or
-which operations exist — the client writing ``params={"regoin": ...}`` and the
-server declaring ``region`` still type-check and still pass unit tests, then
-silently ignore the filter in production.
+SDK and server intentionally use direct HTTP strings rather than a shared route
+builder. The client writing ``params={"regoin": ...}`` while the server
+declares ``region`` would otherwise type-check and silently ignore the filter.
 
 FastAPI already publishes all of that in ``/openapi.json``. So rather than
 generate the client from the schema (which would cost the namespace ergonomics

@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any
 
 from azure_jobs.sdk._resource import Namespace
 from azure_jobs.sdk.workspace import WorkspaceClient
-from azure_jobs.shared.contract import routes as R
+from azure_jobs.shared.contract.http import DEFAULT_WORKSPACE
 from azure_jobs.shared.contract.models import CatalogItem, Target
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -27,14 +27,14 @@ class AuthNamespace(Namespace):
 
     def status(self) -> dict[str, Any]:
         """``{"signed_in": bool, "account": {...}|None, "credential": {...}}``."""
-        return dict(self._c.get(R.auth_status()) or {})
+        return dict(self._c.get("/v2/auth/status") or {})
 
 
 class SubscriptionNamespace(Namespace):
     """``d.subscription`` — subscriptions the sign-in can see."""
 
     def list(self) -> list[CatalogItem]:
-        return self._items(R.subscriptions())
+        return self._items("/v2/subscriptions")
 
 
 class SkuNamespace(Namespace):
@@ -44,7 +44,9 @@ class SkuNamespace(Namespace):
         self, *, region: str = "", subscription_id: str = ""
     ) -> list[CatalogItem]:
         return self._items(
-            R.instance_types(), region=region, subscription_id=subscription_id
+            "/v2/instance-types",
+            region=region,
+            subscription_id=subscription_id,
         )
 
 
@@ -52,21 +54,24 @@ class StorageAccountNamespace(Namespace):
     """``d.sa`` — storage accounts, for datastore and upload wiring."""
 
     def list(self, *, subscription_id: str = "") -> list[CatalogItem]:
-        return self._items(R.storage_accounts(), subscription_id=subscription_id)
+        return self._items(
+            "/v2/storage-accounts",
+            subscription_id=subscription_id,
+        )
 
 
 class IdentityNamespace(Namespace):
     """``d.uai`` — user-assigned managed identities."""
 
     def list(self, *, subscription_id: str = "") -> list[CatalogItem]:
-        return self._items(R.identities(), subscription_id=subscription_id)
+        return self._items("/v2/identities", subscription_id=subscription_id)
 
 
 class ImageNamespace(Namespace):
     """``d.image`` — Singularity images a job can run on."""
 
     def list(self, *, subscription_id: str = "") -> list[CatalogItem]:
-        return self._items(R.images(), subscription_id=subscription_id)
+        return self._items("/v2/images", subscription_id=subscription_id)
 
 
 class QuotaNamespace(Namespace):
@@ -79,7 +84,7 @@ class QuotaNamespace(Namespace):
         self, *, include_zero: bool = False, subscription_id: str = ""
     ) -> list[CatalogItem]:
         return self._items(
-            R.vc_quota(),
+            "/v2/vc-quota",
             include_zero=include_zero,
             subscription_id=subscription_id,
         )
@@ -101,7 +106,7 @@ class ComputeNamespace(Namespace):
         subscription_id: str = "",
     ) -> list[CatalogItem]:
         return self._items(
-            R.account_computes(),
+            "/v2/computes",
             resource_group=resource_group,
             workspace=workspace,
             subscription_id=subscription_id,
@@ -133,7 +138,7 @@ class WorkspaceNamespace(Namespace):
 
     def list(self, *, subscription_id: str = "") -> list[Target]:
         rows = self._c.get(
-            R.workspaces(),
+            "/v2/workspaces",
             params={"subscription_id": subscription_id} if subscription_id else None,
         )
         return [Target.from_json(row) for row in rows or ()]
@@ -144,11 +149,13 @@ class WorkspaceNamespace(Namespace):
         Answers ``None`` rather than raising so a caller can ask whether setup
         has happened without handling an error.
         """
-        payload = self._c.get(R.current_workspace())
+        payload = self._c.get(f"/v2/workspaces/{DEFAULT_WORKSPACE}")
         return Target.from_json(payload) if payload else None
 
     def get(self, ws_name: str) -> Target | None:
-        payload = self._c.get(R.workspace(ws_name))
+        payload = self._c.get(
+            f"/v2/workspaces/{ws_name or DEFAULT_WORKSPACE}"
+        )
         return Target.from_json(payload) if payload else None
 
     def jobs(self, *, limit: int, cutoff_days: int = 0) -> dict[str, Any]:
@@ -159,7 +166,8 @@ class WorkspaceNamespace(Namespace):
         """
         return dict(
             self._c.get(
-                R.all_jobs(), params={"limit": limit, "cutoff_days": cutoff_days}
+                "/v2/jobs",
+                params={"limit": limit, "cutoff_days": cutoff_days},
             )
             or {"jobs": [], "failures": []}
         )
@@ -167,7 +175,7 @@ class WorkspaceNamespace(Namespace):
     def computes(self) -> dict[str, Any]:
         """``{"pairs": [{"workspace": {...}, "computes": [...]}], "failures": []}``."""
         return dict(
-            self._c.get(R.workspace_computes())
+            self._c.get("/v2/workspace-computes")
             or {"pairs": [], "failures": []}
         )
 

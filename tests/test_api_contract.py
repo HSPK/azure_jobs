@@ -1,9 +1,4 @@
-"""Contract equivalence: a frontend must not be able to tell the transports apart.
-
-Every test here runs twice — once against the in-process backend and once
-against the same backend served by a real daemon over a real Unix socket.
-Tests assert against the contract, never against one implementation.
-"""
+"""SDK behavior through a real daemon backed by deterministic resources."""
 
 from __future__ import annotations
 
@@ -14,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from azure_jobs.shared.contract import routes as R
+from azure_jobs.shared.contract import http as H
 from azure_jobs.sdk import AjClient
 from azure_jobs.sdk._transport import DaemonClient, _reachable
 from azure_jobs.server.runner import Daemon
@@ -226,41 +221,41 @@ class TestApiCoverage:
             getattr(r, "path", "") for r in create_app(DaemonState()).routes
         }
         required = {
-            R.ping(),
-            R.info(),
-            R.retire(),
-            R.events(),
-            R.workspaces(),
-            R.auth_status(),
-            R.workspace("{ws}"),
-            R.jobs("{ws}"),
-            R.jobs_fetch("{ws}"),
-            R.job("{ws}", "{job_id}"),
-            R.job_cancel("{ws}", "{job_id}"),
-            R.job_logs("{ws}", "{job_id}"),
-            R.job_log_content("{ws}", "{job_id}"),
-            R.job_log_download("{ws}", "{job_id}"),
-            R.workspace_info("{ws}"),
-            R.datastores("{ws}"),
-            R.datastore("{ws}", "{name}"),
-            R.environments("{ws}"),
-            R.environment_versions("{ws}", "{name}"),
-            R.computes("{ws}"),
-            R.quota("{ws}"),
-            R.subscriptions(),
-            R.storage_accounts(),
-            R.identities(),
-            R.instance_types(),
-            R.images(),
-            R.vc_quota(),
-            R.account_computes(),
-            R.workspace_computes(),
-            R.all_jobs(),
-            R.submissions("{ws}"),
-            R.queue("{ws}"),
-            R.queue_ticket("{ws}", "{ticket}"),
-            R.watches("{ws}"),
-            R.watch_job("{ws}", "{job_id}"),
+            "/v2/ping",
+            "/v2/info",
+            "/v2/retire",
+            "/v2/events",
+            "/v2/auth/status",
+            "/v2/subscriptions",
+            "/v2/storage-accounts",
+            "/v2/identities",
+            "/v2/instance-types",
+            "/v2/images",
+            "/v2/vc-quota",
+            "/v2/computes",
+            "/v2/workspace-computes",
+            "/v2/jobs",
+            "/v2/workspaces",
+            "/v2/workspaces/{ws}",
+            "/v2/workspaces/{ws}/jobs",
+            "/v2/workspaces/{ws}/jobs:fetch",
+            "/v2/workspaces/{ws}/jobs/{job_id}",
+            "/v2/workspaces/{ws}/jobs/{job_id}/cancel",
+            "/v2/workspaces/{ws}/jobs/{job_id}/logs",
+            "/v2/workspaces/{ws}/jobs/{job_id}/logs/content",
+            "/v2/workspaces/{ws}/jobs/{job_id}/logs/download",
+            "/v2/workspaces/{ws}/info",
+            "/v2/workspaces/{ws}/datastores",
+            "/v2/workspaces/{ws}/datastores/{name}",
+            "/v2/workspaces/{ws}/environments",
+            "/v2/workspaces/{ws}/environments/{name}/versions",
+            "/v2/workspaces/{ws}/computes",
+            "/v2/workspaces/{ws}/quota",
+            "/v2/workspaces/{ws}/submissions",
+            "/v2/workspaces/{ws}/queue",
+            "/v2/workspaces/{ws}/queue/{ticket}",
+            "/v2/workspaces/{ws}/watches",
+            "/v2/workspaces/{ws}/watches/{job_id}",
         }
         assert required <= paths, required - paths
 
@@ -280,15 +275,14 @@ class TestApiVersioning:
     def test_info_advertises_the_supported_range(self):
         harness = _over_daemon()
         try:
-            info = harness.rpc.get(R.info())
-            assert info["api_version"] == R.API_VERSION
-            assert info["min_api_version"] == R.MIN_API_VERSION
+            info = harness.rpc.get("/v2/info")
+            assert info["api_version"] == H.API_VERSION
+            assert info["min_api_version"] == H.MIN_API_VERSION
         finally:
             harness.close()
 
     def test_routes_are_version_prefixed(self):
-        assert R.ping().startswith("/v2/")
-        assert R.jobs("t").startswith("/v2/")
+        assert H.API_PREFIX == "/v2"
 
     def test_an_unknown_workspace_is_an_error_not_a_crash(self):
         harness = _over_daemon()
@@ -297,7 +291,7 @@ class TestApiVersioning:
             from azure_jobs.shared.errors import WorkspaceError
 
             with pytest.raises(WorkspaceError) as caught:
-                harness.rpc.get(R.jobs("no-such-workspace"))
+                harness.rpc.get("/v2/workspaces/no-such-workspace/jobs")
             assert "not found" in str(caught.value)
             # Not a transport failure: callers may retry connectivity, but a
             # workspace the daemon rejected will not become valid by replaying.
@@ -310,7 +304,7 @@ class TestApiVersioning:
         harness = _over_daemon()
         try:
             target = make_target()
-            resolved = harness.rpc.get(R.workspace(target.label))
+            resolved = harness.rpc.get(f"/v2/workspaces/{target.label}")
             assert resolved["label"] == target.label
         finally:
             harness.close()
@@ -321,7 +315,8 @@ class TestApiVersioning:
             target = make_target()
             for _ in range(3):
                 harness.rpc.get(
-                    R.jobs(target.label), params={"limit": 1}
+                    f"/v2/workspaces/{target.label}/jobs",
+                    params={"limit": 1},
                 )
             # One backend: the context is cached per (root, workspace).
             assert len(harness.factory.apis) == 1

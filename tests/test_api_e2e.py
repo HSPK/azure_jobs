@@ -18,7 +18,7 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
-from azure_jobs.shared.contract import routes as R
+from azure_jobs.shared.contract import http as H
 from azure_jobs.sdk._transport import DaemonClient, _reachable
 from azure_jobs.shared.contract.errors import DaemonUnavailable
 from azure_jobs.shared.version import aj_version
@@ -87,10 +87,10 @@ class TestLiveDaemonProcess:
         sock, proc = live_daemon
         client = DaemonClient(sock, sock.parent)
         try:
-            assert client.get(R.ping())["pong"] is True
-            info = client.get(R.info())
+            assert client.get("/v2/ping")["pong"] is True
+            info = client.get("/v2/info")
             assert info["pid"] == proc.pid
-            assert info["api_version"] == R.API_VERSION
+            assert info["api_version"] == H.API_VERSION
         finally:
             client.close()
 
@@ -124,7 +124,7 @@ class TestLiveDaemonProcess:
         clients = [DaemonClient(sock, sock.parent) for _ in range(8)]
         try:
             for client in clients:
-                assert client.get(R.ping())["pong"] is True
+                assert client.get("/v2/ping")["pong"] is True
         finally:
             for client in clients:
                 client.close()
@@ -140,7 +140,7 @@ class TestLiveDaemonProcess:
 
         client = DaemonClient(sock, sock.parent)
         try:
-            assert client.get(R.ping())["pong"] is True
+            assert client.get("/v2/ping")["pong"] is True
         finally:
             client.close()
 
@@ -232,7 +232,7 @@ class TestQueueOverTheRealDaemon:
 
         client = DaemonClient(sock, tmp_path)
         entry = client.post(
-            R.queue(target.label),
+            f"/v2/workspaces/{target.label}/queue",
             json={
                 "payload": {"name": "job-1", "service": "nonexistent-backend"},
                 "name": "job-1",
@@ -247,7 +247,9 @@ class TestQueueOverTheRealDaemon:
         try:
             deadline = time.time() + 30
             while time.time() < deadline:
-                current = other.get(R.queue_ticket(target.label, ticket))
+                current = other.get(
+                    f"/v2/workspaces/{target.label}/queue/{ticket}"
+                )
                 if current["state"] in ("done", "failed", "cancelled"):
                     break
                 time.sleep(0.1)
@@ -263,7 +265,7 @@ class TestQueueOverTheRealDaemon:
 
         first = DaemonClient(sock, tmp_path)
         first.post(
-            R.queue(target.label),
+            f"/v2/workspaces/{target.label}/queue",
             json={
                 "payload": {"name": "job-a", "service": "nonexistent-backend"},
                 "name": "job-a",
@@ -273,7 +275,12 @@ class TestQueueOverTheRealDaemon:
 
         second = DaemonClient(sock, tmp_path)
         try:
-            names = [e["name"] for e in second.get(R.queue(target.label))]
+            names = [
+                entry["name"]
+                for entry in second.get(
+                    f"/v2/workspaces/{target.label}/queue"
+                )
+            ]
             assert names == ["job-a"]
         finally:
             second.close()

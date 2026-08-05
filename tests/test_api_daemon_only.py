@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from azure_jobs.shared.contract import routes as R
+from azure_jobs.shared.contract import http as H
 from azure_jobs.shared.contract.models import Job, JobRef, SubmitOutcome
 from azure_jobs.server.queue import SubmissionQueue
 from azure_jobs.server.watch import JobWatcher
@@ -122,12 +122,12 @@ class TestVersionRangeNegotiation:
     """P0: an exact match forced a daemon kill on every aj upgrade."""
 
     def test_the_range_is_declared(self):
-        assert R.MIN_API_VERSION <= R.API_VERSION
+        assert H.MIN_API_VERSION <= H.API_VERSION
 
     def test_info_reports_the_range(self, local_daemon):
         info = local_daemon.info()
-        assert info["min_api_version"] == R.MIN_API_VERSION
-        assert info["api_version"] == R.API_VERSION
+        assert info["min_api_version"] == H.MIN_API_VERSION
+        assert info["api_version"] == H.API_VERSION
 
 
 class TestRetireNeverKillsRunningWork:
@@ -217,14 +217,13 @@ class TestServerOwnsConnectionResources:
 
     def test_many_short_lived_clients_leave_nothing_behind(self, local_daemon):
         from azure_jobs.sdk._transport import DaemonClient
-        from azure_jobs.shared.contract import routes as R
 
         before = threading.active_count()
         for _ in range(20):
             client = DaemonClient(
                 local_daemon.socket_path, local_daemon.socket_path.parent
             )
-            client.get(R.ping())
+            client.get("/v2/ping")
             client.close()
         time.sleep(0.5)
         # Allow a little slack for uvicorn's own pool, but not 20 new threads.
@@ -233,11 +232,13 @@ class TestServerOwnsConnectionResources:
 
 def _retire(daemon, *, drain_timeout=None):
     from azure_jobs.sdk._transport import DaemonClient
-    from azure_jobs.shared.contract import routes as R
 
     client = DaemonClient(daemon.socket_path, daemon.socket_path.parent)
     try:
-        return client.post(R.retire(), json={"drain_timeout": drain_timeout})
+        return client.post(
+            "/v2/retire",
+            json={"drain_timeout": drain_timeout},
+        )
     finally:
         client.close()
 
@@ -268,11 +269,13 @@ class TestRequestsAreMultiplexed:
 
     def test_a_slow_call_does_not_block_the_connection(self, local_daemon):
         from azure_jobs.sdk._transport import DaemonClient
-        from azure_jobs.shared.contract import routes as R
 
         target = local_daemon.target
         client = DaemonClient(local_daemon.socket_path, local_daemon.socket_path.parent)
-        client.get(R.jobs(target.label), params={"limit": 1})
+        client.get(
+            f"/v2/workspaces/{target.label}/jobs",
+            params={"limit": 1},
+        )
 
         api = local_daemon.factory.apis[0]
         gate = threading.Event()
@@ -286,12 +289,15 @@ class TestRequestsAreMultiplexed:
         waited: dict[str, float] = {}
 
         def slow_call():
-            client.get(R.job(target.id, "a"), params={"backend_ref": "a"})
+            client.get(
+                f"/v2/workspaces/{target.id}/jobs/a",
+                params={"backend_ref": "a"},
+            )
 
         def fast_call():
             time.sleep(0.3)
             started = time.time()
-            client.get(R.ping())
+            client.get("/v2/ping")
             waited["fast"] = time.time() - started
             gate.set()
 
@@ -305,7 +311,6 @@ class TestRequestsAreMultiplexed:
 
     def test_concurrent_requests_all_get_their_own_reply(self, local_daemon):
         from azure_jobs.sdk._transport import DaemonClient
-        from azure_jobs.shared.contract import routes as R
 
         client = DaemonClient(local_daemon.socket_path, local_daemon.socket_path.parent)
         results: list = []
@@ -313,7 +318,7 @@ class TestRequestsAreMultiplexed:
 
         def call() -> None:
             try:
-                results.append(client.get(R.info())["pid"])
+                results.append(client.get("/v2/info")["pid"])
             except BaseException as exc:
                 errors.append(exc)
 
