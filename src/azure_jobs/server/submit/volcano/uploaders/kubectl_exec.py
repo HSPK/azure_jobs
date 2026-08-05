@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from .. import constants as C
+from ..config import pvc_code_path
 from ..upload import upload_code_to_pvc
 from .base import CodeUploader, CodeUploadResult, EmitFn
 
@@ -37,7 +37,7 @@ class KubectlExecUploader(CodeUploader):
         if not ok:
             return CodeUploadResult(ok=False, error=err)
 
-        code_path = f"{cfg.pvc_mount_dir}/{C.CODE_UPLOAD_PREFIX}/{cfg.name}"
+        code_path = pvc_code_path(cfg)
         return CodeUploadResult(
             ok=True,
             pod_setup_lines=[],

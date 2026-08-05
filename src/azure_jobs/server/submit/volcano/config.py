@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import logging
+import hashlib
 import os
+import shlex
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -80,6 +82,25 @@ class VolcanoConfig:
     pvc_name: str = ""
     pvc_mount_dir: str = ""
     storage: dict[str, Any] = field(default_factory=dict)
+
+
+def code_asset_name(name: str) -> str:
+    """Stable filesystem-safe name shared by upload and pod setup."""
+    normalized = sanitize_dns1035(name, max_length=C.JOB_NAME_MAX_LEN)
+    if normalized == name.lower():
+        return normalized
+    digest = hashlib.sha256(name.encode("utf-8")).hexdigest()[:8]
+    base = sanitize_dns1035(
+        name,
+        max_length=C.JOB_NAME_MAX_LEN - len(digest) - 1,
+    )
+    return f"{base}-{digest}"
+
+
+def pvc_code_path(cfg: VolcanoConfig) -> str:
+    return (
+        f"{cfg.pvc_mount_dir}/{C.CODE_UPLOAD_PREFIX}/{code_asset_name(cfg.name)}"
+    )
 
 def build_volcano_config_from_request(request: JobSpec) -> VolcanoConfig:
     """Translate a :class:JobSpec into a VolcanoConfig."""
@@ -173,7 +194,7 @@ def build_volcano_job(
 
     if code_path is None:
         code_path = (
-            f"{cfg.pvc_mount_dir}/{C.CODE_UPLOAD_PREFIX}/{cfg.name}"
+            pvc_code_path(cfg)
             if cfg.pvc_name and cfg.pvc_mount_dir
             else ""
         )
@@ -186,12 +207,12 @@ def build_volcano_job(
     if code_setup_lines:
         script_lines.extend(code_setup_lines)
     if code_path:
-        run_wd = f"{C.WORKDIR_MOUNT_PATH}/{cfg.name}/wd"
+        run_wd = f"{C.WORKDIR_MOUNT_PATH}/{code_asset_name(cfg.name)}/wd"
         script_lines.extend(
             [
-                f'AJ_WORKDIR="{run_wd}"',
+                f"AJ_WORKDIR={shlex.quote(run_wd)}",
                 'mkdir -p "$AJ_WORKDIR"',
-                f'cp -a {code_path}/. "$AJ_WORKDIR"/',
+                f"cp -a {shlex.quote(code_path)}/. \"$AJ_WORKDIR\"/",
                 'cd "$AJ_WORKDIR"',
                 "export AJ_WORKDIR",
             ]

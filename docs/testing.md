@@ -19,7 +19,7 @@ uv run pytest -q \
   --cov-report=term-missing
 ```
 
-CI enforces at least 75% combined line/branch coverage. Tests explicitly cover
+CI enforces at least 78% combined line/branch coverage. Tests explicitly cover
 typed exception round-trips, unknown remote errors, debug traceback behavior,
 HTTP decode failures, protocol mismatch, Azure data-plane fallbacks and
 resource cleanup.

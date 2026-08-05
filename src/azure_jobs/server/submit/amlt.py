@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import os
+import logging
+import signal
 import shutil
 import subprocess
+import threading
 from pathlib import Path
 from typing import Callable
 
@@ -11,6 +15,25 @@ from azure_jobs.shared.job.spec import JobEvent, JobResult, JobSpec
 from azure_jobs.shared.job.write import write_amlt_yaml
 
 from . import register_backend
+
+log = logging.getLogger(__name__)
+
+AMLT_RUN_TIMEOUT = float(os.getenv("AJ_AMLT_TIMEOUT", "1800"))
+AMLT_STOP_TIMEOUT = 5.0
+
+
+def _signal_process_tree(proc: subprocess.Popen, sig: signal.Signals) -> None:
+    """Signal AMLT and descendants that inherited its stdout."""
+    if os.name != "nt" and isinstance(getattr(proc, "pid", None), int):
+        try:
+            os.killpg(proc.pid, sig)
+            return
+        except ProcessLookupError:
+            return
+        except OSError:
+            pass
+    action = proc.terminate if sig == signal.SIGTERM else proc.kill
+    action()
 
 
 def amlt_available() -> bool:
@@ -55,6 +78,7 @@ def submit_via_amlt(
             stderr=subprocess.STDOUT,
             text=True,
             bufsize=1,
+            start_new_session=(os.name != "nt"),
         )
         try:
             proc.stdin.write("\n\n\n")  # type: ignore[union-attr]
@@ -63,13 +87,46 @@ def submit_via_amlt(
             pass
 
         output_lines: list[str] = []
-        for line in proc.stdout:  # type: ignore[union-attr]
-            line = line.rstrip()
-            if not line:
-                continue
-            output_lines.append(line)
-            emit(JobEvent(kind="log", detail=line))
-        proc.wait()
+
+        def drain_stdout() -> None:
+            try:
+                for line in proc.stdout:  # type: ignore[union-attr]
+                    line = line.rstrip()
+                    if not line:
+                        continue
+                    output_lines.append(line)
+            except (OSError, ValueError):
+                # Main thread may close the pipe after killing descendants.
+                return
+
+        reader = threading.Thread(target=drain_stdout, daemon=True)
+        reader.start()
+        try:
+            proc.wait(timeout=AMLT_RUN_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            _signal_process_tree(proc, signal.SIGTERM)
+            try:
+                proc.wait(timeout=AMLT_STOP_TIMEOUT)
+            except subprocess.TimeoutExpired:
+                _signal_process_tree(proc, signal.SIGKILL)
+                proc.wait(timeout=AMLT_STOP_TIMEOUT)
+            raise
+        finally:
+            reader.join(timeout=AMLT_STOP_TIMEOUT)
+            if reader.is_alive():
+                # Parent exited but a descendant still owns the pipe.
+                _signal_process_tree(proc, signal.SIGTERM)
+                reader.join(timeout=AMLT_STOP_TIMEOUT)
+            if reader.is_alive():
+                _signal_process_tree(proc, signal.SIGKILL)
+                reader.join(timeout=AMLT_STOP_TIMEOUT)
+            if reader.is_alive():
+                log.error(
+                    "AMLT stdout reader did not stop after process-group kill; "
+                    "continuing without closing the pipe concurrently"
+                )
+            for line in output_lines:
+                emit(JobEvent(kind="log", detail=line))
 
         if proc.returncode != 0:
             note = "\n".join(output_lines[-10:]) or "amlt run failed"

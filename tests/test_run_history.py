@@ -49,6 +49,10 @@ def test_get_run_handles_not_found_and_success() -> None:
     assert api.get_run("missing") == {}
     assert api.get_run("job") == {"runId": "job"}
     assert ctx.session.get.call_count == 2
+    assert (
+        ctx.session.get.call_args.kwargs["headers"]["Authorization"]
+        == "Bearer token"
+    )
 
 
 def test_get_run_raises_other_http_failures() -> None:
