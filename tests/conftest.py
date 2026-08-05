@@ -131,8 +131,14 @@ def local_daemon(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _stub_azure_resolvers():
+def _stub_azure_resolvers(request):
     """Avoid hitting Azure Resource Graph / ARM during submit pipeline tests."""
+    if (
+        request.node.get_closest_marker("live") is not None
+        or request.node.get_closest_marker("azure_unit") is not None
+    ):
+        yield
+        return
     from azure_jobs.shared.types.azure import VCInfo, WorkspaceInfo
 
     fake_vc = VCInfo(

@@ -28,6 +28,7 @@ from azure_jobs.shared.contract import http as H
 from azure_jobs.shared.contract.errors import (
     DaemonStartupRefused,
     DaemonUnavailable,
+    ProtocolMismatch,
     TransportError,
     error_from_json,
 )
@@ -66,14 +67,14 @@ def socket_path() -> Path:
     return runtime_dir() / "daemon.sock"
 
 
-def daemon_required(exc: BaseException) -> DaemonUnavailable:
+def daemon_required(exc: BaseException) -> TransportError:
     """Explain how to recover from an unreachable daemon.
 
     An exception that already says what to do is passed through: the daemon
     refusing to start because Azure is not signed in needs ``az login``, and
     burying that under "run aj daemon start" points the user the wrong way.
     """
-    if isinstance(exc, DaemonStartupRefused):
+    if isinstance(exc, (DaemonStartupRefused, ProtocolMismatch)):
         return exc
     return DaemonUnavailable(
         f"The aj daemon is unavailable ({type(exc).__name__}: {exc}).\n"
@@ -383,7 +384,7 @@ def _check_version(info: Mapping[str, Any]) -> None:
     # Ranges overlap only if *both* hold; `or` would accept anything.
     if server_min <= H.API_VERSION and server_max >= H.MIN_API_VERSION:
         return
-    raise DaemonUnavailable(
+    raise ProtocolMismatch(
         f"Daemon speaks API {server_min}..{server_max}; this build speaks "
         f"{H.MIN_API_VERSION}..{H.API_VERSION}. Run 'aj daemon restart'."
     )

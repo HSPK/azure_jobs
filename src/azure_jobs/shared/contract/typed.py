@@ -39,6 +39,8 @@ def encode(value: Any) -> Any:
     """Serialise *value*, tagging registered types so they survive the trip."""
     if isinstance(value, dict):
         return {str(k): encode(v) for k, v in value.items()}
+    if hasattr(value, "_asdict"):
+        return encode(dict(value._asdict()))
     if isinstance(value, (list, tuple, set)):
         return [encode(v) for v in value]
     if isinstance(value, (str, int, float, bool)) or value is None:
@@ -47,8 +49,6 @@ def encode(value: Any) -> Any:
         data = {f.name: encode(getattr(value, f.name)) for f in fields(value)}
         data[TAG] = type(value).__name__
         return data
-    if hasattr(value, "_asdict"):
-        return encode(dict(value._asdict()))
     if hasattr(value, "__dict__"):
         data = {
             k: encode(v) for k, v in vars(value).items() if not k.startswith("_")

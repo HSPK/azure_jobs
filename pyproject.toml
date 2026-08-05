@@ -36,6 +36,11 @@ version-file = "src/azure_jobs/_version.py"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "stress: local concurrency/load tests that never submit real jobs",
+    "live: opt-in test that submits one real Azure job",
+    "azure_unit: mocked HTTP tests for real Azure resolver implementations",
+]
 
 [dependency-groups]
 dev = [
@@ -43,4 +48,14 @@ dev = [
     "mkdocs-material>=9.5",
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
+    "pytest-cov>=6.0",
 ]
+
+[tool.coverage.run]
+branch = true
+source = ["azure_jobs"]
+
+[tool.coverage.report]
+fail_under = 75
+show_missing = true
+skip_covered = false

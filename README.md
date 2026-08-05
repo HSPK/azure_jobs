@@ -191,5 +191,6 @@ namespaces.
 | [Architecture](docs/architecture.md) | Module layout, submission flow, backends |
 | [Configuration](docs/configuration.md) | Templates, inheritance, merge rules, SKU formats |
 | [REST API](docs/rest-api.md) | REST client design, endpoints, job body shape |
+| [Testing](docs/testing.md) | Unit, coverage, stress, and opt-in live E2E |
 | [Comparison](docs/comparison.md) | aj vs amlt feature matrix |
 | [Roadmap](docs/roadmap.md) | Planned features |
