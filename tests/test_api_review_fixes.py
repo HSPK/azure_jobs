@@ -18,7 +18,7 @@ import pytest
 from azure_jobs import connect
 from azure_jobs.sdk._transport import secure_runtime_dir
 from azure_jobs.shared.contract.errors import DaemonUnavailable, TransportError
-from azure_jobs.server.backend import _spec_from_payload
+from azure_jobs.server.resources import _spec_from_payload
 from azure_jobs.shared.contract.models import JobRef, SubmitOutcome, Target
 from azure_jobs.server.queue import SubmissionQueue
 from azure_jobs.shared.job.spec import JobSpec
@@ -167,6 +167,24 @@ class TestQueueJournalPermissions:
         assert journal.exists()
         assert journal.stat().st_mode & 0o077 == 0
         assert journal.parent.stat().st_mode & 0o077 == 0
+
+
+class TestWorkspaceAPIClose:
+    def test_both_clients_close_when_one_raises(self):
+        from unittest.mock import MagicMock
+
+        from azure_jobs.server.resources import WorkspaceAPI
+
+        workspace = MagicMock()
+        workspace.close.side_effect = RuntimeError("workspace close failed")
+        azure = MagicMock()
+        api = WorkspaceAPI(make_target(), client=workspace, azure=azure)
+
+        with pytest.raises(RuntimeError, match="workspace close failed"):
+            api.close()
+
+        workspace.close.assert_called_once_with()
+        azure.close.assert_called_once_with()
 
 
 class TestTokenCacheIdentity:
@@ -348,7 +366,7 @@ class TestWorkspaceComputesShape:
             yield _Azure()
 
         monkeypatch.setattr(
-            "azure_jobs.server.backend.azure_client", fake_azure
+            "azure_jobs.server.resources.azure_client", fake_azure
         )
 
     def test_pairs_are_plain_json_ready_dicts(self, monkeypatch):
@@ -363,7 +381,7 @@ class TestWorkspaceComputesShape:
             subscription_id="s",
             workspace_name="ws",
         )
-        from azure_jobs.server.backend import workspace_computes
+        from azure_jobs.server.resources import workspace_computes
 
         self._patch_azure(monkeypatch, [(ws, [compute])])
         result = workspace_computes("sub")
@@ -375,7 +393,7 @@ class TestWorkspaceComputesShape:
         json.dumps(result)
 
     def test_subscriptions_carry_their_id_as_the_name(self):
-        from azure_jobs.server.backend import subscription_items
+        from azure_jobs.server.resources import subscription_items
 
         items = subscription_items(["sub-aaa", "sub-bbb"])
         assert [i.name for i in items] == ["sub-aaa", "sub-bbb"]

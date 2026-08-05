@@ -55,8 +55,6 @@ class FakeJobs:
         self.deleted: list[str] = []
         self.current_status = "Running"
         self.raises: BaseException | None = None
-        self.submit_calls: list[dict] = []
-        self.submit_fail = False
         self.lock = threading.Lock()
 
     def page(
@@ -109,22 +107,6 @@ class FakeJobs:
         if status:
             jobs = [j for j in jobs if j.status.lower() == status.lower()]
         return jobs[:limit]
-
-    def submit(self, payload: dict, *, on_event: Any = None) -> SubmitOutcome:
-        self.submit_calls.append(dict(payload))
-        if self.submit_fail:
-            return SubmitOutcome(
-                job_name=str(payload.get("name") or "j"),
-                status="failed",
-                error="submission refused",
-            )
-        return SubmitOutcome(
-            job_name=str(payload.get("name") or "j"),
-            backend_ref="azure-name",
-            status="submitted",
-            note="ok",
-        )
-
 
 class FakeReader:
     def __init__(self, blob: bytes) -> None:
@@ -193,12 +175,34 @@ class FakeQuota:
         return [CatalogItem("quota", "NDv4", {"limit": 100})]
 
 
+class FakeSubmissions:
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+        self.fail = False
+
+    def submit(self, payload: dict, *, on_event: Any = None) -> SubmitOutcome:
+        self.calls.append(dict(payload))
+        if self.fail:
+            return SubmitOutcome(
+                job_name=str(payload.get("name") or "j"),
+                status="failed",
+                error="submission refused",
+            )
+        return SubmitOutcome(
+            job_name=str(payload.get("name") or "j"),
+            backend_ref="azure-name",
+            status="submitted",
+            note="ok",
+        )
+
+
 class FakeWorkspaceAPI:
     """In-process workspace API with the same resource shape as the server."""
 
     def __init__(self, target: Target) -> None:
         self.target = target
         self.job = FakeJobs()
+        self.submission = FakeSubmissions()
         self.log = FakeLogs()
         self.ds = FakeDatastores()
         self.env = FakeEnvironments()

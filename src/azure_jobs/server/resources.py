@@ -1,15 +1,14 @@
-"""The Azure implementation of the capability contract.
+"""Wire-facing workspace resources and cross-workspace aggregations.
 
-This is what the daemon runs, and the only place that talks to ``az_client``.
-Clients never construct it: they reach it over the socket, so there is exactly
-one execution path and no mode that behaves subtly differently.
+Submission backends live under :mod:`azure_jobs.server.submit`; this module
+only adapts Azure HTTP rows to the daemon's resource API.
 """
 
 from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from typing import Any
 
 from azure_jobs.server.azure import AzureRangeLogReader
@@ -111,17 +110,15 @@ class WorkspaceJobs:
         )
         return [self._job(value) for value in values]
 
-    def submit(
-        self,
-        payload: dict,
-        *,
-        on_event: EventSink = None,
-    ) -> SubmitOutcome:
+class WorkspaceSubmissions:
+    """Submission payload reconstruction and backend dispatch."""
+
+    def submit(self, payload: dict, *, on_event: EventSink = None) -> SubmitOutcome:
         from azure_jobs.server.submit import get_backend
         from azure_jobs.shared.job.spec import JobEvent
 
         spec = _spec_from_payload(payload)
-        backend = get_backend(spec.service)
+        submission_backend = get_backend(spec.service)
 
         def relay(event: JobEvent) -> None:
             if on_event is not None:
@@ -134,7 +131,7 @@ class WorkspaceJobs:
                     )
                 )
 
-        result = backend.fn(spec, on_event=relay)
+        result = submission_backend.fn(spec, on_event=relay)
         return SubmitOutcome(
             job_name=result.job_name,
             backend_ref=result.azure_name,
@@ -175,17 +172,13 @@ class WorkspaceDatastores:
         self._api = client.ds
 
     def list(self) -> list[CatalogItem]:
-        return [
-            CatalogItem("datastore", _name_of(item), item)
-            for item in _as_dicts(self._api.list())
-        ]
+        return catalog_items("datastore", self._api.list())
 
     def get(self, name: str) -> CatalogItem | None:
         value = self._api.get(name)
         if not value:
             return None
-        data = _as_dicts([value])[0]
-        return CatalogItem("datastore", (_name_of(data) or name), data)
+        return catalog_items("datastore", [value], default_name=name)[0]
 
 
 class WorkspaceEnvironments:
@@ -193,16 +186,14 @@ class WorkspaceEnvironments:
         self._api = client.env
 
     def list(self) -> list[CatalogItem]:
-        return [
-            CatalogItem("environment", _name_of(item), item)
-            for item in _as_dicts(self._api.list())
-        ]
+        return catalog_items("environment", self._api.list())
 
     def versions(self, name: str) -> list[CatalogItem]:
-        return [
-            CatalogItem("environment_version", (_name_of(item) or name), item)
-            for item in _as_dicts(self._api.list_versions(name))
-        ]
+        return catalog_items(
+            "environment_version",
+            self._api.list_versions(name),
+            default_name=name,
+        )
 
 
 class WorkspaceComputes:
@@ -217,10 +208,7 @@ class WorkspaceComputes:
             str(metadata.get("resource_group") or ""),
             str(metadata.get("workspace_name") or ""),
         )
-        return [
-            CatalogItem("compute", _name_of(item), item)
-            for item in _as_dicts(values)
-        ]
+        return catalog_items("compute", values)
 
 
 class WorkspaceQuota:
@@ -234,10 +222,7 @@ class WorkspaceQuota:
         values = self._azure.quota.list(
             [subscription_id] if subscription_id else None
         )
-        return [
-            CatalogItem("quota", _name_of(item), item)
-            for item in _as_dicts(values)
-        ]
+        return catalog_items("quota", values)
 
 
 def workspace_computes(subscription_id: str = "") -> dict[str, Any]:
@@ -324,9 +309,14 @@ def azure_client() -> Any:
             close()
 
 
-def catalog_items(category: str, values: Any) -> list[CatalogItem]:
+def catalog_items(
+    category: str,
+    values: Any,
+    *,
+    default_name: str = "",
+) -> list[CatalogItem]:
     return [
-        CatalogItem(category, _name_of(value), value)
+        CatalogItem(category, _name_of(value) or default_name, value)
         for value in _as_dicts(values)
     ]
 
@@ -426,6 +416,7 @@ class WorkspaceAPI:
         self._client = client if client is not None else _open_client(target)
         self._azure = azure if azure is not None else AzureClient()
         self.job = WorkspaceJobs(self._client, target)
+        self.submission = WorkspaceSubmissions()
         self.log = WorkspaceLogs(self._client)
         self.ds = WorkspaceDatastores(self._client)
         self.env = WorkspaceEnvironments(self._client)
@@ -441,11 +432,9 @@ class WorkspaceAPI:
         )
 
     def close(self) -> None:
-        for client in (self._client, self._azure):
-            try:
-                client.close()
-            except Exception:
-                log.debug("Failed to close a workspace API client", exc_info=True)
+        with ExitStack() as stack:
+            stack.callback(self._azure.close)
+            stack.callback(self._client.close)
 
 
 def _open_client(target: Target) -> Any:
@@ -483,6 +472,7 @@ __all__ = [
     "WorkspaceJobs",
     "WorkspaceLogs",
     "WorkspaceQuota",
+    "WorkspaceSubmissions",
     "azure_client",
     "catalog_items",
     "image_items",

@@ -96,7 +96,7 @@ def test_there_is_one_canonical_job_model():
 
 
 #: The Azure adapter layer. Everything else in api/ reaches Azure through it.
-AZURE_ADAPTER_FILES = ("backend.py", "azure.py")
+AZURE_ADAPTER_FILES = ("resources.py", "azure.py")
 
 
 def _layer_of(path: Path) -> str:
@@ -175,8 +175,8 @@ def test_rendering_is_client_only():
 
 
 def test_within_the_server_only_the_adapter_reaches_the_sdk_directly():
-    """daemon/queue/watch go through backend.py, so one place owns the SDK."""
-    allowed = {"backend.py", "azure.py"}
+    """Daemon routes reach Azure through the resource adapters."""
+    allowed = {"resources.py", "azure.py"}
     offenders = []
     for path in SERVER.glob("*.py"):
         if path.name in allowed:
@@ -208,10 +208,20 @@ def test_only_the_transport_speaks_http():
 
 def test_context_and_server_api_use_the_client_resource_shape():
     """Routes reach resource namespaces directly, without a backend facade."""
-    from azure_jobs.server.backend import WorkspaceAPI
+    from azure_jobs.server.resources import WorkspaceAPI
     from azure_jobs.server.context import Context
 
-    expected = {"job", "log", "ds", "env", "compute", "quota", "info", "close"}
+    expected = {
+        "job",
+        "submission",
+        "log",
+        "ds",
+        "env",
+        "compute",
+        "quota",
+        "info",
+        "close",
+    }
     source = inspect.getsource(WorkspaceAPI)
     for attribute in expected:
         assert (
@@ -219,6 +229,27 @@ def test_context_and_server_api_use_the_client_resource_shape():
         ), f"WorkspaceAPI is missing {attribute}"
     for legacy in ("jobs", "actions", "delete_jobs", "logs", "catalog", "submitter"):
         assert f"self.{legacy}" not in source
+
+    from azure_jobs.server.resources import WorkspaceJobs
+
+    assert "def submit(" not in inspect.getsource(WorkspaceJobs)
+
+    from azure_jobs.server.resources import (
+        WorkspaceComputes,
+        WorkspaceDatastores,
+        WorkspaceEnvironments,
+        WorkspaceQuota,
+    )
+
+    for cls in (
+        WorkspaceDatastores,
+        WorkspaceEnvironments,
+        WorkspaceComputes,
+        WorkspaceQuota,
+    ):
+        adapter = inspect.getsource(cls)
+        assert "catalog_items(" in adapter, cls.__name__
+        assert "CatalogItem(" not in adapter, cls.__name__
 
     context_source = inspect.getsource(Context)
     assert "self.backend" not in context_source

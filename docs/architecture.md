@@ -172,7 +172,7 @@ src/azure_jobs/
     ├── discovery/     the only place `az` is executed
     ├── targets.py     workspace name → target
     ├── main.py
-    ├── backend.py     wire-model adapters + cross-workspace aggregations
+    ├── resources.py   wire-model adapters + cross-workspace aggregations
     ├── azure.py, queue.py, watch.py, concurrent.py
     ├── az_client/     the SDK layer
     └── submit/        how a job is *run*
@@ -224,7 +224,7 @@ d.sku.list()
 ```
 
 `Context` owns queue/watch persistence and aliases the resolved workspace
-resources directly. `backend.py` remains only where translation is real:
+resources directly. `resources.py` remains only where translation is real:
 Azure job rows → wire `Job`, range-log readers, `CatalogItem` tagging, submit
 payload reconstruction, and cross-workspace aggregation.
 

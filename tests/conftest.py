@@ -97,7 +97,7 @@ def cli_daemon(tmp_path, monkeypatch):
     process, those patches still apply, so the tests keep asserting real
     command behaviour while exercising the socket path.
     """
-    from azure_jobs.server.backend import WorkspaceAPIFactory
+    from azure_jobs.server.resources import WorkspaceAPIFactory
 
     from .api_fakes import make_target
 

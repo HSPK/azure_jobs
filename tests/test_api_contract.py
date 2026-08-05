@@ -177,7 +177,7 @@ class TestSubmitPort:
         assert outcome.backend_ref == "azure-name"
 
     def test_failed_submission_is_not_an_exception(self, harness):
-        harness.served.job.submit_fail = True
+        harness.served.submission.fail = True
         outcome = harness.backend.job.submit({"name": "job-2"})
         assert not outcome.succeeded
         assert outcome.error == "submission refused"

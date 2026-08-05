@@ -42,6 +42,7 @@ class Context:
         self.target = target
         self._api = api
         self.job = api.job
+        self.submission = api.submission
         self.log = api.log
         self.ds = api.ds
         self.env = api.env
@@ -51,7 +52,7 @@ class Context:
         self.touched = time.time()
         self._publish = publish
         self.queue = SubmissionQueue(
-            self.job.submit,
+            self.submission.submit,
             journal_path=root / "daemon" / f"queue-{target.id[:16]}.json",
         )
         self.watcher = JobWatcher(
@@ -90,8 +91,14 @@ class Context:
         self.watcher.stop()
         try:
             self._api.close()
-        except Exception:
-            log.exception("Failed to close the workspace API for %s", self.key)
+        except Exception as exc:
+            log.exception(
+                "Failed to close the workspace API for %s "
+                "(%s: %s). Set AJ_DEBUG=1 for a full traceback.",
+                self.key,
+                type(exc).__name__,
+                exc,
+            )
 
 
 #: Bounded so a long-lived daemon cannot accumulate one entry per name typed.
@@ -174,7 +181,7 @@ class ContextRegistry:
     def _open_api(self, target: Target) -> Any:
         if self._factory is not None:
             return self._factory.open(target)
-        from azure_jobs.server.backend import WorkspaceAPIFactory
+        from azure_jobs.server.resources import WorkspaceAPIFactory
 
         return WorkspaceAPIFactory().open(target)
 

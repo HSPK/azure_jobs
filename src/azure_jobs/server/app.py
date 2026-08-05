@@ -21,7 +21,7 @@ from typing import Any
 from fastapi import Body, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
-from azure_jobs.server.backend import (
+from azure_jobs.server.resources import (
     azure_client,
     catalog_items,
     image_items,
@@ -600,7 +600,7 @@ def create_app(state: DaemonState) -> FastAPI:
                     {"stream": stream_id, "event": event.to_json()},
                 )
 
-        outcome = context.job.submit(
+        outcome = context.submission.submit(
             dict(body.get("payload") or {}),
             on_event=relay if stream_id else None,
         )
