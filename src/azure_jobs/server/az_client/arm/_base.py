@@ -7,12 +7,12 @@ from typing import TYPE_CHECKING, Any
 from ..auth import MGMT, WorkspaceCoords
 
 if TYPE_CHECKING:
-    from . import AzureARMClient
+    from . import AzureClient
 
 class ArmNamespace:
-    """Base class for ARM namespace APIs (arm.vc, arm.compute, …)."""
+    """Base class for account-scoped Azure resource namespaces."""
 
-    def __init__(self, client: AzureARMClient) -> None:
+    def __init__(self, client: AzureClient) -> None:
         self._client = client
 
     def _get(self, url: str, **kw: Any) -> dict[str, Any]:

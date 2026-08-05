@@ -1,4 +1,4 @@
-"""Workspace datastore management (client.datastores)."""
+"""Workspace datastore management (client.ds)."""
 
 from __future__ import annotations
 

@@ -11,6 +11,10 @@ import click
 
 from azure_jobs.client.cli import main
 from azure_jobs.shared.contract import routes as R
+from azure_jobs.shared.contract.errors import TransportError
+
+_LEGACY_INFO = "/v1/info"
+_LEGACY_RETIRE = "/v1/retire"
 
 
 def _client(path: Path):
@@ -19,6 +23,36 @@ def _client(path: Path):
     from azure_jobs.shared import const
 
     return DaemonClient(path, Path(const.AJ_HOME).resolve())
+
+
+def _fallback_404(primary, legacy):
+    """Use the v1 daemon-control route only to complete an upgrade.
+
+    Normal resources never fall back. These two process-lifecycle calls are
+    special: without them the recovery instruction ``aj daemon restart`` could
+    not stop the old daemon that needs replacing.
+    """
+    try:
+        return primary()
+    except TransportError as exc:
+        if "returned 404" not in str(exc):
+            raise
+        return legacy()
+
+
+def _info(conn):
+    return _fallback_404(
+        lambda: conn.get(R.info()),
+        lambda: conn.get(_LEGACY_INFO),
+    )
+
+
+def _retire(conn, *, timeout: float):
+    body = {"drain_timeout": timeout or None}
+    return _fallback_404(
+        lambda: conn.post(R.retire(), json=body),
+        lambda: conn.post(_LEGACY_RETIRE, json=body),
+    )
 
 
 @main.group(name="daemon")
@@ -46,7 +80,7 @@ def daemon_status() -> None:
         )
         raise SystemExit(1) from exc
     try:
-        info = conn.get(R.info())
+        info = _info(conn)
     finally:
         conn.close()
     console.print(f"pid       {info['pid']}")
@@ -68,7 +102,7 @@ def daemon_start() -> None:
     path = socket_path()
     try:
         conn = _client(path)
-        info = conn.get(R.info())
+        info = _info(conn)
         conn.close()
         console.print(f"Daemon already running (pid {info['pid']})")
         return
@@ -81,7 +115,7 @@ def daemon_start() -> None:
         raise click.ClickException(str(exc)) from exc
     conn = _client(path)
     try:
-        info = conn.get(R.info())
+        info = _info(conn)
     finally:
         conn.close()
     console.print(f"Daemon started (pid {info['pid']}) at {path}")
@@ -114,10 +148,10 @@ def daemon_stop(force: bool, timeout: float) -> None:
         console.print("Removed a stale daemon socket")
         return
     try:
-        info = conn.get(R.info())
-        retired = conn.post(
-            R.retire(),
-            json={"drain_timeout": timeout if (force or timeout) else None},
+        info = _info(conn)
+        retired = _retire(
+            conn,
+            timeout=timeout if (force or timeout) else 0,
         )
     finally:
         conn.close()

@@ -1,4 +1,4 @@
-"""arm.subscriptions — list enabled subscriptions for the current account."""
+"""``az.subscription`` — enabled subscriptions for the current account."""
 
 from __future__ import annotations
 

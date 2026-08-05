@@ -16,11 +16,11 @@ def _datastore_name(
     return f"ds_{digest}"
 
 if TYPE_CHECKING:
-    from azure_jobs.server.az_client import AzureMLClient
+    from azure_jobs.server.az_client import AzureWorkspaceClient
 
 def _build_storage_mounts(
     request: JobSpec,
-    client: AzureMLClient,
+    client: AzureWorkspaceClient,
 ) -> tuple[dict[str, Any], dict[str, str], dict[str, str]]:
     outputs: dict[str, Any] = {}
     path_on_compute: dict[str, str] = {}
@@ -35,7 +35,7 @@ def _build_storage_mounts(
         mount_dir = mount_cfg.mount_dir or f"/mnt/{mount_name}"
         ds_name = _datastore_name(account, container, mount_name, mount_dir)
 
-        client.datastores.get_or_create(
+        client.ds.get_or_create(
             name=ds_name,
             account_name=account,
             container_name=container,

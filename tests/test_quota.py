@@ -166,7 +166,7 @@ class TestSeriesQuota:
 
 
 # ---------------------------------------------------------------------------
-# AzureARMClient.list_virtual_clusters tests
+# AzureClient virtual-cluster namespace tests
 # ---------------------------------------------------------------------------
 
 
@@ -202,20 +202,20 @@ _MOCK_VC_RESPONSE = {
 
 
 def _make_arm_client():
-    """Construct a real ``AzureARMClient`` with namespaces stubbed."""
-    from azure_jobs.server.az_client import AzureARMClient
+    """Construct a real ``AzureClient`` with namespaces stubbed."""
+    from azure_jobs.server.az_client import AzureClient
 
-    client = AzureARMClient()
-    client.subscriptions.list = MagicMock()
-    client.graph.query = MagicMock()
+    client = AzureClient()
+    client.subscription.list = MagicMock()
+    client._graph.query = MagicMock()
     return client
 
 
 class TestListVirtualClusters:
     def test_lists_vcs_from_resource_graph(self):
         client = _make_arm_client()
-        client.subscriptions.list.return_value = ["sub-1", "sub-2"]
-        client.graph.query.return_value = [
+        client.subscription.list.return_value = ["sub-1", "sub-2"]
+        client._graph.query.return_value = [
             {"name": "vc1", "resourceGroup": "rg1", "subscriptionId": "sub-1"},
             {"name": "vc2", "resourceGroup": "rg2", "subscriptionId": "sub-2"},
         ]
@@ -224,46 +224,46 @@ class TestListVirtualClusters:
 
     def test_uses_provided_subscriptions(self):
         client = _make_arm_client()
-        client.graph.query.return_value = [
+        client._graph.query.return_value = [
             {"name": "vc1", "resourceGroup": "rg1", "subscriptionId": "sub-a"},
         ]
         vcs = client.vc.list(subscription_ids=["sub-a"])
         assert len(vcs) == 1
-        client.subscriptions.list.assert_not_called()
+        client.subscription.list.assert_not_called()
 
     def test_skips_when_no_subscriptions(self):
         client = _make_arm_client()
-        client.subscriptions.list.return_value = []
+        client.subscription.list.return_value = []
         assert client.vc.list() == []
 
     def test_handles_exception_gracefully(self):
         import requests
 
         client = _make_arm_client()
-        client.subscriptions.list.side_effect = requests.ConnectionError("auth fail")
+        client.subscription.list.side_effect = requests.ConnectionError("auth fail")
         assert client.vc.list() == []
 
     def test_empty_on_no_data(self):
         client = _make_arm_client()
-        client.subscriptions.list.return_value = ["sub-1"]
-        client.graph.query.return_value = []
+        client.subscription.list.return_value = ["sub-1"]
+        client._graph.query.return_value = []
         assert client.vc.list() == []
 
     def test_quota_list_parses_payload(self):
         client = _make_arm_client()
         row = dict(_MOCK_VC_RESPONSE)
         row.update(name="vc1", resourceGroup="rg1", subscriptionId="sub-1")
-        client.subscriptions.list.return_value = ["sub-1"]
-        client.graph.query.return_value = [row]
-        vcs = client.vc.quota.list()
+        client.subscription.list.return_value = ["sub-1"]
+        client._graph.query.return_value = [row]
+        vcs = client.quota.list()
         series = sorted(sq.series for sq in vcs[0].quotas)
         assert "ND_A100_v4" in series
         assert "ND_H100_v5" in series
 
     def test_resolves_vc_by_name(self):
         client = _make_arm_client()
-        client.subscriptions.list.return_value = ["sub-1"]
-        client.graph.query.return_value = [
+        client.subscription.list.return_value = ["sub-1"]
+        client._graph.query.return_value = [
             {"name": "vc1", "resourceGroup": "rg1", "subscriptionId": "sub-1"},
         ]
         vc = client.vc.get("vc1")
@@ -273,8 +273,8 @@ class TestListVirtualClusters:
 
     def test_resolve_vc_ambiguous_requires_filter(self):
         client = _make_arm_client()
-        client.subscriptions.list.return_value = ["sub-1", "sub-2"]
-        client.graph.query.return_value = [
+        client.subscription.list.return_value = ["sub-1", "sub-2"]
+        client._graph.query.return_value = [
             {"name": "vc1", "resourceGroup": "rg1", "subscriptionId": "sub-1"},
             {"name": "vc1", "resourceGroup": "rg2", "subscriptionId": "sub-2"},
         ]
@@ -299,14 +299,13 @@ class TestQuotaListCli:
 
     def setup_method(self):
         self.runner = CliRunner()
-        self._arm_patcher = patch("azure_jobs.server.az_client.AzureARMClient")
+        self._arm_patcher = patch("azure_jobs.server.az_client.AzureClient")
         self.arm_cls = self._arm_patcher.start()
         self.arm = self.arm_cls.return_value
-        # ``load_vcs_with_quotas`` now calls ``arm.vc.quota.list(...)`` which
-        # internally re-parses ``vc.raw`` — short-circuit it back to
+        # The quota namespace re-parses ``vc.raw`` — short-circuit it back to
         # ``arm.vc.list`` so tests can supply pre-built ``VCInfo`` rows
         # (with ``quotas`` already populated) directly.
-        self.arm.vc.quota.list.side_effect = lambda **kw: self.arm.vc.list()
+        self.arm.quota.list.side_effect = lambda *args, **kw: self.arm.vc.list()
 
     def teardown_method(self):
         self._arm_patcher.stop()

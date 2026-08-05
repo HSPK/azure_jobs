@@ -35,12 +35,12 @@ def fetch_jobs_all_workspaces(
     """
     from azure_jobs.server.concurrent import parallel_each
 
-    from .. import AzureARMClient, AzureMLClient
+    from azure_jobs.server.az_client.arm import AzureClient
+    from azure_jobs.server.az_client.ml import AzureWorkspaceClient
 
     if workspaces is None:
-        arm = AzureARMClient()
-        workspaces = arm.workspace.list()
-        arm.ensure_token()
+        with AzureClient() as az:
+            workspaces = az.ws.list()
 
     if not workspaces:
         return []
@@ -48,12 +48,12 @@ def fetch_jobs_all_workspaces(
     def _one(ws: Any) -> list[dict[str, Any]]:
         if on_workspace_start is not None:
             on_workspace_start(ws.name)
-        client = AzureMLClient(
+        with AzureWorkspaceClient(
             subscription_id=ws.subscription_id,
             resource_group=ws.resource_group,
             workspace_name=ws.name,
-        )
-        jobs = client.jobs.fetch(n_per_ws, cutoff_utc=cutoff_utc)
+        ) as client:
+            jobs = client.job.fetch(n_per_ws, cutoff_utc=cutoff_utc)
         for j in jobs:
             j["_workspace"] = ws.name
         return jobs

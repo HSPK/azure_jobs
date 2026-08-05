@@ -115,9 +115,9 @@ class TestLiveDaemonProcess:
         with httpx.Client(
             transport=httpx.HTTPTransport(uds=str(sock)), base_url="http://d"
         ) as raw:
-            assert raw.get("/v1/ping").json() == {"pong": True}
+            assert raw.get("/v2/ping").json() == {"pong": True}
             schema = raw.get("/openapi.json").json()
-            assert "/v1/info" in schema["paths"]
+            assert "/v2/info" in schema["paths"]
 
     def test_many_clients_share_one_daemon(self, live_daemon):
         sock, _ = live_daemon
@@ -196,7 +196,7 @@ class TestDaemonCli:
         try:
             status = runner.invoke(daemon_status, [])
             assert status.exit_code == 0
-            assert "API v1" in status.output
+            assert "API v2" in status.output
 
             again = runner.invoke(daemon_start, [])
             assert "already running" in again.output

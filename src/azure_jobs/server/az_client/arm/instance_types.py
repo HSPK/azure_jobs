@@ -1,4 +1,4 @@
-"""arm.instance_types — Singularity instance type catalog."""
+"""``az.sku`` — Singularity instance type catalog."""
 
 from __future__ import annotations
 
@@ -79,7 +79,7 @@ def _row_to_info(row: dict) -> InstanceTypeInfo:
 _VARIANT_SUFFIX_RE = re.compile(r"-n\d+$")
 
 class InstanceTypesAPI(ArmNamespace):
-    """arm.instance_types — Singularity instance type catalog per region."""
+    """Singularity instance type catalog per region."""
 
     def list(
         self,
@@ -92,7 +92,7 @@ class InstanceTypesAPI(ArmNamespace):
             return []
         if not subscription_id:
             try:
-                subs = self._client.subscriptions.list()
+                subs = self._client.subscription.list()
             except NETWORK_LIKE_ERRORS:
                 return []
             if not subs:

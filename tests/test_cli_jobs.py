@@ -113,9 +113,9 @@ class TestJobListCommand:
         from unittest.mock import MagicMock, patch
 
         mock_client = MagicMock()
-        mock_client.jobs.fetch.return_value = []
+        mock_client.job.fetch.return_value = []
         with patch(
-            "azure_jobs.server.az_client.create_rest_client", return_value=mock_client
+            "azure_jobs.server.az_client.AzureWorkspaceClient", return_value=mock_client
         ):
             runner = CliRunner()
             result = runner.invoke(main, ["job", "list"])
@@ -137,9 +137,9 @@ class TestJobListCommand:
             },
         ]
         mock_client = MagicMock()
-        mock_client.jobs.fetch.return_value = jobs
+        mock_client.job.fetch.return_value = jobs
         with patch(
-            "azure_jobs.server.az_client.create_rest_client", return_value=mock_client
+            "azure_jobs.server.az_client.AzureWorkspaceClient", return_value=mock_client
         ):
             runner = CliRunner()
             result = runner.invoke(main, ["job", "list"])
@@ -171,11 +171,11 @@ class TestJobListCommand:
             },
         ]
         mock_client = MagicMock()
-        mock_client.jobs.fetch.side_effect = lambda *a, **kw: [
+        mock_client.job.fetch.side_effect = lambda *a, **kw: [
             j for j in jobs if kw["predicate"](j)
         ]
         with patch(
-            "azure_jobs.server.az_client.create_rest_client", return_value=mock_client
+            "azure_jobs.server.az_client.AzureWorkspaceClient", return_value=mock_client
         ):
             runner = CliRunner()
             result = runner.invoke(main, ["job", "list", "-s", "Failed"])
@@ -208,11 +208,11 @@ class TestJobListCommand:
             },
         ]
         mock_client = MagicMock()
-        mock_client.jobs.fetch.side_effect = lambda *a, **kw: [
+        mock_client.job.fetch.side_effect = lambda *a, **kw: [
             j for j in jobs if kw["predicate"](j)
         ]
         with patch(
-            "azure_jobs.server.az_client.create_rest_client", return_value=mock_client
+            "azure_jobs.server.az_client.AzureWorkspaceClient", return_value=mock_client
         ):
             runner = CliRunner()
             result = runner.invoke(main, ["job", "list", "-e", "exp-A"])
@@ -225,7 +225,7 @@ class TestJobStatusCommand:
         from unittest.mock import MagicMock, patch
 
         mock_client = MagicMock()
-        mock_client.jobs.get.return_value = {
+        mock_client.job.get.return_value = {
             "name": "my-job-xyz",
             "display_name": "azure_jobs_abc123",
             "status": "Running",
@@ -245,7 +245,7 @@ class TestJobStatusCommand:
             "error": "",
         }
         with patch(
-            "azure_jobs.server.az_client.create_rest_client", return_value=mock_client
+            "azure_jobs.server.az_client.AzureWorkspaceClient", return_value=mock_client
         ):
             runner = CliRunner()
             result = runner.invoke(main, ["job", "status", "my-job-xyz"])
@@ -274,7 +274,7 @@ class TestJobStatusCommand:
         aj_env["record_fp"].write_text(record + "\n")
 
         mock_client = MagicMock()
-        mock_client.jobs.get.return_value = {
+        mock_client.job.get.return_value = {
             "name": "resolved-azure-name",
             "display_name": "",
             "status": "Completed",
@@ -294,11 +294,11 @@ class TestJobStatusCommand:
             "error": "",
         }
         with patch(
-            "azure_jobs.server.az_client.create_rest_client", return_value=mock_client
+            "azure_jobs.server.az_client.AzureWorkspaceClient", return_value=mock_client
         ):
             runner = CliRunner()
             result = runner.invoke(main, ["job", "status", "abc12345"])
-        mock_client.jobs.get.assert_called_once_with("resolved-azure-name")
+        mock_client.job.get.assert_called_once_with("resolved-azure-name")
         assert result.exit_code == 0
         assert "Completed" in result.output
 
@@ -325,12 +325,12 @@ class TestJobCancelCommand:
 
         mock_client = MagicMock()
         # First get_job call returns Running, second returns Canceled
-        mock_client.jobs.get.side_effect = [
+        mock_client.job.get.side_effect = [
             {"name": "azure_jobs_abc12345", "status": "Running"},
             {"name": "azure_jobs_abc12345", "status": "Canceled"},
         ]
         with mock_patch(
-            "azure_jobs.server.az_client.create_rest_client", return_value=mock_client
+            "azure_jobs.server.az_client.AzureWorkspaceClient", return_value=mock_client
         ):
             runner = CliRunner()
             result = runner.invoke(main, ["job", "cancel", "abc12345"])
@@ -342,12 +342,12 @@ class TestJobCancelCommand:
         from unittest.mock import patch as mock_patch
 
         mock_client = MagicMock()
-        mock_client.jobs.get.return_value = {
+        mock_client.job.get.return_value = {
             "name": "some-job",
             "status": "Completed",
         }
         with mock_patch(
-            "azure_jobs.server.az_client.create_rest_client", return_value=mock_client
+            "azure_jobs.server.az_client.AzureWorkspaceClient", return_value=mock_client
         ):
             runner = CliRunner()
             result = runner.invoke(main, ["job", "cancel", "some-job"])
@@ -361,14 +361,14 @@ class TestJobLogsCommand:
         from unittest.mock import patch as mock_patch
 
         mock_client = MagicMock()
-        mock_client.jobs.get.return_value = {
+        mock_client.job.get.return_value = {
             "name": "some-job",
             "display_name": "my-train",
             "status": "Queued",
             "portal_url": "",
         }
         with mock_patch(
-            "azure_jobs.server.az_client.create_rest_client", return_value=mock_client
+            "azure_jobs.server.az_client.AzureWorkspaceClient", return_value=mock_client
         ):
             runner = CliRunner()
             result = runner.invoke(main, ["job", "logs", "some-job"])
@@ -376,20 +376,20 @@ class TestJobLogsCommand:
         assert "no logs available" in result.output.lower()
 
     def test_logs_completed_job(self, aj_env):
-        """Completed jobs should download logs via the client.logs namespace."""
+        """Completed jobs should download logs via the client.log namespace."""
         from unittest.mock import MagicMock
         from unittest.mock import patch as mock_patch
 
         mock_client = MagicMock()
-        mock_client.jobs.get.return_value = {
+        mock_client.job.get.return_value = {
             "name": "some-job",
             "display_name": "my-train",
             "status": "Completed",
             "portal_url": "",
         }
-        mock_client.logs.download.return_value = ("Hello from training", "")
+        mock_client.log.download.return_value = ("Hello from training", "")
         with mock_patch(
-            "azure_jobs.server.az_client.create_rest_client",
+            "azure_jobs.server.az_client.AzureWorkspaceClient",
             return_value=mock_client,
         ):
             runner = CliRunner()
@@ -403,15 +403,15 @@ class TestJobLogsCommand:
         from unittest.mock import patch as mock_patch
 
         mock_client = MagicMock()
-        mock_client.jobs.get.return_value = {
+        mock_client.job.get.return_value = {
             "name": "some-job",
             "display_name": "my-train",
             "status": "Running",
             "portal_url": "",
         }
-        mock_client.logs.download.return_value = ("Epoch 1/10 loss=0.5", "")
+        mock_client.log.download.return_value = ("Epoch 1/10 loss=0.5", "")
         with mock_patch(
-            "azure_jobs.server.az_client.create_rest_client",
+            "azure_jobs.server.az_client.AzureWorkspaceClient",
             return_value=mock_client,
         ):
             runner = CliRunner()

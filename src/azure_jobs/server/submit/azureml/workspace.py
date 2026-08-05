@@ -10,24 +10,24 @@ from azure_jobs.shared.job.spec import JobSpec
 from azure_jobs.shared.opts import AmlOpts
 
 if TYPE_CHECKING:
-    from ...az_client import AzureARMClient
+    from ...az_client import AzureClient
 
 log = logging.getLogger(__name__)
 
 
-def resolve_target(request: JobSpec, *, arm_client: AzureARMClient) -> AmlOpts:
+def resolve_target(request: JobSpec, *, arm_client: AzureClient) -> AmlOpts:
     """Fill Azure sub/rg/workspace on ``request.backend_spec`` and return it."""
     aml: AmlOpts = request.backend_spec
     if request.service not in ("sing", "aml") or not aml.compute:
         return aml
 
     if request.service == "sing":
-        vc = arm_client.vc.quota.get_by_name(aml.compute)
+        vc = arm_client.quota.get_by_name(aml.compute)
         aml.vc_subscription_id = vc.subscription_id
         aml.vc_resource_group = vc.resource_group
 
         if aml.workspace_name and not (aml.subscription_id and aml.resource_group):
-            ws = arm_client.workspace.get(aml.workspace_name)
+            ws = arm_client.ws.get(aml.workspace_name)
             aml.subscription_id = ws.subscription_id
             aml.resource_group = ws.resource_group
         return aml

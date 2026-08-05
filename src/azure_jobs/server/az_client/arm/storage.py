@@ -1,4 +1,4 @@
-"""arm.storage — storage-account discovery via Resource Graph."""
+"""``az.sa`` — storage-account discovery via Resource Graph."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ class StoragesAPI(ArmNamespace):
         """Discover all storage accounts the user can read."""
         if not subscription_ids:
             try:
-                subscription_ids = self._client.subscriptions.list()
+                subscription_ids = self._client.subscription.list()
             except NETWORK_LIKE_ERRORS:
                 return []
         if not subscription_ids:
@@ -28,7 +28,7 @@ class StoragesAPI(ArmNamespace):
             "kind, sku = tostring(sku.name)"
         )
         try:
-            rows = self._client.graph.query(query, subscription_ids)
+            rows = self._client._graph.query(query, subscription_ids)
         except NETWORK_LIKE_ERRORS:
             return []
         return [

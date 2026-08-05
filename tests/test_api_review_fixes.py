@@ -161,10 +161,10 @@ class TestServerBackendHasEveryPort:
         from azure_jobs.server.backend import AzureBackend
 
         class _Client:
-            jobs = object()
-            logs = object()
-            datastores = object()
-            environments = object()
+            job = object()
+            log = object()
+            ds = object()
+            env = object()
 
             def close(self):
                 pass
@@ -356,10 +356,10 @@ class TestWorkspaceComputesShape:
     def _account(self, monkeypatch, pairs):
         from azure_jobs.server.backend import AzureAccount
 
-        class _Arm:
-            class workspace:
+        class _Azure:
+            class ws:
                 @staticmethod
-                def list():
+                def list(subscription_ids=None):
                     return [ws for ws, _ in pairs]
 
             class compute:
@@ -368,24 +368,20 @@ class TestWorkspaceComputesShape:
                     return pairs
 
             @staticmethod
-            def ensure_token():
-                return None
-
-            @staticmethod
             def close():
                 return None
 
         from contextlib import contextmanager
 
         @contextmanager
-        def fake_arm(subscription_id):
-            yield _Arm()
+        def fake_azure():
+            yield _Azure()
 
-        monkeypatch.setattr("azure_jobs.server.backend._arm", fake_arm)
+        monkeypatch.setattr("azure_jobs.server.backend._azure", fake_azure)
         return AzureAccount("sub")
 
     def test_pairs_are_plain_json_ready_dicts(self, monkeypatch):
-        from azure_jobs.server.az_client import ComputeInfo, WorkspaceInfo
+        from azure_jobs.shared.types.azure import ComputeInfo, WorkspaceInfo
 
         ws = WorkspaceInfo(
             name="ws", resource_group="rg", subscription_id="s", location="eastus"
@@ -410,17 +406,17 @@ class TestWorkspaceComputesShape:
 
         from azure_jobs.server.backend import AzureAccount
 
-        class _Arm:
-            class subscriptions:
+        class _Azure:
+            class subscription:
                 @staticmethod
                 def list():
                     return ["sub-aaa", "sub-bbb"]  # bare ids, not records
 
         @contextmanager
-        def fake_arm(subscription_id):
-            yield _Arm()
+        def fake_azure():
+            yield _Azure()
 
-        monkeypatch.setattr("azure_jobs.server.backend._arm", fake_arm)
+        monkeypatch.setattr("azure_jobs.server.backend._azure", fake_azure)
         items = AzureAccount().subscriptions()
         assert [i.name for i in items] == ["sub-aaa", "sub-bbb"]
 

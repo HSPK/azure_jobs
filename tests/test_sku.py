@@ -188,7 +188,7 @@ class _FakeInstanceTypes:
 class FakeArm:
     def __init__(self, vcs=(), catalog=()):
         self.vc = _FakeVc(list(vcs))
-        self.instance_types = _FakeInstanceTypes(list(catalog))
+        self.sku = _FakeInstanceTypes(list(catalog))
 
 
 _SERIES_HW = {

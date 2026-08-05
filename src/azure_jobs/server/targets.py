@@ -75,9 +75,7 @@ class ConfigTargetCatalog:
         )
 
 
-ConfigWorkspaceCatalog = ConfigTargetCatalog
-
-__all__ = ["ConfigTargetCatalog", "ConfigWorkspaceCatalog", "resolve_named"]
+__all__ = ["ConfigTargetCatalog", "resolve_named"]
 
 
 def resolve_named(name: str = "", root: Path | None = None) -> Target:

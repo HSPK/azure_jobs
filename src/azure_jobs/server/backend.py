@@ -35,7 +35,7 @@ class AzureJobs:
     """Job listing, inspection, cancellation and deletion."""
 
     def __init__(self, client: Any, target_id: str) -> None:
-        self._api = client.jobs
+        self._api = client.job
         self._target_id = target_id
 
     def _job(self, value: dict) -> Job:
@@ -116,7 +116,7 @@ class AzureLogs:
     """Range-capable log source."""
 
     def __init__(self, client: Any) -> None:
-        self._api = client.logs
+        self._api = client.log
 
     def list_files(self, job: JobRef, *, cancelled: Cancelled = None) -> list[str]:
         return self._api.list_files(job.backend_ref, cancelled=cancelled)
@@ -145,7 +145,7 @@ class AzureCatalog:
         self._target = target
 
     def workspace(self) -> CatalogItem:
-        info = self._client.get_workspace() or {}
+        info = self._client.info() or {}
         return CatalogItem(
             "workspace",
             str(info.get("name") or self._target.label),
@@ -155,11 +155,11 @@ class AzureCatalog:
     def datastores(self) -> list[CatalogItem]:
         return [
             CatalogItem("datastore", _name_of(item), item)
-            for item in _as_dicts(self._client.datastores.list())
+            for item in _as_dicts(self._client.ds.list())
         ]
 
     def datastore(self, name: str) -> CatalogItem | None:
-        value = self._client.datastores.get(name)
+        value = self._client.ds.get(name)
         if not value:
             return None
         data = _as_dicts([value])[0]
@@ -168,19 +168,20 @@ class AzureCatalog:
     def environments(self) -> list[CatalogItem]:
         return [
             CatalogItem("environment", _name_of(item), item)
-            for item in _as_dicts(self._client.environments.list())
+            for item in _as_dicts(self._client.env.list())
         ]
 
     def environment_versions(self, name: str) -> list[CatalogItem]:
         return [
             CatalogItem("environment_version", (_name_of(item) or name), item)
-            for item in _as_dicts(self._client.environments.list_versions(name))
+            for item in _as_dicts(self._client.env.list_versions(name))
         ]
 
     def computes(self) -> list[CatalogItem]:
         metadata = self._target.metadata
-        with _arm(str(metadata.get("subscription_id") or "")) as arm:
-            values = arm.compute.list_all(
+        with _azure() as az:
+            values = az.compute.list(
+                str(metadata.get("subscription_id") or ""),
                 str(metadata.get("resource_group") or ""),
                 str(metadata.get("workspace_name") or ""),
             )
@@ -191,8 +192,11 @@ class AzureCatalog:
 
     def quota(self) -> list[CatalogItem]:
         metadata = self._target.metadata
-        with _arm(str(metadata.get("subscription_id") or "")) as arm:
-            values = arm.vc.quota.list()
+        subscription_id = str(metadata.get("subscription_id") or "")
+        with _azure() as az:
+            values = az.quota.list(
+                [subscription_id] if subscription_id else None
+            )
         return [
             CatalogItem("quota", _name_of(item), item)
             for item in _as_dicts(values)
@@ -209,33 +213,37 @@ class AzureAccount:
         return override or self._subscription_id
 
     def subscriptions(self) -> list[CatalogItem]:
-        """``arm.subscriptions.list()`` returns bare ids, not records."""
-        with _arm(self._sub()) as arm:
-            values = arm.subscriptions.list()
+        """``az.subscription.list()`` returns bare ids, not records."""
+        subscription_id = self._sub()
+        with _azure() as az:
+            values = [subscription_id] if subscription_id else az.subscription.list()
         return [
             CatalogItem("subscription", str(value), {"id": str(value)})
             for value in values or ()
         ]
 
     def workspaces(self, subscription_id: str = "") -> list[CatalogItem]:
-        with _arm(self._sub(subscription_id)) as arm:
-            values = arm.workspace.list()
+        subscription_id = self._sub(subscription_id)
+        with _azure() as az:
+            values = az.ws.list([subscription_id] if subscription_id else None)
         return [
             CatalogItem("workspace", _name_of(item), item)
             for item in _as_dicts(values)
         ]
 
     def storage_accounts(self, subscription_id: str = "") -> list[CatalogItem]:
-        with _arm(self._sub(subscription_id)) as arm:
-            values = arm.storage.list()
+        subscription_id = self._sub(subscription_id)
+        with _azure() as az:
+            values = az.sa.list([subscription_id] if subscription_id else None)
         return [
             CatalogItem("storage_account", _name_of(item), item)
             for item in _as_dicts(values)
         ]
 
     def identities(self, subscription_id: str = "") -> list[CatalogItem]:
-        with _arm(self._sub(subscription_id)) as arm:
-            values = arm.identity.list()
+        subscription_id = self._sub(subscription_id)
+        with _azure() as az:
+            values = az.uai.list([subscription_id] if subscription_id else None)
         return [
             CatalogItem("identity", _name_of(item), item)
             for item in _as_dicts(values)
@@ -244,8 +252,11 @@ class AzureAccount:
     def instance_types(
         self, region: str = "", subscription_id: str = ""
     ) -> list[CatalogItem]:
-        with _arm(self._sub(subscription_id)) as arm:
-            values = arm.instance_types.list(region)
+        with _azure() as az:
+            values = az.sku.list(
+                region,
+                subscription_id=self._sub(subscription_id),
+            )
         return [
             CatalogItem("instance_type", _name_of(item), item)
             for item in _as_dicts(values)
@@ -254,8 +265,12 @@ class AzureAccount:
     def vc_quota(
         self, *, include_zero: bool = False, subscription_id: str = ""
     ) -> list[CatalogItem]:
-        with _arm(self._sub(subscription_id)) as arm:
-            values = arm.vc.quota.list(include_zero=include_zero)
+        subscription_id = self._sub(subscription_id)
+        with _azure() as az:
+            values = az.quota.list(
+                [subscription_id] if subscription_id else None,
+                include_zero=include_zero,
+            )
         return [
             CatalogItem("vc_quota", _name_of(item), item)
             for item in _as_dicts(values)
@@ -267,8 +282,11 @@ class AzureAccount:
         workspace: str,
         subscription_id: str = "",
     ) -> list[CatalogItem]:
-        with _arm(self._sub(subscription_id)) as arm:
-            values = arm.compute.list_all(resource_group, workspace)
+        subscription_id = self._sub(subscription_id)
+        if not (subscription_id and resource_group and workspace):
+            return []
+        with _azure() as az:
+            values = az.compute.list(subscription_id, resource_group, workspace)
         return [
             CatalogItem("compute", _name_of(item), item)
             for item in _as_dicts(values)
@@ -277,47 +295,28 @@ class AzureAccount:
 
     def singularity_images(self) -> list[CatalogItem]:
         """Singularity base images, searched across accessible subscriptions."""
-        with _arm(self._sub()) as arm:
-            try:
-                subscriptions = arm.subscriptions.list()
-            except Exception:
-                log.debug("Listing subscriptions failed", exc_info=True)
-                return []
-            for subscription_id in subscriptions:
-                try:
-                    data = arm.get(
-                        f"https://management.azure.com/subscriptions/"
-                        f"{subscription_id}/providers/Microsoft.Singularity/images"
-                        f"?api-version=2020-12-01-preview"
-                    )
-                except Exception:
-                    log.debug(
-                        "Singularity image fetch failed for %s",
-                        subscription_id,
-                        exc_info=True,
-                    )
-                    continue
-                if data and data.get("value"):
-                    return [
-                        CatalogItem("singularity_image", _image_name(entry), entry)
-                        for entry in data["value"]
-                    ]
-        return []
+        subscription_id = self._sub()
+        with _azure() as az:
+            values = az.image.list([subscription_id] if subscription_id else None)
+        return [
+            CatalogItem("singularity_image", _image_name(entry), entry)
+            for entry in values
+        ]
 
 
     def workspace_computes(self) -> dict[str, Any]:
         failures: list[str] = []
-        with _arm(self._sub()) as arm:
-            workspaces = arm.workspace.list()
+        subscription_id = self._sub()
+        with _azure() as az:
+            workspaces = az.ws.list([subscription_id] if subscription_id else None)
             if not workspaces:
                 return {"pairs": [], "failures": []}
-            arm.ensure_token()
 
             def on_fail(workspace: Any, exc: BaseException) -> None:
                 failures.append(getattr(workspace, "name", str(workspace)))
                 log.debug("Skipping workspace", exc_info=True)
 
-            results = arm.compute.list_all(
+            results = az.compute.list_all(
                 workspaces=workspaces,
                 on_workspace_failure=on_fail,
             )
@@ -345,11 +344,11 @@ class AzureAccount:
             else None
         )
         failures: list[str] = []
-        with _arm(self._sub()) as arm:
-            workspaces = arm.workspace.list()
+        subscription_id = self._sub()
+        with _azure() as az:
+            workspaces = az.ws.list([subscription_id] if subscription_id else None)
             if not workspaces:
                 return {"jobs": [], "failures": []}
-            arm.ensure_token()
 
             def on_fail(workspace: Any, exc: BaseException) -> None:
                 name = getattr(workspace, "name", str(workspace))
@@ -377,10 +376,10 @@ def _image_name(entry: dict) -> str:
 
 
 @contextmanager
-def _arm(subscription_id: str) -> Any:
-    from azure_jobs.server.az_client import AzureARMClient
+def _azure() -> Any:
+    from azure_jobs.server.az_client import AzureClient
 
-    client = AzureARMClient(subscription_id) if subscription_id else AzureARMClient()
+    client = AzureClient()
     try:
         yield client
     finally:
@@ -541,16 +540,22 @@ class AzureBackend:
 
 
 def _open_client(target: Target) -> Any:
-    from azure_jobs.server.az_client import create_rest_client
-    from azure_jobs.shared.config import AJWorkspace
+    from azure_jobs.server.az_client import AzureWorkspaceClient
+    from azure_jobs.shared.errors import WorkspaceError
 
     metadata = target.metadata
-    configured = AJWorkspace(
-        subscription_id=str(metadata.get("subscription_id") or ""),
-        resource_group=str(metadata.get("resource_group") or ""),
-        workspace_name=str(metadata.get("workspace_name") or target.label),
-    )
-    return create_rest_client(configured)
+    values = {
+        "subscription_id": str(metadata.get("subscription_id") or ""),
+        "resource_group": str(metadata.get("resource_group") or ""),
+        "workspace_name": str(metadata.get("workspace_name") or target.label),
+    }
+    missing = [name for name, value in values.items() if not value]
+    if missing:
+        raise WorkspaceError(
+            f"Workspace target is missing {', '.join(missing)}. "
+            "Run `aj ws set` to configure it."
+        )
+    return AzureWorkspaceClient(**values)
 
 
 class AzureBackendFactory:

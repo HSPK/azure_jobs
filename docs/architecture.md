@@ -113,18 +113,21 @@ az_client/
 ├── auth.py          # TokenCache, retry session, WorkspaceCoords,
 │                    # raise_for_rest_error, AuthSession base
 ├── arm/
-│   ├── compute.py / graph.py / identity.py / instance_types.py
+│   ├── compute.py / image.py / graph.py / identity.py / instance_types.py
 │   ├── storage.py / subscriptions.py / vc.py / workspace.py
-│   ├── models.py    # VCInfo, WorkspaceInfo, SeriesQuota, …
-│   └── __init__.py  # AzureARMClient (namespaces: .vc, .workspace, .graph, …)
+│   └── __init__.py  # AzureClient: .subscription/.ws/.sku/.sa/.uai/
+│                    # .image/.quota/.compute
 └── ml/
     ├── context.py   # RestContext (= AuthSession + WorkspaceCoords + dual scopes)
     ├── jobs.py / environments.py / datastores.py / blob.py / logs.py
     ├── run_history.py
     ├── extract.py   # Pure REST→JobInfo parsers
-    └── __init__.py  # AzureMLClient (namespaces: .jobs, .environments,
-                     # .datastores, .blob, .logs)
+    └── __init__.py  # AzureWorkspaceClient: .job/.env/.ds/.blob/.log/.info()
 ```
+
+The server-side client follows the same account-root → callable workspace scope
+→ resource namespace shape as the public SDK. `azure.ws(sub, rg, name)` returns
+an `AzureWorkspaceClient`; there is no legacy plural alias surface to maintain.
 
 Highlights:
 
@@ -144,7 +147,7 @@ Three top-level layers, enforced by `tests/test_api_architecture.py`:
 ```
 src/azure_jobs/
 ├── shared/          vocabulary both sides speak — imports neither side
-│   ├── contract/      ports, models, errors, routes, typed codec
+│   ├── contract/      wire models, errors, routes, typed codec
 │   ├── types/         Azure value objects (quota rows, workspaces, SKUs)
 │   ├── opts/          typed backend options + spec-hook registration
 │   ├── spec.py        how a job is *described*
@@ -259,11 +262,11 @@ The same shape `dockerd` exposes. FastAPI/uvicorn serves, httpx calls.
 
 | | |
 |---|---|
-| Versioning | by path (`/v1/...`), so an older client keeps working |
+| Versioning | by path (`/v2/...`), so an older client keeps working |
 | Resources | one path per resource, so `/openapi.json` can describe the response |
 | Log windows | plain HTTP `Range`, answered `206` — what Range is for |
-| Server push | Server-Sent Events on `/v1/events` |
-| Debugging | `curl --unix-socket … http://d/v1/info`, plus a generated `/openapi.json` |
+| Server push | Server-Sent Events on `/v2/events` |
+| Debugging | `curl --unix-socket … http://d/v2/info`, plus a generated `/openapi.json` |
 | Security | socket `0600` inside a `0700` dir; the client refuses a socket it does not own |
 
 Replacing the hand-rolled JSON-RPC loop was not about the wire format. That
@@ -273,7 +276,7 @@ invocation, and raced on shutdown. Those are exactly the parts a real server
 already solves.
 
 **Stateless, so there is less to get wrong.** Requests are addressed by
-workspace *name* (`/v1/workspaces/{name}/...`); the daemon resolves the name
+workspace *name* (`/v2/workspaces/{name}/...`); the daemon resolves the name
 against the config of the project root in `X-AJ-Root` — not its own — and
 caches a *context* per `(project root, workspace)`, created on first use and
 expired on idle. Named lookups are cached because they cost an `az` call; the
@@ -283,9 +286,9 @@ the lifecycle bugs that lived there.
 
 **The client never runs `az`.** Resolving a workspace name, listing workspaces
 and reading the active subscription are all `az` calls, so they are endpoints
-(`/v1/workspaces`, `/v1/workspaces/{name}`, `/v1/subscription`) rather than
-client-side subprocesses. Credential health (`/v1/credential`) is asked of the
-daemon too, because the daemon's token is the one that matters. That is why
+(`/v2/workspaces`, `/v2/workspaces/{name}`, `/v2/auth/status`) rather than
+client-side subprocesses. Credential health is part of the same auth snapshot,
+because the daemon's token is the one that matters. That is why
 `shared/config` holds only local file config: everything that shells out lives
 in `server/discovery/`, guarded by `tests/test_api_architecture.py` with no
 exemptions.
@@ -298,10 +301,53 @@ output in `<runtime>/daemon.log` and reports it, so an autostart that refuses
 reads as "run az login" rather than as a spawn timeout.
 
 A domain failure keeps its type across the wire: an unresolvable workspace
-arrives as `WorkspaceError`, not `TransportError`, so `ResilientBackend` does
-not retry a name the daemon has already rejected.
+arrives as `WorkspaceError`, not `TransportError`; neither is automatically
+replayed.
 
-## TUI
+## Remote HTTP feasibility
+
+The FastAPI application already speaks ordinary HTTP, so exposing **read-only**
+resources over TCP is mechanically straightforward. Accepting a **submit from
+another machine** is feasible, but is not a socket configuration change:
+
+| Current local assumption | Remote requirement |
+|---|---|
+| Unix socket permissions authenticate the caller | TLS plus mTLS or OIDC bearer authentication and per-resource authorization |
+| `X-AJ-Root` is a trusted path on the daemon host | an authorized project ID; the client must never choose server filesystem paths |
+| `JobSpec.code_dir` points at local files visible to the daemon | upload a content-addressed source artifact first, then submit by artifact ID |
+| submission may collect the local user's `~/.ssh` keys | remote mode must never read server-home SSH material; use explicit client credentials or workload identity |
+| queue/watch journals live under `<root>/daemon` | server-owned state keyed by principal/project/workspace |
+| one local user may receive every SSE event | event streams filtered by authenticated principal and project |
+| `/retire`, daemon status and auth status are local controls | separate admin surface; never expose them to normal remote clients |
+| the daemon's Azure CLI credential represents the user | explicit service-identity model, or delegated user identity with token isolation |
+
+Recommended remote shape:
+
+```text
+SDK RemoteHttpTransport
+  -> TLS/OIDC reverse proxy
+  -> existing FastAPI resource API
+  -> artifact store + durable queue/state
+  -> Azure service identity
+```
+
+The submission flow should be asynchronous and idempotent:
+
+1. upload/touch an artifact by content hash;
+2. `POST` a submission with explicit workspace coordinates, `artifact_id`, and
+   `Idempotency-Key`;
+3. return `202 Accepted` plus a queue ticket;
+4. observe it through scoped `GET`/SSE endpoints.
+
+SSE and HTTP Range already work over TCP. UDS should remain the zero-config
+default; a remote URL should be explicit and must not autostart a process.
+Implement the transport only after project identity, artifact upload,
+authorization and event isolation exist—otherwise the server would either read
+the wrong filesystem or expose one user's jobs and secrets to another.
+Remote submission must also force `AJ_SHIP_SSH=0` semantics on the server:
+credentials are never inherited from the service host.
+
+## Azure client notes
 - **Blob credential fallback**: SAS → SharedKey → AAD bearer. If the storage
   account disables shared-key access, it skips straight to AAD; on a 403 mid-
   upload it retries once with bearer.
@@ -313,8 +359,8 @@ not retry a name the daemon has already rejected.
 ## TUI
 
 `aj dash` is built on Textual. `AjDashboard` is only the composition root: it
-wires registered features to immutable stores, typed events, narrow view ports,
-a bounded worker pool, and capability-oriented backend ports.
+wires registered features to immutable stores, typed events, narrow view
+ports, a bounded worker pool, and the same SDK namespaces as the CLI.
 
 ```
 tui/
@@ -354,11 +400,9 @@ visual records are split at 256 KiB without changing remote offsets.
 Jobs use opaque IDs and value-comparable cursors. The dashboard initially loads
 the requested `--last` scope (50 by default); reaching the final loaded page
 and pressing `→` consumes another cursor page without a fixed total cap. Local
-filters apply to the jobs loaded so far. Optional actions/log capabilities
-drive command availability, so a new backend may implement only the features
-it supports. Permanent deletion is a separate `JobDelete`
-capability rather than part of cancel/detail actions; deleting a job updates
-the JobsStore atomically and emits `JobDeleted` so cached logs are evicted.
+filters apply to the jobs loaded so far. Namespace capability flags drive
+command availability. Deleting a job updates the JobsStore atomically and
+emits `JobDeleted` so cached logs are evicted.
 
 ## Design notes
 

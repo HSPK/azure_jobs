@@ -398,9 +398,10 @@ class TestSubmitMocked:
             "azure_jobs.server.submit.azureml.entry._get_rest_client"
         ) as mock_factory:
             mock_client = mock_factory.return_value
-            mock_client.environments.get.return_value = SimpleNamespace(id="env-id-1")
+            mock_client.__enter__.return_value = mock_client
+            mock_client.env.get.return_value = SimpleNamespace(id="env-id-1")
             mock_client.blob.upload_code.return_value = "code-id-1"
-            mock_client.jobs.create_or_update.return_value = mock_returned
+            mock_client.job.create_or_update.return_value = mock_returned
             result = submit(request)
 
         assert result.status == "submitted"
@@ -439,9 +440,10 @@ class TestSubmitMocked:
             "azure_jobs.server.submit.azureml.entry._get_rest_client"
         ) as mock_factory:
             mock_client = mock_factory.return_value
-            mock_client.environments.get.return_value = SimpleNamespace(id="env-id")
+            mock_client.__enter__.return_value = mock_client
+            mock_client.env.get.return_value = SimpleNamespace(id="env-id")
             mock_client.blob.upload_code.return_value = "code-id"
-            mock_client.jobs.create_or_update.return_value = mock_returned
+            mock_client.job.create_or_update.return_value = mock_returned
             submit(request, on_event=on_event)
 
         assert "auth" in steps
@@ -609,32 +611,32 @@ class TestBuildEnvironment:
         r = JobSpec(name="j", service="sing", image="amlt-sing/acpt-torch2.7.1-py3.10-cuda12.6-ubuntu22.04")
         client = MagicMock()
         # Simulate no cached environment
-        client.environments.get.return_value = None
-        client.environments.create_or_update.return_value = SimpleNamespace(id="env-arm-id")
+        client.env.get.return_value = None
+        client.env.create_or_update.return_value = SimpleNamespace(id="env-arm-id")
         env_id = _build_environment(r, client)
         assert env_id == "env-arm-id"
         # Check that the dummy image was passed
-        call_args = client.environments.create_or_update.call_args
+        call_args = client.env.create_or_update.call_args
         assert call_args.args[2] == _SING_DUMMY_IMAGE  # image arg
 
     def test_regular_image_unchanged(self):
         """Non-sing images should be used as-is."""
         r = JobSpec(name="j", service="aml", image="pytorch:2.0")
         client = MagicMock()
-        client.environments.get.return_value = None
-        client.environments.create_or_update.return_value = SimpleNamespace(id="env-id")
+        client.env.get.return_value = None
+        client.env.create_or_update.return_value = SimpleNamespace(id="env-id")
         env_id = _build_environment(r, client)
         assert env_id == "env-id"
-        call_args = client.environments.create_or_update.call_args
+        call_args = client.env.create_or_update.call_args
         assert call_args.args[2] == "pytorch:2.0"
 
     def test_registry_prepended(self):
         r = JobSpec(name="j", service="aml", image="pytorch:2.0", image_registry="docker.io")
         client = MagicMock()
-        client.environments.get.return_value = None
-        client.environments.create_or_update.return_value = SimpleNamespace(id="env-id")
+        client.env.get.return_value = None
+        client.env.create_or_update.return_value = SimpleNamespace(id="env-id")
         _build_environment(r, client)
-        call_args = client.environments.create_or_update.call_args
+        call_args = client.env.create_or_update.call_args
         assert call_args.args[2] == "docker.io/pytorch:2.0"
 
 
@@ -652,7 +654,7 @@ class TestResolveSingIdentity:
                 "_AZUREML_SINGULARITY_JOB_UAI": "/subs/1/rg/Identity/providers/ManagedIdentity/uai/RL"
             }, backend_spec=AmlOpts(workspace_name="ws"))
         client = MagicMock()
-        client.get_workspace.return_value = {
+        client.info.return_value = {
             "identity": {
                 "userAssignedIdentities": {
                     "/subs/1/rg/Identity/providers/ManagedIdentity/uai/RL": {
@@ -666,7 +668,7 @@ class TestResolveSingIdentity:
     def test_case_insensitive_match(self):
         r = JobSpec(name="j", service="sing", env_vars={"_AZUREML_SINGULARITY_JOB_UAI": "/SUBS/1/RG/IDENTITY"}, backend_spec=AmlOpts(workspace_name="ws"))
         client = MagicMock()
-        client.get_workspace.return_value = {
+        client.info.return_value = {
             "identity": {
                 "userAssignedIdentities": {
                     "/subs/1/rg/identity": {"clientId": "found-it"},
@@ -680,7 +682,7 @@ class TestResolveSingIdentity:
 
         r = JobSpec(name="j", service="sing", env_vars={"_AZUREML_SINGULARITY_JOB_UAI": "/subs/other/uai/missing"}, backend_spec=AmlOpts(workspace_name="ws"))
         client = MagicMock()
-        client.get_workspace.return_value = {
+        client.info.return_value = {
             "identity": {
                 "userAssignedIdentities": {
                     "/subs/1/rg/Identity/providers/ManagedIdentity/uai/RL": {
@@ -697,7 +699,7 @@ class TestResolveSingIdentity:
 
         r = JobSpec(name="j", service="sing", env_vars={"_AZUREML_SINGULARITY_JOB_UAI": "/subs/1/uai/missing"}, backend_spec=AmlOpts(workspace_name="ws"))
         client = MagicMock()
-        client.get_workspace.return_value = {"identity": {}}
+        client.info.return_value = {"identity": {}}
         with pytest.raises(ConfigError, match=r"Available UAIs: \(none\)"):
             _resolve_sing_identity(r, client)
 
@@ -719,12 +721,12 @@ class TestBuildStorageMounts:
                 ),
             }, backend_spec=AmlOpts(subscription_id="sub1", resource_group="rg1", workspace_name="ws1"))
         client = MagicMock()
-        client.datastores.get.return_value = None  # not found
+        client.ds.get.return_value = None  # not found
         outputs, poc, env = _build_storage_mounts(r, client)
 
         # Datastore should have been created with deterministic hash-based name
-        client.datastores.get_or_create.assert_called_once()
-        call_kwargs = client.datastores.get_or_create.call_args
+        client.ds.get_or_create.assert_called_once()
+        call_kwargs = client.ds.get_or_create.call_args
         from azure_jobs.server.submit.azureml.storage import _datastore_name
 
         expected_ds = _datastore_name(
@@ -753,13 +755,13 @@ class TestBuildStorageMounts:
                 ),
             }, backend_spec=AmlOpts(subscription_id="s", resource_group="r", workspace_name="w"))
         client = MagicMock()
-        client.datastores.get.return_value = {
+        client.ds.get.return_value = {
             "name": "ds_deadbeef"
         }  # already exists
         outputs, poc, env = _build_storage_mounts(r, client)
 
         # get_or_create_datastore is called (it handles get/create internally)
-        client.datastores.get_or_create.assert_called_once()
+        client.ds.get_or_create.assert_called_once()
         assert "data" in outputs
 
 

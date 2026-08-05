@@ -1,4 +1,4 @@
-"""Workspace environment management (client.environments)."""
+"""Workspace environment management (client.env)."""
 
 from __future__ import annotations
 

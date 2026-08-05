@@ -32,7 +32,7 @@ aj daemon status                 # is one running, and what is it doing
 aj daemon start / stop / restart # restart after upgrading aj
 
 # It speaks ordinary HTTP over a Unix socket, so it needs no special tooling:
-curl -s --unix-socket ~/.cache/../aj/daemon.sock http://d/v1/info
+curl -s --unix-socket ~/.cache/../aj/daemon.sock http://d/v2/info
 curl -s --unix-socket ... http://d/openapi.json  # generated API schema
 aj daemon stop --force           # stop even if submissions are running
 ```

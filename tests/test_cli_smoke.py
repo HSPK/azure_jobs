@@ -60,6 +60,28 @@ _UNKNOWN = NOT_INVOKED - {path for path, _ in ALL_COMMANDS}
 assert not _UNKNOWN, f"exclusions that match no command: {sorted(_UNKNOWN)}"
 
 
+def test_root_help_groups_every_visible_command_once() -> None:
+    result = CliRunner().invoke(main, ["--help"])
+    assert result.exit_code == 0
+    headings = (
+        "Getting Started:",
+        "Jobs:",
+        "Azure Resources:",
+        "Project:",
+        "System:",
+    )
+    positions = [result.output.index(heading) for heading in headings]
+    assert positions == sorted(positions)
+
+    root_commands = [
+        name
+        for _heading, names in main._COMMAND_GROUPS
+        for name in names
+    ]
+    for name in root_commands:
+        assert result.output.count(f"  {name} ") == 1, name
+
+
 @pytest.mark.parametrize("path", [p for p, _ in ALL_COMMANDS])
 def test_help_renders(path: str) -> None:
     """Catches an import or decorator error in the command's module."""

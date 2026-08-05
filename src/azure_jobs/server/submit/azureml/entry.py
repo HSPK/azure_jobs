@@ -9,9 +9,9 @@ from typing import TYPE_CHECKING, Callable
 import requests
 
 if TYPE_CHECKING:
-    from azure_jobs.server.az_client import AzureMLClient
+    from azure_jobs.server.az_client import AzureWorkspaceClient
 
-from azure_jobs.server.az_client import AzureARMClient
+from azure_jobs.server.az_client import AzureClient
 from azure_jobs.shared.job.spec import JobEvent, JobResult, JobSpec
 
 from azure_jobs.shared.errors import AJError, parse_exception_message
@@ -35,10 +35,10 @@ log = logging.getLogger(__name__)
 __all__ = ["submit", "_get_rest_client", "_build_env_vars"]
 
 
-def _get_rest_client(aml: AmlOpts) -> AzureMLClient:
-    from azure_jobs.server.az_client import AzureMLClient
+def _get_rest_client(aml: AmlOpts) -> AzureWorkspaceClient:
+    from azure_jobs.server.az_client import AzureWorkspaceClient
 
-    return AzureMLClient(
+    return AzureWorkspaceClient(
         subscription_id=aml.subscription_id,
         resource_group=aml.resource_group,
         workspace_name=aml.workspace_name,
@@ -97,71 +97,92 @@ def _submit_impl(
         )
 
     _status("resolve", "Resolving Azure coordinates…")
-    arm = AzureARMClient()
-    aml = resolve_target(request, arm_client=arm)
-    vc = arm.vc.quota.get_by_name(aml.compute) if request.service == "sing" else None
+    with AzureClient() as azure:
+        aml = resolve_target(request, arm_client=azure)
+        vc = (
+            azure.quota.get_by_name(aml.compute)
+            if request.service == "sing"
+            else None
+        )
 
-    _status("auth", "Authenticating…")
-    client = _get_rest_client(aml)
+        _status("auth", "Authenticating…")
+        with _get_rest_client(aml) as workspace:
+            _status("command", "Building command…")
+            distribution = _build_distribution(request)
+            identity = _build_identity(request)
+            compute = _resolve_compute(request)
+            resources = _build_resources(
+                request,
+                client=azure,
+                compute_id=compute,
+                on_log=_status,
+                vc=vc,
+            )
 
-    _status("command", "Building command…")
-    distribution = _build_distribution(request)
-    identity = _build_identity(request)
-    compute = _resolve_compute(request)
-    resources = _build_resources(
-        request, client=arm, compute_id=compute, on_log=_status, vc=vc
-    )
+            identity_client_id = ""
+            if request.service == "sing":
+                _status("identity", "Resolving Singularity identity…")
+                identity_client_id = (
+                    _resolve_sing_identity(request, workspace) or ""
+                )
 
-    identity_client_id = ""
-    if request.service == "sing":
-        _status("identity", "Resolving Singularity identity…")
-        identity_client_id = _resolve_sing_identity(request, client) or ""
+            runner_script = generate_runner_script(request, identity_client_id)
+            extra_files: dict[str, str | bytes] = {
+                RUNNER_FILENAME: runner_script
+            }
+            code_root = request.code_dir or os.getcwd()
+            extra_files.update(_collect_ssh_files(code_root, emit))
 
-    runner_script = generate_runner_script(request, identity_client_id)
-    extra_files: dict[str, str | bytes] = {RUNNER_FILENAME: runner_script}
-    code_root = request.code_dir or os.getcwd()
-    extra_files.update(_collect_ssh_files(code_root, emit))
+            _status("environment", "Preparing environment…")
+            env_id = _build_environment(request, workspace)
 
-    _status("environment", "Preparing environment…")
-    env_id = _build_environment(request, client)
+            _status(
+                "storage",
+                f"Configuring {len(request.storage)} storage mount(s)…",
+            )
+            outputs, poc_props, dataref_env = _build_storage_mounts(
+                request, workspace
+            )
+            env_vars = _build_env_vars(request, dataref_env)
 
-    _status("storage", f"Configuring {len(request.storage)} storage mount(s)…")
-    outputs, poc_props, dataref_env = _build_storage_mounts(request, client)
-    env_vars = _build_env_vars(request, dataref_env)
+            _status("code", "Uploading code…")
+            code_id = workspace.blob.upload_code(
+                code_root,
+                ignore_patterns=request.code_ignore or None,
+                extra_files=extra_files,
+                on_progress=_on_upload,
+            )
 
-    _status("code", "Uploading code…")
-    code_id = client.blob.upload_code(
-        code_root,
-        ignore_patterns=request.code_ignore or None,
-        extra_files=extra_files,
-        on_progress=_on_upload,
-    )
+            _status("submit", f"Submitting to {aml.compute}…")
+            job_body = _build_job_body(
+                request,
+                env_id=env_id,
+                code_id=code_id,
+                compute_id=compute,
+                env_vars=env_vars,
+                distribution=distribution,
+                identity=identity,
+                resources=resources,
+                outputs=outputs,
+                custom_props=dict(poc_props) if poc_props else None,
+                tags=_build_tags(aml.tags),
+            )
+            returned_job = workspace.job.create_or_update(
+                request.name, job_body
+            )
 
-    _status("submit", f"Submitting to {aml.compute}…")
-    job_body = _build_job_body(
-        request,
-        env_id=env_id,
-        code_id=code_id,
-        compute_id=compute,
-        env_vars=env_vars,
-        distribution=distribution,
-        identity=identity,
-        resources=resources,
-        outputs=outputs,
-        custom_props=dict(poc_props) if poc_props else None,
-        tags=_build_tags(aml.tags),
-    )
-    returned_job = client.jobs.create_or_update(request.name, job_body)
+            portal_url = (
+                ((returned_job.get("properties") or {}).get("services") or {})
+                .get("Studio", {})
+                .get("endpoint")
+                or ""
+            )
+            azure_name = returned_job.get("name", "") or request.name
+            _status("done", f"Job {azure_name} submitted")
 
-    portal_url = ((returned_job.get("properties") or {}).get("services") or {}).get(
-        "Studio", {}
-    ).get("endpoint") or ""
-    azure_name = returned_job.get("name", "") or request.name
-    _status("done", f"Job {azure_name} submitted")
-
-    return JobResult(
-        job_name=request.name,
-        azure_name=azure_name,
-        status="submitted",
-        portal_url=portal_url,
-    )
+            return JobResult(
+                job_name=request.name,
+                azure_name=azure_name,
+                status="submitted",
+                portal_url=portal_url,
+            )

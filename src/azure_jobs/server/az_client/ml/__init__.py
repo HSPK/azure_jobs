@@ -20,8 +20,8 @@ from .logs import DEFAULT_POLL_INTERVAL, LogsAPI, LogStreamer
 from .models import DatastoreInfo, EnvironmentInfo
 from azure_jobs.shared.types.vm_gpu import AML_VM_GPU, vm_sku_label
 
-class AzureMLClient:
-    """REST client for Azure ML workspace operations."""
+class AzureWorkspaceClient:
+    """Workspace-scoped Azure ML resources, mirroring ``d.ws(name)``."""
 
     def __init__(
         self,
@@ -30,13 +30,13 @@ class AzureMLClient:
         workspace_name: str,
     ) -> None:
         self._ctx = RestContext(subscription_id, resource_group, workspace_name)
-        self.jobs = JobsAPI(self._ctx)
-        self.environments = EnvironmentsAPI(self._ctx)
-        self.datastores = DatastoresAPI(self._ctx)
+        self.job = JobsAPI(self._ctx)
+        self.env = EnvironmentsAPI(self._ctx)
+        self.ds = DatastoresAPI(self._ctx)
         self.blob = BlobAPI(self._ctx)
-        self.logs = LogsAPI(self._ctx)
+        self.log = LogsAPI(self._ctx)
 
-    def get_workspace(self) -> dict[str, Any]:
+    def info(self) -> dict[str, Any]:
         """Fetch full workspace details (cached for the client's lifetime)."""
         return self._ctx.get_workspace()
 
@@ -44,40 +44,15 @@ class AzureMLClient:
         """Close the underlying HTTP session."""
         self._ctx.close()
 
-    def __enter__(self) -> "AzureMLClient":
+    def __enter__(self) -> "AzureWorkspaceClient":
         return self
 
     def __exit__(self, *exc: Any) -> None:
         self.close()
 
-def create_rest_client(
-    workspace: Any = None,
-    *,
-    ws_name: str | None = None,
-) -> AzureMLClient:
-    """Factory: create a REST client from workspace config."""
-    from azure_jobs.shared.errors import WorkspaceError
-
-    if workspace is None:
-        from azure_jobs.server.discovery import resolve_workspace
-
-        workspace = resolve_workspace(ws_name)
-    required = ("subscription_id", "resource_group", "workspace_name")
-    missing = [k for k in required if not getattr(workspace, k, "")]
-    if missing:
-        raise WorkspaceError(
-            f"Workspace config incomplete — missing: {', '.join(missing)}. "
-            "Run `aj ws set` to configure."
-        )
-    return AzureMLClient(
-        subscription_id=workspace.subscription_id,
-        resource_group=workspace.resource_group,
-        workspace_name=workspace.workspace_name,
-    )
-
 __all__ = [
     "AML_VM_GPU",
-    "AzureMLClient",
+    "AzureWorkspaceClient",
     "BlobAPI",
     "DEFAULT_POLL_INTERVAL",
     "DatastoreInfo",
@@ -95,7 +70,6 @@ __all__ = [
     "WorkspaceFailureCallback",
     "WorkspaceStartCallback",
     "apply_cutoff",
-    "create_rest_client",
     "fetch_jobs_all_workspaces",
     "vm_sku_label",
 ]

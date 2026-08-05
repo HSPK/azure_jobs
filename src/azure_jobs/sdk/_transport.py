@@ -185,7 +185,7 @@ class DaemonClient:
         message = f"{method} {url} returned {response.status_code}" + (
             f": {detail}" if detail else ""
         )
-        if response.status_code == 404 and url.startswith(R.API_V1):
+        if response.status_code == 404 and url.startswith(R.API_PREFIX):
             # A route this build knows about is missing, so the daemon is
             # almost certainly an older process that predates it. Say so:
             # a bare 404 sends people looking for a missing job instead.

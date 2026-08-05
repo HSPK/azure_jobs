@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import ast
 import inspect
+import re
 from pathlib import Path
 
 import pytest
@@ -233,7 +234,7 @@ def test_routes_are_version_prefixed():
     from azure_jobs.shared.contract import routes as R
 
     for path in (R.ping(), R.info(), R.jobs("t"), R.subscriptions(), R.events()):
-        assert path.startswith(f"{R.API_V1}/")
+        assert path.startswith(f"{R.API_PREFIX}/")
 
 
 def test_the_sdk_builds_urls_from_the_shared_route_table():
@@ -242,7 +243,7 @@ def test_the_sdk_builds_urls_from_the_shared_route_table():
     for path in SDK.rglob("*.py"):
         source = path.read_text(encoding="utf-8")
         # Every request goes through R.<helper>(...), never a literal path.
-        if '"/v1' in source or "'/v1" in source:
+        if re.search(r"""["']/v\d+""", source):
             offenders.append(str(path.relative_to(SDK)))
     assert offenders == [], offenders
 
@@ -283,6 +284,33 @@ def test_the_server_backend_exposes_every_port():
         assert (
             f"self.{attribute}" in source or f"def {attribute}" in source
         ), f"AzureBackend is missing {attribute}"
+
+
+def test_server_azure_clients_follow_the_public_sdk_namespace_shape():
+    """Both sides use account root + callable workspace scope + resources."""
+    from azure_jobs.server.az_client import AzureClient, AzureWorkspaceClient
+
+    with AzureClient() as azure:
+        for name in ("subscription", "ws", "sku", "sa", "uai", "image", "quota", "compute"):
+            assert hasattr(azure, name), name
+        for legacy in (
+            "subscriptions",
+            "workspace",
+            "instance_types",
+            "storage",
+            "identity",
+        ):
+            assert not hasattr(azure, legacy), legacy
+
+        scoped = azure.ws("sub", "rg", "workspace")
+        try:
+            assert isinstance(scoped, AzureWorkspaceClient)
+            for name in ("job", "log", "ds", "env", "info"):
+                assert hasattr(scoped, name), name
+            for legacy in ("jobs", "logs", "datastores", "environments"):
+                assert not hasattr(scoped, legacy), legacy
+        finally:
+            scoped.close()
 
 
 def test_the_sdk_covers_every_capability_the_server_offers():
@@ -363,7 +391,10 @@ def test_cli_does_not_construct_azure_clients():
     offenders = []
     for path in CLI.rglob("*.py"):
         source = path.read_text(encoding="utf-8")
-        for needle in ("AzureARMClient(", "create_rest_client(", "AzureMLClient("):
+        for needle in (
+            "AzureClient(",
+            "AzureWorkspaceClient(",
+        ):
             if needle in source:
                 offenders.append(f"{path.name}: {needle}")
     assert offenders == [], offenders

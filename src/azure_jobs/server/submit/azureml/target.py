@@ -10,7 +10,7 @@ from .image import _SING_IMAGE_PREFIX
 from azure_jobs.shared.opts import AmlOpts
 
 if TYPE_CHECKING:
-    from azure_jobs.server.az_client import AzureMLClient
+    from azure_jobs.server.az_client import AzureClient, AzureWorkspaceClient
 
 log = logging.getLogger(__name__)
 
@@ -47,7 +47,7 @@ def _build_resources(
     request: JobSpec,
     compute_id: str,
     vc: Any,
-    client: AzureMLClient,
+    client: AzureClient,
     on_log: Any = None,
 ) -> dict[str, Any] | None:
     if request.service != "sing":
@@ -127,7 +127,7 @@ def _build_resources(
 
 def _resolve_sing_identity(
     request: JobSpec,
-    client: AzureMLClient,
+    client: AzureWorkspaceClient,
 ) -> str | None:
     if request.service != "sing":
         return None
@@ -138,7 +138,7 @@ def _resolve_sing_identity(
 
     from azure_jobs.shared.errors import ConfigError
 
-    ws = client.get_workspace()
+    ws = client.info()
     uais = (ws.get("identity") or {}).get("userAssignedIdentities") or {}
     wanted = uai_resource_id.lower().rstrip("/")
     for rid, props in uais.items():

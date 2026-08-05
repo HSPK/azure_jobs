@@ -1,4 +1,4 @@
-"""arm.compute — Azure ML compute target listing and lookup."""
+"""``az.compute`` — Azure ML compute target listing and lookup."""
 
 from __future__ import annotations
 
@@ -108,7 +108,7 @@ class ComputesAPI(ArmNamespace):
         from azure_jobs.server.concurrent import parallel_each
 
         if workspaces is None:
-            workspaces = self._client.workspace.list()
+            workspaces = self._client.ws.list()
             self._client.ensure_token()
         if not workspaces:
             return []

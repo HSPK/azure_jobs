@@ -48,6 +48,16 @@ class _LazyGroup(click.Group):
         ".watch": ("watch",),
     }
     _ALIASES_MODULE = "._aliases"
+    _COMMAND_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
+        ("Getting Started", ("init", "run", "dash")),
+        ("Jobs", ("job", "exp", "queue", "watch", "list")),
+        (
+            "Azure Resources",
+            ("ws", "ds", "env", "image", "sku", "quota", "sa", "uai"),
+        ),
+        ("Project", ("template", "config", "code")),
+        ("System", ("auth", "daemon")),
+    )
 
     _cmd_map_cache: dict[str, str] | None = None
 
@@ -73,7 +83,49 @@ class _LazyGroup(click.Group):
 
     def list_commands(self, ctx: click.Context) -> list[str]:
         self._load_all()
-        return super().list_commands(ctx)
+        available = set(super().list_commands(ctx))
+        ordered = [
+            name
+            for _title, names in self._COMMAND_GROUPS
+            for name in names
+            if name in available
+        ]
+        return ordered + sorted(available - set(ordered))
+
+    def format_commands(
+        self,
+        ctx: click.Context,
+        formatter: click.HelpFormatter,
+    ) -> None:
+        """Show the flat Click command set in stable, task-oriented groups."""
+        self._load_all()
+        visible = {
+            name: command
+            for name in super().list_commands(ctx)
+            if (command := self.get_command(ctx, name)) is not None
+            and not command.hidden
+        }
+        rendered: set[str] = set()
+        for title, names in self._COMMAND_GROUPS:
+            rows = [
+                (name, visible[name].get_short_help_str())
+                for name in names
+                if name in visible
+            ]
+            if not rows:
+                continue
+            with formatter.section(title):
+                formatter.write_dl(rows)
+            rendered.update(name for name, _help in rows)
+
+        other = [
+            (name, command.get_short_help_str())
+            for name, command in visible.items()
+            if name not in rendered
+        ]
+        if other:
+            with formatter.section("Other"):
+                formatter.write_dl(sorted(other))
 
     def get_command(
         self, ctx: click.Context, cmd_name: str

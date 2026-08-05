@@ -193,8 +193,8 @@ def create_app(state: DaemonState) -> FastAPI:
 
         Deliberately does not flatten failures: a workspace that cannot be
         resolved is a domain error the user must act on, and turning it into a
-        bare status code would reach the client as a *transport* error, which
-        ``ResilientBackend`` would then retry as if the daemon had died.
+        bare status code would reach the client as a *transport* error rather
+        than the actionable ``WorkspaceError``.
         """
         return state.contexts.context(_root_of(root), ws)
 

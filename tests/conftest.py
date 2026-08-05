@@ -133,7 +133,7 @@ def local_daemon(tmp_path, monkeypatch):
 @pytest.fixture(autouse=True)
 def _stub_azure_resolvers():
     """Avoid hitting Azure Resource Graph / ARM during submit pipeline tests."""
-    from azure_jobs.server.az_client import VCInfo, WorkspaceInfo
+    from azure_jobs.shared.types.azure import VCInfo, WorkspaceInfo
 
     fake_vc = VCInfo(
         name="stub-vc",

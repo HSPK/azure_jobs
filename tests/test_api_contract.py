@@ -268,7 +268,7 @@ class TestApiCoverage:
         harness = _over_daemon()
         try:
             with pytest.raises(Exception) as caught:
-                harness.rpc.get("/v1/teleport")
+                harness.rpc.get("/v2/teleport")
             assert "404" in str(caught.value)
         finally:
             harness.close()
@@ -287,8 +287,8 @@ class TestApiVersioning:
             harness.close()
 
     def test_routes_are_version_prefixed(self):
-        assert R.ping().startswith("/v1/")
-        assert R.jobs("t").startswith("/v1/")
+        assert R.ping().startswith("/v2/")
+        assert R.jobs("t").startswith("/v2/")
 
     def test_an_unknown_workspace_is_an_error_not_a_crash(self):
         harness = _over_daemon()

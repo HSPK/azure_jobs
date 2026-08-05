@@ -5,9 +5,10 @@ Needs the ARM API, so it runs where the submission runs.
 
 from __future__ import annotations
 
-from azure_jobs.server.az_client import AzureARMClient, VCInfo
+from azure_jobs.server.az_client import AzureClient
 from azure_jobs.shared.errors import SkuResolveError
 from azure_jobs.shared.sku import MatchedInstances, SkuSpec, tier_chain
+from azure_jobs.shared.types.azure import SeriesQuota, SlaTierQuota, VCInfo
 from azure_jobs.shared.types.instance import InstanceTypeInfo
 
 _AMD_GPUS = frozenset({"MI50", "MI100", "MI200", "MI300X"})
@@ -34,7 +35,7 @@ def match_instance_type(
     *,
     vc: VCInfo,
     tier: str,
-    client: AzureARMClient,
+    client: AzureClient,
     nodes: int = 0,
     gpus_per_node: int = 0,
 ) -> MatchedInstances:
@@ -44,7 +45,7 @@ def match_instance_type(
 
     vc_series = {sq.series for sq in vc.quotas}
     series_catalog: dict[str, list[InstanceTypeInfo]] = {}
-    for row in client.instance_types.list(region, subscription_id=vc.subscription_id):
+    for row in client.sku.list(region, subscription_id=vc.subscription_id):
         if row.series_id in vc_series:
             series_catalog.setdefault(row.series_id, []).append(row)
 

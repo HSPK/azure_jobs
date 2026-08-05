@@ -1,4 +1,4 @@
-"""arm.vc — Singularity virtual cluster discovery + name resolution."""
+"""``az.vc`` — raw Singularity virtual cluster discovery."""
 
 from __future__ import annotations
 
@@ -99,7 +99,7 @@ def parse_managed_quotas(
     return results
 
 class VCQuotaAPI(ArmNamespace):
-    """arm.vc.quota — parsed-quota view over Singularity VCs."""
+    """``az.quota`` — parsed-quota view over Singularity VCs."""
 
     def list(
         self,
@@ -139,10 +139,6 @@ class VCQuotaAPI(ArmNamespace):
         return matches[0]
 
 class VirtualClustersAPI(ArmNamespace):
-    def __init__(self, client) -> None:  # type: ignore[no-untyped-def]
-        super().__init__(client)
-        self.quota = VCQuotaAPI(client)
-
     def list(
         self,
         subscription_ids: list[str] | None = None,
@@ -152,7 +148,7 @@ class VirtualClustersAPI(ArmNamespace):
         """List Singularity VCs across every subscription the user can see."""
         if not subscription_ids:
             try:
-                subscription_ids = self._client.subscriptions.list()
+                subscription_ids = self._client.subscription.list()
             except NETWORK_LIKE_ERRORS as exc:
                 log.warning("VC list: subscription enumeration failed: %s", exc)
                 return []
@@ -168,7 +164,7 @@ class VirtualClustersAPI(ArmNamespace):
             query += "\n| project name, resourceGroup, subscriptionId"
 
         try:
-            rows = self._client.graph.query(query, subscription_ids)
+            rows = self._client._graph.query(query, subscription_ids)
         except NETWORK_LIKE_ERRORS as exc:
             log.warning("VC list: Resource Graph query failed: %s", exc)
             return []

@@ -8,6 +8,7 @@ from ..auth import TIMEOUT_STANDARD, AuthSession, raise_for_rest_error
 from .compute import ComputesAPI
 from .graph import ResourceGraphAPI
 from .identity import IdentitiesAPI
+from .image import ImagesAPI
 from .instance_types import InstanceTypeInfo, InstanceTypesAPI
 from azure_jobs.shared.types.azure import (
     SLA_TIERS,
@@ -24,19 +25,21 @@ from .subscriptions import SubscriptionsAPI
 from .vc import VCQuotaAPI, VirtualClustersAPI, parse_managed_quotas
 from .workspace import WorkspacesAPI
 
-class AzureARMClient(AuthSession):
-    """Lightweight authenticated client for Azure Resource Manager APIs."""
+class AzureClient(AuthSession):
+    """Account-scoped Azure resources, mirroring the public SDK namespaces."""
 
     def __init__(self) -> None:
         super().__init__()
-        self.subscriptions = SubscriptionsAPI(self)
-        self.graph = ResourceGraphAPI(self)
+        self.subscription = SubscriptionsAPI(self)
+        self.ws = WorkspacesAPI(self)
+        self.sku = InstanceTypesAPI(self)
+        self.sa = StoragesAPI(self)
+        self.uai = IdentitiesAPI(self)
+        self.image = ImagesAPI(self)
+        self.quota = VCQuotaAPI(self)
         self.vc = VirtualClustersAPI(self)
         self.compute = ComputesAPI(self)
-        self.workspace = WorkspacesAPI(self)
-        self.identity = IdentitiesAPI(self)
-        self.storage = StoragesAPI(self)
-        self.instance_types = InstanceTypesAPI(self)
+        self._graph = ResourceGraphAPI(self)
 
     def get(self, url: str, *, timeout: int = TIMEOUT_STANDARD) -> dict[str, Any]:
         """Authenticated GET, returns parsed JSON."""
@@ -59,10 +62,11 @@ class AzureARMClient(AuthSession):
         return resp.json()
 
 __all__ = [
-    "AzureARMClient",
+    "AzureClient",
     "ComputeInfo",
     "ComputesAPI",
     "IdentitiesAPI",
+    "ImagesAPI",
     "InstanceTypeInfo",
     "InstanceTypesAPI",
     "ManagedIdentityInfo",

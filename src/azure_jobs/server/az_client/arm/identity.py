@@ -1,4 +1,4 @@
-"""arm.identity — user-assigned managed identity discovery."""
+"""``az.uai`` — user-assigned managed identity discovery."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ class IdentitiesAPI(ArmNamespace):
         """Discover all user-assigned managed identities the user can read."""
         if not subscription_ids:
             try:
-                subscription_ids = self._client.subscriptions.list()
+                subscription_ids = self._client.subscription.list()
             except NETWORK_LIKE_ERRORS:
                 return []
         if not subscription_ids:
@@ -29,7 +29,7 @@ class IdentitiesAPI(ArmNamespace):
             "principalId = tostring(properties.principalId)"
         )
         try:
-            rows = self._client.graph.query(query, subscription_ids)
+            rows = self._client._graph.query(query, subscription_ids)
         except NETWORK_LIKE_ERRORS:
             return []
         return [
