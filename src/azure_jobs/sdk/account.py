@@ -9,13 +9,13 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from azure_jobs.client.sdk._resource import Namespace
-from azure_jobs.client.sdk.workspace import WorkspaceClient
+from azure_jobs.sdk._resource import Namespace
+from azure_jobs.sdk.workspace import WorkspaceClient
 from azure_jobs.shared.contract import routes as R
 from azure_jobs.shared.contract.models import CatalogItem, Target
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    from azure_jobs.client.connection import DaemonClient
+    from azure_jobs.sdk._transport import DaemonClient
 
 
 class AuthNamespace(Namespace):
@@ -119,16 +119,17 @@ class WorkspaceNamespace(Namespace):
         super().__init__(client)
         self._default = default
 
-    def __call__(self, ws_name: str = "") -> WorkspaceClient:
+    def __call__(self, ws_name: str | Target = "") -> WorkspaceClient:
         """Scope to *ws_name*; no name means the one the root already uses.
 
         Returns the *same* object the root shorthands delegate to, so
         ``d.ws().job is d.job``. Building a fresh one would quietly discard an
         explicitly pinned workspace and scope to the configured one instead.
         """
-        if not ws_name or ws_name == self._default.name:
+        name = ws_name.label if isinstance(ws_name, Target) else ws_name
+        if not name or name == self._default.name:
             return self._default
-        return WorkspaceClient(self._c, ws_name)
+        return WorkspaceClient(self._c, name)
 
     def list(self, *, subscription_id: str = "") -> list[Target]:
         rows = self._c.get(

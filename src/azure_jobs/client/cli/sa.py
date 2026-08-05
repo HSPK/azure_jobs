@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import click
-
 import logging
 
 from azure_jobs.client.cli import main
+from azure_jobs.shared.errors import AJError
 
 log = logging.getLogger(__name__)
 
@@ -17,18 +16,17 @@ def sa_group() -> None:
 @sa_group.command(name="list")
 def sa_list() -> None:
     """List storage accounts across accessible subscriptions."""
-    from azure_jobs.client.cli._backend import client
+    from azure_jobs import connect
     from azure_jobs.client.ui import console, error, show_storage_accounts_table
 
     with console.status(
         "[bold cyan]Discovering storage accounts…[/bold cyan]", spinner="dots"
     ):
         try:
-            with client() as d:
+            with connect() as d:
                 accounts = d.sa.list()
-        except click.ClickException:
-            # An unreachable daemon already explains how to recover;
-            # wrapping it again would bury the instructions.
+        except AJError:
+            # The root CLI renders domain errors once, with recovery steps.
             raise
         except Exception as exc:
             log.exception("Could not list storage accounts")

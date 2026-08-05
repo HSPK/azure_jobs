@@ -9,7 +9,7 @@ from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.widgets import Input, OptionList
 
-from azure_jobs.client.connection import ClientFactory, WorkspaceCatalog
+from azure_jobs.sdk import AjClient, connect
 from azure_jobs.client.tui.bindings import (
     COMMAND_BINDINGS,
     CommandHandler,
@@ -54,6 +54,7 @@ class AjDashboard(App):
         page_size: int | None = None,
         *,
         mouse: bool = False,
+        sdk: AjClient | None = None,
         workspace_catalog: TargetCatalog | None = None,
         session_factory: SessionFactory | None = None,
         features: Sequence[DashboardFeature] = (),
@@ -62,6 +63,13 @@ class AjDashboard(App):
         super().__init__(**kwargs)
         self._mouse = mouse
         self._shutting_down = False
+        self._sdk = sdk
+        self._owns_sdk = False
+        if self._sdk is None and (
+            workspace_catalog is None or session_factory is None
+        ):
+            self._sdk = connect()
+            self._owns_sdk = True
         limit = validate_last(last)
         size = validate_page_size(
             page_size if page_size is not None else get_page_size()
@@ -78,12 +86,14 @@ class AjDashboard(App):
         )
         self.logs_store = LogsStore(self.events)
 
+        catalog = workspace_catalog or self._sdk.ws
+        sessions = session_factory or self._sdk.ws
         self.workspace = WorkspaceController(
             self.ui.target,
             self.tasks,
             self.target_store,
-            catalog=workspace_catalog or WorkspaceCatalog(),
-            session_factory=session_factory or ClientFactory(),
+            catalog=catalog,
+            session_factory=sessions,
         )
         self.jobs = JobsController(
             self.ui.jobs,
@@ -222,6 +232,8 @@ class AjDashboard(App):
             self._feature_registry.shutdown()
         finally:
             self.tasks.shutdown()
+            if self._owns_sdk and self._sdk is not None:
+                self._sdk.close()
 
     def on_unmount(self) -> None:
         self._shutdown_dashboard()

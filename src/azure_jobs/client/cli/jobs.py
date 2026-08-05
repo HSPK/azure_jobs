@@ -77,10 +77,10 @@ def job_list(
     ws_name: str | None,
 ) -> None:
     """List recent jobs in the cloud workspace."""
-    from azure_jobs.client.cli._backend import client
+    from azure_jobs import connect
     from azure_jobs.client.ui import console, show_cloud_jobs_table
 
-    with client(ws_name) as d:
+    with connect(ws_name or "") as d:
         with console.status("[bold cyan]Fetching jobs…[/bold cyan]", spinner="dots"):
             jobs = d.job.list(
                 limit=last,
@@ -95,14 +95,14 @@ def job_list(
 
 def _fetch_and_show_job(job_id: str, ws_name: str | None = None) -> None:
     from azure_jobs.shared.contract.models import JobRef
-    from azure_jobs.client.cli._backend import client
+    from azure_jobs import connect
     from azure_jobs.shared.errors import RestError
     from azure_jobs.client.ui import console, error, show_job_detail
 
     name = resolve_short_id(job_id)
 
     try:
-        with client(ws_name) as d:
+        with connect(ws_name or "") as d:
             with console.status(
                 "[bold cyan]Fetching job…[/bold cyan]", spinner="dots"
             ):
@@ -147,7 +147,7 @@ def job_status(job_id: str) -> None:
 def job_cancel(job_id: str) -> None:
     """Cancel a running job."""
     from azure_jobs.shared.contract.models import JobRef
-    from azure_jobs.client.cli._backend import client
+    from azure_jobs import connect
     from azure_jobs.client.ui import (
         console,
         get_output_mode,
@@ -160,7 +160,7 @@ def job_cancel(job_id: str) -> None:
     json_mode = get_output_mode() == "json"
     ref = JobRef(azure_name, azure_name)
 
-    with client() as d:
+    with connect() as d:
         with console.status("[bold cyan]Checking job…[/bold cyan]", spinner="dots"):
             current = d.job.status(ref).status
         final = current
@@ -212,7 +212,7 @@ def job_cancel(job_id: str) -> None:
 def job_logs(job_id: str) -> None:
     """Show logs from a job."""
     from azure_jobs.shared.contract.models import JobRef
-    from azure_jobs.client.cli._backend import client
+    from azure_jobs import connect
     from azure_jobs.client.ui import (
         console,
         emit_json,
@@ -225,7 +225,7 @@ def job_logs(job_id: str) -> None:
     json_mode = get_output_mode() == "json"
     ref = JobRef(azure_name, azure_name)
 
-    with client() as d:
+    with connect() as d:
         with console.status(
             "[bold cyan]Checking job status…[/bold cyan]", spinner="dots"
         ):

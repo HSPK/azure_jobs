@@ -14,10 +14,10 @@ def sku_group() -> None:
 @click.option("--all", "show_all", is_flag=True, help="Include zero-quota families")
 def sku_list(show_all: bool) -> None:
     """List available SKUs on Singularity virtual clusters."""
-    from azure_jobs.client.cli._backend import client
+    from azure_jobs import connect
     from azure_jobs.client.ui import console, error, show_sku_table
 
-    with client() as d:
+    with connect() as d:
         with console.status(
             "[bold cyan]Discovering virtual clusters…[/bold cyan]", spinner="dots"
         ):

@@ -15,8 +15,8 @@ from pathlib import Path
 import pytest
 
 from azure_jobs.shared.contract import routes as R
-from azure_jobs.client.connection import DaemonClient, _reachable
-from azure_jobs.client.sdk import AjClient
+from azure_jobs.sdk import AjClient
+from azure_jobs.sdk._transport import DaemonClient, _reachable
 from azure_jobs.server.runner import Daemon
 from azure_jobs.shared.version import aj_version
 from azure_jobs.shared.contract.errors import ProtocolMismatch, RemoteError
@@ -299,8 +299,8 @@ class TestApiVersioning:
             with pytest.raises(WorkspaceError) as caught:
                 harness.rpc.get(R.jobs("no-such-workspace"))
             assert "not found" in str(caught.value)
-            # Not a transport failure: ResilientClient must not retry a name
-            # the daemon has already told us does not exist.
+            # Not a transport failure: callers may retry connectivity, but a
+            # workspace the daemon rejected will not become valid by replaying.
             assert not isinstance(caught.value, TransportError)
         finally:
             harness.close()

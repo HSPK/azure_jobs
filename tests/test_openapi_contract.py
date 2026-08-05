@@ -19,9 +19,8 @@ import inspect
 
 import pytest
 
-from azure_jobs.client.sdk import AjClient
-from azure_jobs.client.sdk._resource import Namespace
-from azure_jobs.client.sdk.workspace import WorkspaceClient
+from azure_jobs.sdk import AjClient
+from azure_jobs.sdk.workspace import WorkspaceClient
 from azure_jobs.shared.contract.models import JobQuerySpec
 
 
@@ -208,20 +207,9 @@ def test_the_namespaces_do_not_reach_past_the_transport() -> None:
     allowed = {"get", "post", "delete", "subscribe", "subscribe_raw", "close"}
     for module in ("account", "workspace", "logs"):
         source = inspect.getsource(
-            __import__(f"azure_jobs.client.sdk.{module}", fromlist=["x"])
+            __import__(f"azure_jobs.sdk.{module}", fromlist=["x"])
         )
         for line in source.splitlines():
             if "self._c." in line:
                 verb = line.split("self._c.")[1].split("(")[0].strip()
                 assert verb in allowed, f"{module}: unexpected transport call {verb}"
-
-
-def test_namespaces_are_marked_for_the_reconnect_wrapper() -> None:
-    """`ResilientClient` keeps guarding whatever is marked as a namespace."""
-    client = AjClient(_Recorder())
-    assert isinstance(client.workspace, WorkspaceClient)
-    assert client.workspace._aj_namespace
-    for name in ("auth", "job", "ds", "ws"):
-        namespace = getattr(client, name)
-        assert isinstance(namespace, Namespace)
-        assert namespace._aj_namespace

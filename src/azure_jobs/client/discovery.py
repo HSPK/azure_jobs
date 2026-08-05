@@ -7,38 +7,15 @@ active, or which workspaces exist, ask the daemon and render the answer. The
 
 from __future__ import annotations
 
-from contextlib import contextmanager
 from typing import Any
 
+from azure_jobs import connect
 from azure_jobs.shared.config.models import AJWorkspace
-
-
-@contextmanager
-def _client() -> Any:
-    """One short-lived client per lookup.
-
-    These run during setup, often before a workspace exists, so holding a
-    connection open across the prompts would pin a daemon context to a
-    half-finished ``aj init``.
-    """
-    from azure_jobs.client.connection import daemon_required, open_client
-    from azure_jobs.shared.contract.errors import DaemonUnavailable
-
-    try:
-        handle = open_client()
-    except DaemonUnavailable:
-        raise
-    except Exception as exc:
-        raise daemon_required(exc) from exc
-    try:
-        yield handle
-    finally:
-        handle.close()
 
 
 def auth_status() -> dict[str, Any]:
     """Sign-in and credential health, as the daemon sees them."""
-    with _client() as d:
+    with connect() as d:
         return dict(d.auth.status() or {})
 
 
@@ -73,7 +50,7 @@ def workspaces(subscription_id: str = "") -> list[dict[str, str]]:
     Flattened to the ``name``/``resource_group``/``location`` shape the display
     and prompt code already speaks, rather than leaking ``Target`` upwards.
     """
-    with _client() as d:
+    with connect() as d:
         found = d.ws.list(subscription_id=subscription_id)
     return [
         {
@@ -88,7 +65,7 @@ def workspaces(subscription_id: str = "") -> list[dict[str, str]]:
 
 def resolve(name: str | None = None) -> AJWorkspace | None:
     """Resolve a workspace name, or the configured one when *name* is empty."""
-    with _client() as d:
+    with connect() as d:
         target = d.ws.get(name) if name else d.ws.current()
     if target is None:
         return None

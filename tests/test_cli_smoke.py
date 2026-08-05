@@ -80,7 +80,7 @@ def test_the_body_runs(path: str, aj_env) -> None:
     from unittest.mock import MagicMock, patch
 
     with patch(
-        "azure_jobs.client.connection.open_client", return_value=MagicMock()
+        "azure_jobs.connect", return_value=MagicMock()
     ):
         result = CliRunner().invoke(main, path.split()[1:])
 
@@ -99,7 +99,7 @@ class TestInteractiveCommandsAreWiredUp:
     runs the body. So run the body with the UI stubbed.
     """
 
-    def test_the_dashboard_builds_its_session_factory(self, monkeypatch) -> None:
+    def test_the_dashboard_uses_its_default_sdk(self, monkeypatch) -> None:
         from unittest.mock import MagicMock, patch
 
         from azure_jobs.client.cli.dashboard import dashboard
@@ -107,10 +107,9 @@ class TestInteractiveCommandsAreWiredUp:
         with patch("azure_jobs.client.tui.app.AjDashboard") as app:
             app.return_value = MagicMock()
             result = CliRunner().invoke(dashboard, [])
-
         assert result.exception is None, result.exception
-        factory = app.call_args.kwargs["session_factory"]
-        assert hasattr(factory, "open")
+        assert result.exception is None, result.exception
+        assert "session_factory" not in app.call_args.kwargs
 
     def test_the_dashboard_alias_reaches_the_same_command(self) -> None:
         from unittest.mock import MagicMock, patch

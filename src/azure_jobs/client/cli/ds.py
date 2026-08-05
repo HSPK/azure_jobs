@@ -14,10 +14,10 @@ def ds_group() -> None:
 @click.option("--ws", "ws_name", default=None, help="Workspace name override")
 def ds_list(ws_name: str | None) -> None:
     """List datastores in the current workspace."""
-    from azure_jobs.client.cli._backend import client
+    from azure_jobs import connect
     from azure_jobs.client.ui import console, show_datastores_table
 
-    with client(ws_name) as d:
+    with connect(ws_name or "") as d:
         with console.status(
             "[bold cyan]Fetching datastores…[/bold cyan]", spinner="dots"
         ):
@@ -29,10 +29,10 @@ def ds_list(ws_name: str | None) -> None:
 @click.option("--ws", "ws_name", default=None, help="Workspace name override")
 def ds_show(name: str, ws_name: str | None) -> None:
     """Show details of a datastore."""
-    from azure_jobs.client.cli._backend import client
+    from azure_jobs import connect
     from azure_jobs.client.ui import console, show_datastore_detail, warning
 
-    with client(ws_name) as d:
+    with connect(ws_name or "") as d:
         with console.status(
             f"[bold cyan]Fetching '{name}'…[/bold cyan]", spinner="dots"
         ):

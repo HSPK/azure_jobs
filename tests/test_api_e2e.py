@@ -19,7 +19,7 @@ import pytest
 from click.testing import CliRunner
 
 from azure_jobs.shared.contract import routes as R
-from azure_jobs.client.connection import DaemonClient, _reachable
+from azure_jobs.sdk._transport import DaemonClient, _reachable
 from azure_jobs.shared.contract.errors import DaemonUnavailable
 from azure_jobs.shared.version import aj_version
 
@@ -209,14 +209,14 @@ class TestDaemonCli:
         self, tmp_path, monkeypatch
     ):
         """A missing daemon must be an actionable message, not a traceback."""
-        from azure_jobs.client.cli.queue import queue_list
+        from azure_jobs.client.cli import main
 
         monkeypatch.setenv("AJ_RUNTIME_DIR", str(tmp_path))
         monkeypatch.setattr(
             "azure_jobs.server.targets.ConfigTargetCatalog.configured",
             lambda self: None,
         )
-        result = CliRunner().invoke(queue_list, [])
+        result = CliRunner().invoke(main, ["queue", "list"])
         assert result.exit_code != 0
         # Workspace resolution now happens in the daemon, so the first thing a
         # client can report is that it could not reach one.
@@ -327,8 +327,6 @@ class TestLoginIsRequired:
         self, tmp_path, monkeypatch, allow_daemon_spawn
     ):
         """A refusal must reach the user, not surface as a bare timeout."""
-        from azure_jobs.client import connection
-
         runtime = tmp_path / "rt"
         runtime.mkdir(mode=0o700)
         monkeypatch.setenv("AJ_RUNTIME_DIR", str(runtime))

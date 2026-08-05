@@ -9,14 +9,8 @@ import time
 
 import click
 
+from azure_jobs import connect
 from azure_jobs.client.cli import main
-
-
-def _client():
-    """Open the SDK root for a queue/watch command."""
-    from azure_jobs.client.cli._backend import client
-
-    return client()
 
 
 def desktop_notify(title: str, body: str) -> None:
@@ -61,7 +55,7 @@ def watch_add(job_name: str) -> None:
     from azure_jobs.shared.contract.models import JobRef
     from azure_jobs.client.ui import console
 
-    with _client() as d:
+    with connect() as d:
         job = d.job.status(JobRef(job_name, job_name))
         d.watch.add(job.ref)
         console.print(f"Watching {job.label} (currently {job.status or 'unknown'})")
@@ -74,7 +68,7 @@ def watch_remove(job_name: str) -> None:
     from azure_jobs.shared.contract.models import JobRef
     from azure_jobs.client.ui import console
 
-    with _client() as d:
+    with connect() as d:
         d.watch.remove(JobRef(job_name, job_name))
         console.print(f"Stopped watching {job_name}")
 
@@ -84,7 +78,7 @@ def watch_list() -> None:
     """List jobs the daemon is currently watching."""
     from azure_jobs.client.ui import console
 
-    with _client() as d:
+    with connect() as d:
         refs = d.watch.list()
     if not refs:
         console.print("Not watching anything")
@@ -104,7 +98,7 @@ def watch_listen(desktop: bool, timeout: float) -> None:
     """Stream notifications for watched jobs until interrupted."""
     from azure_jobs.client.ui import console
 
-    d = _client()
+    d = connect()
     deadline = time.time() + timeout if timeout else None
     try:
         d.watch.subscribe(
@@ -115,6 +109,8 @@ def watch_listen(desktop: bool, timeout: float) -> None:
             time.sleep(0.5)
     except KeyboardInterrupt:
         console.print("Stopped listening")
+    finally:
+        d.close()
 
 
 def _render(note, *, desktop: bool, out) -> None:

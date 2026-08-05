@@ -15,7 +15,7 @@ from azure_jobs.shared.contract import routes as R
 
 def _client(path: Path):
     """A short-lived HTTP client for one daemon-control command."""
-    from azure_jobs.client.connection import DaemonClient
+    from azure_jobs.sdk._transport import DaemonClient
     from azure_jobs.shared import const
 
     return DaemonClient(path, Path(const.AJ_HOME).resolve())
@@ -29,7 +29,7 @@ def daemon() -> None:
 @daemon.command(name="status")
 def daemon_status() -> None:
     """Show whether a daemon is running, and what it is doing."""
-    from azure_jobs.client.connection import socket_path
+    from azure_jobs.sdk._transport import socket_path
     from azure_jobs.client.ui import console
 
     path = socket_path()
@@ -61,7 +61,7 @@ def daemon_status() -> None:
 @daemon.command(name="start")
 def daemon_start() -> None:
     """Start the daemon if it is not already running."""
-    from azure_jobs.client.connection import socket_path, spawn_daemon
+    from azure_jobs.sdk._transport import socket_path, spawn_daemon
     from azure_jobs.client.ui import console
     from azure_jobs.shared.contract.errors import DaemonUnavailable
 
@@ -100,7 +100,7 @@ def daemon_start() -> None:
 )
 def daemon_stop(force: bool, timeout: float) -> None:
     """Stop the daemon, letting in-flight submissions finish first."""
-    from azure_jobs.client.connection import socket_path
+    from azure_jobs.sdk._transport import socket_path
     from azure_jobs.client.ui import console
 
     path = socket_path()

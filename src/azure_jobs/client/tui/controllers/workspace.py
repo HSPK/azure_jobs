@@ -174,7 +174,7 @@ class WorkspaceController(Controller[WorkspaceState]):
         self.ui.show_info_loading(f"Connecting to {workspace.label}…")
 
         def open_session(token: CancellationToken) -> _OpenedSession:
-            session = self._session_factory.open(workspace)
+            session = self._session_factory(workspace)
             if token.cancelled:
                 try:
                     session.close()

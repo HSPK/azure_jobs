@@ -13,6 +13,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from azure_jobs.shared import const
+from azure_jobs.shared.errors import AJError
 
 log = logging.getLogger(__name__)
 
@@ -60,16 +61,16 @@ def _sanitise(name: str) -> str:
 
 
 def _pick_account() -> str:
-    from azure_jobs.client.cli._backend import client
+    from azure_jobs import connect
     from azure_jobs.client.ui import console, dim, warning
 
     with console.status(
         "[bold cyan]Discovering managed identities…[/bold cyan]", spinner="dots"
     ):
         try:
-            with client() as d:
+            with connect() as d:
                 uais = d.uai.list()
-        except click.ClickException:
+        except AJError:
             # An unreachable daemon already explains how to recover;
             # wrapping it again would bury the instructions.
             raise
@@ -118,9 +119,11 @@ def _pick_environment() -> tuple[str, str]:
     ):
         try:
             images = _fetch_sing_images()
-        except click.ClickException:
+        except AJError:
             # An unreachable daemon already explains how to recover;
             # wrapping it again would bury the instructions.
+            raise
+        except AJError:
             raise
         except Exception as exc:
             log.exception("Could not list Singularity images")
@@ -166,15 +169,17 @@ def _pick_environment() -> tuple[str, str]:
 
 
 def _pick_storage() -> str:
-    from azure_jobs.client.cli._backend import client
+    from azure_jobs import connect
     from azure_jobs.client.ui import console, dim, info, warning
 
     with console.status(
         "[bold cyan]Discovering storage accounts…[/bold cyan]", spinner="dots"
     ):
         try:
-            with client() as d:
+            with connect() as d:
                 sas = d.sa.list()
+        except AJError:
+            raise
         except Exception as exc:
             log.exception("Could not list storage accounts")
             warning(
@@ -227,7 +232,7 @@ def _generate_leaves(
     workspace: dict[str, str],
     force: bool,
 ) -> list[dict[str, str]]:
-    from azure_jobs.client.cli._backend import client
+    from azure_jobs import connect
     from azure_jobs.client.ui import console, error, warning
 
     with console.status(
@@ -235,8 +240,10 @@ def _generate_leaves(
         spinner="dots",
     ):
         try:
-            with client() as d:
+            with connect() as d:
                 vcs = d.quota.list()
+        except AJError:
+            raise
         except Exception as exc:
             log.exception("Could not fetch VC quota")
             error(
@@ -296,14 +303,14 @@ def _generate_leaves(
 
 
 def _pick_workspace() -> dict[str, str]:
-    from azure_jobs.client.cli._backend import client
+    from azure_jobs import connect
     from azure_jobs.client.ui import console, error
 
     with console.status(
         "[bold cyan]Discovering AML workspaces…[/bold cyan]", spinner="dots"
     ):
         try:
-            with client() as d:
+            with connect() as d:
                 workspaces = d.ws.list()
         except Exception as exc:
             log.exception("Could not discover workspaces")

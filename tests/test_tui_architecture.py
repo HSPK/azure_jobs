@@ -1283,7 +1283,7 @@ def test_app_shutdown_closes_runtime_after_feature_failure() -> None:
             return ()
 
     class Factory:
-        def open(self, target):
+        def __call__(self, target):
             raise AssertionError
 
     app = AjDashboard(
@@ -1352,7 +1352,7 @@ async def test_feature_key_binding_and_help_use_aggregated_metadata() -> None:
             return ()
 
     class Factory:
-        def open(self, target):
+        def __call__(self, target):
             raise AssertionError
 
     ran: list[bool] = []

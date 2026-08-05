@@ -50,7 +50,7 @@ class LogChunk:
 
 @runtime_checkable
 class JobQuery(Protocol):
-    def list_page(
+    def page(
         self,
         cursor: Cursor | None,
         *,
@@ -61,7 +61,7 @@ class JobQuery(Protocol):
 
 @runtime_checkable
 class JobActions(Protocol):
-    def get(self, job: JobRef) -> Job: ...
+    def status(self, job: JobRef) -> Job: ...
 
     def cancel(self, job: JobRef) -> None: ...
 
@@ -89,7 +89,7 @@ class RangeLogReader(Protocol):
 
 @runtime_checkable
 class RangeLogSource(Protocol):
-    def list_files(
+    def list(
         self,
         job: JobRef,
         *,
@@ -123,7 +123,7 @@ class DashboardSession(Protocol):
 
 @runtime_checkable
 class SessionFactory(Protocol):
-    def open(self, target: Target) -> DashboardSession: ...
+    def __call__(self, target: Target | str) -> DashboardSession: ...
 
 
 @runtime_checkable
@@ -133,6 +133,3 @@ class TargetCatalog(Protocol):
     def current(self) -> Target | None: ...
 
     def list(self) -> list[Target]: ...
-
-
-WorkspaceCatalog = TargetCatalog

@@ -151,11 +151,15 @@ src/azure_jobs/
 │   ├── job/           JobSpec and how to build one
 │   ├── template/, config/, sku.py, journal.py, utils/
 │
-├── client/          drives and renders — never imports server/
-│   ├── sdk/           resource namespaces: d.job, d.ws(name).ds, …
-│   ├── connection.py  httpx transport over UDS, auto-spawn, reconnect
+├── sdk/             public SDK — resource namespaces + UDS transport
+│   ├── __init__.py    AjClient, connect(), public namespace exports
+│   ├── _transport.py  httpx over UDS + daemon autostart
+│   ├── account.py     account-scoped namespaces
+│   ├── workspace.py   workspace-scoped namespaces
+│   └── logs.py
+│
+├── client/          frontends — directly consume azure_jobs.sdk
 │   ├── discovery.py   interactive setup, fed by the daemon
-│   ├── resilient.py
 │   ├── cli/, tui/, ui/
 │
 └── server/          executes — never imports client/
@@ -176,9 +180,10 @@ The invariants, each with a test:
 | Rule | Why |
 |---|---|
 | `client` never imports `server` | everything it needs is on the wire |
+| `sdk` imports neither frontend nor server | it is a public peer, not a CLI detail |
 | `server` never imports `client` | the daemon runs headless |
 | `shared` imports neither | it is the vocabulary, not a participant |
-| the SDK appears only under `server/` | only the server executes |
+| Azure adapters appear only under `server/` | only the daemon talks to Azure |
 | `rich`/`textual` appear only under `client/` | rendering is not the daemon's job |
 
 Measured after the split: `client → shared` 88 edges, `server → shared` 83,
@@ -203,7 +208,7 @@ The CLI and the dashboard call the same object, organised as resource
 namespaces:
 
 ```python
-from azure_jobs.client import connect
+from azure_jobs import connect
 
 with connect() as d:
     d.auth.status()
@@ -222,9 +227,11 @@ a subscription (`d.sku`, `d.sa`, `d.uai`, `d.ws`) lives at the root alone,
 because there is no workspace to narrow it to — which is what lets `aj init`
 run before one is configured.
 
-`connection.py` holds only the transport. `sdk/` holds only what the requests
-mean. A namespace never builds a URL by hand: it calls the shared route table,
-so a path typo is an import error rather than a 404 at runtime.
+The top-level `sdk/` owns both the small transport and what requests mean. The
+frontends import `connect()` directly; there is no CLI context-manager wrapper,
+session factory, workspace-catalog adapter, or reconnect proxy in between. A
+namespace never builds a URL by hand: it calls the shared route table, so a
+path typo is an import error rather than a 404 at runtime.
 
 **Why the SDK is written rather than generated.** FastAPI publishes
 `/openapi.json`, and `openapi-python-client` would turn it into a client — but
@@ -241,10 +248,10 @@ tests fine, and silently ignores the filter. So
 transport and asserts each request it produces exists in the served schema,
 with a completeness check so a new operation cannot skip it.
 
-**Retries follow the path, not a port list.** `ResilientClient` records the
-attribute chain (`ws` → call → `job` → `list`) and replays it against a fresh
-connection if the daemon restarts mid-call. Enumerating ports here would mean
-editing this file every time a namespace was added.
+**No automatic replay.** A transport failure reaches the caller. Automatically
+replaying an ambiguous `submit()` or `queue()` response can create duplicate
+jobs, so retry policy belongs to the caller (or to a future server-side
+idempotency key), not to a generic proxy.
 
 ## Transport: HTTP over a Unix socket
 

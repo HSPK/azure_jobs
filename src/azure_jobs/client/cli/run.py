@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
+from typing import Callable
 
 import click
 
@@ -170,7 +171,7 @@ def _submit_via_daemon(
     execution path with different auth and different failure modes.
     """
     from azure_jobs.shared.contract.models import SubmitEvent
-    from azure_jobs.client.cli._backend import client
+    from azure_jobs import connect
     from azure_jobs.shared.job.spec import JobEvent, JobResult
 
     payload = request.to_dict()
@@ -186,7 +187,7 @@ def _submit_via_daemon(
                 )
             )
 
-        with client() as d:
+        with connect() as d:
             outcome = d.job.submit(payload, on_event=relay)
         return JobResult(
             job_name=outcome.job_name,
@@ -202,9 +203,9 @@ def _submit_via_daemon(
 
 def _enqueue(request: JobSpec, name: str) -> None:
     """Hand a built JobSpec to the daemon's queue and report the ticket."""
-    from azure_jobs.client.cli._backend import client
+    from azure_jobs import connect
 
-    with client() as d:
+    with connect() as d:
         entry = d.job.queue(request.to_dict(), name=name)
     click.echo(f"Queued {name} as {entry.ticket}")
     click.echo(f"  aj queue show {entry.ticket}")

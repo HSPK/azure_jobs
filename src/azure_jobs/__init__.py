@@ -10,6 +10,8 @@ except ImportError:
     __version__ = "0.0.0.dev0"
 
 _LAZY_ATTRS: dict[str, tuple[str, str]] = {
+    "AjClient": ("azure_jobs.sdk", "AjClient"),
+    "connect": ("azure_jobs.sdk", "connect"),
     "Template": ("azure_jobs.shared.template", "Template"),
     "StorageMount": ("azure_jobs.shared.job", "StorageMount"),
     "JobSpec": ("azure_jobs.shared.job", "JobSpec"),
@@ -44,6 +46,7 @@ def __dir__() -> list[str]:
     return sorted(__all__)
 
 if TYPE_CHECKING:
+    from azure_jobs.sdk import AjClient, connect
     from azure_jobs.client.cli.runner import submit_and_record
     from azure_jobs.client.discovery import get_workspace_config
     from azure_jobs.shared.journal import (
@@ -71,6 +74,8 @@ if TYPE_CHECKING:
 
 __all__ = [
     "__version__",
+    "AjClient",
+    "connect",
     "Template",
     "StorageMount",
     "JobSpec",

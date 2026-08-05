@@ -14,10 +14,10 @@ def env_group() -> None:
 @click.option("--ws", "ws_name", default=None, help="Workspace name override")
 def env_list(ws_name: str | None) -> None:
     """List environments in the current workspace."""
-    from azure_jobs.client.cli._backend import client
+    from azure_jobs import connect
     from azure_jobs.client.ui import console, show_environments_table
 
-    with client(ws_name) as d:
+    with connect(ws_name or "") as d:
         with console.status(
             "[bold cyan]Fetching environments…[/bold cyan]", spinner="dots"
         ):
@@ -36,10 +36,10 @@ def env_list(ws_name: str | None) -> None:
 @click.option("--ws", "ws_name", default=None, help="Workspace name override")
 def env_show(name: str, last: int, ws_name: str | None) -> None:
     """Show versions of an environment."""
-    from azure_jobs.client.cli._backend import client
+    from azure_jobs import connect
     from azure_jobs.client.ui import console, show_environment_versions_table
 
-    with client(ws_name) as d:
+    with connect(ws_name or "") as d:
         with console.status(
             f"[bold cyan]Fetching versions for '{name}'…[/bold cyan]",
             spinner="dots",

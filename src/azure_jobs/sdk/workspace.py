@@ -10,8 +10,8 @@ from __future__ import annotations
 import uuid
 from typing import TYPE_CHECKING, Any, Callable
 
-from azure_jobs.client.sdk._resource import WorkspaceNamespaceBase, as_ref
-from azure_jobs.client.sdk.logs import LogNamespace
+from azure_jobs.sdk._resource import WorkspaceNamespaceBase, as_ref
+from azure_jobs.sdk.logs import LogNamespace
 from azure_jobs.shared.contract import routes as R
 from azure_jobs.shared.contract.models import (
     CatalogItem,
@@ -27,7 +27,7 @@ from azure_jobs.shared.contract.models import (
 )
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    from azure_jobs.client.connection import DaemonClient
+    from azure_jobs.sdk._transport import DaemonClient
 
 EventSink = Callable[[SubmitEvent], None] | None
 NotificationSink = Callable[[Notification], None]
@@ -230,8 +230,6 @@ class WorkspaceClient:
     ``session.job`` and compares it across refreshes.
     """
 
-    _aj_namespace = True
-
     def __init__(self, client: "DaemonClient", ws: str = "") -> None:
         self._c = client
         self.name = ws or R.DEFAULT_WORKSPACE
@@ -254,7 +252,7 @@ class WorkspaceClient:
         return CatalogItem.from_json(self._c.get(R.workspace_info(self.name)))
 
     def close(self) -> None:
-        self._c.close()
+        """A scoped workspace does not own the root client's connection."""
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
         return f"<WorkspaceClient {self.name!r}>"

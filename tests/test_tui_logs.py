@@ -403,7 +403,7 @@ class _Factory:
     def __init__(self, logs: _Logs) -> None:
         self.logs = logs
 
-    def open(self, target):
+    def __call__(self, target):
         return _Session(self.logs)
 
 

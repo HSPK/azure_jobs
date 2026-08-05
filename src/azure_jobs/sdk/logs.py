@@ -9,12 +9,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from azure_jobs.client.sdk._resource import WorkspaceNamespaceBase, as_ref
+from azure_jobs.sdk._resource import WorkspaceNamespaceBase, as_ref
 from azure_jobs.shared.contract import routes as R
 from azure_jobs.shared.contract.models import JobRef, LogChunk
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    from azure_jobs.client.connection import DaemonClient
+    from azure_jobs.sdk._transport import DaemonClient
 
 
 class LogReader:

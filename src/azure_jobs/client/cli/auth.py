@@ -23,12 +23,12 @@ def auth_group() -> None:
 @auth_group.command(name="status")
 def auth_status() -> None:
     """Show current Azure login status, subscription, and credential health."""
-    from azure_jobs.client.discovery import account as az_account
-    from azure_jobs.client.discovery import credential
+    from azure_jobs.client.discovery import auth_status as get_auth_status
     from azure_jobs.shared.config import read_config
     from azure_jobs.client.ui import console, show_auth_status
 
-    account = az_account()
+    status = get_auth_status()
+    account = status.get("account")
     if account is None:
         console.print("[error]✗[/error] Not logged in (or Azure CLI not installed)")
         console.print("  Run [bold]az login[/bold] to authenticate")
@@ -36,7 +36,7 @@ def auth_status() -> None:
 
     # Asked of the daemon: it is the process that will call Azure, so its
     # credential is the one whose health the user needs to know about.
-    health = credential()
+    health = status.get("credential") or {}
 
     ws = read_config().workspace
     show_auth_status(

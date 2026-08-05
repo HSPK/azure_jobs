@@ -23,24 +23,24 @@ from .api_fakes import make_job
 
 
 class TestThereIsNoInProcessMode:
-    def test_open_client_has_no_bypass_parameters(self):
+    def test_connect_has_no_bypass_parameters(self):
         import inspect
 
-        from azure_jobs.client.connection import open_client
+        from azure_jobs import connect
 
-        params = inspect.signature(open_client).parameters
+        params = inspect.signature(connect).parameters
         assert "prefer_daemon" not in params
 
     def test_no_module_offers_an_in_process_client(self):
-        import azure_jobs.client.connection as client_mod
+        import azure_jobs.sdk as sdk
 
-        assert not hasattr(client_mod, "daemon_disabled")
-        assert "AJ_NO_DAEMON" not in inspect_source(client_mod)
+        assert not hasattr(sdk, "daemon_disabled")
+        assert "AJ_NO_DAEMON" not in inspect_source(sdk)
 
     def test_the_cli_never_builds_a_backend_itself(self):
-        from azure_jobs.client.cli import _backend as cli_backend
+        from azure_jobs.client import cli
 
-        source = inspect_source(cli_backend)
+        source = inspect_source(cli)
         assert "AzureBackend(" not in source
         assert "AJ_NO_DAEMON" not in source
 
@@ -216,7 +216,7 @@ class TestServerOwnsConnectionResources:
         assert "_threads" not in Daemon.__init__.__code__.co_names
 
     def test_many_short_lived_clients_leave_nothing_behind(self, local_daemon):
-        from azure_jobs.client.connection import DaemonClient
+        from azure_jobs.sdk._transport import DaemonClient
         from azure_jobs.shared.contract import routes as R
 
         before = threading.active_count()
@@ -232,7 +232,7 @@ class TestServerOwnsConnectionResources:
 
 
 def _retire(daemon, *, drain_timeout=None):
-    from azure_jobs.client.connection import DaemonClient
+    from azure_jobs.sdk._transport import DaemonClient
     from azure_jobs.shared.contract import routes as R
 
     client = DaemonClient(daemon.socket_path, daemon.socket_path.parent)
@@ -267,7 +267,7 @@ class TestRequestsAreMultiplexed:
     """
 
     def test_a_slow_call_does_not_block_the_connection(self, local_daemon):
-        from azure_jobs.client.connection import DaemonClient
+        from azure_jobs.sdk._transport import DaemonClient
         from azure_jobs.shared.contract import routes as R
 
         target = local_daemon.target
@@ -304,7 +304,7 @@ class TestRequestsAreMultiplexed:
         assert waited["fast"] < 1.0, f"ping waited {waited['fast']:.2f}s"
 
     def test_concurrent_requests_all_get_their_own_reply(self, local_daemon):
-        from azure_jobs.client.connection import DaemonClient
+        from azure_jobs.sdk._transport import DaemonClient
         from azure_jobs.shared.contract import routes as R
 
         client = DaemonClient(local_daemon.socket_path, local_daemon.socket_path.parent)

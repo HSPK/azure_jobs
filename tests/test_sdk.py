@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import pytest
 
-from azure_jobs.client.sdk import AjClient
-from azure_jobs.client.sdk.workspace import WorkspaceClient
+from azure_jobs.sdk import AjClient
+from azure_jobs.sdk.workspace import WorkspaceClient
 from azure_jobs.shared.contract import routes as R
 
 

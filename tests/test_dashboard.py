@@ -91,7 +91,7 @@ class _FakeSession:
 
 
 class _FakeSessionFactory:
-    def open(self, workspace):
+    def __call__(self, workspace):
         return _FakeSession()
 
 

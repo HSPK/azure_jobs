@@ -14,15 +14,11 @@ from typing import TYPE_CHECKING, Any
 from azure_jobs.shared.contract.models import CatalogItem, JobRef
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    from azure_jobs.client.connection import DaemonClient
+    from azure_jobs.sdk._transport import DaemonClient
 
 
 class Namespace:
     """A group of operations sharing one transport."""
-
-    #: Read by :mod:`azure_jobs.client.resilient` to decide whether a returned
-    #: value is a namespace (keep guarding it) or data (hand it back).
-    _aj_namespace = True
 
     def __init__(self, client: "DaemonClient") -> None:
         self._c = client

@@ -1,7 +1,7 @@
 """Client half of the transport: HTTP over a Unix domain socket.
 
 Transport only. What the requests *mean* — ``d.job.list()``, ``d.ws(name).ds``
-— lives in :mod:`azure_jobs.client.sdk`, so a change to the resource surface
+— lives in :mod:`azure_jobs.sdk`, so a change to the resource surface
 does not touch socket handling and vice versa.
 
 The daemon is the only execution path. If it cannot be reached this raises with
@@ -31,7 +31,7 @@ from azure_jobs.shared.contract.errors import (
     TransportError,
     error_from_json,
 )
-from azure_jobs.shared.contract.models import Notification, Target
+from azure_jobs.shared.contract.models import Notification
 from azure_jobs.shared.contract.ports import NotificationSink
 from azure_jobs.shared.version import aj_version
 
@@ -396,7 +396,7 @@ def connect_transport(
 ) -> DaemonClient:
     """Open the transport the SDK namespaces call through.
 
-    Resource semantics live in ``client.sdk``; this only gets a working
+    Resource semantics live in :mod:`azure_jobs.sdk`; this only gets a working
     connection, starting the daemon if one is not already listening.
     """
     from azure_jobs.shared import const
@@ -418,95 +418,11 @@ def connect_transport(
     return client
 
 
-def open_client(
-    ws_name: str = "",
-    *,
-    root: Path | None = None,
-    path: Path | None = None,
-    autostart: bool = True,
-    resilient: bool = True,
-) -> Any:
-    """Return an :class:`AjClient` for a workspace *name*.
-
-    Wrapped so a daemon restart mid-session is survivable: the transport is
-    reopened once and the call retried, since the daemon holds no per-client
-    state that a reconnect could lose.
-    """
-    from azure_jobs.client.sdk import AjClient
-
-    try:
-        transport = connect_transport(root=root, path=path, autostart=autostart)
-    except Exception as exc:
-        raise daemon_required(exc) from exc
-
-    client = AjClient(transport, workspace=ws_name)
-    if not resilient:
-        return client
-    from azure_jobs.client.resilient import ResilientClient
-
-    return ResilientClient(
-        client,
-        lambda: AjClient(
-            connect_transport(root=root, path=path, autostart=autostart),
-            workspace=ws_name,
-        ),
-    )
-
-
-class WorkspaceCatalog:
-    """``d.ws`` on a connection opened per call.
-
-    The dashboard asks for the workspace list before it has a session, and
-    keeping a socket open for the whole run just to answer that would pin a
-    daemon context to a window nobody is looking at.
-    """
-
-    def __init__(self, *, root: Path | None = None, path: Path | None = None) -> None:
-        self._root = root
-        self._path = path
-
-    def _ws(self) -> Any:
-        from azure_jobs.client.sdk import AjClient
-
-        transport = connect_transport(root=self._root, path=self._path)
-        return AjClient(transport), transport
-
-    def current(self) -> Any:
-        client, transport = self._ws()
-        try:
-            return client.ws.current()
-        finally:
-            transport.close()
-
-    def list(self) -> list[Any]:
-        client, transport = self._ws()
-        try:
-            return list(client.ws.list())
-        finally:
-            transport.close()
-
-
-class ClientFactory:
-    """Hands the dashboard a client scoped to the workspace it picked."""
-
-    def __init__(self, *, root: Path | None = None, path: Path | None = None) -> None:
-        self._root = root
-        self._path = path
-
-    def open(self, target: Target) -> Any:
-        # The label is the workspace name the daemon will resolve again, so a
-        # restarted daemon rebuilds the context from scratch.
-        return open_client(target.label, root=self._root, path=self._path).workspace
-
-
 __all__ = [
-    "ClientFactory",
-    "WorkspaceCatalog",
     "DaemonClient",
     "DAEMON_LOG_NAME",
     "connect_transport",
     "daemon_required",
-    "open_client",
     "runtime_dir",
     "secure_runtime_dir",
     "socket_path",

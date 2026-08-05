@@ -15,18 +15,15 @@ from pathlib import Path
 
 import pytest
 
-from azure_jobs.client.connection import (
-    open_client,
-    secure_runtime_dir,
-)
+from azure_jobs import connect
+from azure_jobs.sdk._transport import secure_runtime_dir
 from azure_jobs.shared.contract.errors import DaemonUnavailable, TransportError
 from azure_jobs.server.backend import _spec_from_payload
 from azure_jobs.shared.contract.models import JobRef, SubmitOutcome, Target
 from azure_jobs.server.queue import SubmissionQueue
-from azure_jobs.client.resilient import ResilientClient
 from azure_jobs.shared.job.spec import JobSpec
 
-from .api_fakes import FakeBackend, FakeClient, make_target
+from .api_fakes import make_target
 
 
 class TestBackendSpecSurvivesTheWire:
@@ -113,7 +110,7 @@ class TestTransportFailuresAreFast:
 
         started = time.time()
         with pytest.raises(DaemonUnavailable):
-            open_client(
+            connect(
                 "ws",
                 root=tmp_path,
                 path=tmp_path / "absent.sock",
@@ -122,70 +119,39 @@ class TestTransportFailuresAreFast:
         assert time.time() - started < 5
 
 
-class TestResilientSession:
-    """A daemon restart must not end the session, but an outage must surface."""
+class TestTransportFailuresAreNotReplayed:
+    """A caller may retry a read; the SDK must never replay a mutation itself."""
 
-    def _backend(self, remote, replacement=None):
-        made: list = []
+    def test_a_transport_failure_reaches_the_caller(self):
+        from azure_jobs.sdk import AjClient
 
-        def reconnect():
-            if replacement is None:
-                raise DaemonUnavailable("still gone")
-            made.append(replacement)
-            return replacement
+        class Transport:
+            def get(self, *args, **kwargs):
+                raise TransportError("daemon restarted")
 
-        return ResilientClient(remote, reconnect), made
+            def close(self):
+                pass
 
-    def test_a_healthy_remote_is_used(self):
-        remote = FakeClient()
-        backend, made = self._backend(remote)
-        backend.job.cancel(JobRef("a", "a"))
-        assert remote.backend.jobs.cancelled == ["a"]
-        assert made == []
+        with pytest.raises(TransportError, match="daemon restarted"):
+            AjClient(Transport()).job.status(JobRef("a", "a"))
 
-    def test_transport_loss_reconnects_and_completes_the_call(self):
-        remote = FakeClient()
-        remote.backend.jobs.raises = TransportError("daemon restarted")
-        fresh = FakeClient()
-        backend, made = self._backend(remote, fresh)
-        job = backend.job.status(JobRef("a", "a"))
-        assert job.name == "a"
-        assert made == [fresh]
+    def test_a_failed_submit_is_attempted_once(self):
+        from azure_jobs.sdk import AjClient
 
-    def test_later_calls_use_the_new_connection(self):
-        remote = FakeClient()
-        remote.backend.jobs.raises = TransportError("daemon restarted")
-        fresh = FakeClient()
-        backend, _ = self._backend(remote, fresh)
-        backend.job.status(JobRef("a", "a"))
-        backend.job.cancel(JobRef("b", "b"))
-        assert fresh.backend.jobs.cancelled == ["b"]
+        class Transport:
+            calls = 0
 
-    def test_a_failed_reconnect_raises_with_recovery_steps(self):
-        """No in-process downgrade: the user is told what to do."""
-        remote = FakeClient()
-        remote.backend.jobs.raises = TransportError("daemon gone")
-        backend, _ = self._backend(remote, replacement=None)
-        with pytest.raises(DaemonUnavailable) as caught:
-            backend.job.status(JobRef("a", "a"))
-        assert "aj daemon start" in str(caught.value)
+            def post(self, *args, **kwargs):
+                self.calls += 1
+                raise TransportError("outcome unknown")
 
-    def test_a_real_backend_error_is_not_retried(self):
-        """A 403 must propagate; only transport loss triggers a reconnect."""
-        from azure_jobs.shared.errors import RestError
+            def close(self):
+                pass
 
-        remote = FakeClient()
-        remote.backend.jobs.raises = RestError("denied", status_code=403)
-        backend, made = self._backend(remote, FakeBackend(make_target()))
-        with pytest.raises(RestError):
-            backend.job.status(JobRef("a", "a"))
-        assert made == []
-
-    def test_close_releases_the_connection(self):
-        remote = FakeClient()
-        backend, _ = self._backend(remote)
-        backend.close()
-        assert remote.closed
+        transport = Transport()
+        with pytest.raises(TransportError, match="outcome unknown"):
+            AjClient(transport).job.submit({"name": "j"})
+        assert transport.calls == 1
 
 
 class TestServerBackendHasEveryPort:
@@ -347,7 +313,7 @@ class TestDaemonFailureIsReportedNotWorkedAround:
             lambda self: target,
         )
         monkeypatch.setattr(
-            "azure_jobs.client.connection.spawn_daemon",
+            "azure_jobs.sdk._transport.spawn_daemon",
             lambda path: (_ for _ in ()).throw(RuntimeError("daemon missing")),
         )
 
@@ -465,7 +431,7 @@ class TestHandlerErrorsDoNotKillTheConnection:
     def test_the_connection_survives_a_handler_error(self, tmp_path):
         import threading as threading_mod
 
-        from azure_jobs.client.connection import DaemonClient, _reachable
+        from azure_jobs.sdk._transport import DaemonClient, _reachable
         from azure_jobs.server.runner import Daemon
         from azure_jobs.shared.contract import routes as R
 

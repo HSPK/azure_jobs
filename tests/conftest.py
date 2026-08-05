@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from azure_jobs.client.connection import spawn_daemon as _REAL_SPAWN_DAEMON
+from azure_jobs.sdk._transport import spawn_daemon as _REAL_SPAWN_DAEMON
 from unittest.mock import patch
 
 import pytest
@@ -24,7 +24,7 @@ def _isolate_daemon_runtime(tmp_path_factory, monkeypatch):
     monkeypatch.setenv("AJ_RUNTIME_DIR", str(runtime))
     # Nothing may spawn the real `ajd` binary during a unit test.
     monkeypatch.setattr(
-        "azure_jobs.client.connection.spawn_daemon",
+        "azure_jobs.sdk._transport.spawn_daemon",
         lambda path: (_ for _ in ()).throw(
             AssertionError(f"a test tried to spawn a daemon at {path}")
         ),
@@ -35,7 +35,7 @@ def _isolate_daemon_runtime(tmp_path_factory, monkeypatch):
 @pytest.fixture
 def allow_daemon_spawn(monkeypatch):
     """Opt back into spawning a real `ajd`, for tests that verify startup."""
-    import azure_jobs.client.connection as client_mod
+    import azure_jobs.sdk._transport as client_mod
 
     monkeypatch.setattr(client_mod, "spawn_daemon", _REAL_SPAWN_DAEMON)
     return _REAL_SPAWN_DAEMON
@@ -45,7 +45,7 @@ def _await_socket(path, timeout: float = 20.0) -> None:
     """uvicorn binds asynchronously; wait until it actually answers."""
     import time
 
-    from azure_jobs.client.connection import _reachable
+    from azure_jobs.sdk._transport import _reachable
 
     deadline = time.time() + timeout
     while time.time() < deadline:

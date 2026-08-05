@@ -2,7 +2,7 @@
 
 ::
 
-    from azure_jobs.client import connect
+    from azure_jobs import connect
 
     with connect() as d:
         d.auth.status()
@@ -27,7 +27,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from azure_jobs.client.sdk.account import (
+from azure_jobs.sdk.account import (
     AuthNamespace,
     ComputeNamespace,
     IdentityNamespace,
@@ -38,8 +38,8 @@ from azure_jobs.client.sdk.account import (
     SubscriptionNamespace,
     WorkspaceNamespace,
 )
-from azure_jobs.client.sdk.logs import LogNamespace, LogReader
-from azure_jobs.client.sdk.workspace import (
+from azure_jobs.sdk.logs import LogNamespace, LogReader
+from azure_jobs.sdk.workspace import (
     DatastoreNamespace,
     EnvironmentNamespace,
     JobNamespace,
@@ -51,7 +51,7 @@ from azure_jobs.client.sdk.workspace import (
 )
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    from azure_jobs.client.connection import DaemonClient
+    from azure_jobs.sdk._transport import DaemonClient
 
 
 class AjClient:
@@ -137,12 +137,13 @@ def connect(
     The daemon is the only execution path: if it cannot be reached this raises
     with the steps to recover rather than quietly doing the work in-process.
     """
-    from azure_jobs.client.connection import connect_transport
+    from azure_jobs.sdk._transport import connect_transport, daemon_required
 
-    return AjClient(
-        connect_transport(root=root, path=path, autostart=autostart),
-        workspace=ws_name,
-    )
+    try:
+        transport = connect_transport(root=root, path=path, autostart=autostart)
+    except Exception as exc:
+        raise daemon_required(exc) from exc
+    return AjClient(transport, workspace=ws_name)
 
 
 __all__ = [

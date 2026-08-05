@@ -17,6 +17,7 @@ SRC = Path(__file__).parents[1] / "src" / "azure_jobs"
 SHARED = SRC / "shared"
 CONTRACT = SHARED / "contract"
 CLIENT = SRC / "client"
+SDK = SRC / "sdk"
 SERVER = SRC / "server"
 CLI = CLIENT / "cli"
 
@@ -107,8 +108,8 @@ def _azure_jobs_imports(path: Path) -> list[str]:
     return [n for n in _imports(path) if n.startswith("azure_jobs")]
 
 
-def test_the_sdk_lives_only_in_the_server_layer():
-    """Only the server executes, so only it may reach the Azure SDK."""
+def test_azure_adapters_live_only_in_the_server_layer():
+    """Only the server executes, so only it may reach the Azure adapters."""
     offenders = []
     for layer, root in (("shared", SHARED), ("client", CLIENT)):
         for path in root.rglob("*.py"):
@@ -136,6 +137,17 @@ def test_the_client_never_imports_the_server():
         for path in CLIENT.rglob("*.py")
         for name in _azure_jobs_imports(path)
         if name.startswith("azure_jobs.server")
+    ]
+    assert offenders == [], offenders
+
+
+def test_the_sdk_depends_on_neither_frontend_nor_server():
+    """The public SDK is a peer of the frontends, not hidden inside one."""
+    offenders = [
+        f"{path.relative_to(SDK)}: {name}"
+        for path in SDK.rglob("*.py")
+        for name in _azure_jobs_imports(path)
+        if name.startswith(("azure_jobs.client", "azure_jobs.server"))
     ]
     assert offenders == [], offenders
 
@@ -224,26 +236,26 @@ def test_routes_are_version_prefixed():
         assert path.startswith(f"{R.API_V1}/")
 
 
-def test_the_client_builds_urls_from_the_shared_route_table():
+def test_the_sdk_builds_urls_from_the_shared_route_table():
     """A path typo should be an import error, not a 404 at runtime."""
     offenders = []
-    for path in CLIENT.rglob("*.py"):
+    for path in SDK.rglob("*.py"):
         source = path.read_text(encoding="utf-8")
         # Every request goes through R.<helper>(...), never a literal path.
         if '"/v1' in source or "'/v1" in source:
-            offenders.append(str(path.relative_to(CLIENT)))
+            offenders.append(str(path.relative_to(SDK)))
     assert offenders == [], offenders
 
 
 def test_only_the_transport_speaks_http():
     """The namespaces describe resources; httpx belongs to one module."""
     offenders = []
-    for path in CLIENT.rglob("*.py"):
-        if path.name == "connection.py":
+    for path in SDK.rglob("*.py"):
+        if path.name == "_transport.py":
             continue
         for name in _imports(path):
             if name == "httpx" or name.startswith("httpx."):
-                offenders.append(str(path.relative_to(CLIENT)))
+                offenders.append(str(path.relative_to(SDK)))
     assert offenders == [], offenders
 
 
@@ -275,8 +287,8 @@ def test_the_server_backend_exposes_every_port():
 
 def test_the_sdk_covers_every_capability_the_server_offers():
     """Liskov: every port the daemon serves is reachable from a namespace."""
-    from azure_jobs.client.sdk import AjClient
-    from azure_jobs.client.sdk.workspace import WorkspaceClient
+    from azure_jobs.sdk import AjClient
+    from azure_jobs.sdk.workspace import WorkspaceClient
 
     workspace_namespaces = {
         "job",
@@ -310,7 +322,7 @@ def test_the_sdk_covers_every_capability_the_server_offers():
 
 def test_the_root_shorthands_reach_the_configured_workspace():
     """`d.job`, `d.workspace.job` and `d.ws().job` must be one namespace."""
-    from azure_jobs.client.sdk import AjClient
+    from azure_jobs.sdk import AjClient
 
     client = AjClient(object())
     for name in ("job", "log", "ds", "env", "queue", "watch"):
@@ -320,8 +332,8 @@ def test_the_root_shorthands_reach_the_configured_workspace():
 
 def test_sdk_ports_satisfy_the_runtime_protocols():
     """A namespace must still be substitutable for the narrow port it serves."""
-    from azure_jobs.client.sdk.logs import LogNamespace, LogReader
-    from azure_jobs.client.sdk.workspace import (
+    from azure_jobs.sdk.logs import LogNamespace, LogReader
+    from azure_jobs.sdk.workspace import (
         JobNamespace,
         QueueNamespace,
         WatchNamespace,

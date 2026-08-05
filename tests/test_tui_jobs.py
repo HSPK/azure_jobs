@@ -77,7 +77,7 @@ class _Factory:
     def __init__(self, jobs: _PagedJobs) -> None:
         self.jobs = jobs
 
-    def open(self, workspace):
+    def __call__(self, workspace):
         return _Session(self.jobs)
 
 
@@ -419,7 +419,7 @@ class _WorkspaceFactory:
         self.sources = sources
         self.sessions: dict[str, _Session] = {}
 
-    def open(self, workspace):
+    def __call__(self, workspace):
         session = _Session(self.sources[workspace.key])
         self.sessions[workspace.key] = session
         return session
@@ -494,7 +494,7 @@ async def test_optional_capabilities_disable_actions_without_stuck_info(
             return None
 
     class Factory:
-        def open(self, target):
+        def __call__(self, target):
             return Session()
 
     app = AjDashboard(
@@ -679,7 +679,7 @@ async def test_failed_target_connection_can_retry_same_target(
         def __init__(self):
             self.calls = 0
 
-        def open(self, selected):
+        def __call__(self, selected):
             self.calls += 1
             if self.calls == 1:
                 raise OSError("temporary auth failure")
@@ -741,7 +741,7 @@ async def test_cancel_post_submit_status_failure_triggers_refresh(
             return None
 
     class Factory:
-        def open(self, target):
+        def __call__(self, target):
             return Session()
 
     app = AjDashboard(

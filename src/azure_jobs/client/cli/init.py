@@ -145,10 +145,10 @@ def init_amlt(ctx: click.Context, force: bool) -> None:
         "[bold cyan]Querying workspace storage…[/bold cyan]", spinner="dots"
     ):
         try:
-            from azure_jobs.client.cli._backend import client
+            from azure_jobs import connect
 
             ws_label = getattr(ws, "workspace_name", "") or getattr(ws, "name", "")
-            with client(ws_label or None) as d:
+            with connect(ws_label or "") as d:
                 workspace_info = d.workspace.info().raw
             storage_arm = (workspace_info.get("properties") or {}).get(
                 "storageAccount", ""

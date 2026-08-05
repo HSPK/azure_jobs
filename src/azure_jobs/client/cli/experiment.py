@@ -83,10 +83,10 @@ def exp_list(
 @click.option("--ws", "ws_name", default=None, help="Workspace name override")
 def exp_show(name: str, last: int, ws_name: str | None) -> None:
     """Show recent jobs for a specific experiment."""
-    from azure_jobs.client.cli._backend import client
+    from azure_jobs import connect
     from azure_jobs.client.ui import console, show_cloud_jobs_table, warning
 
-    with client(ws_name) as d:
+    with connect(ws_name or "") as d:
         with console.status(
             f"[bold cyan]Fetching jobs for '{name}'…[/bold cyan]",
             spinner="dots",

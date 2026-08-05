@@ -15,10 +15,10 @@ from pathlib import Path
 
 import pytest
 
-from azure_jobs.client.connection import (
+from azure_jobs import connect
+from azure_jobs.sdk._transport import (
     DaemonClient,
     _reachable,
-    open_client,
     runtime_dir,
     secure_runtime_dir,
     socket_path,
@@ -178,7 +178,7 @@ class TestNoSilentDowngrade:
 
     def test_missing_daemon_raises_with_recovery_steps(self, tmp_path):
         with pytest.raises(DaemonUnavailable) as caught:
-            open_client(
+            connect(
                 "ws",
                 root=tmp_path,
                 path=tmp_path / "nothing.sock",
@@ -192,20 +192,20 @@ class TestNoSilentDowngrade:
         self, tmp_path, monkeypatch
     ):
         monkeypatch.setattr(
-            "azure_jobs.client.connection.connect_transport",
+            "azure_jobs.sdk._transport.connect_transport",
             lambda *a, **k: (_ for _ in ()).throw(RuntimeError("wedged")),
         )
         with pytest.raises(DaemonUnavailable):
-            open_client("ws", root=tmp_path)
+            connect("ws", root=tmp_path)
 
     def test_there_is_no_in_process_escape_hatch(self):
         import inspect
 
-        from azure_jobs.client import connection
+        from azure_jobs.sdk import _transport
 
-        source = inspect.getsource(connection)
+        source = inspect.getsource(_transport)
         assert "AJ_NO_DAEMON" not in source
-        assert not hasattr(connection, "daemon_disabled")
+        assert not hasattr(_transport, "daemon_disabled")
 
     def test_runtime_dir_is_user_scoped(self, monkeypatch):
         monkeypatch.delenv("AJ_RUNTIME_DIR", raising=False)

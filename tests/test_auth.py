@@ -34,16 +34,25 @@ _ACCOUNT = {
 }
 
 
-def _account(payload: dict | None = _ACCOUNT):
-    """Patch the daemon lookup ``aj auth status`` uses for account details."""
-    return patch("azure_jobs.client.discovery.account", return_value=payload)
-
-
-def _credential(ok: bool = True, error: str = "", missing_package: bool = False):
-    """Credential health is the daemon's answer now, not a local token call."""
+def _status(
+    account: dict | None = _ACCOUNT,
+    *,
+    ok: bool = True,
+    error: str = "",
+    missing_package: bool = False,
+):
+    """Patch the single auth snapshot the command renders."""
     return patch(
-        "azure_jobs.client.discovery.credential",
-        return_value={"ok": ok, "error": error, "missing_package": missing_package},
+        "azure_jobs.client.discovery.auth_status",
+        return_value={
+            "signed_in": account is not None,
+            "account": account,
+            "credential": {
+                "ok": ok,
+                "error": error,
+                "missing_package": missing_package,
+            },
+        },
     )
 
 
@@ -62,8 +71,7 @@ class TestAuthStatus:
             )
         )
         with (
-            _account(),
-            _credential(ok=True),
+            _status(),
             patch(
                 "azure_jobs.shared.config.read_config",
                 return_value=ws_cfg,
@@ -79,14 +87,14 @@ class TestAuthStatus:
 
     def test_not_logged_in(self, runner: CliRunner) -> None:
         """Exits with error when not logged in."""
-        with _account(None):
+        with _status(None):
             result = runner.invoke(main, ["auth", "status"])
         assert result.exit_code != 0
         assert "Not logged in" in result.output
 
     def test_az_cli_missing(self, runner: CliRunner) -> None:
         """Exits with error when the daemon cannot reach the Azure CLI."""
-        with _account(None):
+        with _status(None):
             result = runner.invoke(main, ["auth", "status"])
         assert result.exit_code != 0
         assert "not installed" in result.output
@@ -96,8 +104,7 @@ class TestAuthStatus:
         from azure_jobs.shared.config import AJConfig
 
         with (
-            _account(),
-            _credential(ok=True),
+            _status(),
             patch(
                 "azure_jobs.shared.config.read_config",
                 return_value=AJConfig(),
@@ -113,8 +120,7 @@ class TestAuthStatus:
         from azure_jobs.shared.config import AJConfig
 
         with (
-            _account(),
-            _credential(ok=False, error="ClientAuthenticationError: token expired"),
+            _status(ok=False, error="ClientAuthenticationError: token expired"),
             patch(
                 "azure_jobs.shared.config.read_config",
                 return_value=AJConfig(),
