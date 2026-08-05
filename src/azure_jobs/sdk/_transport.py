@@ -32,8 +32,9 @@ from azure_jobs.shared.contract.errors import (
     error_from_json,
 )
 from azure_jobs.shared.contract.models import Notification
-from azure_jobs.shared.contract.ports import NotificationSink
 from azure_jobs.shared.version import aj_version
+
+NotificationSink = Callable[[Notification], None]
 
 log = logging.getLogger(__name__)
 

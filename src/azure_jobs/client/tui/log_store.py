@@ -16,7 +16,7 @@ from azure_jobs.client.tui.log_settings import (
 )
 from azure_jobs.client.tui.events import EventBus, LogsChanged
 from azure_jobs.client.tui.models import BackfillRequest, JobRef, StreamRequest, ViewMode
-from azure_jobs.client.tui.ports import LogChunk
+from azure_jobs.shared.contract.models import LogChunk
 from azure_jobs.client.tui.state import LogsState
 
 _CONTINUED_PREFIX = "[continued] "

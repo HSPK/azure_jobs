@@ -10,7 +10,7 @@ from azure_jobs.client.tui.app import AjDashboard
 from azure_jobs.client.tui.events import EventBus, LogsChanged
 from azure_jobs.client.tui.log_store import LogsStore
 from azure_jobs.client.tui.models import Job, Target
-from azure_jobs.client.tui.ports import Cursor, JobPage, LogChunk
+from azure_jobs.shared.contract.models import Cursor, JobPage, LogChunk
 
 
 def _job(name: str = "job") -> Job:

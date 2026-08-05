@@ -22,7 +22,7 @@ SERVER = SRC / "server"
 CLI = CLIENT / "cli"
 
 #: Files that define the contract itself. Implementations may import more.
-CONTRACT_FILES = ("ports.py", "models.py", "errors.py", "routes.py")
+CONTRACT_FILES = ("models.py", "errors.py", "routes.py")
 
 FORBIDDEN_IN_CONTRACT = (
     "azure_jobs.server.az_client",
@@ -59,7 +59,7 @@ def test_contract_files_are_transport_and_sdk_free(filename):
 
 def test_models_do_not_import_a_socket_or_http_stack():
     """Values travel over any transport; they must not embed one."""
-    for filename in ("models.py", "ports.py"):
+    for filename in ("models.py",):
         names = _imports(CONTRACT / filename)
         assert "socket" not in names
         assert "requests" not in names
@@ -330,39 +330,6 @@ def test_the_root_shorthands_reach_the_configured_workspace():
         assert getattr(client, name) is getattr(client.ws(), name)
 
 
-def test_sdk_ports_satisfy_the_runtime_protocols():
-    """A namespace must still be substitutable for the narrow port it serves."""
-    from azure_jobs.sdk.logs import LogNamespace, LogReader
-    from azure_jobs.sdk.workspace import (
-        JobNamespace,
-        QueueNamespace,
-        WatchNamespace,
-    )
-    from azure_jobs.shared.contract import ports
-
-    assert isinstance(object.__new__(LogReader), ports.RangeLogReader)
-    for cls, protocol in (
-        (JobNamespace, ports.JobQuery),
-        (LogNamespace, ports.RangeLogSource),
-        (QueueNamespace, ports.SubmitQueue),
-        (WatchNamespace, ports.Watcher),
-    ):
-        stub = object.__new__(cls)
-        assert isinstance(stub, protocol) or hasattr(stub, "list"), cls.__name__
-
-
-def test_inprocess_ports_satisfy_the_runtime_protocols():
-    from azure_jobs.shared.contract import ports
-    from azure_jobs.server.backend import AzureCatalog, AzureJobs, AzureLogs
-
-    stub = object.__new__(AzureJobs)
-    assert isinstance(stub, ports.JobQuery)
-    assert isinstance(stub, ports.JobActions)
-    assert isinstance(stub, ports.JobDelete)
-    assert isinstance(object.__new__(AzureLogs), ports.RangeLogSource)
-    assert isinstance(object.__new__(AzureCatalog), ports.Catalog)
-
-
 def test_the_server_does_not_hand_roll_a_transport():
     """uvicorn owns framing, concurrency and shutdown; we own the domain."""
     import inspect
@@ -462,21 +429,6 @@ def test_workspace_resolution_is_server_side_only():
         if "resolve_workspace" in source or "detect_subscription(" in source:
             offenders.append(str(path.relative_to(CLIENT)))
     assert offenders == [], offenders
-
-
-def test_every_account_port_method_is_served():
-    """The account routes fan out from one path, so check the dispatch covers it."""
-    import inspect
-
-    from azure_jobs.server import app
-    from azure_jobs.shared.contract import ports
-
-    source = inspect.getsource(app.create_app)
-    for name, member in vars(ports.Account).items():
-        if name.startswith("_") or not callable(member):
-            continue
-        wire = name.replace("_", "-")
-        assert wire in source or name in source, name
 
 
 def test_catalog_item_does_not_shadow_payload_keys():

@@ -12,15 +12,37 @@ def ws_group() -> None:
     """Manage Azure ML workspaces."""
 
 def _ensure_workspaces() -> tuple[dict[str, str], list[dict[str, str]]]:
-    from azure_jobs.client.discovery import subscription, workspaces
+    from azure_jobs import connect
     from azure_jobs.client.ui import console
 
-    sub = subscription()
-    if not sub:
+    with connect() as d:
+        status = d.auth.status()
+        account = status.get("account")
+        if not account:
+            raise click.ClickException(
+                "Cannot detect subscription. Run `az login` first."
+            )
+        with console.status(
+            "[bold cyan]Listing workspaces…[/bold cyan]", spinner="dots"
+        ):
+            targets = d.ws.list()
+
+    sub = {
+        "subscription_id": account.get("id", ""),
+        "subscription_name": account.get("name", ""),
+    }
+    if not sub["subscription_id"]:
         raise click.ClickException("Cannot detect subscription. Run `az login` first.")
 
-    with console.status("[bold cyan]Listing workspaces…[/bold cyan]", spinner="dots"):
-        found = workspaces()
+    found = [
+        {
+            "name": target.metadata.get("workspace_name") or target.label,
+            "resource_group": target.metadata.get("resource_group", ""),
+            "location": target.metadata.get("location", ""),
+            "subscription_id": target.metadata.get("subscription_id", ""),
+        }
+        for target in targets
+    ]
 
     if not found:
         raise click.ClickException("No ML workspaces found in this subscription")
@@ -80,18 +102,24 @@ def ws_show(name: str | None) -> None:
     from rich.panel import Panel
     from rich.table import Table
 
-    from azure_jobs.client.discovery import resolve
-    from azure_jobs.shared.config import read_config
+    from azure_jobs import connect
+    from azure_jobs.shared.config import AJWorkspace, read_config
     from azure_jobs.client.ui import console, emit_json, get_output_mode, warning
 
     if name:
         try:
-            resolved = resolve(name)
+            with connect() as d:
+                target = d.ws.get(name)
         except AJError as exc:
             raise click.ClickException(str(exc)) from exc
-        if resolved is None:
+        if target is None:
             raise click.ClickException(f"Workspace '{name}' not found")
-        ws = resolved
+        meta = target.metadata
+        ws = AJWorkspace(
+            subscription_id=meta.get("subscription_id", ""),
+            resource_group=meta.get("resource_group", ""),
+            workspace_name=meta.get("workspace_name") or target.label,
+        )
     else:
         cfg = read_config()
         if not cfg.workspace.workspace_name:
@@ -145,7 +173,7 @@ def ws_show(name: str | None) -> None:
 @click.argument("name", required=False)
 def ws_set(name: str | None) -> None:
     """Set the active workspace."""
-    from azure_jobs.client.discovery import pick_workspace
+    from azure_jobs.client.cli._workspace_setup import pick_workspace
     from azure_jobs.shared.config import AJWorkspace, read_config, write_config
     from azure_jobs.client.ui import get_output_mode, show_command_result, success
 

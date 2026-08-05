@@ -7,8 +7,8 @@ from unittest.mock import patch
 
 import pytest
 
-from azure_jobs.client.tui.models import Job, Workspace
-from azure_jobs.client.tui.ports import JobPage, LogChunk
+from azure_jobs.client.tui.models import Job
+from azure_jobs.shared.contract.models import JobPage, LogChunk, Target
 from azure_jobs.client.tui.runtime import SessionHandle
 
 # Two sample cloud job dicts (no local records involved)
@@ -47,6 +47,20 @@ _JOBS = [
         "experiment": "cv",
     },
 ]
+
+
+def _workspace(subscription_id: str, resource_group: str, name: str) -> Target:
+    return Target.create(
+        backend="azureml",
+        native_id=f"{subscription_id}/{resource_group}/{name}",
+        label=name,
+        detail=resource_group,
+        metadata={
+            "subscription_id": subscription_id,
+            "resource_group": resource_group,
+            "workspace_name": name,
+        },
+    )
 
 
 class _FakeJobs:
@@ -127,7 +141,7 @@ async def _load_jobs(app, pilot=None):
     if pilot:
         await pilot.pause()
     if app.workspace.state.current is None:
-        target = Workspace("test-sub", "test-rg", "test-ws")
+        target = _workspace("test-sub", "test-rg", "test-ws")
         app.target_store.configured(target)
         app.target_store.ready(
             target,
@@ -306,12 +320,12 @@ async def test_workspace_picker(_dash) -> None:
     async with _dash.run_test(size=(120, 30)) as pilot:
         await _load_jobs(_dash, pilot)
         await pilot.pause()
-        ws_a = Workspace(
+        ws_a = _workspace(
             subscription_id="sub-123",
             resource_group="rg-1",
             name="ws-a",
         )
-        ws_b = Workspace(
+        ws_b = _workspace(
             subscription_id="sub-123",
             resource_group="rg-2",
             name="ws-b",
@@ -336,7 +350,7 @@ async def test_switch_workspace(_dash) -> None:
     async with _dash.run_test(size=(120, 30)) as pilot:
         await _load_jobs(_dash, pilot)
         await pilot.pause()
-        workspace = Workspace(
+        workspace = _workspace(
             subscription_id="sub-123",
             resource_group="rg-2",
             name="ws-b",
@@ -345,8 +359,8 @@ async def test_switch_workspace(_dash) -> None:
         await pilot.pause()
         cur = _dash.workspace.state.current
         assert cur.name == "ws-b"
-        assert cur.resource_group == "rg-2"
-        assert cur.subscription_id == "sub-123"
+        assert cur.detail == "rg-2"
+        assert cur.metadata["subscription_id"] == "sub-123"
 
 
 def test_make_option_display_name() -> None:

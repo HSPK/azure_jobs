@@ -59,7 +59,6 @@ class AjClient:
 
     def __init__(self, transport: "DaemonClient", *, workspace: str = "") -> None:
         self._c = transport
-        self._default_ws = workspace
 
         # Subscription-scoped: usable before any workspace is configured.
         self.auth = AuthNamespace(transport)
@@ -74,37 +73,14 @@ class AjClient:
         # Workspace-scoped, defaulting to the configured workspace. Built once
         # so `d.job` is the same object every time, which callers rely on when
         # they hold a namespace across calls.
-        self._workspace = WorkspaceClient(transport, workspace)
-        self.ws = WorkspaceNamespace(transport, self._workspace)
-
-    @property
-    def workspace(self) -> WorkspaceClient:
-        """The workspace the root shorthands act on."""
-        return self._workspace
-
-    @property
-    def job(self) -> JobNamespace:
-        return self._workspace.job
-
-    @property
-    def log(self) -> LogNamespace:
-        return self._workspace.log
-
-    @property
-    def ds(self) -> DatastoreNamespace:
-        return self._workspace.ds
-
-    @property
-    def env(self) -> EnvironmentNamespace:
-        return self._workspace.env
-
-    @property
-    def queue(self) -> QueueNamespace:
-        return self._workspace.queue
-
-    @property
-    def watch(self) -> WatchNamespace:
-        return self._workspace.watch
+        self.workspace = WorkspaceClient(transport, workspace)
+        self.ws = WorkspaceNamespace(transport, self.workspace)
+        self.job = self.workspace.job
+        self.log = self.workspace.log
+        self.ds = self.workspace.ds
+        self.env = self.workspace.env
+        self.queue = self.workspace.queue
+        self.watch = self.workspace.watch
 
     def info(self) -> dict[str, Any]:
         """What the daemon reports about itself: pid, version, uptime."""
@@ -122,7 +98,7 @@ class AjClient:
         self.close()
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
-        return f"<AjClient workspace={self._workspace.name!r}>"
+        return f"<AjClient workspace={self.workspace.name!r}>"
 
 
 def connect(

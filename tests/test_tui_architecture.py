@@ -32,7 +32,7 @@ from azure_jobs.client.tui.events import (
 from azure_jobs.client.tui.features import Feature, FeatureRegistry
 from azure_jobs.client.tui.log_store import LogsStore
 from azure_jobs.client.tui.models import Job, Target
-from azure_jobs.client.tui.ports import Cursor, JobPage
+from azure_jobs.shared.contract.models import Cursor, JobPage
 from azure_jobs.client.tui.runtime import SessionHandle, TaskRunner
 from azure_jobs.client.tui.stores import JobsStore
 

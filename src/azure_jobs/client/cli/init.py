@@ -45,7 +45,7 @@ def init(ctx: click.Context, force: bool) -> None:
 
 def _init_aj(force: bool) -> None:
     from azure_jobs.shared import const
-    from azure_jobs.client.discovery import get_workspace_config
+    from azure_jobs.client.cli._workspace_setup import get_workspace_config
     from azure_jobs.shared.config import read_config, write_config
     from azure_jobs.client.ui import dim, info, success, warning
 
@@ -102,7 +102,7 @@ def init_amlt(ctx: click.Context, force: bool) -> None:
     """Set up amlt integration (project + workspace registration)."""
     from pathlib import Path
 
-    from azure_jobs.client.discovery import get_workspace_config
+    from azure_jobs.client.cli._workspace_setup import get_workspace_config
     from azure_jobs.client.ui import console, dim, error, info, success
 
     parent_force = (ctx.parent and ctx.parent.obj or {}).get("force", False)
@@ -202,7 +202,7 @@ def init_amlt(ctx: click.Context, force: bool) -> None:
     success("amlt configured ✓")
 
 def _print_amlt_workspace_commands(aj_ws: "AJWorkspace") -> None:
-    from azure_jobs.client.discovery import workspaces as list_workspaces
+    from azure_jobs.client.cli._workspace_setup import _workspaces
     from azure_jobs.client.ui import info
 
     sub = aj_ws.subscription_id
@@ -210,7 +210,7 @@ def _print_amlt_workspace_commands(aj_ws: "AJWorkspace") -> None:
         return
 
     info("Detecting workspaces in subscription…")
-    all_ws = list_workspaces()
+    all_ws = _workspaces()
     if not all_ws:
         all_ws = [
             {
@@ -232,15 +232,15 @@ def _print_amlt_workspace_commands(aj_ws: "AJWorkspace") -> None:
     click.echo()
 
 def _setup_workspace() -> "AJWorkspace | None":
-    from azure_jobs.client.discovery import (
+    from azure_jobs.client.cli._workspace_setup import (
+        _subscription,
+        _workspaces,
         pick_workspace,
-        subscription as active_subscription,
-        workspaces as list_workspaces,
     )
     from azure_jobs.shared.config import AJWorkspace, read_config, write_config
     from azure_jobs.client.ui import console, dim, error
 
-    sub = active_subscription()
+    sub = _subscription()
     if not sub:
         error("Cannot detect subscription. Run [bold]az login[/bold] first.")
         return None
@@ -248,7 +248,7 @@ def _setup_workspace() -> "AJWorkspace | None":
     dim(f"Subscription: {sub['subscription_name']} ({sub['subscription_id'][:8]}…)")
 
     with console.status("[bold cyan]Listing workspaces…[/bold cyan]", spinner="dots"):
-        workspaces = list_workspaces()
+        workspaces = _workspaces()
 
     if not workspaces:
         error("No ML workspaces found in this subscription.")

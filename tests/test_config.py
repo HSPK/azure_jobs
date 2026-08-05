@@ -1,6 +1,6 @@
 import json
 
-from azure_jobs.client.discovery import (
+from azure_jobs.client.cli._workspace_setup import (
     get_workspace_config,
     pick_workspace,
 )
@@ -179,11 +179,11 @@ class TestGetWorkspaceConfig:
     def test_full_auto_detect_flow(self, aj_config, monkeypatch):
         """subscription + workspace all come from the daemon."""
         monkeypatch.setattr(
-            "azure_jobs.client.discovery.subscription",
+            "azure_jobs.client.cli._workspace_setup._subscription",
             lambda: {"subscription_id": "auto-sub", "subscription_name": "MySub"},
         )
         monkeypatch.setattr(
-            "azure_jobs.client.discovery.workspaces",
+            "azure_jobs.client.cli._workspace_setup._workspaces",
             lambda sub="": [
                 {
                     "name": "FastAML",
@@ -205,11 +205,11 @@ class TestGetWorkspaceConfig:
     def test_manual_fallback_when_no_workspaces_found(self, aj_config, monkeypatch):
         """Falls back to prompting when the daemon finds no workspaces."""
         monkeypatch.setattr(
-            "azure_jobs.client.discovery.subscription",
+            "azure_jobs.client.cli._workspace_setup._subscription",
             lambda: {"subscription_id": "sub-x", "subscription_name": "Sub"},
         )
         monkeypatch.setattr(
-            "azure_jobs.client.discovery.workspaces", lambda sub="": []
+            "azure_jobs.client.cli._workspace_setup._workspaces", lambda sub="": []
         )
         inputs = iter(["rg-manual", "ws-manual"])
         monkeypatch.setattr(
@@ -222,11 +222,11 @@ class TestGetWorkspaceConfig:
     def test_manual_entry_via_option_zero(self, aj_config, monkeypatch):
         """User selects '0' to enter manually instead of picking a workspace."""
         monkeypatch.setattr(
-            "azure_jobs.client.discovery.subscription",
+            "azure_jobs.client.cli._workspace_setup._subscription",
             lambda: {"subscription_id": "sub-y", "subscription_name": "Sub"},
         )
         monkeypatch.setattr(
-            "azure_jobs.client.discovery.workspaces",
+            "azure_jobs.client.cli._workspace_setup._workspaces",
             lambda sub="": [{"name": "W", "resource_group": "R", "location": "l"}],
         )
         inputs = iter([0, "my-rg", "my-ws"])
@@ -239,9 +239,11 @@ class TestGetWorkspaceConfig:
 
     def test_prompts_subscription_when_detection_fails(self, aj_config, monkeypatch):
         """Falls back to prompting when the daemon cannot detect a login."""
-        monkeypatch.setattr("azure_jobs.client.discovery.subscription", lambda: None)
         monkeypatch.setattr(
-            "azure_jobs.client.discovery.workspaces", lambda sub="": []
+            "azure_jobs.client.cli._workspace_setup._subscription", lambda: None
+        )
+        monkeypatch.setattr(
+            "azure_jobs.client.cli._workspace_setup._workspaces", lambda sub="": []
         )
         inputs = iter(["manual-sub", "rg-prod", ""])
         monkeypatch.setattr(

@@ -42,17 +42,19 @@ def _status(
     missing_package: bool = False,
 ):
     """Patch the single auth snapshot the command renders."""
-    return patch(
-        "azure_jobs.client.discovery.auth_status",
-        return_value={
-            "signed_in": account is not None,
-            "account": account,
-            "credential": {
-                "ok": ok,
-                "error": error,
-                "missing_package": missing_package,
-            },
+    client = MagicMock()
+    client.__enter__.return_value.auth.status.return_value = {
+        "signed_in": account is not None,
+        "account": account,
+        "credential": {
+            "ok": ok,
+            "error": error,
+            "missing_package": missing_package,
         },
+    }
+    return patch(
+        "azure_jobs.connect",
+        return_value=client,
     )
 
 

@@ -17,7 +17,7 @@ from azure_jobs.client.tui.events import (
     TargetReady,
 )
 from azure_jobs.client.tui.models import Job, JobRef, Target
-from azure_jobs.client.tui.ports import Cursor, JobPage
+from azure_jobs.shared.contract.models import Cursor, JobPage
 from azure_jobs.client.tui.state import JobsState, LoadStatus, TargetState
 
 

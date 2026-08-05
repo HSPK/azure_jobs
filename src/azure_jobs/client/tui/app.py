@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import Any
 
 from rich.text import Text
@@ -10,6 +10,8 @@ from textual.app import App, ComposeResult
 from textual.widgets import Input, OptionList
 
 from azure_jobs.sdk import AjClient, connect
+from azure_jobs.sdk.account import WorkspaceNamespace
+from azure_jobs.sdk.workspace import WorkspaceClient
 from azure_jobs.client.tui.bindings import (
     COMMAND_BINDINGS,
     CommandHandler,
@@ -32,8 +34,7 @@ from azure_jobs.client.tui.events import (
 from azure_jobs.client.tui.features import DashboardFeature, Feature, FeatureRegistry
 from azure_jobs.client.tui.helpers import get_page_size
 from azure_jobs.client.tui.log_store import LogsStore
-from azure_jobs.client.tui.models import ViewMode
-from azure_jobs.client.tui.ports import SessionFactory, TargetCatalog
+from azure_jobs.client.tui.models import Target, ViewMode
 from azure_jobs.client.tui.runtime import TaskRunner
 from azure_jobs.client.tui.settings import validate_last, validate_page_size
 from azure_jobs.client.tui.stores import JobsStore, TargetStore
@@ -55,8 +56,8 @@ class AjDashboard(App):
         *,
         mouse: bool = False,
         sdk: AjClient | None = None,
-        workspace_catalog: TargetCatalog | None = None,
-        session_factory: SessionFactory | None = None,
+        workspace_catalog: WorkspaceNamespace | None = None,
+        session_factory: Callable[[Target | str], WorkspaceClient] | None = None,
         features: Sequence[DashboardFeature] = (),
         **kwargs: Any,
     ) -> None:

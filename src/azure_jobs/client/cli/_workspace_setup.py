@@ -1,32 +1,19 @@
-"""Azure discovery, performed by the daemon on the client's behalf.
+"""Interactive workspace setup, fed by the daemon through the SDK.
 
-The client never runs ``az``. Commands that need to know which subscription is
-active, or which workspaces exist, ask the daemon and render the answer. The
-*prompting* stays here, because only the client has a terminal.
+The prompting stays in the CLI; ordinary ``auth`` and ``ws`` commands call the
+SDK directly rather than passing through this module.
 """
 
 from __future__ import annotations
-
-from typing import Any
 
 from azure_jobs import connect
 from azure_jobs.shared.config.models import AJWorkspace
 
 
-def auth_status() -> dict[str, Any]:
-    """Sign-in and credential health, as the daemon sees them."""
-    with connect() as d:
-        return dict(d.auth.status() or {})
-
-
-def account() -> dict[str, Any] | None:
-    """The raw ``az account show`` payload the daemon sees, or ``None``."""
-    return auth_status().get("account")
-
-
-def subscription() -> dict[str, str] | None:
+def _subscription() -> dict[str, str] | None:
     """The active subscription, flattened to id + name."""
-    data = account()
+    with connect() as d:
+        data = d.auth.status().get("account")
     if not data:
         return None
     return {
@@ -35,12 +22,7 @@ def subscription() -> dict[str, str] | None:
     }
 
 
-def credential() -> dict[str, Any]:
-    """Health of the credential the daemon uses to reach Azure."""
-    return auth_status().get("credential") or {}
-
-
-def workspaces(subscription_id: str = "") -> list[dict[str, str]]:
+def _workspaces(subscription_id: str = "") -> list[dict[str, str]]:
     """Workspaces in *subscription_id*, or in the active subscription.
 
     Passing the subscription explicitly matters when a project is configured
@@ -61,20 +43,6 @@ def workspaces(subscription_id: str = "") -> list[dict[str, str]]:
         }
         for target in found
     ]
-
-
-def resolve(name: str | None = None) -> AJWorkspace | None:
-    """Resolve a workspace name, or the configured one when *name* is empty."""
-    with connect() as d:
-        target = d.ws.get(name) if name else d.ws.current()
-    if target is None:
-        return None
-    meta = target.metadata
-    return AJWorkspace(
-        subscription_id=meta.get("subscription_id", ""),
-        resource_group=meta.get("resource_group", ""),
-        workspace_name=meta.get("workspace_name") or target.label,
-    )
 
 
 def pick_workspace(rows: list[dict[str, str]]) -> dict[str, str] | None:
@@ -103,7 +71,7 @@ def _ensure_subscription_id(workspace: AJWorkspace) -> bool:
     _echo, _prompt = prompts._echo, prompts._prompt
     if workspace.subscription_id:
         return False
-    info = subscription()
+    info = _subscription()
     if info and info.get("subscription_id"):
         workspace.subscription_id = info["subscription_id"]
         _echo()
@@ -130,7 +98,7 @@ def _ensure_resource_group_and_workspace(workspace: AJWorkspace) -> bool:
     if not need_rg and not need_ws:
         return False
 
-    detected = workspaces(workspace.subscription_id)
+    detected = _workspaces(workspace.subscription_id)
     picked = pick_workspace(detected) if detected else None
 
     if picked:
@@ -183,12 +151,6 @@ def get_workspace_config() -> AJWorkspace:
 
 
 __all__ = [
-    "account",
-    "auth_status",
-    "credential",
     "get_workspace_config",
     "pick_workspace",
-    "resolve",
-    "subscription",
-    "workspaces",
 ]

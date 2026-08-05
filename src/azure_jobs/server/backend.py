@@ -8,9 +8,11 @@ one execution path and no mode that behaves subtly differently.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from contextlib import contextmanager
 from typing import Any
 
+from azure_jobs.server.azure import AzureRangeLogReader
 from azure_jobs.shared.contract.models import (
     CatalogItem,
     Cursor,
@@ -22,7 +24,9 @@ from azure_jobs.shared.contract.models import (
     SubmitOutcome,
     Target,
 )
-from azure_jobs.shared.contract.ports import Cancelled, EventSink, RangeLogReader
+
+Cancelled = Callable[[], bool] | None
+EventSink = Callable[[SubmitEvent], None] | None
 
 log = logging.getLogger(__name__)
 
@@ -122,9 +126,7 @@ class AzureLogs:
 
         return pick_default_log(files)
 
-    def open(self, job: JobRef, path: str) -> RangeLogReader:
-        from azure_jobs.server.azure import AzureRangeLogReader
-
+    def open(self, job: JobRef, path: str) -> AzureRangeLogReader:
         content_uri = self._api.get_content_uri(job.backend_ref, path)
         if not content_uri:
             raise FileNotFoundError(f"No content URI for log file {path!r}")

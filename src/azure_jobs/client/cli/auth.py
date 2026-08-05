@@ -23,11 +23,12 @@ def auth_group() -> None:
 @auth_group.command(name="status")
 def auth_status() -> None:
     """Show current Azure login status, subscription, and credential health."""
-    from azure_jobs.client.discovery import auth_status as get_auth_status
+    from azure_jobs import connect
     from azure_jobs.shared.config import read_config
     from azure_jobs.client.ui import console, show_auth_status
 
-    status = get_auth_status()
+    with connect() as d:
+        status = d.auth.status()
     account = status.get("account")
     if account is None:
         console.print("[error]✗[/error] Not logged in (or Azure CLI not installed)")

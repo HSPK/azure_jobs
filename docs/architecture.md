@@ -322,16 +322,13 @@ tui/
 ├── bindings.py      # validated commands + context predicates + help
 ├── features.py      # feature lifecycle and optional Screen registration
 ├── events.py        # typed, breadth-first cross-feature events
-├── models.py        # Target / Job / JobRef / request identities
+├── models.py        # TUI-only request identities and view enums
 ├── state.py         # immutable JobsState / LogsState / TargetState snapshots
 ├── stores.py        # all jobs/target transitions (UI-thread guarded)
 ├── log_store.py     # exact-byte log windows and projections
-├── ports.py         # capability ports + Cursor / LogChunk(bytes)
 ├── runtime.py       # bounded worker pool, cancellation, resource leases
 ├── view_ports.py    # Jobs / Logs / Target / Shell view Protocols
 ├── ui.py            # separate Textual adapter for each view port
-├── adapters/
-│   └── azureml.py   # strict Azure implementation (including HTTP Range)
 ├── components/      # shell layout, widgets, searchable modals
 └── controllers/
     ├── workspace.py # target discovery + session ownership

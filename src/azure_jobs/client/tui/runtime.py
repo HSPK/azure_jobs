@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from itertools import count
 from typing import Any, Callable, Generic, Iterator, Protocol, TypeVar
 
-from azure_jobs.client.tui.ports import DashboardSession
+from azure_jobs.sdk.workspace import WorkspaceClient
 
 log = logging.getLogger(__name__)
 
@@ -404,5 +404,5 @@ class ResourceHandle(Generic[R]):
             )
 
 
-class SessionHandle(ResourceHandle[DashboardSession]):
+class SessionHandle(ResourceHandle[WorkspaceClient]):
     """Dashboard-session specialization used by feature controllers."""

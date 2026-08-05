@@ -11,7 +11,7 @@ from azure_jobs.shared.errors import RestError
 from azure_jobs.client.tui.controllers.base import Controller
 from azure_jobs.client.tui.errors import format_error
 from azure_jobs.client.tui.models import Job
-from azure_jobs.client.tui.ports import Cursor, JobPage, JobQuerySpec
+from azure_jobs.shared.contract.models import Cursor, JobPage, JobQuerySpec
 from azure_jobs.client.tui.runtime import (
     CancellationToken,
     SessionHandle,

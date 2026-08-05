@@ -10,8 +10,8 @@ import pytest
 from azure_jobs.shared.errors import DeleteOutcomeUncertain, RestError
 from azure_jobs.client.tui.app import AjDashboard
 from azure_jobs.client.tui.settings import DEFAULT_DASHBOARD_LAST
-from azure_jobs.client.tui.models import Job, Workspace
-from azure_jobs.client.tui.ports import Cursor, JobPage
+from azure_jobs.client.tui.models import Job
+from azure_jobs.shared.contract.models import Cursor, JobPage, Target
 
 
 def _job(index: int, status: str = "Running") -> Job:
@@ -22,6 +22,20 @@ def _job(index: int, status: str = "Running") -> Job:
             "status": status,
             "experiment": "test",
         }
+    )
+
+
+def _workspace(subscription_id: str, resource_group: str, name: str) -> Target:
+    return Target.create(
+        backend="azureml",
+        native_id=f"{subscription_id}/{resource_group}/{name}",
+        label=name,
+        detail=resource_group,
+        metadata={
+            "subscription_id": subscription_id,
+            "resource_group": resource_group,
+            "workspace_name": name,
+        },
     )
 
 
@@ -82,7 +96,7 @@ class _Factory:
 
 
 class _Catalog:
-    workspace = Workspace("sub", "rg", "ws")
+    workspace = _workspace("sub", "rg", "ws")
 
     def current(self):
         return self.workspace
@@ -431,8 +445,8 @@ async def test_workspace_switch_drops_inflight_old_result(
     monkeypatch,
 ) -> None:
     monkeypatch.setattr("azure_jobs.shared.const.AJ_CONFIG", tmp_path / "config.json")
-    first = Workspace("sub", "rg-a", "ws-a")
-    second = Workspace("sub", "rg-b", "ws-b")
+    first = _workspace("sub", "rg-a", "ws-a")
+    second = _workspace("sub", "rg-b", "ws-b")
     old_jobs = _BlockingJobs([_job(0)])
     new_jobs = _PagedJobs([_job(9)])
     factory = _WorkspaceFactory(

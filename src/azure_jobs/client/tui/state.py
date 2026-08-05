@@ -8,7 +8,7 @@ from types import MappingProxyType
 from typing import Mapping
 
 from azure_jobs.client.tui.models import Job, JobRef, Target, ViewMode
-from azure_jobs.client.tui.ports import Cursor
+from azure_jobs.shared.contract.models import Cursor
 
 
 class LoadStatus(str, Enum):

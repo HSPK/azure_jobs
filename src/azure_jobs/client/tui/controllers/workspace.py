@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from rich.markup import escape
 from rich.text import Text
@@ -12,7 +13,8 @@ from azure_jobs.client.tui.components import PickerItem
 from azure_jobs.client.tui.controllers.base import Controller
 from azure_jobs.client.tui.errors import format_error
 from azure_jobs.client.tui.models import Target
-from azure_jobs.client.tui.ports import SessionFactory, TargetCatalog
+from azure_jobs.sdk.account import WorkspaceNamespace
+from azure_jobs.sdk.workspace import WorkspaceClient
 from azure_jobs.client.tui.runtime import (
     CancellationToken,
     SessionHandle,
@@ -42,8 +44,8 @@ class WorkspaceController(Controller[WorkspaceState]):
         tasks: TaskRunner,
         store: TargetStore,
         *,
-        catalog: TargetCatalog,
-        session_factory: SessionFactory,
+        catalog: WorkspaceNamespace,
+        session_factory: Callable[[Target | str], WorkspaceClient],
     ) -> None:
         super().__init__(ui, tasks, lambda: store.state)
         self.store = store

@@ -21,7 +21,8 @@ from azure_jobs.client.tui.errors import format_error
 from azure_jobs.client.tui.helpers import safe_close
 from azure_jobs.client.tui.log_store import LogsStore
 from azure_jobs.client.tui.models import BackfillRequest, JobRef, StreamRequest
-from azure_jobs.client.tui.ports import LogChunk, RangeLogReader
+from azure_jobs.sdk.logs import LogReader
+from azure_jobs.shared.contract.models import LogChunk
 from azure_jobs.client.tui.runtime import (
     CancellationToken,
     ResourceHandle,
@@ -32,7 +33,7 @@ from azure_jobs.client.tui.state import LogsState
 from azure_jobs.client.tui.view_ports import LogsViewPort
 
 if TYPE_CHECKING:
-    from azure_jobs.client.tui.ports import RangeLogSource
+    from azure_jobs.sdk.logs import LogNamespace
 
 log = logging.getLogger(__name__)
 
@@ -42,7 +43,7 @@ class StreamInitial:
     files: tuple[str, ...]
     path: str
     chunk: LogChunk | None
-    reader: RangeLogReader | None
+    reader: LogReader | None
 
 
 class LogsStream(Controller[LogsState]):
@@ -61,7 +62,7 @@ class LogsStream(Controller[LogsState]):
         self.store = store
         self._session_provider = session_provider
         self._on_restart = on_restart
-        self._reader: ResourceHandle[RangeLogReader] | None = None
+        self._reader: ResourceHandle[LogReader] | None = None
         self._poll_timer: Timer | None = None
         self._poll_interval = DEFAULT_POLL_INTERVAL
         self._retry_count = 0
@@ -76,7 +77,7 @@ class LogsStream(Controller[LogsState]):
         self._on_restart()
 
     @staticmethod
-    def _logs_capability(session: object) -> "RangeLogSource":
+    def _logs_capability(session: object) -> "LogNamespace":
         logs = getattr(session, "log", None)
         if logs is None:
             raise RuntimeError("This backend does not provide range logs")
