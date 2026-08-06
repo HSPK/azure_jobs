@@ -108,5 +108,5 @@ def redact_value(value: Any) -> Any:
 def bounded_tail(value: str, lines: int) -> str:
     if lines < 1:
         return ""
-    selected = str(value).splitlines()[-lines:]
-    return redact_text("\n".join(line[:2000] for line in selected))
+    selected = redact_text(str(value)).splitlines()[-lines:]
+    return "\n".join(line[:2000] for line in selected)

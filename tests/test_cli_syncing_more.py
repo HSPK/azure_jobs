@@ -351,13 +351,18 @@ class TestDaemonExtra:
             patch.object(ui_mod, "console", console),
             patch.object(daemon_mod, "_client", return_value=conn),
             patch.object(daemon_mod, "_info", return_value={"pid": 7}),
-            patch.object(daemon_mod, "_retire", return_value={"outstanding": 1}),
+            patch.object(
+                daemon_mod,
+                "_retire",
+                return_value={"outstanding": 1},
+            ) as retire,
             patch.object(daemon_mod.time, "time", side_effect=lambda: next(times)),
             patch.object(daemon_mod.time, "sleep", lambda _: None),
         ):
             result = CliRunner().invoke(daemon_mod.daemon_stop, ["--timeout", "1"])
 
         assert result.exit_code == 0
+        retire.assert_called_once_with(conn, force=False)
         printed = [call.args[0] for call in console.print.call_args_list]
         assert any("Waiting for 1 running submission" in line for line in printed)
         assert printed[-1] == "Daemon is still draining work"
@@ -379,7 +384,11 @@ class TestDaemonExtra:
             patch.object(ui_mod, "console", console),
             patch.object(daemon_mod, "_client", return_value=conn),
             patch.object(daemon_mod, "_info", return_value={"pid": 7}),
-            patch.object(daemon_mod, "_retire", return_value={"outstanding": 0}),
+            patch.object(
+                daemon_mod,
+                "_retire",
+                return_value={"outstanding": 0},
+            ) as retire,
             patch.object(daemon_mod.time, "time", side_effect=lambda: next(times)),
             patch.object(daemon_mod.time, "sleep", side_effect=_sleep),
             patch.object(daemon_mod.os, "kill", side_effect=OSError("gone")),
@@ -389,6 +398,7 @@ class TestDaemonExtra:
             )
 
         assert result.exit_code == 0
+        retire.assert_called_once_with(conn, force=True)
         assert console.print.call_args_list[-1].args[0] == "Daemon stopped"
 
 

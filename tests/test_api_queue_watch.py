@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import threading
 import time
 
@@ -12,12 +13,13 @@ from azure_jobs.shared.contract.models import (
     DONE,
     FAILED,
     QUEUED,
+    RUNNING,
     Job,
     JobRef,
     Notification,
     SubmitOutcome,
 )
-from azure_jobs.server.queue import MAX_HISTORY, SubmissionQueue
+from azure_jobs.server.queue import MAX_HISTORY, SubmissionQueue, _replace
 from azure_jobs.server.watch import (
     TOPIC_DONE,
     TOPIC_STATUS,
@@ -50,6 +52,52 @@ class TestSubmissionQueue:
         assert entry.state == QUEUED
         assert entry.ticket
         assert queue.get(entry.ticket) == entry
+
+    def test_persistence_cannot_overwrite_running_with_stale_queued_snapshot(
+        self, tmp_path
+    ):
+        journal = tmp_path / "queue.json"
+        queue = SubmissionQueue(_ok, autostart=False)
+        entry = queue.enqueue({"name": "job-1"})
+        queue._journal_path = journal
+        stale_waiting = threading.Event()
+        release_stale = threading.Event()
+        write_lock = threading.Lock()
+
+        class ReorderingLock:
+            def __enter__(self):
+                if threading.current_thread().name == "stale-writer":
+                    stale_waiting.set()
+                    assert release_stale.wait(timeout=5)
+                write_lock.acquire()
+
+            def __exit__(self, exc_type, exc, tb):
+                write_lock.release()
+
+        queue._io_lock = ReorderingLock()
+        stale = threading.Thread(target=queue._persist, name="stale-writer")
+        stale.start()
+        assert stale_waiting.wait(timeout=5)
+
+        with queue._lock:
+            queue._pending.remove(entry.ticket)
+            queue._entries[entry.ticket] = _replace(
+                entry,
+                state=RUNNING,
+                started_at=time.time(),
+            )
+
+        fresh = threading.Thread(target=queue._persist, name="fresh-writer")
+        fresh.start()
+        fresh.join(timeout=5)
+        assert not fresh.is_alive()
+        release_stale.set()
+        stale.join(timeout=5)
+        assert not stale.is_alive()
+
+        persisted = json.loads(journal.read_text(encoding="utf-8"))
+        assert persisted["entries"][0]["state"] == RUNNING
+        assert persisted["pending"] == []
 
     def test_submissions_run_in_fifo_order(self):
         order: list[str] = []

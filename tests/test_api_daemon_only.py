@@ -167,7 +167,7 @@ class TestRetireNeverKillsRunningWork:
         session.queue.enqueue({"name": "slow"})
         assert started.wait(timeout=5)
         try:
-            result = _retire(local_daemon, drain_timeout=30)
+            result = _retire(local_daemon)
             assert result["outstanding"] == 1
         finally:
             release.set()
@@ -188,7 +188,7 @@ class TestRetireNeverKillsRunningWork:
         session.queue.enqueue({"name": "slow"})
         assert started.wait(timeout=5)
 
-        _retire(local_daemon, drain_timeout=30)
+        _retire(local_daemon)
         time.sleep(0.3)
         # Still alive: the submission has not finished yet.
         assert local_daemon.socket_path.exists()
@@ -230,14 +230,14 @@ class TestServerOwnsConnectionResources:
         assert threading.active_count() < before + 10
 
 
-def _retire(daemon, *, drain_timeout=None):
+def _retire(daemon, *, force=False):
     from azure_jobs.sdk._transport import DaemonClient
 
     client = DaemonClient(daemon.socket_path, daemon.socket_path.parent)
     try:
         return client.post(
             "/v2/retire",
-            json={"drain_timeout": drain_timeout},
+            json={"force": force},
         )
     finally:
         client.close()

@@ -238,15 +238,16 @@ class SubmissionQueue:
     def _persist(self) -> None:
         if self._journal_path is None:
             return
-        with self._lock:
-            payload = {
-                "entries": [e.to_json() for e in self._entries.values()],
-                "pending": list(self._pending),
-                "payloads": {t: self._payloads[t] for t in self._pending},
-            }
-        # Serialised separately from the state lock: two writers sharing one
-        # temp path would race, and the loser's replace() fails with ENOENT.
+        # Acquire the writer lock before snapshotting state. Otherwise a stale
+        # QUEUED snapshot can be written after the worker persisted RUNNING,
+        # causing a restart to submit the same remote mutation twice.
         with self._io_lock:
+            with self._lock:
+                payload = {
+                    "entries": [e.to_json() for e in self._entries.values()],
+                    "pending": list(self._pending),
+                    "payloads": {t: self._payloads[t] for t in self._pending},
+                }
             try:
                 self._journal_path.parent.mkdir(parents=True, exist_ok=True)
                 os.chmod(self._journal_path.parent, 0o700)

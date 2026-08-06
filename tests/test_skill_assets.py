@@ -54,6 +54,26 @@ def test_bounded_tail_redacts_after_selecting_last_lines() -> None:
     assert "tail-secret" not in result
 
 
+def test_bounded_tail_redacts_before_character_and_line_limits() -> None:
+    long_secret = "secret-start-" + "x" * 2100 + "-secret-end"
+    json_log = f'{{"api_key":"{long_secret}"}}'
+    pem_log = (
+        "before\n"
+        "-----BEGIN PRIVATE KEY-----\n"
+        "pem-secret-body\n"
+        "-----END PRIVATE KEY-----"
+    )
+
+    json_result = bounded_tail(json_log, 1)
+    pem_result = bounded_tail(pem_log, 2)
+
+    assert "secret-start" not in json_result
+    assert "secret-end" not in json_result
+    assert "pem-secret-body" not in pem_result
+    assert "[REDACTED" in json_result
+    assert "[REDACTED PEM BLOCK]" in pem_result
+
+
 def test_summary_whitelists_and_redacts_nested_values() -> None:
     value = {
         "kind": "submission_result",

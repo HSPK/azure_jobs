@@ -290,25 +290,19 @@ class TestAppHelpers:
         state.contexts.outstanding = lambda: outstanding.pop(0) if len(outstanding) > 1 else outstanding[0]
         monkeypatch.setattr(app_mod.time, "sleep", lambda seconds: None)
 
-        _retire_when_drained(state, drain_timeout=30)
+        _retire_when_drained(state)
 
         assert state.should_exit.is_set()
 
-    def test_retire_when_drained_times_out_and_warns(self, monkeypatch):
+    def test_force_retire_exits_with_outstanding_work(self):
         state = SimpleNamespace(
             contexts=SimpleNamespace(outstanding=lambda: 2),
             should_exit=threading.Event(),
         )
-        now = iter([100.0, 100.0, 100.7])
-        warning = MagicMock()
-        monkeypatch.setattr(app_mod.time, "time", lambda: next(now))
-        monkeypatch.setattr(app_mod.time, "sleep", lambda seconds: None)
-        monkeypatch.setattr(app_mod.log, "warning", warning)
 
-        _retire_when_drained(state, drain_timeout=0.5)
+        _retire_when_drained(state, force=True)
 
         assert state.should_exit.is_set()
-        warning.assert_called_once_with("Retiring with %d submission(s) still running", 2)
 
     def test_workspace_detail_default_sentinel_returns_null_when_unconfigured(self, tmp_path):
         class Catalog:

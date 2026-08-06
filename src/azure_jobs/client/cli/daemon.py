@@ -46,11 +46,11 @@ def _info(conn):
     )
 
 
-def _retire(conn, *, timeout: float):
-    body = {"drain_timeout": timeout or None}
+def _retire(conn, *, force: bool):
+    body = {"force": force}
     return _fallback_404(
         lambda: conn.post("/v2/retire", json=body),
-        lambda: conn.post(_LEGACY_RETIRE, json=body),
+        lambda: conn.post(_LEGACY_RETIRE, json={"drain_timeout": None}),
     )
 
 
@@ -150,7 +150,7 @@ def daemon_stop(force: bool, timeout: float) -> None:
         info = _info(conn)
         retired = _retire(
             conn,
-            timeout=timeout if (force or timeout) else 0,
+            force=force,
         )
     finally:
         conn.close()
@@ -166,8 +166,10 @@ def daemon_stop(force: bool, timeout: float) -> None:
             os.kill(int(info["pid"]), signal.SIGTERM)
         except (OSError, ValueError, KeyError):
             pass
-    deadline = time.time() + (timeout or 600)
-    while time.time() < deadline and path.exists():
+    deadline = None if timeout <= 0 else time.time() + timeout
+    while path.exists() and (
+        deadline is None or time.time() < deadline
+    ):
         time.sleep(0.1)
     console.print(
         "Daemon stopped" if not path.exists() else "Daemon is still draining work"

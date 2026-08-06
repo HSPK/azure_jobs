@@ -230,12 +230,11 @@ def create_app(state: DaemonState) -> FastAPI:
 
     @app.post("/v2/retire")
     def retire(body: dict = Body(default={})) -> dict:
-        raw = body.get("drain_timeout")
-        timeout = float(raw) if raw else None
+        force = bool(body.get("force"))
         outstanding = state.contexts.outstanding()
         state.retiring = True
         threading.Thread(
-            target=_retire_when_drained, args=(state, timeout), daemon=True
+            target=_retire_when_drained, args=(state, force), daemon=True
         ).start()
         return {"retiring": True, "outstanding": outstanding}
 
@@ -696,17 +695,13 @@ def _read_range(reader: Any, range_header: str | None) -> Any:
     return reader.read_after(start, 1024 * 1024)
 
 
-def _retire_when_drained(state: DaemonState, drain_timeout: float | None) -> None:
+def _retire_when_drained(state: DaemonState, force: bool = False) -> None:
     """A submission the daemon accepted has no other owner; never cut it short."""
-    deadline = None if drain_timeout is None else time.time() + drain_timeout
+    if force:
+        state.should_exit.set()
+        return
     while not state.should_exit.is_set():
         if state.contexts.outstanding() == 0:
-            break
-        if deadline is not None and time.time() >= deadline:
-            log.warning(
-                "Retiring with %d submission(s) still running",
-                state.contexts.outstanding(),
-            )
             break
         time.sleep(0.2)
     state.should_exit.set()

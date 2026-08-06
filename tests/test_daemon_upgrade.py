@@ -33,7 +33,7 @@ def test_info_falls_back_only_for_daemon_upgrade() -> None:
 
 def test_retire_falls_back_so_restart_can_replace_v1() -> None:
     daemon = _V1Daemon()
-    assert _retire(daemon, timeout=0)["retiring"] is True
+    assert _retire(daemon, force=False)["retiring"] is True
     assert daemon.calls == [("POST", "/v2/retire"), ("POST", "/v1/retire")]
 
 
