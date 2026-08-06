@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 from pathlib import Path
 from typing import Any
@@ -41,7 +42,21 @@ def write_config(config: AJConfig) -> None:
     """Write :class:AJConfig to aj_config.json with pretty indentation."""
     global _config_cache
     const.AJ_CONFIG.parent.mkdir(parents=True, exist_ok=True)
-    const.AJ_CONFIG.write_text(json.dumps(config.to_dict(), indent=2) + "\n")
+    tmp = const.AJ_CONFIG.with_name(
+        f".{const.AJ_CONFIG.name}.{os.getpid()}.{threading.get_ident()}.tmp"
+    )
+    try:
+        fd = os.open(
+            str(tmp),
+            os.O_CREAT | os.O_WRONLY | os.O_TRUNC,
+            0o600,
+        )
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps(config.to_dict(), indent=2) + "\n")
+        os.replace(tmp, const.AJ_CONFIG)
+        os.chmod(const.AJ_CONFIG, 0o600)
+    finally:
+        tmp.unlink(missing_ok=True)
     with _config_lock:
         _config_cache = None
 

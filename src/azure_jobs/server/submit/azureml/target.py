@@ -11,6 +11,7 @@ from azure_jobs.shared.opts import AmlOpts
 
 if TYPE_CHECKING:
     from azure_jobs.server.az_client import AzureClient, AzureWorkspaceClient
+    from azure_jobs.shared.sku import MatchedInstances
 
 log = logging.getLogger(__name__)
 
@@ -49,6 +50,8 @@ def _build_resources(
     vc: Any,
     client: AzureClient,
     on_log: Any = None,
+    match: MatchedInstances | None = None,
+    requested_tier: str = "",
 ) -> dict[str, Any] | None:
     if request.service != "sing":
         return None
@@ -60,29 +63,30 @@ def _build_resources(
         on_log(f"Resolving SKU {sku}\u2026")
 
     aml: AmlOpts = request.backend_spec
-    requested_tier = aml.sla_tier or "Premium"
-    match = match_instance_type(
-        sku,
-        client=client,
-        nodes=request.nodes,
-        gpus_per_node=request.gpus_per_node,
-        vc=vc,
-        tier=requested_tier,
-    )
-    if match.effective_tier != requested_tier:
+    original_tier = requested_tier or aml.sla_tier or "Premium"
+    if match is None:
+        match = match_instance_type(
+            sku,
+            client=client,
+            nodes=request.nodes,
+            gpus_per_node=request.gpus_per_node,
+            vc=vc,
+            tier=original_tier,
+        )
+    if match.effective_tier != original_tier:
         log.warning(
             "VC '%s' has no %s quota for SKU '%s'; auto-downgraded SLA tier to %s.",
             aml.compute,
-            requested_tier,
+            original_tier,
             sku,
             match.effective_tier,
         )
         if on_log:
             on_log(
-                f"SLA tier downgraded: {requested_tier} → {match.effective_tier} "
-                f"(no {requested_tier} quota on VC '{aml.compute}')"
+                f"SLA tier downgraded: {original_tier} → {match.effective_tier} "
+                f"(no {original_tier} quota on VC '{aml.compute}')"
             )
-        aml.sla_tier = match.effective_tier
+    aml.sla_tier = match.effective_tier
 
     if not match.nvlink_satisfied:
         log.warning(

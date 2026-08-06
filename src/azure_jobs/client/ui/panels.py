@@ -33,11 +33,12 @@ def _aml_view(request: JobSpec) -> "AmlOpts":
 
 def _request_payload(request: JobSpec) -> dict[str, Any]:
     aml = _aml_view(request)
+    compute = aml.compute or ("auto" if request.service == "sing" else "")
     return {
         "template_name": request.template_name,
         "experiment": request.expr_name,
         "service": request.service,
-        "compute": aml.compute,
+        "compute": compute,
         "sku": request.sku,
         "matched_instances": list(aml.matched_instances),
         "nodes": request.nodes,
@@ -66,6 +67,7 @@ def show_submission_preview(
         return
 
     aml = _aml_view(request)
+    compute = aml.compute or ("auto" if request.service == "sing" else "-")
     total_processes = request.nodes * request.processes_per_node
     final_cmd = request.command[-1] if request.command else ""
     storage_count = len(request.storage)
@@ -96,7 +98,7 @@ def show_submission_preview(
     right = _section(
         "Runtime",
         [
-            ("Compute", esc(aml.compute or "-")),
+            ("Compute", esc(compute)),
             ("SKU", esc(request.sku or "auto")),
             ("Nodes", str(request.nodes)),
             (

@@ -138,13 +138,15 @@ def job_show(name: str, ws_name: str | None) -> None:
 
 @job_group.command(name="status")
 @click.argument("job_id")
-def job_status(job_id: str) -> None:
+@click.option("--ws", "ws_name", default=None, help="Workspace name override")
+def job_status(job_id: str, ws_name: str | None = None) -> None:
     """Query the status of a submitted job."""
-    _fetch_and_show_job(job_id)
+    _fetch_and_show_job(job_id, ws_name=ws_name)
 
 @job_group.command(name="cancel")
 @click.argument("job_id")
-def job_cancel(job_id: str) -> None:
+@click.option("--ws", "ws_name", default=None, help="Workspace name override")
+def job_cancel(job_id: str, ws_name: str | None = None) -> None:
     """Cancel a running job."""
     from azure_jobs.shared.contract.models import JobRef
     from azure_jobs import connect
@@ -160,7 +162,7 @@ def job_cancel(job_id: str) -> None:
     json_mode = get_output_mode() == "json"
     ref = JobRef(azure_name, azure_name)
 
-    with connect() as d:
+    with connect(ws_name or "") as d:
         with console.status("[bold cyan]Checking job…[/bold cyan]", spinner="dots"):
             current = d.job.status(ref).status
         final = current
@@ -209,7 +211,8 @@ def job_cancel(job_id: str) -> None:
 
 @job_group.command(name="logs")
 @click.argument("job_id")
-def job_logs(job_id: str) -> None:
+@click.option("--ws", "ws_name", default=None, help="Workspace name override")
+def job_logs(job_id: str, ws_name: str | None = None) -> None:
     """Show logs from a job."""
     from azure_jobs.shared.contract.models import JobRef
     from azure_jobs import connect
@@ -225,7 +228,7 @@ def job_logs(job_id: str) -> None:
     json_mode = get_output_mode() == "json"
     ref = JobRef(azure_name, azure_name)
 
-    with connect() as d:
+    with connect(ws_name or "") as d:
         with console.status(
             "[bold cyan]Checking job status…[/bold cyan]", spinner="dots"
         ):

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 import os
+import tempfile
+from pathlib import Path
 from typing import TYPE_CHECKING, Callable
 
 import requests
@@ -12,12 +14,14 @@ if TYPE_CHECKING:
     from azure_jobs.server.az_client import AzureWorkspaceClient
 
 from azure_jobs.server.az_client import AzureClient
-from azure_jobs.shared.job.spec import JobEvent, JobResult, JobSpec
-
+from azure_jobs.server.submit.archive import create_code_archive
 from azure_jobs.shared.errors import AJError, parse_exception_message
+from azure_jobs.shared.job.spec import JobEvent, JobResult, JobSpec
+from azure_jobs.shared.opts import AmlOpts
+from azure_jobs.shared.utils.format import format_size
+
 from .bootstrap import RUNNER_FILENAME, generate_runner_script
 from .image import _build_environment
-from azure_jobs.shared.opts import AmlOpts
 from .payload import _build_env_vars, _build_job_body, _build_tags
 from .ssh import _collect_ssh_files
 from .storage import _build_storage_mounts
@@ -96,14 +100,35 @@ def _submit_impl(
             )
         )
 
+    def _on_package(completed: int, total: int, current: str) -> None:
+        if completed == 0 or completed % 50 == 0 or completed == total:
+            emit(
+                JobEvent(
+                    kind="package",
+                    completed=completed,
+                    total=total,
+                    current=current,
+                )
+            )
+
     _status("resolve", "Resolving Azure coordinates…")
     with AzureClient() as azure:
-        aml = resolve_target(request, arm_client=azure)
-        vc = (
-            azure.quota.get_by_name(aml.compute)
-            if request.service == "sing"
-            else None
-        )
+        resolved = resolve_target(request, arm_client=azure)
+        aml = resolved.aml
+        vc = resolved.vc
+        matched_instances = resolved.matched_instances
+        if (
+            resolved.auto_selected
+            and vc is not None
+            and matched_instances is not None
+        ):
+            _status(
+                "resolve",
+                f"Auto-selected VC '{vc.name}' at "
+                f"{matched_instances.effective_tier} "
+                f"({resolved.available_capacity} quota available; matched: "
+                f"{', '.join(aml.matched_instances)})",
+            )
 
         _status("auth", "Authenticating…")
         with _get_rest_client(aml) as workspace:
@@ -117,6 +142,8 @@ def _submit_impl(
                 compute_id=compute,
                 on_log=_status,
                 vc=vc,
+                match=matched_instances,
+                requested_tier=resolved.requested_tier,
             )
 
             identity_client_id = ""
@@ -145,19 +172,35 @@ def _submit_impl(
             )
             env_vars = _build_env_vars(request, dataref_env)
 
-            _status("code", "Uploading code…")
-            code_id = workspace.blob.upload_code(
-                code_root,
-                ignore_patterns=request.code_ignore or None,
-                extra_files=extra_files,
-                on_progress=_on_upload,
-            )
+            _status("code", "Packaging code archive…")
+            with tempfile.TemporaryDirectory(prefix="aj-code-") as temp_dir:
+                archive_path = Path(temp_dir) / "code.tar.gz"
+                archive = create_code_archive(
+                    code_root,
+                    archive_path,
+                    ignore_patterns=request.code_ignore or None,
+                    extra_files=extra_files,
+                    on_progress=_on_package,
+                )
+                env_vars["AJ_CODE_ARCHIVE_SHA256"] = archive.code_hash
+                _status(
+                    "code",
+                    f"Packaged {archive.file_count} file(s) "
+                    f"({format_size(archive.size_bytes)})",
+                )
+                _status("code", "Uploading code archive…")
+                code_archive_uri = workspace.blob.upload_archive(
+                    archive_path,
+                    archive.code_hash,
+                    on_progress=_on_upload,
+                )
 
             _status("submit", f"Submitting to {aml.compute}…")
             job_body = _build_job_body(
                 request,
                 env_id=env_id,
-                code_id=code_id,
+                code_archive_uri=code_archive_uri,
+                code_archive_hash=archive.code_hash,
                 compute_id=compute,
                 env_vars=env_vars,
                 distribution=distribution,

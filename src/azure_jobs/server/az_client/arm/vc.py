@@ -6,7 +6,7 @@ import logging
 import re
 from typing import Any
 
-from azure_jobs.shared.errors import NETWORK_LIKE_ERRORS, ConfigError
+from azure_jobs.shared.errors import AuthError, NETWORK_LIKE_ERRORS, ConfigError
 
 from ._base import ArmNamespace
 from azure_jobs.shared.types.azure import SeriesQuota, VCInfo
@@ -62,30 +62,55 @@ def parse_managed_quotas(
     """Parse a VC's raw ARM/Resource-Graph payload into :class:SeriesQuota."""
     managed = (raw.get("properties") or {}).get("managed") or {}
 
-    raw_items: list[dict[str, Any]] = []
-    raw_items.extend(
-        (managed.get("defaultGroupPolicyOverallQuotas") or {}).get("limits") or []
-    )
-    for region_data in (managed.get("quotas") or {}).values():
-        if isinstance(region_data, dict):
-            raw_items.extend(region_data.get("limits") or [])
-
     series_map: dict[str, SeriesQuota] = {}
-    for item in raw_items:
+
+    def _series(item: dict[str, Any]) -> SeriesQuota | None:
         sid = item.get("id", "")
         if not sid:
-            continue
+            return None
         sq = series_map.setdefault(sid, SeriesQuota(series=sid))
-        sq.set_tier(
-            item.get("slaTier"),
-            item.get("limit", 0),
-            item.get("used") if "used" in item else None,
-        )
         accel, mem = _parse_quota_name(item.get("name") or "")
         if accel and not sq.accelerator:
             sq.accelerator = accel
         if mem and not sq.gpu_memory:
             sq.gpu_memory = mem
+        return sq
+
+    def _sort_key(item: dict[str, Any]) -> tuple[str, str, str]:
+        return (
+            str(item.get("id") or ""),
+            str(item.get("slaTier") or ""),
+            str(item.get("name") or ""),
+        )
+
+    overall_items = (
+        (managed.get("defaultGroupPolicyOverallQuotas") or {}).get("limits") or []
+    )
+    for item in sorted(overall_items, key=_sort_key):
+        sq = _series(item)
+        if sq is not None and item.get("slaTier") is None:
+            sq.accumulate_tier(
+                None,
+                int(item.get("limit") or 0),
+                int(item["used"]) if item.get("used") is not None else None,
+            )
+
+    regional_quotas = managed.get("quotas") or {}
+    for region in sorted(regional_quotas, key=str):
+        region_data = regional_quotas[region]
+        if not isinstance(region_data, dict):
+            continue
+        for item in sorted(region_data.get("limits") or [], key=_sort_key):
+            sla_tier = item.get("slaTier")
+            if sla_tier is None:
+                continue
+            sq = _series(item)
+            if sq is not None:
+                sq.accumulate_tier(
+                    sla_tier,
+                    int(item.get("limit") or 0),
+                    int(item["used"]) if item.get("used") is not None else None,
+                )
 
     for sq in series_map.values():
         if not sq.accelerator:
@@ -106,35 +131,71 @@ class VCQuotaAPI(ArmNamespace):
         subscription_ids: list[str] | None = None,
         *,
         include_zero: bool = False,
+        strict: bool = False,
     ) -> list[VCInfo]:
         """List Singularity VCs with parsed quotas attached."""
         vcs = self._client.vc.list(
             subscription_ids=subscription_ids,
             with_raw=True,
+            strict=strict,
         )
         for vc in vcs:
             vc.quotas = parse_managed_quotas(vc.raw, include_zero=include_zero)
         return vcs
 
-    def get_by_name(self, name: str) -> VCInfo:
+    def get_by_name(
+        self,
+        name: str,
+        *,
+        subscription_id: str = "",
+        resource_group: str = "",
+        strict: bool = False,
+    ) -> VCInfo:
         """Resolve a single Singularity VC by name (with parsed quotas)."""
+        name = str(name or "")
+        subscription_id = str(subscription_id or "")
+        resource_group = str(resource_group or "")
         if not name:
             raise ConfigError("Singularity virtual cluster name is required.")
-        matches = [vc for vc in self.list(include_zero=True) if vc.name == name]
+        matches = [
+            vc
+            for vc in self.list(
+                subscription_ids=[subscription_id] if subscription_id else None,
+                include_zero=True,
+                strict=strict,
+            )
+            if vc.name.casefold() == name.casefold()
+            and (
+                not subscription_id
+                or vc.subscription_id.casefold() == subscription_id.casefold()
+            )
+            and (
+                not resource_group
+                or vc.resource_group.casefold() == resource_group.casefold()
+            )
+        ]
         if not matches:
+            filters = []
+            if subscription_id:
+                filters.append(f"subscription_id={subscription_id}")
+            if resource_group:
+                filters.append(f"resource_group={resource_group}")
+            suffix = f" ({', '.join(filters)})" if filters else ""
             raise ConfigError(
-                f"Singularity virtual cluster '{name}' was not found in "
+                f"Singularity virtual cluster '{name}'{suffix} was not found in "
                 "any subscription visible to this account. Run "
-                "`aj quota list` to discover accessible VCs."
+                "`aj quota list --full` to discover accessible VCs."
             )
         if len(matches) > 1:
             choices = "; ".join(
                 f"{vc.name} in {vc.resource_group} ({vc.subscription_id})"
                 for vc in matches[:5]
             )
+            more = " …" if len(matches) > 5 else ""
             raise ConfigError(
                 f"Singularity virtual cluster name '{name}' is ambiguous: "
-                f"{choices}."
+                f"{choices}{more}. Set target.subscription_id or "
+                "target.resource_group in the template."
             )
         return matches[0]
 
@@ -144,15 +205,24 @@ class VirtualClustersAPI(ArmNamespace):
         subscription_ids: list[str] | None = None,
         *,
         with_raw: bool = False,
+        strict: bool = False,
     ) -> list[VCInfo]:
         """List Singularity VCs across every subscription the user can see."""
         if not subscription_ids:
             try:
                 subscription_ids = self._client.subscription.list()
             except NETWORK_LIKE_ERRORS as exc:
+                if strict:
+                    raise
                 log.warning("VC list: subscription enumeration failed: %s", exc)
                 return []
             if not subscription_ids:
+                if strict:
+                    raise AuthError(
+                        "No enabled Azure subscriptions are visible to this "
+                        "account. Run `az login` (and, if needed, "
+                        "`az account set --subscription <id>`) before submitting."
+                    )
                 return []
 
         query = (
@@ -166,6 +236,8 @@ class VirtualClustersAPI(ArmNamespace):
         try:
             rows = self._client._graph.query(query, subscription_ids)
         except NETWORK_LIKE_ERRORS as exc:
+            if strict:
+                raise
             log.warning("VC list: Resource Graph query failed: %s", exc)
             return []
 
@@ -198,6 +270,7 @@ class VirtualClustersAPI(ArmNamespace):
         *,
         subscription_id: str = "",
         resource_group: str = "",
+        strict: bool = False,
     ) -> VCInfo:
         """Resolve a Singularity VC name to its ARM coordinates."""
         if not name:
@@ -207,10 +280,17 @@ class VirtualClustersAPI(ArmNamespace):
             vc
             for vc in self.list(
                 subscription_ids=[subscription_id] if subscription_id else None,
+                strict=strict,
             )
-            if vc.name == name
-            and (not subscription_id or vc.subscription_id == subscription_id)
-            and (not resource_group or vc.resource_group == resource_group)
+            if vc.name.casefold() == name.casefold()
+            and (
+                not subscription_id
+                or vc.subscription_id.casefold() == subscription_id.casefold()
+            )
+            and (
+                not resource_group
+                or vc.resource_group.casefold() == resource_group.casefold()
+            )
         ]
         if not matches:
             filters = []

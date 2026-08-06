@@ -24,6 +24,11 @@ class BackendEntry:
 
 
 _REGISTRY: dict[str, BackendEntry] = {}
+_BUILTIN_MODULES = (
+    "azure_jobs.server.submit.amlt",
+    "azure_jobs.server.submit.azureml",
+    "azure_jobs.server.submit.volcano",
+)
 
 
 def register_backend(name: str, fn: SubmitFn, *, label: str | None = None) -> None:
@@ -44,6 +49,14 @@ def known_backends() -> tuple[str, ...]:
     return tuple(sorted(_REGISTRY))
 
 
+def load_builtin_backends() -> None:
+    """Import built-in backend packages so their registrations run."""
+    import importlib
+
+    for module_name in _BUILTIN_MODULES:
+        importlib.import_module(module_name)
+
+
 __all__ = [
     "BackendEntry",
     "JobEvent",
@@ -52,5 +65,6 @@ __all__ = [
     "SubmitFn",
     "get_backend",
     "known_backends",
+    "load_builtin_backends",
     "register_backend",
 ]

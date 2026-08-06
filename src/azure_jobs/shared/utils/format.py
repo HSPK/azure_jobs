@@ -10,4 +10,3 @@ def format_size(n: int) -> str:
         if size < 1024 or unit == units[-1]:
             return f"{size:.1f} {unit}" if unit != "B" else f"{int(size)} {unit}"
         size /= 1024
-    return f"{n} B"

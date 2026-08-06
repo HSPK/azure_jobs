@@ -64,7 +64,11 @@ def submit_via_amlt(
     job_name = request.name
     experiment = request.expr_name
 
-    submission_fp = write_amlt_yaml(request)
+    project_root = Path(request.code_dir or os.getcwd()).resolve()
+    submission_fp = write_amlt_yaml(
+        request,
+        home=project_root / ".azure_jobs" / "submission",
+    ).resolve()
     emit(JobEvent(kind="submit", detail=f"wrote submission YAML → {submission_fp}"))
 
     cmd = ["amlt", "run", str(submission_fp), experiment, "-y"]
@@ -79,6 +83,7 @@ def submit_via_amlt(
             text=True,
             bufsize=1,
             start_new_session=(os.name != "nt"),
+            cwd=project_root,
         )
         try:
             proc.stdin.write("\n\n\n")  # type: ignore[union-attr]

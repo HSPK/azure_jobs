@@ -11,10 +11,41 @@
 
 set -eo pipefail
 
+if ! command -v tar >/dev/null 2>&1 ||
+    ! command -v sha256sum >/dev/null 2>&1; then
+    echo "[aj] installing tar/coreutils prerequisites"
+    _aj_root=()
+    if [ "$EUID" -ne 0 ]; then
+        if ! command -v sudo >/dev/null 2>&1; then
+            echo "[aj] tar/coreutils are required, but root/sudo is unavailable" >&2
+            exit 1
+        fi
+        _aj_root=(sudo)
+    fi
+    if command -v apt-get >/dev/null 2>&1; then
+        "${_aj_root[@]}" apt-get update &&
+            "${_aj_root[@]}" apt-get install -y tar coreutils
+    elif command -v apk >/dev/null 2>&1; then
+        "${_aj_root[@]}" apk add --no-cache tar coreutils
+    elif command -v dnf >/dev/null 2>&1; then
+        "${_aj_root[@]}" dnf install -y tar coreutils
+    elif command -v yum >/dev/null 2>&1; then
+        "${_aj_root[@]}" yum install -y tar coreutils
+    else
+        echo "[aj] no supported package manager found for tar/coreutils" >&2
+        exit 1
+    fi
+fi
+
+if ! command -v tar >/dev/null 2>&1 ||
+    ! command -v sha256sum >/dev/null 2>&1; then
+    echo "[aj] tar/coreutils installation did not provide required binaries" >&2
+    exit 1
+fi
+
 if command -v azcopy >/dev/null 2>&1; then
     echo "[aj] azcopy already installed: $(command -v azcopy)"
-    exit 0
-fi
+else
 
 echo "[aj] azcopy not found — installing"
 _aj_arch="$(uname -m)"
@@ -86,3 +117,4 @@ fi
 
 echo "[aj] azcopy installed:"
 azcopy --version || true
+fi

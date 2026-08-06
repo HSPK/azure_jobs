@@ -38,10 +38,33 @@ class SeriesQuota:
         if sla_tier is None:
             self.user_limit = SlaTierQuota(limit, used)
         else:
-            tier = sla_tier.strip().title()
-            if tier not in SLA_TIERS:
-                tier = "Basic"
+            tier = self._normalize_tier(sla_tier)
             self.tiers[tier] = SlaTierQuota(limit, used)
+
+    def accumulate_tier(
+        self,
+        sla_tier: str | None,
+        limit: int,
+        used: int | None,
+    ) -> None:
+        """Add one regional quota row without combining distinct SLA tiers."""
+        current = (
+            self.user_limit
+            if sla_tier is None
+            else self.tiers.get(self._normalize_tier(sla_tier))
+        )
+        if current is None:
+            self.set_tier(sla_tier, limit, used)
+            return
+
+        current.limit += limit
+        if used is not None:
+            current.used = (current.used or 0) + used
+
+    @staticmethod
+    def _normalize_tier(sla_tier: str) -> str:
+        tier = sla_tier.strip().title()
+        return tier if tier in SLA_TIERS else "Basic"
 
     def has_any_quota(self) -> bool:
         """Return True if user_limit or any tier has a non-zero limit."""

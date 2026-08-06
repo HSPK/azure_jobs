@@ -164,15 +164,22 @@ def template_diff() -> None:
     from azure_jobs.client.ui import emit_json, get_output_mode
 
     config = read_config()
-    repo_id = config.repo_id
-    if not repo_id:
+    clone_url = config.repo_id
+    if not clone_url:
         raise click.ClickException(
             "No remote repo configured. Run `aj pull <repo>` first."
         )
     if not const.AJ_HOME.exists():
         raise click.ClickException("No AJ home found. Run `aj pull` first.")
 
-    diff_text = _compute_remote_diff(repo_id)
+    from azure_jobs.client.cli.pull import _safe_repo_url
+    from azure_jobs.shared.config import write_config
+
+    safe_url = _safe_repo_url(clone_url)
+    if safe_url != config.repo_id:
+        config.repo_id = safe_url
+        write_config(config)
+    diff_text = _compute_remote_diff(clone_url)
 
     if not diff_text:
         if get_output_mode() != "json":
@@ -189,9 +196,9 @@ def template_diff() -> None:
     console.print()
     console.print(Syntax(diff_text, "diff", theme="monokai", line_numbers=False))
 
-_DIFF_EXCLUDE = {".git", "aj_config.json", "submission", "record.jsonl"}
-
 def _clone_remote(repo_id: str, dst: str) -> None:
+    from azure_jobs.client.cli.pull import _redact_git_error
+
     try:
         with console.status(
             "[bold cyan]Fetching remote…[/bold cyan]", spinner="dots"
@@ -204,16 +211,17 @@ def _clone_remote(repo_id: str, dst: str) -> None:
             )
     except subprocess.CalledProcessError as exc:
         raise click.ClickException(
-            f"Failed to clone remote: {exc.stderr.strip()}"
+            "Failed to clone remote: "
+            f"{_redact_git_error(exc.stderr, repo_id).strip()}"
         ) from exc
 
 def _collect_diff_files(root: Path) -> dict[str, Path]:
+    from azure_jobs.client.cli.pull import _is_sync_excluded
+
     files: dict[str, Path] = {}
     for p in root.rglob("*"):
-        if not p.is_file():
-            continue
         rel = p.relative_to(root)
-        if any(part in _DIFF_EXCLUDE for part in rel.parts):
+        if _is_sync_excluded(rel) or not p.is_file():
             continue
         files[rel.as_posix()] = p
     return files
@@ -249,6 +257,10 @@ def _compute_remote_diff(repo_id: str) -> str:
     with tempfile.TemporaryDirectory() as tmp:
         _clone_remote(repo_id, tmp)
 
+        from azure_jobs.client.cli.pull import _validate_sync_tree
+
+        _validate_sync_tree(Path(tmp))
+        _validate_sync_tree(const.AJ_HOME)
         remote_files = _collect_diff_files(Path(tmp))
         local_files = _collect_diff_files(const.AJ_HOME)
         all_keys = sorted(set(remote_files) | set(local_files))

@@ -44,8 +44,8 @@ class AmlOpts:
         container_args = dict(submit_args.get("container_args") or {})
 
         opts = cls(
-            compute=target.name,
-            workspace_name=target.workspace_name,
+            compute=str(target.name or ""),
+            workspace_name=str(target.workspace_name or ""),
             container_args=container_args,
             shm_size=container_args.get("shm_size", ""),
             amlt_code_dir=template.code.local_dir,
@@ -56,11 +56,11 @@ class AmlOpts:
             opts.priority = job.priority
             opts.tags = list(job.tags)
         if target.service == "sing":
-            opts.vc_subscription_id = target.subscription_id
-            opts.vc_resource_group = target.resource_group
+            opts.vc_subscription_id = str(target.subscription_id or "")
+            opts.vc_resource_group = str(target.resource_group or "")
         else:
-            opts.subscription_id = target.subscription_id
-            opts.resource_group = target.resource_group
+            opts.subscription_id = str(target.subscription_id or "")
+            opts.resource_group = str(target.resource_group or "")
         return opts
 
 

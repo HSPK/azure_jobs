@@ -111,35 +111,58 @@ def init_amlt(ctx: click.Context, force: bool) -> None:
     if not shutil.which("amlt"):
         error("amlt not found in PATH")
         dim("Install amlt with: pipx install amlt")
-        return
+        raise SystemExit(1)
 
     ws = get_workspace_config()
     if not ws or not ws.workspace_name:
         error("Workspace not configured. Run [bold]aj init[/bold] first.")
-        return
+        raise SystemExit(1)
 
     has_amltconfig = Path(".amltconfig").exists()
     if has_amltconfig:
         import json
 
+        config_error = ""
         try:
             amlt_cfg = json.loads(Path(".amltconfig").read_text())
-            dim(
-                f"amlt project: {amlt_cfg.get('project_name', '?')}  "
-                f"(storage={amlt_cfg.get('storage_account_name', '?')})"
-            )
-        except Exception as exc:
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
             log.debug(
                 "Failed to parse .amltconfig (%s: %s)",
                 type(exc).__name__,
                 exc,
                 exc_info=True,
             )
-            dim(".amltconfig exists (failed to parse — AJ_DEBUG=1 for trace)")
-        if not (force and _confirm_step("amlt project", force)):
-            _print_amlt_workspace_commands(ws)
-            success("amlt configured ✓")
-            return
+            config_error = f"{type(exc).__name__}: {exc}"
+        else:
+            if not isinstance(amlt_cfg, dict):
+                config_error = "expected a JSON object"
+            elif not isinstance(amlt_cfg.get("project_name"), str) or not amlt_cfg[
+                "project_name"
+            ].strip():
+                config_error = "missing non-empty project_name"
+            elif not isinstance(
+                amlt_cfg.get("storage_account_name"), str
+            ) or not amlt_cfg["storage_account_name"].strip():
+                config_error = "missing non-empty storage_account_name"
+
+        if config_error:
+            message = (
+                f"Invalid .amltconfig ({config_error}). "
+                "Set AJ_DEBUG=1 for a full traceback."
+            )
+            if not force:
+                error(f"{message} Re-run with [bold]--force[/bold] to recreate it.")
+                raise SystemExit(1)
+            dim(f"{message} Recreating it because --force was set.")
+        else:
+            dim(
+                f"amlt project: {amlt_cfg.get('project_name', '?')}  "
+                f"(storage={amlt_cfg.get('storage_account_name', '?')})"
+            )
+            if not (force and _confirm_step("amlt project", force)):
+                _print_amlt_workspace_commands(ws)
+                success("amlt configured ✓")
+                return
 
     with console.status(
         "[bold cyan]Querying workspace storage…[/bold cyan]", spinner="dots"
@@ -163,11 +186,11 @@ def init_amlt(ctx: click.Context, force: bool) -> None:
                 f"Failed to query workspace ({type(exc).__name__}: {exc}). "
                 "Run with AJ_DEBUG=1 for a Python traceback."
             )
-            return
+            raise SystemExit(1) from exc
 
     if not storage_account:
         error("Could not determine workspace storage account.")
-        return
+        raise SystemExit(1)
 
     dim(f"Storage account: {storage_account}")
 
@@ -180,20 +203,27 @@ def init_amlt(ctx: click.Context, force: bool) -> None:
     )
     info(f"Creating amlt project [bold]{project_name}[/bold]…")
 
+    command = ["amlt", "project", "create", project_name, storage_account]
     result = subprocess.run(
-        ["amlt", "project", "create", project_name, storage_account],
+        command,
         capture_output=True,
         text=True,
         cwd=".",
     )
 
     if result.returncode != 0:
-        msg = result.stderr.strip() or result.stdout.strip()
-        error(f"amlt project create failed: {msg}")
+        stdout = result.stdout.strip()
+        stderr = result.stderr.strip()
+        details = [f"command: {' '.join(command)}"]
+        if stdout:
+            details.append(f"stdout: {stdout}")
+        if stderr:
+            details.append(f"stderr: {stderr}")
+        error("amlt project create failed: " + "; ".join(details))
         dim(
             "You can set up amlt manually: amlt project create <name> <storage_account>"
         )
-        return
+        raise SystemExit(1)
 
     if result.stdout.strip():
         dim(result.stdout.strip())

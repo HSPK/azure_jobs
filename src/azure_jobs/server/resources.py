@@ -12,6 +12,7 @@ from contextlib import ExitStack, contextmanager
 from typing import Any
 
 from azure_jobs.server.azure import AzureRangeLogReader
+from azure_jobs.server.submit import load_builtin_backends
 from azure_jobs.shared.contract.models import (
     CatalogItem,
     Cursor,
@@ -23,6 +24,8 @@ from azure_jobs.shared.contract.models import (
     SubmitOutcome,
     Target,
 )
+
+load_builtin_backends()
 
 Cancelled = Callable[[], bool] | None
 EventSink = Callable[[SubmitEvent], None] | None
@@ -376,9 +379,7 @@ def _spec_from_payload(payload: dict) -> Any:
     from azure_jobs.shared.job.spec import JobSpec, StorageMount
 
     data = dict(payload)
-    # The source Template is only needed for amlt raw passthrough, which is
-    # rendered before a spec is ever queued.
-    data.pop("template", None)
+    template_data = data.pop("template", None)
     backend_spec = data.pop("backend_spec", None)
     storage = {}
     for key, value in (data.pop("storage", None) or {}).items():
@@ -388,6 +389,12 @@ def _spec_from_payload(payload: dict) -> Any:
     known = {f for f in JobSpec.__dataclass_fields__}
     spec = JobSpec(**{k: v for k, v in data.items() if k in known})
     spec.storage = storage
+    if isinstance(template_data, dict):
+        from azure_jobs.shared.template.models import Template
+
+        raw = template_data.get("raw")
+        source = raw if isinstance(raw, dict) and raw else template_data
+        spec.template = Template.from_dict(source)
     if backend_spec is not None and not isinstance(backend_spec, dict):
         spec.backend_spec = backend_spec
     elif backend_spec:

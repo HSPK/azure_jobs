@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import shutil
 import subprocess
 import tempfile
@@ -64,6 +65,17 @@ def _apply_blob_secret(
         )
 
 log = logging.getLogger(__name__)
+
+_CREATED_JOB_RE = re.compile(
+    r"\bjob(?:\.batch(?:\.volcano\.sh)?)?/([^\s]+)\s+"
+    r"(?:created|configured)\b",
+    re.IGNORECASE,
+)
+
+
+def _created_job_name(output: str, fallback: str) -> str:
+    match = _CREATED_JOB_RE.search(output or "")
+    return match.group(1) if match else fallback
 
 def _discard_blob_secret(cleanup: _SecretCleanup) -> None:
     """Best-effort removal of a Secret whose job never reached the cluster.
@@ -310,10 +322,11 @@ def _submit_via_volcano(
             )
         if result.returncode == 0:
             output = result.stdout.strip()
+            generated_name = _created_job_name(output, request.name)
             emit(JobEvent(kind="done", detail=output[:80] if output else ""))
             return JobResult(
                 job_name=request.name,
-                azure_name=request.name,
+                azure_name=generated_name,
                 status="submitted",
                 note=output,
             )

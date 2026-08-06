@@ -6,8 +6,8 @@ from __future__ import annotations
 
 import datetime as _dt
 import logging
+import os
 import subprocess
-import tarfile
 import tempfile
 import time
 import traceback
@@ -17,9 +17,13 @@ from typing import TYPE_CHECKING, Any
 
 import requests
 
+from azure_jobs.server.submit.archive import (
+    ArchiveError,
+    ArchiveMetadata,
+    create_code_archive,
+)
 from azure_jobs.shared.job.spec import JobEvent
 from azure_jobs.shared.utils.format import format_size
-from azure_jobs.shared.utils.fs import walk_code
 
 from ._scripts import load_script
 from .base import CodeUploader, CodeUploadResult, EmitFn
@@ -34,6 +38,7 @@ _AZ_SAS_TIMEOUT = 30
 _BLOB_UPLOAD_TIMEOUT = 600
 _BLOB_API_VERSION = "2024-11-04"
 _DEFAULT_BLOB_SUFFIX = "blob.core.windows.net"
+_MAX_SINGLE_PUT_BYTES = 5_000 * 1024 * 1024
 
 @dataclass
 class BlobUploadOpts:
@@ -67,23 +72,27 @@ class BlobUploadError(Exception):
 def _generate_sas_token(
     account_name: str,
     container_name: str,
+    blob_name: str,
+    permissions: str,
     expiry_days: int,
 ) -> str:
-    """Mint a User-Delegation SAS via ``az`` — uses the caller's az-login, no account key."""
+    """Mint a blob-scoped User-Delegation SAS via the daemon's az login."""
     expiry = (
         _dt.datetime.now(_dt.timezone.utc) + _dt.timedelta(days=expiry_days)
     ).strftime("%Y-%m-%dT%H:%MZ")
     cmd = [
         "az",
         "storage",
-        "container",
+        "blob",
         "generate-sas",
         "--account-name",
         account_name,
-        "--name",
+        "--container-name",
         container_name,
+        "--name",
+        blob_name,
         "--permissions",
-        "rwdlac",
+        permissions,
         "--expiry",
         expiry,
         "--auth-mode",
@@ -132,40 +141,44 @@ def _generate_sas_token(
         )
     return token
 
-def _tar_gz(src_dir: Path, ignore: list[str], dest_tar: Path, emit: EmitFn) -> int:
-    files = walk_code(src_dir, ignore)
-    if not files:
-        raise BlobUploadError(
-            f"walk_code({src_dir}) returned 0 files after applying ignore "
-            f"patterns — nothing to upload."
-        )
-
-    emit(
-        JobEvent(
-            kind="upload",
-            completed=0,
-            total=len(files),
-            current="tar.gz",
-        )
-    )
-    with tarfile.open(dest_tar, "w:gz", compresslevel=6) as tar:
-        for i, cf in enumerate(files, 1):
-            tar.add(cf.path, arcname=cf.rel, recursive=False)
-            if i % 50 == 0 or i == len(files):
-                emit(
-                    JobEvent(
-                        kind="upload",
-                        completed=i,
-                        total=len(files),
-                        current=cf.rel,
-                    )
+def _tar_gz(
+    src_dir: Path,
+    ignore: list[str],
+    dest_tar: Path,
+    emit: EmitFn,
+) -> ArchiveMetadata:
+    def _on_progress(completed: int, total: int, current: str) -> None:
+        if completed == 0 or completed % 50 == 0 or completed == total:
+            emit(
+                JobEvent(
+                    kind="upload",
+                    completed=completed,
+                    total=total,
+                    current="tar.gz" if completed == 0 else current,
                 )
-    return dest_tar.stat().st_size
+            )
+
+    try:
+        metadata = create_code_archive(
+            src_dir,
+            dest_tar,
+            ignore_patterns=ignore,
+            on_progress=_on_progress,
+        )
+    except ArchiveError as exc:
+        raise BlobUploadError(str(exc)) from exc
+    return metadata
 
 def _put_blob(blob_url: str, sas: str, local_path: Path, emit: EmitFn) -> None:
     sep = "&" if "?" in blob_url else "?"
     url = f"{blob_url}{sep}{sas}"
     size = local_path.stat().st_size
+    if size > _MAX_SINGLE_PUT_BYTES:
+        raise BlobUploadError(
+            "Code archive is too large for one Azure Blob upload "
+            f"({size} bytes > {_MAX_SINGLE_PUT_BYTES} bytes). "
+            "Exclude large artifacts from the submitted code directory."
+        )
     emit(
         JobEvent(
             kind="code",
@@ -188,13 +201,18 @@ def _put_blob(blob_url: str, sas: str, local_path: Path, emit: EmitFn) -> None:
                     timeout=_BLOB_UPLOAD_TIMEOUT,
                 )
         except requests.RequestException as exc:
-            last_exc = exc
+            safe_message = str(exc).replace(url, blob_url).replace(
+                sas,
+                "[REDACTED]",
+            )
+            last_exc = BlobUploadError(
+                f"{type(exc).__name__}: {safe_message}"
+            )
             log.warning(
                 "blob PUT attempt %d failed (%s) — retrying in %ds",
                 attempt,
-                exc,
+                safe_message,
                 attempt * 2,
-                exc_info=True,
             )
             time.sleep(attempt * 2)
             continue
@@ -210,17 +228,16 @@ def _put_blob(blob_url: str, sas: str, local_path: Path, emit: EmitFn) -> None:
             break
         time.sleep(attempt * 2)
     assert last_exc is not None
-    if isinstance(last_exc, BlobUploadError):
-        raise last_exc
     raise BlobUploadError(
-        f"blob PUT failed after 3 attempts: {type(last_exc).__name__}: {last_exc}"
-    ) from last_exc
+        f"blob PUT failed after 3 attempts: {last_exc}"
+    )
 
 def _build_pod_setup(
     blob_url: str,
     sas: str,
     extract_dir: str,
     retries: int,
+    expected_sha256: str,
 ) -> list[str]:
     bootstrap_retries = max(1, int(retries))
     install_lines = load_script(
@@ -230,6 +247,7 @@ def _build_pod_setup(
         "blob_download.sh",
         EXTRACT_DIR=extract_dir,
         URL_WITH_SAS=f"{blob_url}?{sas}",
+        EXPECTED_SHA256=expected_sha256,
     )
     return [
         *install_lines,
@@ -286,31 +304,67 @@ class BlobUploader(CodeUploader):
                 ),
             )
 
-        ts = _dt.datetime.now(_dt.timezone.utc).strftime("%Y%m%d-%H%M%S")
-        blob_rel = f"{opts.upload_dir.strip('/')}/{cfg.name}-{ts}.tgz"
         account_url = f"https://{opts.storage_account}.{_DEFAULT_BLOB_SUFFIX}"
-        blob_url = f"{account_url}/{opts.container}/{blob_rel}"
-        extract_dir = f"/tmp/aj-code/{cfg.name}-{ts}"
 
-        emit(JobEvent(kind="code", detail=f"Generating SAS for {opts.storage_account}/{opts.container}…"))
         tmp_tar: Path | None = None
         try:
-            sas = _generate_sas_token(
-                opts.storage_account, opts.container, opts.sas_expiry_days
+            fd, tmp_name = tempfile.mkstemp(
+                prefix=f"aj-code-{cfg.name}-",
+                suffix=".tgz",
             )
-
-            tmp_tar = Path(
-                tempfile.mkstemp(prefix=f"aj-code-{cfg.name}-", suffix=".tgz")[1]
+            os.close(fd)
+            tmp_tar = Path(tmp_name)
+            archive = _tar_gz(
+                code_path,
+                list(cfg.code_ignore),
+                tmp_tar,
+                emit,
             )
-            size = _tar_gz(code_path, list(cfg.code_ignore), tmp_tar, emit)
+            blob_rel = (
+                f"{opts.upload_dir.strip('/')}/{archive.code_hash}.tgz"
+            )
+            blob_url = f"{account_url}/{opts.container}/{blob_rel}"
+            extract_dir = f"/tmp/aj-code/{archive.code_hash}"
             emit(
                 JobEvent(
                     kind="code",
-                    detail=f"Tar.gz ready ({format_size(size)}) → {blob_url}",
+                    detail=(
+                        f"Tar.gz ready ({format_size(archive.size_bytes)}) "
+                        f"→ {blob_url}"
+                    ),
                 )
             )
 
-            _put_blob(blob_url, sas, tmp_tar, emit)
+            emit(
+                JobEvent(
+                    kind="code",
+                    detail=(
+                        f"Generating upload SAS for "
+                        f"{opts.storage_account}/{opts.container}…"
+                    ),
+                )
+            )
+            upload_sas = _generate_sas_token(
+                opts.storage_account,
+                opts.container,
+                blob_rel,
+                "cw",
+                opts.sas_expiry_days,
+            )
+            _put_blob(blob_url, upload_sas, tmp_tar, emit)
+            emit(
+                JobEvent(
+                    kind="code",
+                    detail="Generating read-only SAS for pod download…",
+                )
+            )
+            download_sas = _generate_sas_token(
+                opts.storage_account,
+                opts.container,
+                blob_rel,
+                "r",
+                opts.sas_expiry_days,
+            )
         except BlobUploadError as exc:
             log.exception("Blob upload failed for %s", cfg.name)
             return CodeUploadResult(
@@ -338,7 +392,11 @@ class BlobUploader(CodeUploader):
         return CodeUploadResult(
             ok=True,
             pod_setup_lines=_build_pod_setup(
-                blob_url, sas, extract_dir, opts.pod_download_retries
+                blob_url,
+                download_sas,
+                extract_dir,
+                opts.pod_download_retries,
+                archive.code_hash,
             ),
             code_path=extract_dir,
         )

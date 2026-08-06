@@ -375,7 +375,7 @@ def build_volcano_job(
         "metadata": {
             "generateName": f"{job_name}-",
             "namespace": resolved_ns,
-            "labels": {"app": app_label, **cfg.labels},
+            "labels": {**cfg.labels, "app": app_label},
         },
         "spec": {
             "queue": cfg.queue,

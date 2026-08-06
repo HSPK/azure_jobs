@@ -7,7 +7,7 @@ from azure_jobs.shared.types.instance import InstanceTypeInfo
 import re
 from dataclasses import dataclass
 
-from azure_jobs.shared.errors import NETWORK_LIKE_ERRORS
+from azure_jobs.shared.errors import AuthError, ConfigError, NETWORK_LIKE_ERRORS
 
 from ._base import ArmNamespace
 
@@ -86,16 +86,29 @@ class InstanceTypesAPI(ArmNamespace):
         location: str,
         *,
         subscription_id: str = "",
+        strict: bool = False,
     ) -> list[InstanceTypeInfo]:
         """List every Singularity instance type available in *location*."""
         if not location:
+            if strict:
+                raise ConfigError(
+                    "A Singularity instance-type location is required for "
+                    "submission discovery."
+                )
             return []
         if not subscription_id:
             try:
                 subs = self._client.subscription.list()
             except NETWORK_LIKE_ERRORS:
+                if strict:
+                    raise
                 return []
             if not subs:
+                if strict:
+                    raise AuthError(
+                        "No enabled Azure subscriptions are visible to this "
+                        "account. Run `az login` before submitting."
+                    )
                 return []
             subscription_id = subs[0]
 
@@ -108,6 +121,8 @@ class InstanceTypesAPI(ArmNamespace):
         try:
             data = self._get(url)
         except NETWORK_LIKE_ERRORS:
+            if strict:
+                raise
             return []
 
         return [

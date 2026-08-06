@@ -38,6 +38,14 @@ def validate_template(fp: Path | str) -> list[str]:
     else:
         if "service" not in target:
             issues.append("target missing 'service'")
-        if "name" not in target:
+        service = str(target.get("service") or "").strip().lower()
+        name = target.get("name")
+        if service in {"sing", "volcano"} and name is not None and not isinstance(
+            name, str
+        ):
+            issues.append("'target.name' must be a string")
+        elif service not in {"sing", "volcano"} and (
+            not isinstance(name, str) or not name.strip()
+        ):
             issues.append("target missing 'name'")
     return issues

@@ -21,7 +21,11 @@ from azure_jobs.shared.job.spec import JobSpec
 from azure_jobs.shared.journal import JobRecord
 from azure_jobs.shared.template import Template
 from azure_jobs.shared.utils.naming import resolve_name
-from azure_jobs.client.ui import show_dry_run_result, show_submission_preview
+from azure_jobs.client.ui import (
+    get_output_mode,
+    show_dry_run_result,
+    show_submission_preview,
+)
 
 __all__ = ["resolve_name"]
 
@@ -97,7 +101,24 @@ def run(
         raise click.ClickException(str(exc)) from exc
 
     save_defaults(template=template_name, nodes=nodes_int, processes=gpn_int)
-    experiment = get_experiment() or "aj" if dry_run else ensure_experiment()
+    experiment = get_experiment()
+    if not experiment:
+        if dry_run:
+            experiment = "aj"
+        elif get_output_mode() == "json":
+            from azure_jobs.client.ui import show_command_result
+
+            show_command_result(
+                "job.submit",
+                status="failed",
+                message=(
+                    "No experiment configured. Run "
+                    "`aj config experiment <name>` first."
+                ),
+            )
+            raise SystemExit(1)
+        else:
+            experiment = ensure_experiment()
 
     try:
         request = build_job_spec(
@@ -119,7 +140,8 @@ def run(
     show_submission_preview(request, dry_run=dry_run)
     if dry_run:
         submission_fp = write_amlt_yaml(request, dry_run=True)
-        click.echo(f"[dry-run] wrote submission YAML → {submission_fp}")
+        if get_output_mode() != "json":
+            click.echo(f"[dry-run] wrote submission YAML → {submission_fp}")
         show_dry_run_result(request)
         return
 
@@ -204,9 +226,22 @@ def _submit_via_daemon(
 def _enqueue(request: JobSpec, name: str) -> None:
     """Hand a built JobSpec to the daemon's queue and report the ticket."""
     from azure_jobs import connect
+    from azure_jobs.client.ui import (
+        get_output_mode,
+        show_command_result,
+    )
 
     with connect() as d:
         entry = d.job.queue(request.to_dict(), name=name)
+    if get_output_mode() == "json":
+        show_command_result(
+            "job.queue",
+            status="ok",
+            ticket=entry.ticket,
+            name=entry.name,
+            queue_state=entry.state,
+        )
+        return
     click.echo(f"Queued {name} as {entry.ticket}")
     click.echo(f"  aj queue show {entry.ticket}")
     click.echo(f"  aj queue wait {entry.ticket}")
