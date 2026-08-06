@@ -5,10 +5,12 @@ import subprocess
 from unittest.mock import patch
 
 import pytest
+from click import ClickException
 from click.testing import CliRunner
 
 from azure_jobs.client.cli import main
-from azure_jobs.client.cli.pull import resolve_repo_url
+from azure_jobs.client.cli.pull import _is_local_only, resolve_repo_url
+from azure_jobs.shared.config import AJConfig
 
 
 class TestPullCommand:
@@ -43,7 +45,7 @@ class TestPullCommand:
 
     def test_pull_preserves_local_only_files(self, aj_env):
         """``pull -f`` must not delete aj_config.json / record.jsonl."""
-        config_text = aj_env["config_fp"].read_text()
+        config_before = json.loads(aj_env["config_fp"].read_text())
         aj_env["record_fp"].write_text('{"sid":"keep_me"}\n')
         record_before = aj_env["record_fp"].read_text()
 
@@ -56,18 +58,24 @@ class TestPullCommand:
         assert result.exit_code == 0
         # Local-only files survive
         assert aj_env["config_fp"].exists()
-        assert aj_env["config_fp"].read_text() == config_text
+        config_after = json.loads(aj_env["config_fp"].read_text())
+        expected = AJConfig.from_dict(config_before)
+        expected.repo_id = "https://example.com/repo.git"
+        assert AJConfig.from_dict(config_after) == expected
         assert aj_env["record_fp"].exists()
         assert aj_env["record_fp"].read_text() == record_before
 
-    def test_pull_does_not_modify_config(self, aj_env):
-        """Pull must never write back to aj_config.json."""
-        original = aj_env["config_fp"].read_text()
+    def test_pull_persists_repo_without_losing_config(self, aj_env):
+        """The remote is needed by later diff/push operations."""
+        original = json.loads(aj_env["config_fp"].read_text())
         runner = CliRunner()
         with patch("azure_jobs.client.cli.pull.subprocess.run") as mock_run:
             mock_run.return_value.returncode = 0
             runner.invoke(main, ["pull", "-f", "https://example.com/repo.git"])
-        assert aj_env["config_fp"].read_text() == original
+        updated = json.loads(aj_env["config_fp"].read_text())
+        expected = AJConfig.from_dict(original)
+        expected.repo_id = "https://example.com/repo.git"
+        assert AJConfig.from_dict(updated) == expected
 
     def test_pull_force_cleanup_scoped_to_remote_dirs(self, aj_env, tmp_path):
         """``pull -f`` only deletes files in directories the remote populated.
@@ -135,6 +143,81 @@ class TestPullCommand:
         assert result.exit_code == 0
         assert "https://example.com/repo.git" in mock_run.call_args[0][0]
 
+    def test_pull_strips_http_credentials_before_persisting(
+        self, aj_env
+    ):
+        runner = CliRunner()
+        secret_url = "https://user:token@example.com/org/repo.git"
+        with patch("azure_jobs.client.cli.pull.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            result = runner.invoke(main, ["pull", "-f", secret_url])
+
+        assert result.exit_code == 0
+        assert secret_url in mock_run.call_args[0][0]
+        config = json.loads(aj_env["config_fp"].read_text())
+        assert config["repo_id"] == "https://example.com/org/repo.git"
+        assert "token" not in result.output
+
+    def test_pull_strips_query_credentials_before_persisting(
+        self, aj_env
+    ):
+        secret = "query-secret-token"
+        url = (
+            "https://example.com/org/repo.git"
+            f"?access_token={secret}#fragment"
+        )
+        with patch("azure_jobs.client.cli.pull.subprocess.run") as run:
+            run.return_value.returncode = 0
+            result = CliRunner().invoke(main, ["pull", "-f", url])
+
+        assert result.exit_code == 0
+        assert url in run.call_args[0][0]
+        config = json.loads(aj_env["config_fp"].read_text())
+        assert config["repo_id"] == "https://example.com/org/repo.git"
+        assert secret not in result.output
+
+    def test_pull_rejects_repository_symlinks(
+        self, aj_env, tmp_path
+    ):
+        remote = tmp_path / "remote-with-link"
+        (remote / "template").mkdir(parents=True)
+        secret = tmp_path / "secret.txt"
+        secret.write_text("do-not-copy", encoding="utf-8")
+        (remote / "template" / "leak.yaml").symlink_to(secret)
+
+        def fake_clone(cmd, **_kwargs):
+            import shutil
+
+            shutil.copytree(remote, cmd[-1], dirs_exist_ok=True, symlinks=True)
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        with patch(
+            "azure_jobs.client.cli.pull.subprocess.run",
+            side_effect=fake_clone,
+        ):
+            result = CliRunner().invoke(
+                main,
+                ["pull", "-f", "https://example.com/repo.git"],
+            )
+
+        assert result.exit_code != 0
+        assert "symbolic link" in result.output
+        assert not (aj_env["template_home"] / "leak.yaml").exists()
+
+    def test_sync_rejects_symbolic_link_root(self, tmp_path):
+        from azure_jobs.client.cli.pull import _validate_sync_tree
+
+        target = tmp_path / "target"
+        target.mkdir()
+        root = tmp_path / "root"
+        root.symlink_to(target, target_is_directory=True)
+
+        with pytest.raises(
+            ClickException,
+            match="symbolic-link template root",
+        ):
+            _validate_sync_tree(root)
+
     def test_template_pull_subcommand(self, aj_env):
         runner = CliRunner()
         with patch("azure_jobs.client.cli.pull.subprocess.run") as mock_run:
@@ -169,6 +252,22 @@ class TestResolveRepoUrl:
     def test_full_ssh_unchanged(self):
         assert resolve_repo_url("git@github.com:u/r.git") == "git@github.com:u/r.git"
 
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "aj_config.json",
+            "record.jsonl",
+            "submission/job.yaml",
+            "logs/job.log",
+            "daemon/queue-target.json",
+            "daemon/watch-target.json",
+        ],
+    )
+    def test_local_state_is_never_synced(self, path):
+        from pathlib import Path
+
+        assert _is_local_only(Path(path))
+
 
 # ---------------------------------------------------------------------------
 # Tests for extracted helper functions
@@ -187,6 +286,23 @@ class TestPullErrorPaths:
         assert result.exit_code != 0
         assert "Failed to clone" in result.output
 
+    def test_pull_clone_failure_redacts_url_credentials(self, aj_env):
+        secret = "review-secret-token"
+        url = f"https://{secret}@github.com/org/repo.git"
+        with patch(
+            "azure_jobs.client.cli.pull.subprocess.run",
+            side_effect=subprocess.CalledProcessError(
+                128,
+                "git",
+                stderr=f"fatal: could not read Password for '{url}'",
+            ),
+        ):
+            result = CliRunner().invoke(main, ["pull", "-f", url])
+
+        assert result.exit_code != 0
+        assert secret not in result.output
+        assert "https://github.com/org/repo.git" in result.output
+
 class TestPushCommand:
     def test_push_no_home_errors(self, aj_env):
         import shutil
@@ -203,6 +319,23 @@ class TestPushCommand:
         result = runner.invoke(main, ["push"])
         assert result.exit_code != 0
         assert "No remote repo configured" in result.output
+
+    def test_push_rejects_local_symlinks(self, aj_env, tmp_path):
+        aj_env["config_fp"].write_text(
+            json.dumps({"repo_id": "git@github.com:u/r.git"})
+        )
+        secret = tmp_path / "secret.txt"
+        secret.write_text("do-not-push", encoding="utf-8")
+        (aj_env["template_home"] / "leak.yaml").symlink_to(secret)
+
+        with patch(
+            "azure_jobs.client.cli.pull.subprocess.run"
+        ) as run:
+            result = CliRunner().invoke(main, ["push"])
+
+        assert result.exit_code != 0
+        assert "symbolic link" in result.output
+        run.assert_not_called()
 
     def test_push_no_changes(self, aj_env):
         aj_env["config_fp"].write_text(

@@ -98,6 +98,24 @@ class TestSeriesQuota:
         assert "Basic" in sq.tiers
         assert sq.tiers["Basic"].limit == 10
 
+    def test_accumulate_tier_sums_only_the_same_normalized_tier(self):
+        sq = SeriesQuota(series="X")
+        sq.accumulate_tier("premium", 10, 3)
+        sq.accumulate_tier("Premium", 7, 2)
+        sq.accumulate_tier("Standard", 5, 1)
+
+        assert sq.tiers["Premium"] == SlaTierQuota(limit=17, used=5)
+        assert sq.tiers["Standard"] == SlaTierQuota(limit=5, used=1)
+
+    def test_accumulate_tier_preserves_known_usage_when_another_row_omits_it(self):
+        sq = SeriesQuota(series="X")
+        sq.accumulate_tier("Premium", 10, None)
+        sq.accumulate_tier("Premium", 7, 2)
+        sq.accumulate_tier("Premium", 3, None)
+
+        assert sq.tiers["Premium"] == SlaTierQuota(limit=20, used=2)
+        assert sq.tiers["Premium"].available == 18
+
     def test_has_any_quota_true(self):
         sq = SeriesQuota(series="X")
         sq.set_tier("Premium", 10, 0)
@@ -163,6 +181,78 @@ class TestSeriesQuota:
         )[0]
         assert sq.accelerator == "MI200"
         assert sq.gpu_memory == 64
+
+    def test_regional_tiers_are_aggregated_order_independently(self):
+        overall = {
+            "limits": [
+                {
+                    "id": "ND_A100_v4",
+                    "slaTier": None,
+                    "limit": 100,
+                    "used": 25,
+                }
+            ]
+        }
+        east = {
+            "limits": [
+                {
+                    "id": "ND_A100_v4",
+                    "slaTier": "Premium",
+                    "limit": 10,
+                    "used": 2,
+                },
+                {
+                    "id": "ND_A100_v4",
+                    "slaTier": "Standard",
+                    "limit": 4,
+                    "used": 1,
+                },
+            ]
+        }
+        west = {
+            "limits": [
+                {
+                    "id": "ND_A100_v4",
+                    "slaTier": "Standard",
+                    "limit": 6,
+                    "used": 2,
+                },
+                {
+                    "id": "ND_A100_v4",
+                    "slaTier": "Premium",
+                    "limit": 20,
+                    "used": 3,
+                },
+            ]
+        }
+
+        def _raw(quotas):
+            return {
+                "properties": {
+                    "managed": {
+                        "defaultGroupPolicyOverallQuotas": overall,
+                        "quotas": quotas,
+                    }
+                }
+            }
+
+        [forward] = parse_managed_quotas(_raw({"eastus": east, "westus": west}))
+        [reverse] = parse_managed_quotas(
+            _raw(
+                {
+                    "westus": {"limits": list(reversed(west["limits"]))},
+                    "eastus": {"limits": list(reversed(east["limits"]))},
+                }
+            )
+        )
+
+        assert forward == reverse
+        assert forward.user_limit == SlaTierQuota(limit=100, used=25)
+        assert forward.user_limit.available == 75
+        assert forward.tiers["Premium"] == SlaTierQuota(limit=30, used=5)
+        assert forward.tiers["Premium"].available == 25
+        assert forward.tiers["Standard"] == SlaTierQuota(limit=10, used=3)
+        assert forward.tiers["Standard"].available == 7
 
 
 # ---------------------------------------------------------------------------
@@ -236,12 +326,22 @@ class TestListVirtualClusters:
         client.subscription.list.return_value = []
         assert client.vc.list() == []
 
+    def test_strict_mode_rejects_missing_subscriptions(self):
+        from azure_jobs.shared.errors import AuthError
+
+        client = _make_arm_client()
+        client.subscription.list.return_value = []
+        with pytest.raises(AuthError, match="No enabled Azure subscriptions"):
+            client.vc.list(strict=True)
+
     def test_handles_exception_gracefully(self):
         import requests
 
         client = _make_arm_client()
         client.subscription.list.side_effect = requests.ConnectionError("auth fail")
         assert client.vc.list() == []
+        with pytest.raises(requests.ConnectionError, match="auth fail"):
+            client.vc.list(strict=True)
 
     def test_empty_on_no_data(self):
         client = _make_arm_client()
@@ -270,6 +370,20 @@ class TestListVirtualClusters:
         assert vc.name == "vc1"
         assert vc.resource_group == "rg1"
         assert vc.subscription_id == "sub-1"
+
+    def test_resolves_vc_and_filters_case_insensitively(self):
+        client = _make_arm_client()
+        client._graph.query.return_value = [
+            {"name": "Train-VC", "resourceGroup": "Train-RG", "subscriptionId": "SUB-1"},
+        ]
+
+        vc = client.vc.get(
+            "train-vc",
+            subscription_id="sub-1",
+            resource_group="train-rg",
+        )
+
+        assert vc.name == "Train-VC"
 
     def test_resolve_vc_ambiguous_requires_filter(self):
         client = _make_arm_client()

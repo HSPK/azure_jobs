@@ -6,7 +6,7 @@ import pytest
 from click.testing import CliRunner
 
 from azure_jobs.client.cli import main
-from azure_jobs.server.az_client.arm import InstanceTypeInfo, VCInfo
+from azure_jobs.server.az_client.arm import InstanceTypeInfo, SlaTierQuota, VCInfo
 from azure_jobs.shared.errors import SkuResolveError
 from azure_jobs.server.submit.azureml.sku_match import match_instance_type
 from azure_jobs.shared.sku import (
@@ -181,7 +181,7 @@ class _FakeInstanceTypes:
     def __init__(self, catalog):
         self._catalog = catalog
 
-    def list(self, location, *, subscription_id=""):
+    def list(self, location, *, subscription_id="", strict=False):
         return list(self._catalog)
 
 
@@ -248,6 +248,26 @@ class TestResolveInstanceType:
             tier="Premium",
         )
         assert result.instances and result.instances[0].short_name == "E4ads_v5"
+
+    def test_cpu_quota_uses_selected_instance_vcpu_count(self):
+        vc_obj = _vc(series=("Eadsv5",))
+        vc_obj.quotas[0].user_limit = SlaTierQuota(limit=1, used=0)
+        vc_obj.quotas[0].tiers["Premium"] = SlaTierQuota(limit=1, used=0)
+        arm = FakeArm(
+            vcs=[vc_obj],
+            catalog=[_cpu_row("Eadsv5", "E16ads_v5", cores=16)],
+        )
+
+        with pytest.raises(
+            SkuResolveError,
+            match=r"user quota < 16 vCPU\(s\).*available 1",
+        ):
+            match_instance_type(
+                "1xC1",
+                vc=vc_obj,
+                client=arm,
+                tier="Premium",
+            )
 
     def test_gpu_a100_80g_nvlink(self):
         vc_obj = _vc(series=("NDAMv4", "NDv4"))

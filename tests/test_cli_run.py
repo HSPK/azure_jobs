@@ -53,6 +53,63 @@ class TestRunCommand:
         sub = yaml.safe_load(sub_file.read_text())
         assert sub["jobs"][0]["sku"] == "Standard_NC2s_v3"
 
+    def test_json_dry_run_emits_one_json_document(self, aj_env):
+        write_template(
+            aj_env["template_home"],
+            "default",
+            MINIMAL_JOB_CONF,
+        )
+
+        result = CliRunner().invoke(
+            main,
+            ["--json", "run", "-d", "echo", "hello"],
+        )
+
+        assert result.exit_code == 0
+        payload = json.loads(result.output)
+        assert payload["kind"] == "submission_result"
+        assert payload["status"] == "dry_run"
+        assert "[dry-run]" not in result.output
+
+    def test_json_queue_emits_one_json_document(self, aj_env):
+        config = json.loads(aj_env["config_fp"].read_text())
+        config["experiment"] = "test"
+        aj_env["config_fp"].write_text(json.dumps(config))
+        write_template(
+            aj_env["template_home"],
+            "default",
+            MINIMAL_JOB_CONF,
+        )
+
+        result = CliRunner().invoke(
+            main,
+            ["--json", "run", "--queue", "echo", "hello"],
+        )
+
+        assert result.exit_code == 0
+        payload = json.loads(result.output)
+        assert payload["kind"] == "command_result"
+        assert payload["action"] == "job.queue"
+        assert payload["ticket"].startswith("q-")
+
+    def test_json_submit_without_experiment_is_noninteractive(self, aj_env):
+        write_template(
+            aj_env["template_home"],
+            "default",
+            MINIMAL_JOB_CONF,
+        )
+
+        result = CliRunner().invoke(
+            main,
+            ["--json", "run", "--queue", "echo", "hello"],
+        )
+
+        assert result.exit_code == 1
+        payload = json.loads(result.output)
+        assert payload["kind"] == "command_result"
+        assert payload["status"] == "failed"
+        assert "config experiment" in payload["message"]
+
     def test_sing_dry_run_resolves_vc_coords(self, aj_env):
         conf = {
             "target": {"name": "vc1", "service": "sing", "workspace_name": "ws1"},

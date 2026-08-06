@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+import stat
 import sys
 import time
 from unittest.mock import MagicMock, patch
@@ -15,6 +16,8 @@ from azure_jobs.server.submit.amlt import (
     submit_via_amlt,
 )
 from azure_jobs.shared.job.spec import JobSpec
+from azure_jobs.shared.job.write import write_amlt_yaml
+from azure_jobs.shared.template.models import Template
 
 
 def test_amlt_available_requires_binary_and_config(tmp_path, monkeypatch) -> None:
@@ -25,6 +28,23 @@ def test_amlt_available_requires_binary_and_config(tmp_path, monkeypatch) -> Non
         assert not amlt_available()
         (tmp_path / ".amltconfig").write_text("", encoding="utf-8")
         assert amlt_available()
+
+
+def test_submission_yaml_is_private(tmp_path) -> None:
+    request = JobSpec(
+        name="job",
+        sid="secret",
+        env_vars={"TOKEN": "sensitive"},
+        template=Template.from_dict(
+            {"jobs": [{"name": "job", "sku": "G1"}]}
+        ),
+    )
+
+    path = write_amlt_yaml(request, home=tmp_path / "submission")
+
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
+    assert "sensitive" in path.read_text(encoding="utf-8")
 
 
 def test_extract_portal_url() -> None:
@@ -80,6 +100,32 @@ def test_submit_success_streams_logs_and_extracts_portal(tmp_path) -> None:
     ]
     process.stdin.write.assert_called_once_with("\n\n\n")
     process.stdin.close.assert_called_once_with()
+
+
+def test_submit_uses_the_submitting_project_for_yaml_and_cwd(tmp_path) -> None:
+    process = Process([])
+    request = spec()
+    request.code_dir = str(tmp_path)
+    yaml_path = tmp_path / ".azure_jobs" / "submission" / "job.yaml"
+    with (
+        patch(
+            "azure_jobs.server.submit.amlt.write_amlt_yaml",
+            return_value=yaml_path,
+        ) as write_yaml,
+        patch(
+            "azure_jobs.server.submit.amlt.subprocess.Popen",
+            return_value=process,
+        ) as popen,
+    ):
+        result = submit_via_amlt(request)
+
+    assert result.status == "submitted"
+    write_yaml.assert_called_once_with(
+        request,
+        home=tmp_path / ".azure_jobs" / "submission",
+    )
+    assert popen.call_args.kwargs["cwd"] == tmp_path
+    assert popen.call_args.args[0][2] == str(yaml_path.resolve())
 
 
 def test_slow_event_handler_cannot_hide_late_portal_url(tmp_path) -> None:

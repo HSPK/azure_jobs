@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 
@@ -299,11 +299,12 @@ class TestBlobUploader:
                 pod_download_retries=7,
             ))})
 
-        fake_sas = "sv=2024-01-01&sig=abc%2Bdef"
+        upload_sas = "sv=2024-01-01&sp=cw&sig=upload"
+        download_sas = "sv=2024-01-01&sp=r&sig=download"
         with patch.object(
             blob_mod,
             "_generate_sas_token",
-            return_value=fake_sas,
+            side_effect=[upload_sas, download_sas],
         ) as m_sas, patch.object(blob_mod.requests, "put") as m_put:
             m_put.return_value = MagicMock(status_code=201, text="")
             events: list = []
@@ -312,25 +313,37 @@ class TestBlobUploader:
             )
 
         assert r.ok is True, r.error
-        m_sas.assert_called_once_with("mysa", "aj-code", 2)
         assert m_put.called
         put_url = m_put.call_args.args[0]
-        assert put_url.startswith("https://mysa.blob.core.windows.net/aj-code/snap/j-xyz-")
-        assert put_url.endswith(f".tgz?{fake_sas}")
+        assert put_url.startswith(
+            "https://mysa.blob.core.windows.net/aj-code/snap/"
+        )
+        archive_hash = put_url.split("/snap/", 1)[1].split(".tgz", 1)[0]
+        assert len(archive_hash) == 64
+        assert all(char in "0123456789abcdef" for char in archive_hash)
+        assert m_sas.call_args_list == [
+            call("mysa", "aj-code", f"snap/{archive_hash}.tgz", "cw", 2),
+            call("mysa", "aj-code", f"snap/{archive_hash}.tgz", "r", 2),
+        ]
+        assert put_url.endswith(f".tgz?{upload_sas}")
 
         # pod setup must reference the SAS-laden URL, force-install azcopy,
         # and use azcopy for the download (not raw curl).
         lines = "\n".join(r.pod_setup_lines)
-        assert fake_sas in lines
+        assert download_sas in lines
+        assert upload_sas not in lines
         assert "azcopy copy" in lines
+        assert "sha256sum" in lines
+        assert archive_hash in lines
         # azcopy bootstrap is wired to the configured retry count
         assert "seq 1 7" in lines
         assert "downloadazcopy-v10-linux" in lines
-        assert r.code_path.startswith("/tmp/aj-code/j-xyz-")
+        assert r.code_path == f"/tmp/aj-code/{archive_hash}"
         # extract_dir is referenced in tar xzf
         assert r.code_path in lines
 
     def test_az_cli_missing_yields_clean_error(self, tmp_path: Path):
+        (tmp_path / "main.py").write_text("print('x')\n", encoding="utf-8")
         cfg = _vol_cfg(code_dir=str(tmp_path))
         spec = JobSpec(name="j", service="volcano", extra={**(_blob_extra(storage_account="sa", container="c"))})
         with patch.object(
@@ -341,6 +354,7 @@ class TestBlobUploader:
         assert "Azure CLI" in r.error and "kubectl-exec" in r.error
 
     def test_az_cli_nonzero_exit_surfaces_stderr(self, tmp_path: Path):
+        (tmp_path / "main.py").write_text("print('x')\n", encoding="utf-8")
         cfg = _vol_cfg(code_dir=str(tmp_path))
         spec = JobSpec(name="j", service="volcano", extra={**(_blob_extra(storage_account="sa", container="c"))})
         fake = subprocess.CompletedProcess(
@@ -484,19 +498,47 @@ class TestScriptLoader:
         assert "seq 1 7" in text
         assert "downloadazcopy-v10-linux" in text
         assert "{RETRIES}" not in text
+        assert "exit 0" not in text
+
+    def test_preinstalled_azcopy_does_not_exit_the_combined_script(
+        self, tmp_path: Path
+    ):
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        azcopy = bin_dir / "azcopy"
+        azcopy.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+        azcopy.chmod(0o755)
+        marker = tmp_path / "continued"
+        script = "\n".join(load_script("install_azcopy.sh", RETRIES=1))
+        result = subprocess.run(
+            [
+                "bash",
+                "-c",
+                f"{script}\nprintf continued > {marker}",
+            ],
+            env={"PATH": f"{bin_dir}:/usr/bin:/bin"},
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stderr
+        assert marker.read_text(encoding="utf-8") == "continued"
 
     def test_blob_download_round_trip(self):
         lines = load_script(
             "blob_download.sh",
             EXTRACT_DIR="/tmp/aj-code/jx",
             URL_WITH_SAS="https://sa.blob.core.windows.net/c/x.tgz?sv=…&sig=…",
+            EXPECTED_SHA256="abc123",
         )
         text = "\n".join(lines)
         assert "azcopy copy" in text
         assert "/tmp/aj-code/jx" in text
         assert "sv=" in text and "sig=" in text
+        assert "abc123" in text
+        assert "SHA-256 mismatch" in text
         assert "{EXTRACT_DIR}" not in text
         assert "{URL_WITH_SAS}" not in text
+        assert "{EXPECTED_SHA256}" not in text
 
     def test_bash_constructs_are_left_alone(self):
         """Bash's ${var}/$(cmd)/{ … } must survive the {KEY} replacement."""

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sys
+import types
 from unittest.mock import MagicMock
 
 import pytest
@@ -102,6 +104,66 @@ def test_storage_and_identity_return_empty_on_graph_failure() -> None:
     assert IdentitiesAPI(value).list(["sub"]) == []
 
 
+def test_storage_identity_and_workspace_skip_empty_subscription_sets_and_blank_names() -> None:
+    value = client()
+    value.subscription.list.return_value = []
+    assert StoragesAPI(value).list() == []
+    assert IdentitiesAPI(value).list() == []
+    assert WorkspacesAPI(value).list() == []
+
+    value = client()
+    value._graph.query.return_value = [
+        {
+            "name": "",
+            "resourceGroup": "rg",
+            "subscriptionId": "sub",
+        }
+    ]
+    assert StoragesAPI(value).list(["sub"]) == []
+    assert IdentitiesAPI(value).list(["sub"]) == []
+    assert WorkspacesAPI(value).list(["sub"]) == []
+
+
+def test_workspace_call_scopes_from_target_like_objects(monkeypatch) -> None:
+    captured: list[tuple[str, str, str]] = []
+    module = types.ModuleType("azure_jobs.server.az_client.ml")
+
+    def fake_workspace_client(sub, rg, ws):
+        captured.append((sub, rg, ws))
+        return {"subscription_id": sub, "resource_group": rg, "workspace_name": ws}
+
+    module.AzureWorkspaceClient = fake_workspace_client
+    monkeypatch.setitem(sys.modules, "azure_jobs.server.az_client.ml", module)
+
+    target_like = types.SimpleNamespace(
+        subscription_id="sub-a",
+        resource_group="rg-a",
+        label="label-ws",
+        metadata={"workspace_name": "meta-ws"},
+    )
+    named_like = types.SimpleNamespace(
+        metadata={"subscription_id": "sub-b", "resource_group": "rg-b"},
+        name="named-ws",
+    )
+
+    api = WorkspacesAPI(client())
+
+    assert api(target_like) == {
+        "subscription_id": "sub-a",
+        "resource_group": "rg-a",
+        "workspace_name": "meta-ws",
+    }
+    assert api(named_like) == {
+        "subscription_id": "sub-b",
+        "resource_group": "rg-b",
+        "workspace_name": "named-ws",
+    }
+    assert captured == [
+        ("sub-a", "rg-a", "meta-ws"),
+        ("sub-b", "rg-b", "named-ws"),
+    ]
+
+
 def test_images_walk_subscriptions_and_tolerate_failure() -> None:
     value = client()
     value.get.side_effect = [
@@ -177,6 +239,37 @@ def test_compute_list_all_filters_and_reports_callbacks(monkeypatch) -> None:
     assert failed == [("bad", "denied")]
 
 
+def test_compute_list_all_discovers_workspaces_logs_failures_and_allows_non_aml(
+    monkeypatch, caplog
+) -> None:
+    value = client()
+    workspaces = [
+        WorkspaceInfo("good", "rg", "sub"),
+        WorkspaceInfo("bad", "rg", "sub"),
+    ]
+    value.ws.list.return_value = workspaces
+    api = ComputesAPI(value)
+    from azure_jobs.shared.types.azure import ComputeInfo
+
+    aml = ComputeInfo("aml", "rg", "sub", "good", compute_type="AmlCompute")
+    attached = ComputeInfo("attached", "rg", "sub", "good", compute_type="ComputeInstance")
+
+    def listing(sub, rg, ws):
+        if ws == "bad":
+            raise RuntimeError("denied")
+        return [aml, attached]
+
+    monkeypatch.setattr(api, "list", listing)
+    caplog.set_level("DEBUG")
+
+    result = api.list_all(workspaces=None, aml_only=False)
+
+    value.ws.list.assert_called_once_with()
+    value.ensure_token.assert_called_once_with()
+    assert result == [(workspaces[0], [aml, attached])]
+    assert "compute.list failed for bad" in caplog.text
+
+
 def test_compute_owner_validation(monkeypatch) -> None:
     api = ComputesAPI(client())
     one = WorkspaceInfo("one", "rg", "sub")
@@ -200,4 +293,15 @@ def test_compute_owner_validation(monkeypatch) -> None:
         api.get_workspace("gpu")
 
     monkeypatch.setattr(api, "list_all", lambda: [(one, [cluster])])
+    assert api.get_workspace("gpu") == one
+
+
+def test_compute_owner_lookup_deduplicates_the_same_workspace(monkeypatch) -> None:
+    api = ComputesAPI(client())
+    one = WorkspaceInfo("one", "rg", "sub")
+    from azure_jobs.shared.types.azure import ComputeInfo
+
+    cluster = ComputeInfo("gpu", "rg", "sub", "one", compute_type="AmlCompute")
+    monkeypatch.setattr(api, "list_all", lambda: [(one, [cluster]), (one, [cluster])])
+
     assert api.get_workspace("gpu") == one

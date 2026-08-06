@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from azure_jobs.server.submit.archive import ArchiveMetadata
 from azure_jobs.shared.config import AJWorkspace
 from azure_jobs.shared.errors import parse_exception_message
 from azure_jobs.shared.job import (
@@ -15,6 +16,7 @@ from azure_jobs.shared.job import (
     build_job_spec,
     render_amlt_yaml,
 )
+from azure_jobs.shared.job.command import build_user_command
 from azure_jobs.shared.opts.aml import AmlOpts
 from azure_jobs.server.submit.azureml.image import (
     _SING_DUMMY_IMAGE,
@@ -75,6 +77,32 @@ class TestSubmitRequest:
         assert r.backend_spec.compute == "gpu-cluster"
         assert r.nodes == 4
         assert r.service == "sing"
+
+
+class TestBuildUserCommand:
+    def test_non_file_arguments_keep_shell_boundaries(self):
+        command = build_user_command(
+            "python",
+            ("-c", 'print("a b")', "$HOME", "a;b"),
+        )
+
+        assert command == (
+            "python -c 'print(\"a b\")' '$HOME' 'a;b'"
+        )
+
+    def test_python_file_path_and_arguments_are_quoted(
+        self, tmp_path, monkeypatch
+    ):
+        script = tmp_path / "train file.py"
+        script.write_text("print('ok')\n", encoding="utf-8")
+        monkeypatch.chdir(tmp_path)
+
+        command = build_user_command(
+            script.name,
+            ("--label", "two words"),
+        )
+
+        assert command == "uv run 'train file.py' --label 'two words'"
 
 
 class TestBuildRequestFromConfig:
@@ -396,11 +424,14 @@ class TestSubmitMocked:
 
         with patch(
             "azure_jobs.server.submit.azureml.entry._get_rest_client"
-        ) as mock_factory:
+        ) as mock_factory, patch(
+            "azure_jobs.server.submit.azureml.entry.create_code_archive",
+            return_value=ArchiveMetadata("hash", 1, 1),
+        ):
             mock_client = mock_factory.return_value
             mock_client.__enter__.return_value = mock_client
             mock_client.env.get.return_value = SimpleNamespace(id="env-id-1")
-            mock_client.blob.upload_code.return_value = "code-id-1"
+            mock_client.blob.upload_archive.return_value = "archive-uri"
             mock_client.job.create_or_update.return_value = mock_returned
             result = submit(request)
 
@@ -438,11 +469,14 @@ class TestSubmitMocked:
 
         with patch(
             "azure_jobs.server.submit.azureml.entry._get_rest_client"
-        ) as mock_factory:
+        ) as mock_factory, patch(
+            "azure_jobs.server.submit.azureml.entry.create_code_archive",
+            return_value=ArchiveMetadata("hash", 1, 1),
+        ):
             mock_client = mock_factory.return_value
             mock_client.__enter__.return_value = mock_client
             mock_client.env.get.return_value = SimpleNamespace(id="env-id")
-            mock_client.blob.upload_code.return_value = "code-id"
+            mock_client.blob.upload_archive.return_value = "archive-uri"
             mock_client.job.create_or_update.return_value = mock_returned
             submit(request, on_event=on_event)
 

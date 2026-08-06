@@ -15,12 +15,13 @@ import pytest
 from azure_jobs import connect
 from azure_jobs.server.az_client import AzureClient, AzureWorkspaceClient
 from azure_jobs.server.runner import Daemon
+from azure_jobs.server.submit.azureml.sku_match import select_best_vc
 from azure_jobs.shared.config import read_config
 from azure_jobs.shared.contract.models import Target
 from azure_jobs.shared.job.spec import JobSpec
 from azure_jobs.shared.opts.aml import AmlOpts
 
-from .live_e2e import choose_fastest
+from .live_e2e import choose_auto_sing, choose_fastest
 
 pytestmark = [
     pytest.mark.live,
@@ -84,6 +85,54 @@ def _cleanup_job(client, ref: str) -> None:
         raise last_error
 
 
+def _find_sing_workspace_and_identity(
+    workspaces,
+    *,
+    requested_workspace: str,
+    requested_uai: str,
+) -> tuple[dict[str, str] | None, str]:
+    """Find a visible workspace that has the requested or any UAI attached."""
+    wanted_workspace = requested_workspace.casefold()
+    wanted_uai = requested_uai.rstrip("/").casefold()
+    for workspace in workspaces:
+        if wanted_workspace and workspace.name.casefold() != wanted_workspace:
+            continue
+        try:
+            with AzureWorkspaceClient(
+                workspace.subscription_id,
+                workspace.resource_group,
+                workspace.name,
+            ) as workspace_client:
+                identities = (
+                    (workspace_client.info().get("identity") or {})
+                    .get("userAssignedIdentities")
+                    or {}
+                )
+        except Exception:
+            continue
+        if wanted_uai:
+            selected_uai = next(
+                (
+                    resource_id
+                    for resource_id in identities
+                    if resource_id.rstrip("/").casefold() == wanted_uai
+                ),
+                "",
+            )
+        else:
+            selected_uai = next(iter(identities), "")
+        if selected_uai:
+            return (
+                {
+                    "name": workspace.name,
+                    "resource_group": workspace.resource_group,
+                    "subscription_id": workspace.subscription_id,
+                },
+                selected_uai,
+            )
+    return None, ""
+
+
 def test_fastest_available_aml_or_sing_submission(
     tmp_path,
     monkeypatch,
@@ -96,7 +145,7 @@ def test_fastest_available_aml_or_sing_submission(
     if requested_service not in {"auto", "aml", "sing"}:
         pytest.fail("AJ_LIVE_SERVICE must be auto, aml, or sing")
     configured = read_config().workspace
-    fallback = (
+    configured_fallback = (
         {
             "name": configured.workspace_name,
             "resource_group": configured.resource_group,
@@ -106,44 +155,67 @@ def test_fastest_available_aml_or_sing_submission(
         else None
     )
     sing_uai = os.getenv("AJ_LIVE_SING_UAI", "")
-    if not sing_uai and fallback:
-        with AzureWorkspaceClient(
-            configured.subscription_id,
-            configured.resource_group,
-            configured.workspace_name,
-        ) as workspace_client:
-            identities = (
-                (workspace_client.info().get("identity") or {})
-                .get("userAssignedIdentities")
-                or {}
-            )
-        sing_uai = next(iter(identities), "")
-    if requested_service == "sing" and not sing_uai:
-        pytest.skip(
-            "Singularity requires AJ_LIVE_SING_UAI or an identity attached "
-            "to the configured workspace"
-        )
+    requested_workspace = os.getenv("AJ_LIVE_WORKSPACE", "")
+    exact_sing_sku = os.getenv("AJ_LIVE_SING_SKU", "")
+    sing_tier = os.getenv("AJ_LIVE_SING_TIER", "Premium")
+    expected_selection = None
 
     with AzureClient() as azure:
         workspaces = azure.ws.list()
-        pairs = [
-            {
-                "workspace": asdict(workspace),
-                "computes": [asdict(value) for value in computes],
-            }
-            for workspace, computes in azure.compute.list_all(workspaces=workspaces)
-        ]
-        candidate = choose_fastest(
-            pairs,
-            azure.quota.list(include_zero=False),
-            azure.image.list(),
-            fallback_workspace=fallback,
-            service=requested_service,
-            allow_sing=bool(sing_uai),
+        sing_workspace, sing_uai = _find_sing_workspace_and_identity(
+            workspaces,
+            requested_workspace=(
+                requested_workspace
+                or (configured.workspace_name if configured_fallback else "")
+            ),
+            requested_uai=sing_uai,
         )
+        images = azure.image.list()
+        if requested_service == "sing" and exact_sing_sku:
+            if not sing_workspace or not sing_uai:
+                pytest.skip(
+                    "no visible workspace with the requested Singularity UAI"
+                )
+            vcs = azure.quota.list(include_zero=True, strict=True)
+            expected_selection = select_best_vc(
+                exact_sing_sku,
+                candidates=vcs,
+                tier=sing_tier,
+                client=azure,
+                nodes=1,
+                gpus_per_node=1,
+            )
+            candidate = choose_auto_sing(
+                sing_workspace,
+                images,
+                sku=exact_sing_sku,
+            )
+        else:
+            pairs = [
+                {
+                    "workspace": asdict(workspace),
+                    "computes": [asdict(value) for value in computes],
+                }
+                for workspace, computes in azure.compute.list_all(
+                    workspaces=workspaces
+                )
+            ]
+            candidate = choose_fastest(
+                pairs,
+                azure.quota.list(include_zero=False),
+                images,
+                fallback_workspace=sing_workspace or configured_fallback,
+                service=requested_service,
+                allow_sing=bool(sing_uai),
+            )
 
     if candidate is None:
         pytest.skip(f"no usable {requested_service} live candidate")
+    if candidate.service == "sing" and not sing_uai:
+        pytest.skip(
+            "Singularity requires AJ_LIVE_SING_UAI or an identity attached "
+            "to the selected workspace"
+        )
 
     target = Target.create(
         backend="azureml",
@@ -199,14 +271,21 @@ def test_fastest_available_aml_or_sing_submission(
             resource_group=candidate.resource_group,
             workspace_name=candidate.workspace_name,
             compute=candidate.compute,
+            sla_tier=sing_tier,
         ),
     )
+    if expected_selection is not None:
+        assert spec.backend_spec.compute == ""
+        assert spec.sku == exact_sing_sku
+        assert spec.nodes == spec.gpus_per_node == spec.processes_per_node == 1
 
     client = None
     # Reconcile by the requested Azure name even if PUT succeeded but its
     # response was lost and submit() returned a failed outcome.
     ref = name
     current = None
+    submit_events = []
+    auto_selection_event = None
     timeout = float(os.getenv("AJ_LIVE_TIMEOUT", "600"))
     try:
         client = connect(
@@ -215,9 +294,25 @@ def test_fastest_available_aml_or_sing_submission(
             path=daemon.socket_path,
             autostart=False,
         )
-        outcome = client.job.submit(spec.to_dict())
+        outcome = client.job.submit(
+            spec.to_dict(),
+            on_event=submit_events.append,
+        )
         assert outcome.succeeded, outcome.error
         ref = outcome.backend_ref or outcome.job_name or name
+        if expected_selection is not None:
+            auto_selection_event = next(
+                (
+                    event
+                    for event in submit_events
+                    if event.detail.startswith("Auto-selected VC ")
+                ),
+                None,
+            )
+            assert auto_selection_event is not None, [
+                event.detail for event in submit_events
+            ]
+            assert "matched: 40G1-A100" in auto_selection_event.detail
 
         deadline = time.time() + timeout
         while time.time() < deadline:
@@ -232,6 +327,31 @@ def test_fastest_available_aml_or_sing_submission(
             )
 
         assert current.status == "Completed", current.raw
+        log_deadline = time.time() + 120
+        last_log_error = ""
+        while time.time() < log_deadline:
+            downloaded = client.log.download(current.ref)
+            content = downloaded.get("content", "")
+            last_log_error = downloaded.get("error", "")
+            if "aj-live-e2e-ok" in content:
+                break
+            time.sleep(3)
+        else:
+            pytest.fail(
+                f"job completed but expected log marker was missing "
+                f"(last log error: {last_log_error or 'none'})"
+            )
+
+        if expected_selection is not None:
+            assert auto_selection_event is not None
+            actual_compute = str(current.raw.get("compute") or "")
+            actual_tier = str(current.raw.get("sla_tier") or "")
+            assert actual_compute
+            assert actual_tier
+            assert f"VC '{actual_compute}'" in auto_selection_event.detail
+            assert f"at {actual_tier} " in auto_selection_event.detail
+            assert current.raw.get("nodes") == 1
+            assert current.raw.get("instance_type")
     finally:
         active_failure = sys.exc_info()[0] is not None
         cleanup_error = None

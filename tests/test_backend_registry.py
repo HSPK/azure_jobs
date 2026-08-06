@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import subprocess
+import sys
 from typing import Any
 
 import pytest
@@ -237,3 +239,24 @@ class TestSpecHooksShape:
         e = get_spec_hooks("volcano")
         assert isinstance(e, SpecHooks)
         assert callable(e.build_spec_backend)
+
+    def test_fresh_daemon_loads_every_builtin_backend(self, tmp_path):
+        code = (
+            "from pathlib import Path; "
+            "from azure_jobs.server.runner import Daemon; "
+            "from azure_jobs.server.submit import known_backends; "
+            f"d=Daemon(Path({str(tmp_path / 'daemon.sock')!r})); "
+            "print(','.join(known_backends())); d.state.close()"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", code],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        assert set(result.stdout.strip().split(",")) == {
+            "aml",
+            "amlt",
+            "sing",
+            "volcano",
+        }

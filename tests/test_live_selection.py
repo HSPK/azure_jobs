@@ -1,10 +1,13 @@
 """Fastest live candidate selection is deterministic and cheap to unit test."""
 
+from types import SimpleNamespace
+from unittest.mock import patch
+
 from azure_jobs.shared.types.azure import SeriesQuota, SlaTierQuota, VCInfo
 from azure_jobs.shared.contract.models import Job
 
-from .live_e2e import choose_fastest
-from .test_live_submit import _cleanup_job
+from .live_e2e import choose_auto_sing, choose_fastest
+from .test_live_submit import _cleanup_job, _find_sing_workspace_and_identity
 
 
 def workspace_pair(*, idle: int = 0, busy: int = 0, maximum: int = 1):
@@ -75,6 +78,128 @@ def test_service_can_be_forced() -> None:
         service="sing",
     )
     assert candidate.service == "sing"
+
+
+def test_auto_sing_candidate_keeps_compute_empty_and_exact_sku() -> None:
+    candidate = choose_auto_sing(
+        {
+            "name": "ws",
+            "resource_group": "rg",
+            "subscription_id": "sub",
+        },
+        [{"names": ["torch:latest"]}],
+        sku="1x40G1-A100",
+    )
+
+    assert candidate is not None
+    assert candidate.compute == ""
+    assert candidate.sku == "1x40G1-A100"
+    assert candidate.image == "amlt-sing/torch:latest"
+
+
+def test_auto_sing_candidate_requires_workspace_image_and_sku() -> None:
+    assert choose_auto_sing(None, [], sku="1x40G1-A100") is None
+    assert choose_auto_sing(
+        {"name": "ws", "resource_group": "rg", "subscription_id": "sub"},
+        [],
+        sku="1x40G1-A100",
+    ) is None
+    assert choose_auto_sing(
+        {"name": "ws", "resource_group": "rg", "subscription_id": "sub"},
+        [{"names": ["torch:latest"]}],
+        sku="",
+    ) is None
+
+
+def test_find_sing_workspace_honors_case_insensitive_workspace_and_uai() -> None:
+    workspaces = [
+        SimpleNamespace(
+            name="Other",
+            resource_group="rg-a",
+            subscription_id="sub-a",
+        ),
+        SimpleNamespace(
+            name="Embodied-AML",
+            resource_group="rg-b",
+            subscription_id="sub-b",
+        ),
+    ]
+    identities = {
+        "Other": {},
+        "Embodied-AML": {
+            "/subscriptions/sub-b/resourceGroups/rg/providers/"
+            "Microsoft.ManagedIdentity/userAssignedIdentities/Runner": {}
+        },
+    }
+
+    class WorkspaceClient:
+        def __init__(self, _sub, _rg, name):
+            self.name = name
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return None
+
+        def info(self):
+            return {
+                "identity": {
+                    "userAssignedIdentities": identities[self.name]
+                }
+            }
+
+    with patch(
+        "tests.test_live_submit.AzureWorkspaceClient",
+        WorkspaceClient,
+    ):
+        workspace, uai = _find_sing_workspace_and_identity(
+            workspaces,
+            requested_workspace="embodied-aml",
+            requested_uai=(
+                "/SUBSCRIPTIONS/SUB-B/RESOURCEGROUPS/RG/PROVIDERS/"
+                "MICROSOFT.MANAGEDIDENTITY/USERASSIGNEDIDENTITIES/RUNNER"
+            ),
+        )
+
+    assert workspace == {
+        "name": "Embodied-AML",
+        "resource_group": "rg-b",
+        "subscription_id": "sub-b",
+    }
+    assert uai.endswith("/Runner")
+
+
+def test_find_sing_workspace_skips_inaccessible_or_identity_free_rows() -> None:
+    workspaces = [
+        SimpleNamespace(name="broken", resource_group="rg", subscription_id="s"),
+        SimpleNamespace(name="empty", resource_group="rg", subscription_id="s"),
+    ]
+
+    class WorkspaceClient:
+        def __init__(self, _sub, _rg, name):
+            self.name = name
+
+        def __enter__(self):
+            if self.name == "broken":
+                raise RuntimeError("forbidden")
+            return self
+
+        def __exit__(self, *_exc):
+            return None
+
+        def info(self):
+            return {"identity": {"userAssignedIdentities": {}}}
+
+    with patch(
+        "tests.test_live_submit.AzureWorkspaceClient",
+        WorkspaceClient,
+    ):
+        assert _find_sing_workspace_and_identity(
+            workspaces,
+            requested_workspace="",
+            requested_uai="",
+        ) == (None, "")
 
 
 def test_missing_resources_returns_none() -> None:

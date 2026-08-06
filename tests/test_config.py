@@ -1,4 +1,5 @@
 import json
+import stat
 
 from azure_jobs.client.cli._workspace_setup import (
     get_workspace_config,
@@ -46,6 +47,7 @@ class TestWriteConfig:
         assert parsed["workspace"]["subscription_id"] == "sub-123"
         assert parsed["workspace"]["resource_group"] == "rg"
         assert '  "workspace"' in content
+        assert stat.S_IMODE(aj_config.stat().st_mode) == 0o600
 
     def test_creates_parent_dirs(self, tmp_path, monkeypatch):
         deep_path = tmp_path / "a" / "b" / "aj_config.json"

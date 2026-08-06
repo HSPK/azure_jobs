@@ -1,10 +1,10 @@
-"""Blob credential selection, upload and registration branches."""
+"""Hermetic tests for workspace blob archive uploads."""
 
 from __future__ import annotations
 
 import base64
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 import requests
@@ -12,9 +12,10 @@ import requests
 from azure_jobs.server.az_client.ml.blob import (
     BlobAPI,
     _Credentials,
+    _MAX_SINGLE_PUT_BYTES,
     _StorageInfo,
 )
-from azure_jobs.shared.utils.fs import CodeFile
+from azure_jobs.shared.errors import AJError, RestError
 
 
 class Response:
@@ -32,6 +33,15 @@ def api() -> tuple[BlobAPI, MagicMock]:
     ctx.base = "https://management.azure.com/workspace"
     ctx.session = MagicMock()
     return BlobAPI(ctx), ctx
+
+
+def _storage() -> _StorageInfo:
+    return _StorageInfo(
+        account_name="account",
+        container="container",
+        account_url="https://account.blob.core.windows.net",
+        arm_id="/storage",
+    )
 
 
 def test_storage_and_credential_value_objects() -> None:
@@ -102,69 +112,114 @@ def test_resolve_credentials_prefers_secret_then_bearer(monkeypatch) -> None:
     monkeypatch.setattr(value, "_ensure_storage_token", lambda: "bearer")
     assert value._resolve_credentials("/storage").bearer == "bearer"
 
+    ctx.list_datastore_secrets.side_effect = RestError("forbidden")
+    assert value._resolve_credentials("/storage").bearer == "bearer"
+
     monkeypatch.setattr(value, "_shared_key_allowed", lambda _: False)
     assert value._resolve_credentials("/storage").bearer == "bearer"
 
 
-def test_index_files_adds_string_and_binary_extras(monkeypatch, tmp_path) -> None:
-    code_file = CodeFile("disk.txt", tmp_path / "disk.txt", 1)
-    monkeypatch.setattr(
-        "azure_jobs.server.az_client.ml.blob.walk_code",
-        lambda directory, ignore: [code_file],
-    )
-    files, memory = BlobAPI._index_files(
-        str(tmp_path),
-        ["*.tmp"],
-        {"text": "value", "binary": b"bytes"},
-    )
-    assert files == [code_file]
-    assert memory == {"text": b"value", "binary": b"bytes"}
+def test_upload_archive_streams_one_blob_and_reports_progress(
+    tmp_path, monkeypatch
+) -> None:
+    value, ctx = api()
+    archive = tmp_path / "code.tar.gz"
+    archive.write_bytes(b"archive-bytes")
+    progress = []
+    seen = {}
 
-
-def test_upload_all_skips_existing_and_reports_progress(tmp_path, monkeypatch) -> None:
-    value, _ctx = api()
-    disk = tmp_path / "disk"
-    disk.write_bytes(b"disk")
+    monkeypatch.setattr(value, "_ensure_default_storage", _storage)
     monkeypatch.setattr(
         value,
-        "_blob_exists",
-        lambda url, creds: url.endswith("/skip"),
+        "_resolve_credentials",
+        lambda _: _Credentials(bearer="token"),
     )
-    upload = MagicMock()
-    monkeypatch.setattr(value, "_upload_blob", upload)
-    progress = MagicMock()
+    ctx.session.head.return_value = Response(404)
 
-    value._upload_all(
-        on_disk={"disk": disk},
-        in_memory={"skip": b"skip"},
-        code_hash="hash",
-        storage=_StorageInfo(
-            account_name="a",
-            container="c",
-            account_url="https://a.blob",
-        ),
-        creds=_Credentials(bearer="token"),
-        on_progress=progress,
+    def _put(url, *, data, headers, timeout):
+        seen["url"] = url
+        seen["is_stream"] = not isinstance(data, (bytes, bytearray))
+        seen["was_open"] = not data.closed
+        seen["body"] = data.read()
+        seen["headers"] = headers
+        return Response(201)
+
+    ctx.session.put.side_effect = _put
+
+    uri = value.upload_archive(
+        archive,
+        "abc123",
+        lambda *args: progress.append(args),
     )
-    upload.assert_called_once()
-    assert upload.call_args.args[1] == b"disk"
-    assert progress.call_args.args[0:3] == (2, 2, 1)
+
+    assert uri == (
+        "azureml://datastores/workspaceblobstore/paths/"
+        "LocalUpload/abc123/code.tar.gz"
+    )
+    assert seen["url"].endswith("/LocalUpload/abc123/code.tar.gz")
+    assert seen["is_stream"] and seen["was_open"]
+    assert seen["body"] == b"archive-bytes"
+    assert seen["headers"]["Content-Type"] == "application/gzip"
+    assert seen["headers"]["Content-Length"] == str(len(b"archive-bytes"))
+    assert progress == [
+        (0, 1, 0, "code.tar.gz"),
+        (1, 1, 0, "code.tar.gz"),
+    ]
 
 
-def test_register_code_version() -> None:
+def test_upload_archive_reuses_cached_blob(tmp_path, monkeypatch) -> None:
     value, ctx = api()
-    ctx.session.put.return_value = Response(200, {"id": "code-id"})
-    storage = _StorageInfo(
-        account_name="a",
-        container="c",
-        account_url="https://a.blob",
+    archive = tmp_path / "code.tar.gz"
+    archive.write_bytes(b"archive")
+    progress = []
+    monkeypatch.setattr(value, "_ensure_default_storage", _storage)
+    monkeypatch.setattr(
+        value,
+        "_resolve_credentials",
+        lambda _: _Credentials(sas_token="sig=1"),
     )
-    assert value._register_code_version("abcdef012345", storage) == "code-id"
-    body = ctx.session.put.call_args.kwargs["json"]
-    assert body["properties"]["codeUri"].endswith("/LocalUpload/abcdef012345")
+    ctx.session.head.return_value = Response(200)
+
+    uri = value.upload_archive(
+        archive,
+        "cached",
+        lambda *args: progress.append(args),
+    )
+
+    assert uri.endswith("/LocalUpload/cached/code.tar.gz")
+    ctx.session.put.assert_not_called()
+    assert progress[-1] == (1, 1, 1, "code.tar.gz")
 
 
-def test_blob_exists_auth_modes_and_failure() -> None:
+def test_upload_archive_validates_path_and_hash(tmp_path) -> None:
+    value, _ctx = api()
+    with pytest.raises(FileNotFoundError, match="does not exist"):
+        value.upload_archive(tmp_path / "missing.tar.gz", "hash")
+
+    archive = tmp_path / "code.tar.gz"
+    archive.write_bytes(b"x")
+    with pytest.raises(ValueError, match="Invalid code archive hash"):
+        value.upload_archive(archive, "../escape")
+
+
+def test_put_blob_rejects_archive_above_single_request_limit() -> None:
+    value, ctx = api()
+    archive = MagicMock()
+    archive.stat.return_value.st_size = _MAX_SINGLE_PUT_BYTES + 1
+
+    with pytest.raises(AJError, match="too large for one Azure Blob upload"):
+        value._put_blob(
+            "https://account.blob.core.windows.net/c/blob",
+            archive,
+            "application/gzip",
+            _Credentials(bearer="token"),
+        )
+
+    ctx.session.put.assert_not_called()
+    archive.open.assert_not_called()
+
+
+def test_blob_head_auth_modes_403_fallback_and_failure(monkeypatch) -> None:
     value, ctx = api()
     ctx.session.head.return_value = Response(200)
     assert value._blob_exists("https://a/blob", _Credentials(bearer="token"))
@@ -173,40 +228,100 @@ def test_blob_exists_auth_modes_and_failure() -> None:
         == "Bearer token"
     )
 
-    assert value._blob_exists("https://a/blob", _Credentials(sas_token="sig=1"))
+    assert value._blob_exists("https://a/blob", _Credentials(sas_token="?sig=1"))
     assert ctx.session.head.call_args.args[0].endswith("?sig=1")
+    assert ctx.session.head.call_args.kwargs["headers"]["Authorization"] is None
+
+    shared_key = base64.b64encode(b"secret").decode()
+    assert value._blob_exists(
+        "https://account.blob.core.windows.net/c/blob",
+        _Credentials(shared_key=shared_key),
+    )
+    assert ctx.session.head.call_args.kwargs["headers"][
+        "Authorization"
+    ].startswith("SharedKey account:")
+
+    ctx.session.head.side_effect = [Response(403), Response(200)]
+    monkeypatch.setattr(value, "_ensure_storage_token", lambda: "fallback")
+    assert value._blob_exists("https://a/blob", _Credentials(sas_token="sig=1"))
+    assert (
+        ctx.session.head.call_args.kwargs["headers"]["Authorization"]
+        == "Bearer fallback"
+    )
 
     ctx.session.head.side_effect = requests.ConnectionError("gone")
     assert not value._blob_exists("https://a/blob", _Credentials())
 
 
-def test_upload_blob_retries_key_policy_with_bearer(monkeypatch) -> None:
-    value, _ctx = api()
-    put = MagicMock(
-        side_effect=[
-            Response(403, text="Key based authentication is not permitted"),
-            Response(201),
-        ]
+def test_sas_request_errors_are_redacted(tmp_path, caplog) -> None:
+    value, ctx = api()
+    secret = "sig=storage-secret"
+    sas = _Credentials(sas_token=secret)
+    url = f"https://account.blob.core.windows.net/c/blob?{secret}"
+    ctx.session.head.side_effect = requests.ConnectionError(
+        f"failed for {url}"
     )
+
+    assert not value._blob_exists(
+        "https://account.blob.core.windows.net/c/blob",
+        sas,
+    )
+    assert "storage-secret" not in caplog.text
+
+    archive = tmp_path / "code.tar.gz"
+    archive.write_bytes(b"archive")
+    ctx.session.put.side_effect = requests.ConnectionError(
+        f"failed for {url}"
+    )
+    with pytest.raises(AJError) as exc_info:
+        value._put_blob(
+            "https://account.blob.core.windows.net/c/blob",
+            archive,
+            "application/gzip",
+            sas,
+        )
+    assert "storage-secret" not in str(exc_info.value)
+
+
+@pytest.mark.parametrize("status", [401, 403])
+def test_upload_blob_retries_auth_failure_with_bearer(
+    tmp_path, monkeypatch, status
+) -> None:
+    value, _ctx = api()
+    archive = tmp_path / "code.tar.gz"
+    archive.write_bytes(b"data")
+    put = MagicMock(side_effect=[Response(status), Response(201)])
     monkeypatch.setattr(value, "_put_blob", put)
     monkeypatch.setattr(value, "_ensure_storage_token", lambda: "bearer")
+
     value._upload_blob(
         "https://a/blob",
-        b"data",
+        archive,
         _Credentials(shared_key=base64.b64encode(b"key").decode()),
     )
+
     assert put.call_count == 2
     assert put.call_args.args[3].bearer == "bearer"
 
 
-def test_put_blob_bearer_sas_shared_key_and_missing_credentials() -> None:
+def test_put_blob_bearer_sas_shared_key_and_missing_credentials(
+    tmp_path,
+) -> None:
     value, ctx = api()
-    ctx.session.put.return_value = Response(201)
+    archive = tmp_path / "code.tar.gz"
+    archive.write_bytes(b"x")
+    bodies = []
+
+    def _put(url, *, data, headers, timeout):
+        bodies.append(data.read())
+        return Response(201)
+
+    ctx.session.put.side_effect = _put
 
     value._put_blob(
         "https://account.blob.core.windows.net/c/blob",
-        b"x",
-        "text/plain",
+        archive,
+        "application/gzip",
         _Credentials(bearer="token"),
     )
     assert (
@@ -216,45 +331,56 @@ def test_put_blob_bearer_sas_shared_key_and_missing_credentials() -> None:
 
     value._put_blob(
         "https://account.blob.core.windows.net/c/blob",
-        b"x",
-        "text/plain",
-        _Credentials(sas_token="sig=1"),
+        archive,
+        "application/gzip",
+        _Credentials(sas_token="?sig=1"),
     )
     assert ctx.session.put.call_args.args[0].endswith("?sig=1")
+    assert ctx.session.put.call_args.kwargs["headers"]["Authorization"] is None
 
     value._put_blob(
         "https://account.blob.core.windows.net/c/blob",
-        b"x",
-        "text/plain",
+        archive,
+        "application/gzip",
         _Credentials(shared_key=base64.b64encode(b"secret").decode()),
     )
     headers = ctx.session.put.call_args.kwargs["headers"]
     assert headers["Authorization"].startswith("SharedKey account:")
     assert "x-ms-date" in headers
+    assert bodies == [b"x", b"x", b"x"]
 
     with pytest.raises(ValueError, match="No credentials"):
-        value._put_blob("https://a/blob", b"x", "text/plain", _Credentials())
+        value._put_blob(
+            "https://a/blob",
+            archive,
+            "application/gzip",
+            _Credentials(),
+        )
 
 
-def test_upload_code_orchestrates_index_upload_and_registration(monkeypatch) -> None:
-    value, _ctx = api()
-    storage = _StorageInfo(
-        account_name="a",
-        container="c",
-        account_url="https://a.blob",
-        arm_id="/storage",
+def test_sas_requests_remove_inherited_arm_authorization(tmp_path) -> None:
+    value, ctx = api()
+    session = requests.Session()
+    session.headers["Authorization"] = "Bearer arm-token"
+    response = requests.Response()
+    response.status_code = 201
+    session.send = MagicMock(return_value=response)
+    ctx.session = session
+
+    value._head_blob(
+        "https://account.blob.core.windows.net/c/blob",
+        _Credentials(sas_token="sig=1"),
     )
-    monkeypatch.setattr(value, "_index_files", lambda *args: ([], {"x": b"x"}))
-    monkeypatch.setattr(value, "_ensure_default_storage", lambda: storage)
-    monkeypatch.setattr(
-        value, "_resolve_credentials", lambda _: _Credentials(bearer="token")
+    head_request = session.send.call_args.args[0]
+    assert "Authorization" not in head_request.headers
+
+    archive = tmp_path / "code.tar.gz"
+    archive.write_bytes(b"archive")
+    value._put_blob(
+        "https://account.blob.core.windows.net/c/blob",
+        archive,
+        "application/gzip",
+        _Credentials(sas_token="sig=1"),
     )
-    upload = MagicMock()
-    monkeypatch.setattr(value, "_upload_all", upload)
-    monkeypatch.setattr(value, "_register_code_version", lambda hash, store: "id")
-    monkeypatch.setattr(
-        "azure_jobs.server.az_client.ml.blob.compute_code_hash",
-        lambda files, memory: "hash",
-    )
-    assert value.upload_code("code", extra_files={"x": "x"}) == "id"
-    assert upload.call_args.kwargs["code_hash"] == "hash"
+    put_request = session.send.call_args.args[0]
+    assert "Authorization" not in put_request.headers

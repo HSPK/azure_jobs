@@ -211,6 +211,56 @@ class TestSubmissionQueue:
             queue._finish(entry.ticket, DONE, "", _ok({"name": str(i)}))
         assert len(queue.list()) <= MAX_HISTORY
 
+    def test_start_is_idempotent_and_stop_without_a_worker_is_safe(self):
+        queue = SubmissionQueue(_ok, autostart=False)
+
+        queue.stop()
+        queue.start()
+        worker = queue._worker
+        queue.start()
+
+        try:
+            assert queue._worker is worker
+        finally:
+            queue.stop()
+
+    def test_subscribe_returns_an_unsubscribe_callback(self):
+        queue = SubmissionQueue(_ok, autostart=False)
+        seen: list[str] = []
+
+        unsubscribe = queue.subscribe(lambda entry: seen.append(entry.ticket))
+        entry = queue.enqueue({"name": "job-1"})
+        unsubscribe()
+        queue._publish(entry)
+
+        assert seen == [entry.ticket]
+
+    def test_cancel_returns_false_when_pending_ticket_was_already_removed(self):
+        queue = SubmissionQueue(_ok, autostart=False)
+        entry = queue.enqueue({"name": "job-1"})
+
+        with queue._lock:
+            queue._pending.clear()
+
+        assert queue.cancel(entry.ticket) is False
+
+    def test_keyboard_interrupt_records_failure_then_reraises(self):
+        def interrupted(payload: dict) -> SubmitOutcome:
+            raise KeyboardInterrupt("stop now")
+
+        queue = SubmissionQueue(interrupted, autostart=False)
+        entry = queue.enqueue({"name": "job-1"})
+
+        with pytest.raises(KeyboardInterrupt, match="stop now"):
+            queue._execute(entry.ticket, {"name": "job-1"})
+
+        done = queue.get(entry.ticket)
+        assert done is not None
+        assert done.state == FAILED
+        assert "KeyboardInterrupt: stop now" in done.detail
+        assert done.outcome is not None
+        assert done.outcome.error == "KeyboardInterrupt: stop now"
+
 
 class TestQueuePersistence:
     def test_pending_work_survives_a_restart(self, tmp_path):
@@ -268,6 +318,29 @@ class TestQueuePersistence:
         journal.write_text("{not json", encoding="utf-8")
         queue = SubmissionQueue(_ok, journal_path=journal, autostart=False)
         assert queue.list() == []
+
+    def test_restore_skips_invalid_entries_and_nonqueued_pending_tickets(self, tmp_path):
+        journal = tmp_path / "queue.json"
+        journal.write_text(
+            """
+            {
+              "entries": [
+                {"ticket": "q-done", "name": "done", "state": "done"},
+                {"ticket": "q-bad", "name": "bad", "enqueued_at": "nope"},
+                {"ticket": "q-queued", "name": "queued", "state": "queued"}
+              ],
+              "pending": ["q-done", "q-missing", "q-queued"],
+              "payloads": {"q-queued": {"name": "queued"}}
+            }
+            """.strip(),
+            encoding="utf-8",
+        )
+
+        queue = SubmissionQueue(_ok, journal_path=journal, autostart=False)
+
+        assert queue.get("q-done").state == DONE
+        assert list(queue._pending) == ["q-queued"]
+        assert queue._payloads["q-queued"] == {"name": "queued"}
 
 
 class TestJobWatcher:

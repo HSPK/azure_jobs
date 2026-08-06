@@ -26,6 +26,38 @@ def _image_name(entry: dict[str, Any]) -> str:
     return next((name for name in names if ":" in name), names[-1] if names else "")
 
 
+def choose_auto_sing(
+    workspace: dict[str, str] | None,
+    images: list[dict[str, Any]],
+    *,
+    sku: str,
+) -> LiveCandidate | None:
+    """Build a live candidate that deliberately leaves VC selection to aj."""
+    if not workspace or not sku:
+        return None
+    image = next(
+        (_image_name(entry) for entry in images if _image_name(entry)),
+        "",
+    )
+    subscription_id = str(workspace.get("subscription_id") or "")
+    resource_group = str(workspace.get("resource_group") or "")
+    workspace_name = str(
+        workspace.get("name") or workspace.get("workspace_name") or ""
+    )
+    if not all((subscription_id, resource_group, workspace_name, image)):
+        return None
+    return LiveCandidate(
+        service="sing",
+        score=10,
+        subscription_id=subscription_id,
+        resource_group=resource_group,
+        workspace_name=workspace_name,
+        compute="",
+        image=f"amlt-sing/{image}",
+        sku=sku,
+    )
+
+
 def choose_fastest(
     workspace_pairs: list[dict[str, Any]],
     vcs: list[Any],

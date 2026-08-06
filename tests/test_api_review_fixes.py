@@ -70,6 +70,36 @@ class TestBackendSpecSurvivesTheWire:
         rebuilt = _spec_from_payload(payload)
         assert rebuilt.storage["fast"].container_name == "cont"
 
+    def test_amlt_template_and_backend_data_survive(self):
+        from azure_jobs.shared.job.render import render_amlt_yaml
+        from azure_jobs.shared.opts.aml import AmlOpts
+        from azure_jobs.shared.template.models import Template
+
+        template = Template.from_dict(
+            {
+                "target": {"service": "aml", "name": "gpu"},
+                "jobs": [{"name": "original", "sku": "G1"}],
+            }
+        )
+        spec = JobSpec(
+            name="resolved",
+            service="amlt",
+            sku="G2",
+            command=["python train.py"],
+            template=template,
+            backend_spec=AmlOpts(compute="gpu"),
+        )
+
+        rebuilt = _spec_from_payload(json.loads(json.dumps(spec.to_dict())))
+        rendered = render_amlt_yaml(rebuilt)
+
+        assert rebuilt.template is not None
+        assert rebuilt.template.raw == template.raw
+        assert rebuilt.backend_spec["compute"] == "gpu"
+        assert rendered["jobs"][0]["name"] == "resolved"
+        assert rendered["jobs"][0]["sku"] == "G2"
+        assert rendered["jobs"][0]["command"] == ["python train.py"]
+
 
 class TestRuntimeDirectoryIsTrusted:
     """A predictable /tmp path must not let another user plant a socket."""
