@@ -53,6 +53,9 @@ class QuotaError(AJError):
 class BackendError(AJError):
     """No submission backend registered for the requested service."""
 
+class SkillError(AJError):
+    """Agent Skill installation, update, or removal failed."""
+
 NETWORK_LIKE_ERRORS: tuple[type[Exception], ...] = (
     requests.RequestException,
     OSError,
@@ -86,6 +89,7 @@ __all__ = [
     "SubmissionError",
     "QuotaError",
     "BackendError",
+    "SkillError",
     "NETWORK_LIKE_ERRORS",
     "parse_exception_message",
 ]

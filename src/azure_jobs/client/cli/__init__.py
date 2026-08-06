@@ -46,6 +46,7 @@ class _LazyGroup(click.Group):
         ".daemon": ("daemon",),
         ".queue": ("queue",),
         ".watch": ("watch",),
+        ".skill": ("skill",),
     }
     _ALIASES_MODULE = "._aliases"
     _COMMAND_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
@@ -55,7 +56,7 @@ class _LazyGroup(click.Group):
             "Azure Resources",
             ("ws", "ds", "env", "image", "sku", "quota", "sa", "uai"),
         ),
-        ("Project", ("template", "config", "code")),
+        ("Project", ("template", "config", "code", "skill")),
         ("System", ("auth", "daemon")),
     )
 
@@ -176,7 +177,6 @@ class _LazyGroup(click.Group):
     help="Emit machine-readable JSON instead of Rich tables.",
 )
 def main(json_output: bool, **kwargs: Any) -> None:
-    if json_output:
-        from azure_jobs.client.ui.render import set_output_mode
+    from azure_jobs.client.ui.render import set_output_mode
 
-        set_output_mode("json")
+    set_output_mode("json" if json_output else "rich")

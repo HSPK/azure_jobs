@@ -34,6 +34,12 @@ source = "vcs"
 [tool.hatch.build.hooks.vcs]
 version-file = "src/azure_jobs/_version.py"
 
+[tool.hatch.build.targets.wheel.force-include]
+"skills/azure-jobs" = "azure_jobs/_skills/azure-jobs"
+
+[tool.hatch.build.targets.sdist.force-include]
+"skills/azure-jobs" = "skills/azure-jobs"
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = [
@@ -56,6 +62,6 @@ branch = true
 source = ["azure_jobs"]
 
 [tool.coverage.report]
-fail_under = 78
+fail_under = 95
 show_missing = true
 skip_covered = false
