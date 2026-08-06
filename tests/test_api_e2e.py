@@ -187,8 +187,15 @@ class TestDaemonCli:
         self, tmp_path, monkeypatch, allow_daemon_spawn
     ):
         from azure_jobs.client.cli.daemon import daemon_start, daemon_status, daemon_stop
+        import azure_jobs.sdk._transport as transport
 
         monkeypatch.setenv("AJ_RUNTIME_DIR", str(tmp_path))
+        monkeypatch.setenv("PATH", str(tmp_path / "no-azure-cli"))
+        monkeypatch.setattr(
+            transport,
+            "spawn_daemon",
+            lambda path: allow_daemon_spawn(path, skip_login_check=True),
+        )
         runner = CliRunner()
         started = runner.invoke(daemon_start, [])
         assert started.exit_code == 0, started.output

@@ -331,7 +331,7 @@ def _spawn_failure(exit_code: int, log_path: Path) -> str:
     return f"The aj daemon exited with status {exit_code} before it could serve:\n{reason}"
 
 
-def spawn_daemon(path: Path) -> None:
+def spawn_daemon(path: Path, *, skip_login_check: bool = False) -> None:
     """Start the daemon detached, guarded by a lock so racing CLIs spawn one."""
     secure_runtime_dir(path.parent)
     lock_path = path.parent / "spawn.lock"
@@ -351,8 +351,17 @@ def spawn_daemon(path: Path) -> None:
         log_fd = os.open(str(log_path), os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
         log_file = os.fdopen(log_fd, "wb", buffering=0)
         try:
+            command = [
+                sys.executable,
+                "-m",
+                "azure_jobs.server.main",
+                "--socket",
+                str(path),
+            ]
+            if skip_login_check:
+                command.append("--skip-login-check")
             proc = subprocess.Popen(
-                [sys.executable, "-m", "azure_jobs.server.main", "--socket", str(path)],
+                command,
                 stdout=log_file,
                 stderr=log_file,
                 stdin=subprocess.DEVNULL,
