@@ -1,131 +1,162 @@
 # Architecture
 
-`aj` is a daemon-backed CLI and Python SDK. The daemon is the only execution
-path; there is no in-process fallback.
+`aj` has four layers and one execution path. Frontends and the public SDK speak
+HTTP to the local daemon; only the daemon talks to Azure or submission tools.
 
 ## Source layout
 
 ```text
 src/azure_jobs/
-├── shared/                 transport-neutral values and pure logic
-│   ├── contract/           HTTP constants, wire models, typed errors/codecs
-│   ├── job/                JobSpec build/render/materialisation
-│   ├── template/           YAML inheritance, merge and validation
-│   ├── config/             aj_config.json models and persistence
-│   ├── opts/               typed service-specific options
-│   ├── logs.py             shared log ordering/selection policy
-│   └── utils/
-│
-├── sdk/                    public daemon client
-│   ├── __init__.py         AjClient and connect()
-│   ├── _transport.py       HTTP over UDS, daemon startup and SSE
-│   ├── account.py          account-scoped namespaces
-│   ├── workspace.py        workspace/job/resource namespaces
-│   └── logs.py             HTTP Range log reader
-│
-├── client/                 presentation frontends
-│   ├── cli/                Click commands
-│   ├── tui/                Textual dashboard
-│   └── ui/                 Rich rendering
-│
-└── server/                 daemon-only execution
-    ├── app.py              FastAPI resource routes
-    ├── runner.py           uvicorn lifecycle on a Unix socket
-    ├── context.py          per-project/workspace resources, queue and watcher
-    ├── resources.py        Azure rows → wire-model adapters
-    ├── az_client/          pure-HTTP Azure account/workspace clients
-    ├── submit/             submission backend registry and implementations
-    ├── queue.py
-    └── watch.py
+├── shared/
+│   ├── contract/       wire models, HTTP constants, typed errors/codecs
+│   ├── template/       YAML inheritance, merging, validation
+│   ├── job/            JobSpec build, command, render, write
+│   ├── config/         aj_config.json models and persistence
+│   ├── opts/           typed backend option objects
+│   ├── spec.py         shared backend description hooks
+│   └── utils/          pure filesystem, naming, time, stats helpers
+├── sdk/
+│   ├── _transport.py   httpx over UDS, autostart, versioning, SSE
+│   ├── account.py      account-scoped namespaces
+│   ├── workspace.py    workspace/job/queue/watch namespaces
+│   └── logs.py         HTTP Range reader
+├── client/
+│   ├── cli/            Click commands
+│   ├── tui/            Textual dashboard
+│   ├── skill_manager.py local Agent Skill lifecycle and ownership
+│   └── ui/             Rich/JSON presentation
+└── server/
+    ├── app.py          FastAPI `/v2` routes and SSE
+    ├── runner.py       uvicorn and UDS lifecycle
+    ├── context.py      per-project/workspace contexts
+    ├── resources.py    wire adapters and submission reconstruction
+    ├── az_client/      daemon-only Azure HTTP clients
+    └── submit/         execution registry and backends
 ```
 
-Layering is enforced by `tests/test_api_architecture.py`:
+## Layering contract
 
-| Rule | Reason |
-|---|---|
-| `shared` imports neither frontend nor server | values and pure logic stay reusable |
-| `sdk` imports neither frontend nor server | the public client knows only HTTP |
-| `client` never imports `server` | all execution crosses the wire |
-| `server` never imports `client` | the daemon runs headless |
-| Azure HTTP clients live only under `server/` | only the daemon owns Azure credentials |
-| Rich/Textual live only under `client/` | rendering never enters the daemon |
+`tests/test_api_architecture.py` enforces:
 
-## Request path
+| Rule | Consequence |
+| --- | --- |
+| `shared` imports neither client nor server | shared values stay transport-neutral |
+| `sdk` imports neither client nor server | public SDK knows only HTTP |
+| client never imports server | no hidden in-process execution |
+| server never imports client | daemon remains headless |
+| Azure clients live under server | client runs no Azure commands or token acquisition |
+| Rich/Textual live under client | presentation cannot enter shared/server code |
 
-The SDK and server use the same resource-shaped namespaces:
+The daemon is mandatory for Azure operations. If it cannot start or negotiate
+API compatibility, callers receive recovery instructions instead of a fallback
+implementation. Host-only filesystem operations such as `aj skill` remain
+client-local and never authenticate to Azure.
+
+## Request flow
 
 ```text
-d.job.list()
-  → GET /v2/workspaces/{ws}/jobs:fetch
-  → Context.job.list()
-  → AzureWorkspaceClient.job.fetch()
-
-d.sku.list()
-  → GET /v2/instance-types
-  → AzureClient.sku.list()
+Click / Textual / user Python
+  → public SDK namespace
+  → httpx request over private UDS
+  → FastAPI `/v2` route
+  → Context resource namespace
+  → Azure REST adapter or submission backend
 ```
 
-FastAPI and the SDK use direct HTTP strings. OpenAPI is the drift guard:
-`tests/test_openapi_contract.py` drives every SDK operation through a recording
-transport and checks its path, method and query parameters against the live
-FastAPI schema.
+Example:
 
-`Context` owns only state with a real lifetime:
-
-- resolved workspace and resource namespaces;
-- persistent submission queue;
-- persistent job watcher;
-- idle expiry and deterministic close.
-
-There is no generic backend/catalog facade between routes and resources.
-`resources.py` remains only where translation is required: Azure rows to wire
-`Job`/`CatalogItem`, Range readers, submission payload reconstruction, and
-cross-workspace aggregation.
-
-## Public SDK
-
-```python
-from azure_jobs import connect
-
-with connect() as d:
-    d.auth.status()
-    d.sku.list()
-    d.job.list(limit=20)              # configured workspace
-    d.ws("FastAML").ds.list()         # explicit workspace
+```text
+d.job.list(limit=20)
+  → GET /v2/workspaces/_/jobs:fetch
+  → Context.job.list(...)
+  → AzureWorkspaceClient.job.fetch(...)
 ```
 
-`d.ws()` returns the root workspace object, so `d.job is d.ws().job`.
-Account resources (`subscription`, `ws`, `sku`, `sa`, `uai`, `image`,
-`quota`, `compute`) live on the root. Workspace resources (`job`, `log`, `ds`,
-`env`, `compute`, `quota`, `queue`, `watch`) live on `WorkspaceClient`.
+Workspace resolution is daemon-side. The client sends a workspace name and
+the absolute `AJ_HOME` in `X-AJ-Root`.
 
-Transport failures are not replayed automatically. Replaying an ambiguous
-`submit()` or `queue()` response could create duplicate work; retry policy
-belongs to the caller or a future server-side idempotency key.
+## Local JobSpec build
 
-## HTTP transport
+`aj run` performs pure/local description work before crossing the socket:
 
-FastAPI/uvicorn serves ordinary HTTP on a private Unix domain socket; httpx is
-the client.
+```text
+CLI args
+  → read template and recursive bases
+  → merge config
+  → resolve node/GPU SKU placeholders
+  → build_job_spec()
+  → JobSpec.to_dict()
+```
 
-| Concern | Implementation |
-|---|---|
-| versioning | `/v2/...`, advertised by `/v2/info` |
-| socket security | `0600` socket in a `0700` user-owned directory |
-| project identity | `X-AJ-Root` on every local request |
-| log windows | HTTP `Range`, `206`, `Content-Range` |
-| server push | SSE at `/v2/events` |
-| inspection | `curl --unix-socket ... http://d/v2/info` and `/openapi.json` |
+`shared/job/build.py` is service-agnostic. It asks `shared.spec` for:
 
-The CLI retains `/v1/info` and `/v1/retire` only so `aj daemon restart` can
-replace an old process. Normal resources never fall back to v1.
+- `build_spec_backend(template)` to produce typed `AmlOpts` or `VolcanoOpts`;
+- `normalize_job_name(name)` for backend name constraints;
+- `load_spec_backend(data)` to reconstruct typed options after HTTP.
 
-HTTP is stateless: connections do not own contexts. Contexts are cached by
-`(project root, workspace target)` and reaped when idle and not busy.
+`JobSpec.backend_spec` contains typed backend configuration.
+`JobSpec.extra` contains only verbatim template `_extra`. Build never inspects
+`extra`.
+
+## Submission flow
+
+```text
+POST /v2/workspaces/{ws}/submissions
+  → resources._spec_from_payload()
+  → server.submit.get_backend(spec.service)
+  → backend.fn(spec, on_event=...)
+  → SubmitOutcome
+```
+
+Shared description hooks and daemon execution registration are separate:
+
+- `shared/spec.py` is imported on both sides;
+- `server/submit/__init__.py` owns executable backend functions.
+
+This keeps `shared/job/build.py` and client entry points closed to
+service-specific branches.
+
+## Context lifecycle
+
+HTTP connections do not own state. `ContextRegistry` caches contexts by:
+
+```text
+(absolute AJ_HOME, resolved target ID)
+```
+
+A context owns:
+
+- resolved target and workspace resource adapters;
+- Azure sessions and credential state;
+- a persistent, single-worker submission queue;
+- a persistent job watcher.
+
+Configured-workspace lookup is not cached, so `aj ws set` takes effect without
+daemon restart. Named resolution uses a bounded cache. Idle, non-busy contexts
+are reaped; queues or active watches keep a context alive. Daemon retire waits
+for accepted submissions unless forced.
+
+## Transport and API
+
+FastAPI/uvicorn serves HTTP over a UDS; httpx pools client connections.
+
+| Concern | Contract |
+| --- | --- |
+| version | `/v2`, range advertised by `/v2/info` |
+| project identity | `X-AJ-Root` |
+| client version | `X-AJ-Client` |
+| push events | SSE `/v2/events` |
+| log windows | HTTP Range and `206` |
+| inspection | `/openapi.json` and `curl --unix-socket` |
+| local security | `0700` runtime directory, `0600` socket |
+
+SDK and server paths are direct strings. OpenAPI drift tests verify that every
+SDK method maps to a served method/path/query contract. Details are in
+[API](api.md).
 
 ## Azure clients
 
-The server's Azure clients mirror the public SDK:
+The daemon's Azure clients mirror the public namespace style:
 
 ```text
 AzureClient                     AzureWorkspaceClient
@@ -139,78 +170,72 @@ AzureClient                     AzureWorkspaceClient
 └── compute
 ```
 
-They use `requests` plus `azure-identity`, not `azure-ai-ml`. `AuthSession`
-owns retry, token cache and authenticated sessions. ARM, ML data-plane and
-storage tokens are cached per scope with early refresh.
+They use `requests` and `azure-identity`, with ARM, ML data-plane, and storage
+token scopes. Temporary clients are context-managed and closed deterministically.
 
-Temporary clients are context-managed and closed deterministically.
+## Native AML and Sing backend
 
-## Submission
+The native backend:
 
-The client builds a `JobSpec` from local templates; the daemon executes it:
+1. resolves workspace/compute or Sing VC;
+2. resolves identity, environment, storage, distribution, and resources;
+3. creates one deterministic code archive;
+4. uploads/reuses one content-addressed workspace Blob;
+5. submits an Azure ML CommandJob by REST.
 
-```text
-CLI args + template
-  → shared.job.build_job_spec()
-  → d.job.submit(spec.to_dict()) or d.job.queue(...)
-  → /v2/workspaces/{ws}/submissions
-  → Context.submission
-  → server.submit registry
-  → azureml / volcano / amlt implementation
-```
+For Sing with no target name, the daemon discovers visible VCs, filters
+optional subscription/resource group, matches GPU count exactly and applies
+exact accelerator/memory filters when present, checks current user and tier
+quota, applies a per-VC NVIDIA preference when accelerator is omitted and both
+vendors match, then ranks tier, NVLink, remaining quota, and stable
+coordinates. The chosen match is carried through payload construction without
+a second lookup.
 
-Description and execution registries are intentionally separate:
+See [Submitting](submitting.md) for the archive/bootstrap contract and
+[Templates](templates.md) for target selection.
 
-- `shared/spec.py` registers typed option loaders and name normalizers needed
-  on both sides;
-- `server/submit/__init__.py` registers daemon-only execution functions.
+## Volcano backend
 
-`shared/job/build.py` must stay service-agnostic. Service-specific config lives
-in typed `Opts`; opaque aj-only template data lives under `_extra`.
+Volcano renders a Kubernetes `batch.volcano.sh/v1alpha1` Job and submits with
+`kubectl create`.
 
-### Code upload
+- typed Kubernetes resource options live in `VolcanoOpts`;
+- `pick_uploader(extra)` selects `kubectl-exec` or `blob` with a small literal
+  branch;
+- the PVC strategy uses a helper pod plus `tar | kubectl exec`;
+- the Blob strategy uses a deterministic archive, SAS, `azcopy`, and SHA-256;
+- declared Blob storage uses blobfuse2 and a mounted Secret;
+- pod-side dependencies are installed or fail loudly.
 
-Code hashing uses `(relative path, sha256(content))` pairs sorted by path.
-Ignore rules combine built-ins, template `code.ignore`, `.codeignore` and
-`.amltignore`.
+The backend normalizes names to DNS-1035. CPU-only jobs request neither GPU nor
+RDMA unless explicitly configured.
 
-- Azure ML uploads content-addressed blobs and reuses matching versions.
-- Volcano uses `kubectl-exec` or blob upload selected by its uploader seam.
-- Pod-side scripts live as resources, not large inline strings.
+## `amlt` backend
+
+`--amlt` keeps aj's template resolution but executes `amlt run` in the daemon.
+Raw template fields are preserved where possible, resolved job fields are
+overlaid, `_extra` is removed, and shell dollars are escaped for amlt.
 
 ## TUI
 
-`AjDashboard` is a composition root over the same SDK used by the CLI.
-Controllers perform I/O; stores own immutable UI state and publish typed
-events; view ports isolate Textual widgets.
+`AjDashboard` is a composition root over the public SDK:
 
-`TaskRunner` provides a bounded worker pool and cancellation. `ResourceHandle`
-leases defer closing workspace sessions and Range readers until active work
-finishes. Logs use one-shot timer-driven Range reads so idle polling does not
-occupy a worker.
+- controllers own I/O and workflows;
+- stores own canonical immutable UI state;
+- typed events connect features;
+- view ports isolate Textual widgets;
+- `TaskRunner` bounds workers and cancellation;
+- session handles defer close until active leases finish;
+- log polling uses short Range reads rather than occupying a worker.
 
-## Remote HTTP feasibility
+The TUI never imports Azure clients.
 
-Read-only TCP exposure is mechanically easy because the app already speaks
-HTTP. Cross-machine submission is not just a different bind address:
+## Remote boundary
 
-| Local assumption | Remote requirement |
-|---|---|
-| socket permissions authenticate the caller | TLS plus mTLS or OIDC and authorization |
-| `X-AJ-Root` is a trusted local path | authorized project ID |
-| `JobSpec.code_dir` is visible to the daemon | content-addressed artifact upload |
-| journals live under project root | server-owned tenant/project state |
-| one user receives all SSE events | principal/project-filtered streams |
-| daemon Azure CLI identity is the user | explicit service or delegated identity model |
-| local submit may collect `~/.ssh` | remote mode must never read server-home SSH keys |
+Remote HTTP is not implemented. A TCP bind would invalidate assumptions about
+socket identity, trusted local paths, code visibility, journals, events,
+credentials, and SSH collection.
 
-Recommended flow:
-
-1. upload/touch a source artifact by content hash;
-2. submit explicit workspace coordinates, artifact ID and `Idempotency-Key`;
-3. return `202 Accepted` with a queue ticket;
-4. observe through authorized GET/SSE resources.
-
-UDS remains the zero-configuration default. A remote URL should be explicit,
-must not autostart a process, and should be added only after artifact storage,
-authentication, authorization, tenant isolation and event filtering exist.
+A future remote design needs authenticated artifact upload, authorization,
+tenant isolation, server-owned state, filtered SSE, explicit identity, and
+idempotency. UDS remains the only supported transport.

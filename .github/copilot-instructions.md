@@ -12,7 +12,7 @@ managing Azure ML, Singularity and Volcano jobs through templates.
 uv pip install -e .
 
 # Install for end users
-pipx install azure_jobs
+uv tool install azure-jobs
 
 # Run CLI
 aj --help

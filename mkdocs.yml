@@ -1,5 +1,5 @@
 site_name: Azure Jobs
-site_description: Fast, lightweight CLI for submitting Azure ML jobs via pure REST APIs.
+site_description: Daemon-backed CLI, TUI, and SDK for Azure ML job workflows.
 site_url: https://hspk.github.io/azure_jobs/
 repo_url: https://github.com/HSPK/azure_jobs
 repo_name: HSPK/azure_jobs
@@ -51,17 +51,22 @@ theme:
 
 nav:
   - Home: index.md
-  - Tutorial: tutorial.md
+  - User guide:
+      - Getting started: getting-started.md
+      - Templates: templates.md
+      - Submitting: submitting.md
+      - Jobs: jobs.md
+      - Resources and configuration: resources.md
+      - Agent Skill: skills.md
+  - Python SDK: sdk.md
   - Reference:
-      - Commands: commands.md
-      - Configuration: configuration.md
-      - Environment Vars: env_vars.md
-      - REST API: rest-api.md
-      - SDK: sdk.md
+      - Environment variables: environment.md
+      - HTTP and Azure APIs: api.md
   - Internals:
       - Architecture: architecture.md
-      - Comparison: comparison.md
-      - Roadmap: roadmap.md
+      - Development: development.md
+      - Testing: testing.md
+      - Agent guide: agent-guide.md
 
 markdown_extensions:
   - abbr
@@ -112,4 +117,4 @@ extra:
       link: https://pypi.org/project/azure-jobs/
   generator: false
 
-copyright: Copyright &copy; 2025 Azure Jobs contributors
+copyright: Copyright &copy; 2026 Azure Jobs contributors
