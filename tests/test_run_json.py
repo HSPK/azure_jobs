@@ -7,11 +7,11 @@ import json
 import sys
 from unittest.mock import MagicMock
 
-from azure_jobs.backend.azureml.opts import AmlOpts
-from azure_jobs.journal import JobRecord
-from azure_jobs.job.spec import JobSpec, JobResult
-from azure_jobs.template import Template
-from azure_jobs.utils.ui import (
+from azure_jobs.shared.opts.aml import AmlOpts
+from azure_jobs.shared.journal import JobRecord
+from azure_jobs.shared.job.spec import JobSpec, JobResult
+from azure_jobs.shared.template import Template
+from azure_jobs.client.ui import (
     set_output_mode,
     show_dry_run_result,
     show_submission_preview,
@@ -205,7 +205,7 @@ class TestSubmitAndRecordJson:
         set_output_mode("rich")
 
     def test_no_spinner_no_log_lines_in_json(self):
-        from azure_jobs.cli.runner import submit_and_record
+        from azure_jobs.client.cli.runner import submit_and_record
 
         set_output_mode("json")
         req = _make_request()
@@ -230,7 +230,7 @@ class TestSubmitAndRecordJson:
         # log_record writes to disk; patch it to no-op.
         from unittest.mock import patch
 
-        with patch("azure_jobs.cli.runner.log_record"):
+        with patch("azure_jobs.client.cli.runner.log_record"):
             out = _capture_stdout(
                 lambda: submit_and_record(
                     _fake_submit, rec, display_name=req.name, backend_label="X"
@@ -244,7 +244,7 @@ class TestSubmitAndRecordJson:
         assert "[bold" not in out
 
     def test_failure_emits_json_and_exits_nonzero(self):
-        from azure_jobs.cli.runner import submit_and_record
+        from azure_jobs.client.cli.runner import submit_and_record
 
         set_output_mode("json")
         req = _make_request()
@@ -259,7 +259,7 @@ class TestSubmitAndRecordJson:
 
         from unittest.mock import patch
 
-        with patch("azure_jobs.cli.runner.log_record"):
+        with patch("azure_jobs.client.cli.runner.log_record"):
             try:
                 out = _capture_stdout(
                     lambda: submit_and_record(

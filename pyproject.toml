@@ -12,10 +12,17 @@ dependencies = [
     "textual>=1.0.0",
     "requests>=2.31.0",
     "azure-identity>=1.15.0",
+    # Client/server transport: HTTP over a Unix domain socket, the same shape
+    # dockerd exposes. Buys a battle-tested server (concurrency, timeouts,
+    # graceful shutdown), `curl --unix-socket` debuggability, and versioned
+    # paths, in place of a hand-rolled JSON-RPC loop.
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "httpx>=0.27",
 ]
 
 [project.scripts]
-aj = "azure_jobs.cli:main"
+aj = "azure_jobs.client.cli:main"
 
 [build-system]
 requires = ["hatchling", "hatch-vcs"]
@@ -27,8 +34,19 @@ source = "vcs"
 [tool.hatch.build.hooks.vcs]
 version-file = "src/azure_jobs/_version.py"
 
+[tool.hatch.build.targets.wheel.force-include]
+"skills/azure-jobs" = "azure_jobs/_skills/azure-jobs"
+
+[tool.hatch.build.targets.sdist.force-include]
+"skills/azure-jobs" = "skills/azure-jobs"
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "stress: local concurrency/load tests that never submit real jobs",
+    "live: opt-in test that submits one real Azure job",
+    "azure_unit: mocked HTTP tests for real Azure resolver implementations",
+]
 
 [dependency-groups]
 dev = [
@@ -36,4 +54,14 @@ dev = [
     "mkdocs-material>=9.5",
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
+    "pytest-cov>=6.0",
 ]
+
+[tool.coverage.run]
+branch = true
+source = ["azure_jobs"]
+
+[tool.coverage.report]
+fail_under = 95
+show_missing = true
+skip_covered = false

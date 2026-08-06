@@ -1,82 +1,95 @@
----
-hide:
-  - navigation
-  - toc
----
-
 # Azure Jobs
 
-<p style="font-size: 1.25rem; margin-top: -0.5rem;">
-Fast, lightweight CLI for submitting Azure ML jobs through pure REST APIs —
-no <code>azure-ai-ml</code> SDK, no <code>amlt</code> runtime.
-</p>
+Azure Jobs (`aj`) provides one local interface for template-driven jobs on
+Azure Machine Learning, native Singularity, Kubernetes Volcano, and `amlt`.
 
-<div class="grid cards" markdown>
-
--   :material-rocket-launch: **Zero-friction submits**
-
-    ---
-
-    `aj run -t gpu train.py` and you're on the cluster. SKU resolution,
-    code upload, env injection — all handled.
-
--   :material-file-tree: **Composable templates**
-
-    ---
-
-    YAML inheritance via `base` chains. Compose `account · storage ·
-    environment` building blocks; override only what you need.
-
--   :material-puzzle: **Three backends, one CLI**
-
-    ---
-
-    Native REST (AML / Singularity), `amlt`, or Kubernetes Volcano —
-    behind a single dispatch surface.
-
--   :material-chart-box: **Built-in tracking**
-
-    ---
-
-    `aj job list / show / logs / stats`, an interactive TUI dashboard,
-    and a local `record.jsonl` for every submit.
-
-</div>
-
----
+The CLI, Textual dashboard, and public Python SDK are clients. Azure
+authentication, discovery, submission, queueing, watching, and log access run
+in a background daemon. Communication is HTTP over a private Unix domain
+socket; no client falls back to running Azure work in-process.
 
 ## Install
 
 ```bash
-pipx install azure_jobs
+uv tool install azure-jobs
+az login
+aj auth status
 ```
 
-Requires `az login`. The Volcano backend additionally needs `kubectl`.
+Requirements:
 
-## Quickstart
+- Python 3.10 or newer;
+- Azure CLI for authentication and daemon-side discovery;
+- `kubectl` for Volcano;
+- `amlt` only for `aj run --amlt`.
+
+## Five-minute flow
 
 ```bash
-mkdir my-project && cd my-project
-aj init                          # scaffold .azure_jobs/, register workspace
-aj pull <user>/<repo>            # (optional) clone shared templates
-aj run -t gpu train.py           # submit
+mkdir training && cd training
+
+# Interactive: pull a template repository, choose a workspace, set experiment.
+aj init
+
+aj template list
+aj template show <template>
+aj run -t <template> -d python -c "print('hello')"
+aj run -t <template> python -c "print('hello')"
+
+aj job status <job-or-aj-id>
+aj job logs <job-or-aj-id>
+aj job cancel <job-or-aj-id>
 ```
 
-`.py` runs via `uv run`, `.sh` via `bash`. Drop a `.codeignore` at the
-project root to prune the upload.
+No shared templates? Configure the workspace and author one locally:
 
-[Open the full tutorial :material-arrow-right:](tutorial.md){ .md-button .md-button--primary }
-[See all commands](commands.md){ .md-button }
+```bash
+mkdir -p .azure_jobs/template
+aj ws set
+aj config experiment training
+```
 
----
+Continue with [Getting started](getting-started.md) for a complete first
+submission and [Templates](templates.md) for copyable YAML.
 
-## Where to go
+## Daily workflow
 
-| If you want to…                              | Read                                        |
-|----------------------------------------------|---------------------------------------------|
-| Submit your first job end-to-end             | [Tutorial](tutorial.md)                     |
-| Look up a specific command or flag           | [Commands](commands.md)                     |
-| Write or extend templates                    | [Configuration](configuration.md)           |
-| Use `aj` as a Python library                 | [SDK](sdk.md)                               |
-| Understand how it all fits together          | [Architecture](architecture.md)             |
-| Compare against `amlt` / `azure-ai-ml`       | [Comparison](comparison.md)                 |
+```bash
+aj run --queue -t <template> python -c "print('hello')"
+aj queue list
+aj watch add <job>
+aj watch listen
+aj dash
+
+aj quota list
+aj sku list
+aj ds list
+aj env list
+```
+
+Use `aj --help` as the command source of truth. Its top-level groups are:
+
+| Group | Commands |
+| --- | --- |
+| Getting Started | `init`, `run`, `dash` |
+| Jobs | `job`, `exp`, `queue`, `watch`, `list` |
+| Azure Resources | `ws`, `ds`, `env`, `image`, `sku`, `quota`, `sa`, `uai` |
+| Project | `template`, `config`, `code`, `skill` |
+| System | `auth`, `daemon` |
+
+## Documentation map
+
+| Need | Page |
+| --- | --- |
+| Install, authenticate, and submit once | [Getting started](getting-started.md) |
+| Author AML, Sing, or Volcano YAML | [Templates](templates.md) |
+| Understand flags and upload behavior | [Submitting](submitting.md) |
+| Query, log, cancel, queue, watch, or use the TUI | [Jobs](jobs.md) |
+| Find resource, config, auth, and daemon commands | [Resources](resources.md) |
+| Install the Agent Skill for Copilot, Codex, or Claude | [Agent Skill](skills.md) |
+| Automate through Python | [SDK](sdk.md) |
+| Look up `AJ_*` variables | [Environment](environment.md) |
+| Understand HTTP/OpenAPI and Azure REST clients | [API](api.md) |
+| Understand layering and backend flow | [Architecture](architecture.md) |
+| Change or test the repository | [Development](development.md), [Testing](testing.md) |
+| Give an agent repository facts and constraints | [Agent guide](agent-guide.md) |

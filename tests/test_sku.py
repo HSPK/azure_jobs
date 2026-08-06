@@ -5,12 +5,13 @@ from __future__ import annotations
 import pytest
 from click.testing import CliRunner
 
-from azure_jobs.cli import main
-from azure_jobs.az_client.arm import InstanceTypeInfo, VCInfo
-from azure_jobs.errors import SkuResolveError
-from azure_jobs.backend.azureml.sku import (
+from azure_jobs.client.cli import main
+from azure_jobs.server.az_client.arm import InstanceTypeInfo, SlaTierQuota, VCInfo
+from azure_jobs.shared.errors import SkuResolveError
+from azure_jobs.server.submit.azureml.sku_match import match_instance_type
+from azure_jobs.shared.sku import (
     SkuSpec,
-    match_instance_type,
+
 )
 
 # ---------------------------------------------------------------------------
@@ -86,7 +87,7 @@ class TestSkuSpecParse:
 
 class TestRowToInfo:
     def test_parses_scratch_storage(self):
-        from azure_jobs.az_client.arm.instance_types import _row_to_info
+        from azure_jobs.server.az_client.arm.instance_types import _row_to_info
 
         row = {
             "name": "Singularity.ND96isr_H100_v5",
@@ -106,7 +107,7 @@ class TestRowToInfo:
         assert info.nvlink is True
 
     def test_scratch_missing(self):
-        from azure_jobs.az_client.arm.instance_types import _row_to_info
+        from azure_jobs.server.az_client.arm.instance_types import _row_to_info
 
         row = {
             "name": "Singularity.E16ads_v5",
@@ -180,14 +181,14 @@ class _FakeInstanceTypes:
     def __init__(self, catalog):
         self._catalog = catalog
 
-    def list(self, location, *, subscription_id=""):
+    def list(self, location, *, subscription_id="", strict=False):
         return list(self._catalog)
 
 
 class FakeArm:
     def __init__(self, vcs=(), catalog=()):
         self.vc = _FakeVc(list(vcs))
-        self.instance_types = _FakeInstanceTypes(list(catalog))
+        self.sku = _FakeInstanceTypes(list(catalog))
 
 
 _SERIES_HW = {
@@ -201,7 +202,7 @@ _SERIES_HW = {
 
 
 def _vc(name="vc", series=("Eadsv5", "NDAMv4", "NDv4")):
-    from azure_jobs.az_client.arm import SeriesQuota, SlaTierQuota
+    from azure_jobs.server.az_client.arm import SeriesQuota, SlaTierQuota
 
     vc = VCInfo(
         name=name,
@@ -247,6 +248,26 @@ class TestResolveInstanceType:
             tier="Premium",
         )
         assert result.instances and result.instances[0].short_name == "E4ads_v5"
+
+    def test_cpu_quota_uses_selected_instance_vcpu_count(self):
+        vc_obj = _vc(series=("Eadsv5",))
+        vc_obj.quotas[0].user_limit = SlaTierQuota(limit=1, used=0)
+        vc_obj.quotas[0].tiers["Premium"] = SlaTierQuota(limit=1, used=0)
+        arm = FakeArm(
+            vcs=[vc_obj],
+            catalog=[_cpu_row("Eadsv5", "E16ads_v5", cores=16)],
+        )
+
+        with pytest.raises(
+            SkuResolveError,
+            match=r"user quota < 16 vCPU\(s\).*available 1",
+        ):
+            match_instance_type(
+                "1xC1",
+                vc=vc_obj,
+                client=arm,
+                tier="Premium",
+            )
 
     def test_gpu_a100_80g_nvlink(self):
         vc_obj = _vc(series=("NDAMv4", "NDv4"))

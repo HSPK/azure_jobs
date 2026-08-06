@@ -7,11 +7,11 @@ import threading
 
 import pytest
 
-from azure_jobs.errors import DeleteOutcomeUncertain, RestError
-from azure_jobs.tui.app import AjDashboard
-from azure_jobs.tui.settings import DEFAULT_DASHBOARD_LAST
-from azure_jobs.tui.models import Job, Workspace
-from azure_jobs.tui.ports import Cursor, JobPage
+from azure_jobs.shared.errors import DeleteOutcomeUncertain, RestError
+from azure_jobs.client.tui.app import AjDashboard
+from azure_jobs.client.tui.settings import DEFAULT_DASHBOARD_LAST
+from azure_jobs.client.tui.models import Job
+from azure_jobs.shared.contract.models import Cursor, JobPage, Target
 
 
 def _job(index: int, status: str = "Running") -> Job:
@@ -25,12 +25,28 @@ def _job(index: int, status: str = "Running") -> Job:
     )
 
 
+def _workspace(subscription_id: str, resource_group: str, name: str) -> Target:
+    return Target.create(
+        backend="azureml",
+        native_id=f"{subscription_id}/{resource_group}/{name}",
+        label=name,
+        detail=resource_group,
+        metadata={
+            "subscription_id": subscription_id,
+            "resource_group": resource_group,
+            "workspace_name": name,
+        },
+    )
+
+
 class _PagedJobs:
+    can_act = True
+
     def __init__(self, jobs: list[Job]) -> None:
         self.values = jobs
         self.calls: list[tuple[str | None, int]] = []
 
-    def list_page(self, cursor, *, limit, query) -> JobPage:
+    def page(self, cursor, *, limit, query) -> JobPage:
         token = cursor.token if cursor else None
         self.calls.append((token, limit))
         start = int(token or 0)
@@ -38,8 +54,10 @@ class _PagedJobs:
         following = Cursor(str(end)) if end < len(self.values) else None
         return JobPage(tuple(self.values[start:end]), following)
 
-    def get(self, job) -> Job:
-        return next(value for value in self.values if value.backend_ref == job.backend_ref)
+    def status(self, job) -> Job:
+        return next(
+            value for value in self.values if value.backend_ref == job.backend_ref
+        )
 
     def cancel(self, job) -> None:
         return None
@@ -49,7 +67,7 @@ class _PagedJobs:
 
 
 class _Logs:
-    def list_files(self, job_name, *, cancelled=None):
+    def list(self, job_name, *, cancelled=None):
         return []
 
     def pick_default(self, files):
@@ -61,10 +79,8 @@ class _Logs:
 
 class _Session:
     def __init__(self, jobs: _PagedJobs) -> None:
-        self.jobs = jobs
-        self.actions = jobs
-        self.delete_jobs = jobs
-        self.logs = _Logs()
+        self.job = jobs
+        self.log = _Logs()
         self.closed = False
 
     def close(self) -> None:
@@ -75,17 +91,17 @@ class _Factory:
     def __init__(self, jobs: _PagedJobs) -> None:
         self.jobs = jobs
 
-    def open(self, workspace):
+    def __call__(self, workspace):
         return _Session(self.jobs)
 
 
 class _Catalog:
-    workspace = Workspace("sub", "rg", "ws")
+    workspace = _workspace("sub", "rg", "ws")
 
-    def configured(self):
+    def current(self):
         return self.workspace
 
-    def discover(self):
+    def list(self):
         return (self.workspace,)
 
 
@@ -102,7 +118,7 @@ async def test_initial_fetch_honors_last_and_loads_declared_scope(
     tmp_path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setattr("azure_jobs.const.AJ_CONFIG", tmp_path / "config.json")
+    monkeypatch.setattr("azure_jobs.shared.const.AJ_CONFIG", tmp_path / "config.json")
     jobs = _PagedJobs([_job(index) for index in range(8)])
     app = AjDashboard(
         last=5,
@@ -135,7 +151,7 @@ async def test_right_arrow_loads_beyond_initial_scope(
     tmp_path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setattr("azure_jobs.const.AJ_CONFIG", tmp_path / "config.json")
+    monkeypatch.setattr("azure_jobs.shared.const.AJ_CONFIG", tmp_path / "config.json")
     jobs = _PagedJobs([_job(index) for index in range(130)])
     app = AjDashboard(
         last=50,
@@ -186,7 +202,7 @@ async def test_filter_fetches_more_until_page_has_50_matches(
     tmp_path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setattr("azure_jobs.const.AJ_CONFIG", tmp_path / "config.json")
+    monkeypatch.setattr("azure_jobs.shared.const.AJ_CONFIG", tmp_path / "config.json")
     values = [
         _job(
             index,
@@ -225,7 +241,7 @@ async def test_delete_refills_current_page_to_50(
     tmp_path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setattr("azure_jobs.const.AJ_CONFIG", tmp_path / "config.json")
+    monkeypatch.setattr("azure_jobs.shared.const.AJ_CONFIG", tmp_path / "config.json")
     jobs = _DeleteJobs(
         [_job(index, status="Completed") for index in range(120)]
     )
@@ -261,7 +277,7 @@ async def test_refresh_replaces_loaded_snapshot_and_keeps_stable_selection(
     tmp_path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setattr("azure_jobs.const.AJ_CONFIG", tmp_path / "config.json")
+    monkeypatch.setattr("azure_jobs.shared.const.AJ_CONFIG", tmp_path / "config.json")
     jobs = _PagedJobs([_job(0), _job(1), _job(2)])
     app = AjDashboard(
         last=3,
@@ -295,7 +311,7 @@ async def test_async_job_updates_do_not_steal_selection(
     tmp_path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setattr("azure_jobs.const.AJ_CONFIG", tmp_path / "config.json")
+    monkeypatch.setattr("azure_jobs.shared.const.AJ_CONFIG", tmp_path / "config.json")
     jobs = _PagedJobs([_job(0), _job(1)])
     app = AjDashboard(
         last=2,
@@ -336,7 +352,7 @@ async def test_page_change_switches_active_log_job(
     tmp_path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setattr("azure_jobs.const.AJ_CONFIG", tmp_path / "config.json")
+    monkeypatch.setattr("azure_jobs.shared.const.AJ_CONFIG", tmp_path / "config.json")
     jobs = _PagedJobs([_job(0), _job(1)])
     app = AjDashboard(
         last=2,
@@ -373,7 +389,7 @@ async def test_cancel_update_resumes_incomplete_scope_loading(
     tmp_path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setattr("azure_jobs.const.AJ_CONFIG", tmp_path / "config.json")
+    monkeypatch.setattr("azure_jobs.shared.const.AJ_CONFIG", tmp_path / "config.json")
     jobs = _PagedJobs([_job(0)])
     app = AjDashboard(
         last=3,
@@ -406,7 +422,7 @@ class _BlockingJobs(_PagedJobs):
         self.started = threading.Event()
         self.release = threading.Event()
 
-    def list_page(self, cursor, *, limit, query) -> JobPage:
+    def page(self, cursor, *, limit, query) -> JobPage:
         self.started.set()
         self.release.wait(2)
         return super().list_page(cursor, limit=limit, query=query)
@@ -417,7 +433,7 @@ class _WorkspaceFactory:
         self.sources = sources
         self.sessions: dict[str, _Session] = {}
 
-    def open(self, workspace):
+    def __call__(self, workspace):
         session = _Session(self.sources[workspace.key])
         self.sessions[workspace.key] = session
         return session
@@ -428,9 +444,9 @@ async def test_workspace_switch_drops_inflight_old_result(
     tmp_path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setattr("azure_jobs.const.AJ_CONFIG", tmp_path / "config.json")
-    first = Workspace("sub", "rg-a", "ws-a")
-    second = Workspace("sub", "rg-b", "ws-b")
+    monkeypatch.setattr("azure_jobs.shared.const.AJ_CONFIG", tmp_path / "config.json")
+    first = _workspace("sub", "rg-a", "ws-a")
+    second = _workspace("sub", "rg-b", "ws-b")
     old_jobs = _BlockingJobs([_job(0)])
     new_jobs = _PagedJobs([_job(9)])
     factory = _WorkspaceFactory(
@@ -438,10 +454,10 @@ async def test_workspace_switch_drops_inflight_old_result(
     )
 
     class Catalog:
-        def configured(self):
+        def current(self):
             return first
 
-        def discover(self):
+        def list(self):
             return (first, second)
 
     app = AjDashboard(
@@ -472,20 +488,27 @@ async def test_optional_capabilities_disable_actions_without_stuck_info(
     tmp_path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setattr("azure_jobs.const.AJ_CONFIG", tmp_path / "config.json")
+    monkeypatch.setattr("azure_jobs.shared.const.AJ_CONFIG", tmp_path / "config.json")
     jobs = _PagedJobs([_job(0)])
+
+    class _ReadOnlyJobs:
+        """A namespace that lists but cannot act, so the UI must not offer it."""
+
+        can_act = False
+
+        def __init__(self, inner):
+            self.page = inner.page
 
     class Session:
         def __init__(self):
-            self.jobs = jobs
-            self.actions = None
-            self.logs = None
+            self.job = _ReadOnlyJobs(jobs)
+            self.log = None
 
         def close(self):
             return None
 
     class Factory:
-        def open(self, target):
+        def __call__(self, target):
             return Session()
 
     app = AjDashboard(
@@ -529,10 +552,10 @@ class _UncertainDeleteJobs(_DeleteJobs):
         self.values = []
         raise DeleteOutcomeUncertain("accepted but monitor unavailable")
 
-    def get(self, job):
+    def status(self, job):
         if not self.values:
             raise RestError("job not found", status_code=404)
-        return super().get(job)
+        return super().status(job)
 
 
 @pytest.mark.asyncio
@@ -540,7 +563,7 @@ async def test_delete_terminal_job_updates_selection(
     tmp_path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setattr("azure_jobs.const.AJ_CONFIG", tmp_path / "config.json")
+    monkeypatch.setattr("azure_jobs.shared.const.AJ_CONFIG", tmp_path / "config.json")
     jobs = _DeleteJobs(
         [_job(0, status="Completed"), _job(1, status="Failed")]
     )
@@ -580,7 +603,7 @@ async def test_delete_failure_restores_job_info(
     tmp_path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setattr("azure_jobs.const.AJ_CONFIG", tmp_path / "config.json")
+    monkeypatch.setattr("azure_jobs.shared.const.AJ_CONFIG", tmp_path / "config.json")
     jobs = _DeleteJobs([_job(0, status="Completed")], fail=True)
     app = AjDashboard(
         last=1,
@@ -611,7 +634,7 @@ async def test_delete_command_disabled_for_running_job(
     tmp_path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setattr("azure_jobs.const.AJ_CONFIG", tmp_path / "config.json")
+    monkeypatch.setattr("azure_jobs.shared.const.AJ_CONFIG", tmp_path / "config.json")
     jobs = _DeleteJobs([_job(0, status="Running")])
     app = AjDashboard(
         last=1,
@@ -633,7 +656,7 @@ async def test_uncertain_delete_reconciles_after_authoritative_absence(
     tmp_path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setattr("azure_jobs.const.AJ_CONFIG", tmp_path / "config.json")
+    monkeypatch.setattr("azure_jobs.shared.const.AJ_CONFIG", tmp_path / "config.json")
     jobs = _UncertainDeleteJobs([_job(0, status="Completed")])
     app = AjDashboard(
         last=1,
@@ -662,7 +685,7 @@ async def test_failed_target_connection_can_retry_same_target(
     tmp_path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setattr("azure_jobs.const.AJ_CONFIG", tmp_path / "config.json")
+    monkeypatch.setattr("azure_jobs.shared.const.AJ_CONFIG", tmp_path / "config.json")
     target = _Catalog.workspace
     jobs = _PagedJobs([_job(0)])
 
@@ -670,7 +693,7 @@ async def test_failed_target_connection_can_retry_same_target(
         def __init__(self):
             self.calls = 0
 
-        def open(self, selected):
+        def __call__(self, selected):
             self.calls += 1
             if self.calls == 1:
                 raise OSError("temporary auth failure")
@@ -705,7 +728,7 @@ async def test_cancel_post_submit_status_failure_triggers_refresh(
     tmp_path,
     monkeypatch,
 ) -> None:
-    monkeypatch.setattr("azure_jobs.const.AJ_CONFIG", tmp_path / "config.json")
+    monkeypatch.setattr("azure_jobs.shared.const.AJ_CONFIG", tmp_path / "config.json")
     job = _job(0)
 
     class Actions(_PagedJobs):
@@ -713,7 +736,7 @@ async def test_cancel_post_submit_status_failure_triggers_refresh(
             super().__init__([job])
             self.cancelled = False
 
-        def get(self, ref):
+        def status(self, ref):
             if self.cancelled:
                 raise OSError("status unavailable")
             return job
@@ -725,15 +748,14 @@ async def test_cancel_post_submit_status_failure_triggers_refresh(
 
     class Session:
         def __init__(self):
-            self.jobs = actions
-            self.actions = actions
-            self.logs = None
+            self.job = actions
+            self.log = None
 
         def close(self):
             return None
 
     class Factory:
-        def open(self, target):
+        def __call__(self, target):
             return Session()
 
     app = AjDashboard(
@@ -775,10 +797,10 @@ def test_get_page_size_clamps_stored_config(stored, expected, monkeypatch):
     """A stored config must never crash ``aj dash`` (only CLI flags are strict)."""
     from types import SimpleNamespace
 
-    from azure_jobs.tui import helpers
+    from azure_jobs.client.tui import helpers
 
     monkeypatch.setattr(
-        "azure_jobs.config.read_config",
+        "azure_jobs.shared.config.read_config",
         lambda: SimpleNamespace(dashboard=SimpleNamespace(page_size=stored)),
     )
     assert helpers.get_page_size() == expected

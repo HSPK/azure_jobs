@@ -10,8 +10,8 @@ import json
 
 from click.testing import CliRunner
 
-from azure_jobs.cli import main
-from azure_jobs.utils.ui import set_output_mode
+from azure_jobs.client.cli import main
+from azure_jobs.client.ui import set_output_mode
 
 
 def _capture_aj(args: list[str]) -> str:

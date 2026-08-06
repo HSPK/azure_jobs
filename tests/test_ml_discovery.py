@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-from azure_jobs.az_client import WorkspaceInfo, fetch_jobs_all_workspaces
+from azure_jobs.server.az_client import fetch_jobs_all_workspaces
+from azure_jobs.shared.types.azure import WorkspaceInfo
 
 
 def _make_ws(name: str) -> WorkspaceInfo:
@@ -13,19 +14,21 @@ def _make_ws(name: str) -> WorkspaceInfo:
     )
 
 
-@patch("azure_jobs.az_client.AzureMLClient")
-@patch("azure_jobs.az_client.AzureARMClient")
+@patch("azure_jobs.server.az_client.ml.AzureWorkspaceClient")
+@patch("azure_jobs.server.az_client.arm.AzureClient")
 class TestFetchJobsAllWorkspaces:
     def test_returns_empty_when_no_workspaces(self, mock_arm_cls, mock_ml_cls):
         arm = MagicMock()
-        arm.workspace.list.return_value = []
+        arm.__enter__.return_value = arm
+        arm.ws.list.return_value = []
         mock_arm_cls.return_value = arm
 
         assert fetch_jobs_all_workspaces(10) == []
 
     def test_merges_jobs_from_multiple_workspaces(self, mock_arm_cls, mock_ml_cls):
         arm = MagicMock()
-        arm.workspace.list.return_value = [_make_ws("ws1"), _make_ws("ws2")]
+        arm.__enter__.return_value = arm
+        arm.ws.list.return_value = [_make_ws("ws1"), _make_ws("ws2")]
         mock_arm_cls.return_value = arm
 
         ws_jobs = {
@@ -35,8 +38,9 @@ class TestFetchJobsAllWorkspaces:
 
         def _client_factory(*args, **kwargs):
             m = MagicMock()
+            m.__enter__.return_value = m
             ws = kwargs.get("workspace_name", "")
-            m.jobs.fetch.return_value = [dict(j) for j in ws_jobs[ws]]
+            m.job.fetch.return_value = [dict(j) for j in ws_jobs[ws]]
             return m
 
         mock_ml_cls.side_effect = _client_factory
@@ -47,11 +51,13 @@ class TestFetchJobsAllWorkspaces:
 
     def test_workspace_name_tagged_on_jobs(self, mock_arm_cls, mock_ml_cls):
         arm = MagicMock()
-        arm.workspace.list.return_value = [_make_ws("my-ws")]
+        arm.__enter__.return_value = arm
+        arm.ws.list.return_value = [_make_ws("my-ws")]
         mock_arm_cls.return_value = arm
 
         client = MagicMock()
-        client.jobs.fetch.return_value = [{"name": "j1"}]
+        client.__enter__.return_value = client
+        client.job.fetch.return_value = [{"name": "j1"}]
         mock_ml_cls.return_value = client
 
         result = fetch_jobs_all_workspaces(5)
@@ -61,16 +67,18 @@ class TestFetchJobsAllWorkspaces:
         self, mock_arm_cls, mock_ml_cls
     ):
         arm = MagicMock()
-        arm.workspace.list.return_value = [_make_ws("good"), _make_ws("bad")]
+        arm.__enter__.return_value = arm
+        arm.ws.list.return_value = [_make_ws("good"), _make_ws("bad")]
         mock_arm_cls.return_value = arm
 
         def _client_factory(*args, **kwargs):
             m = MagicMock()
+            m.__enter__.return_value = m
             ws = kwargs.get("workspace_name", "")
             if ws == "bad":
-                m.jobs.fetch.side_effect = RuntimeError("auth error")
+                m.job.fetch.side_effect = RuntimeError("auth error")
             else:
-                m.jobs.fetch.return_value = [{"name": "j1"}]
+                m.job.fetch.return_value = [{"name": "j1"}]
             return m
 
         mock_ml_cls.side_effect = _client_factory
@@ -88,12 +96,14 @@ class TestFetchJobsAllWorkspaces:
 
     def test_handles_all_workspaces_failing(self, mock_arm_cls, mock_ml_cls):
         arm = MagicMock()
-        arm.workspace.list.return_value = [_make_ws("ws1"), _make_ws("ws2")]
+        arm.__enter__.return_value = arm
+        arm.ws.list.return_value = [_make_ws("ws1"), _make_ws("ws2")]
         mock_arm_cls.return_value = arm
 
         def _client_factory(*args, **kwargs):
             m = MagicMock()
-            m.jobs.fetch.side_effect = RuntimeError("network error")
+            m.__enter__.return_value = m
+            m.job.fetch.side_effect = RuntimeError("network error")
             return m
 
         mock_ml_cls.side_effect = _client_factory

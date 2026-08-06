@@ -2,19 +2,18 @@
 
 from __future__ import annotations
 
-import json
 from unittest.mock import MagicMock, patch
 
 import pytest
 from click.testing import CliRunner
 
-from azure_jobs.cli import main
+from azure_jobs.client.cli import main
 
 
 @pytest.fixture(autouse=True)
 def _mock_find_az():
     """Ensure tests don't depend on ``az`` being installed."""
-    with patch("azure_jobs.config.find_az", return_value="az"):
+    with patch("azure_jobs.shared.utils.fs.find_az", return_value="az"):
         yield
 
 
@@ -35,13 +34,28 @@ _ACCOUNT = {
 }
 
 
-def _mock_az_account_show(returncode: int = 0, stdout: str = "") -> MagicMock:
-    """Create a mock for ``az account show``."""
-    m = MagicMock()
-    m.returncode = returncode
-    m.stdout = stdout or json.dumps(_ACCOUNT)
-    m.stderr = ""
-    return m
+def _status(
+    account: dict | None = _ACCOUNT,
+    *,
+    ok: bool = True,
+    error: str = "",
+    missing_package: bool = False,
+):
+    """Patch the single auth snapshot the command renders."""
+    client = MagicMock()
+    client.__enter__.return_value.auth.status.return_value = {
+        "signed_in": account is not None,
+        "account": account,
+        "credential": {
+            "ok": ok,
+            "error": error,
+            "missing_package": missing_package,
+        },
+    }
+    return patch(
+        "azure_jobs.connect",
+        return_value=client,
+    )
 
 
 class TestAuthStatus:
@@ -49,7 +63,7 @@ class TestAuthStatus:
 
     def test_logged_in(self, runner: CliRunner) -> None:
         """Shows user, subscription, and workspace when logged in."""
-        from azure_jobs.config import AJConfig, AJWorkspace
+        from azure_jobs.shared.config import AJConfig, AJWorkspace
 
         ws_cfg = AJConfig(
             workspace=AJWorkspace(
@@ -58,18 +72,13 @@ class TestAuthStatus:
                 workspace_name="ws-1",
             )
         )
-        mock_token = MagicMock()
-        mock_token.token = "fake-token"
-
         with (
-            patch("subprocess.run", return_value=_mock_az_account_show()),
-            patch("azure.identity.AzureCliCredential") as mock_cred_cls,
+            _status(),
             patch(
-                "azure_jobs.config.read_config",
+                "azure_jobs.shared.config.read_config",
                 return_value=ws_cfg,
             ),
         ):
-            mock_cred_cls.return_value.get_token.return_value = mock_token
             result = runner.invoke(main, ["auth", "status"])
 
         assert result.exit_code == 0
@@ -80,55 +89,45 @@ class TestAuthStatus:
 
     def test_not_logged_in(self, runner: CliRunner) -> None:
         """Exits with error when not logged in."""
-        mock = _mock_az_account_show(returncode=1, stdout="")
-        with patch("subprocess.run", return_value=mock):
+        with _status(None):
             result = runner.invoke(main, ["auth", "status"])
         assert result.exit_code != 0
         assert "Not logged in" in result.output
 
     def test_az_cli_missing(self, runner: CliRunner) -> None:
-        """Exits with error when Azure CLI not found."""
-        with patch("subprocess.run", side_effect=FileNotFoundError):
+        """Exits with error when the daemon cannot reach the Azure CLI."""
+        with _status(None):
             result = runner.invoke(main, ["auth", "status"])
         assert result.exit_code != 0
         assert "not installed" in result.output
 
     def test_no_workspace(self, runner: CliRunner) -> None:
         """Shows 'Not configured' when workspace not set."""
-        from azure_jobs.config import AJConfig
-
-        mock_token = MagicMock()
-        mock_token.token = "fake-token"
+        from azure_jobs.shared.config import AJConfig
 
         with (
-            patch("subprocess.run", return_value=_mock_az_account_show()),
-            patch("azure.identity.AzureCliCredential") as mock_cred_cls,
+            _status(),
             patch(
-                "azure_jobs.config.read_config",
+                "azure_jobs.shared.config.read_config",
                 return_value=AJConfig(),
             ),
         ):
-            mock_cred_cls.return_value.get_token.return_value = mock_token
             result = runner.invoke(main, ["auth", "status"])
 
         assert result.exit_code == 0
         assert "Not configured" in result.output
 
     def test_sdk_credential_failure(self, runner: CliRunner) -> None:
-        """Shows SDK credential error when token fetch fails."""
-        from azure_jobs.config import AJConfig
+        """Shows the credential error the daemon reported."""
+        from azure_jobs.shared.config import AJConfig
 
         with (
-            patch("subprocess.run", return_value=_mock_az_account_show()),
-            patch("azure.identity.AzureCliCredential") as mock_cred_cls,
+            _status(ok=False, error="ClientAuthenticationError: token expired"),
             patch(
-                "azure_jobs.config.read_config",
+                "azure_jobs.shared.config.read_config",
                 return_value=AJConfig(),
             ),
         ):
-            mock_cred_cls.return_value.get_token.side_effect = Exception(
-                "token expired"
-            )
             result = runner.invoke(main, ["auth", "status"])
 
         assert result.exit_code == 0
@@ -136,54 +135,29 @@ class TestAuthStatus:
 
 
 # ---------------------------------------------------------------------------
-# aj auth login
+# aj auth surface
 # ---------------------------------------------------------------------------
 
 
-class TestAuthLogin:
-    def test_delegates_to_az_login(self, runner: CliRunner) -> None:
-        with patch("subprocess.run") as mock_run:
-            result = runner.invoke(main, ["auth", "login"])
-        assert result.exit_code == 0
-        mock_run.assert_called_once_with(["az", "login"], check=False)
+class TestAuthIsReadOnly:
+    """Signing in is `az login`; aj does not wrap it.
 
-    def test_az_missing(self, runner: CliRunner) -> None:
-        with patch("subprocess.run", side_effect=FileNotFoundError):
-            result = runner.invoke(main, ["auth", "login"])
+    The daemon holds its own credential and refuses to start without one, so a
+    client-side `aj auth login` would both duplicate `az` and authenticate the
+    wrong process.
+    """
+
+    @pytest.mark.parametrize("removed", ["login", "logout"])
+    def test_the_mutating_commands_are_gone(
+        self, runner: CliRunner, removed: str
+    ) -> None:
+        result = runner.invoke(main, ["auth", removed])
         assert result.exit_code != 0
 
-
-# ---------------------------------------------------------------------------
-# aj auth logout
-# ---------------------------------------------------------------------------
-
-
-class TestAuthLogout:
-    def test_success(self, runner: CliRunner) -> None:
-        mock = MagicMock()
-        mock.returncode = 0
-        with patch("subprocess.run", return_value=mock):
-            result = runner.invoke(main, ["auth", "logout"])
+    def test_help_offers_only_status(self, runner: CliRunner) -> None:
+        result = runner.invoke(main, ["auth", "--help"])
         assert result.exit_code == 0
-        assert "Logged out" in result.output
-
-    def test_failure(self, runner: CliRunner) -> None:
-        mock = MagicMock()
-        mock.returncode = 1
-        mock.stderr = "Already logged out"
-        with patch("subprocess.run", return_value=mock):
-            result = runner.invoke(main, ["auth", "logout"])
-        assert result.exit_code != 0
-
-
-# ---------------------------------------------------------------------------
-# aj auth (subcommand help)
-# ---------------------------------------------------------------------------
-
-
-def test_auth_help(runner: CliRunner) -> None:
-    result = runner.invoke(main, ["auth", "--help"])
-    assert result.exit_code == 0
-    assert "status" in result.output
-    assert "login" in result.output
-    assert "logout" in result.output
+        listed = result.output.split("Commands:", 1)[1]
+        assert [line.split()[0] for line in listed.splitlines() if line.strip()] == [
+            "status"
+        ]

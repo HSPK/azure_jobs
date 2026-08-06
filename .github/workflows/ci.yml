@@ -31,4 +31,8 @@ jobs:
         run: uv sync --dev
 
       - name: Run tests
-        run: uv run pytest -x -q
+        run: >-
+          uv run pytest -x -q
+          --cov=azure_jobs
+          --cov-branch
+          --cov-report=term-missing

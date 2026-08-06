@@ -7,13 +7,13 @@ from unittest.mock import patch
 
 import pytest
 
-from azure_jobs.backend.volcano import VolcanoOpts, build_volcano_job
-from azure_jobs.backend.volcano.config import build_volcano_config_from_request
-from azure_jobs.backend.volcano.storage import (
+from azure_jobs.server.submit.volcano import VolcanoOpts, build_volcano_job
+from azure_jobs.server.submit.volcano.config import build_volcano_config_from_request
+from azure_jobs.server.submit.volcano.storage import (
     BlobMountError,
     build_blob_mount_plan,
 )
-from azure_jobs.job.spec import JobSpec, StorageMount
+from azure_jobs.shared.job.spec import JobSpec, StorageMount
 
 
 def _config(gpus_per_node=None, rdma=None, storage=None):
@@ -83,7 +83,7 @@ def storage():
 
 def _plan(storage, sas="sig=abc"):
     with patch(
-        "azure_jobs.backend.volcano.storage.subprocess.run",
+        "azure_jobs.server.submit.volcano.storage.subprocess.run",
         return_value=subprocess.CompletedProcess([], 0, stdout=sas, stderr=""),
     ):
         return build_blob_mount_plan(storage, "job")
@@ -114,7 +114,7 @@ class TestBlobMountPlan:
 
     def test_failed_sas_is_reported(self, storage):
         with patch(
-            "azure_jobs.backend.volcano.storage.subprocess.run",
+            "azure_jobs.server.submit.volcano.storage.subprocess.run",
             return_value=subprocess.CompletedProcess([], 1, stdout="", stderr="denied"),
         ):
             with pytest.raises(BlobMountError, match="denied"):
@@ -127,7 +127,7 @@ class TestBlobMountPlan:
         assert secret["stringData"]["fast_shared"] == "sig=abc"
 
     def test_token_expiry_stays_inside_the_azure_limit(self, storage):
-        from azure_jobs.backend.volcano import storage as storage_mod
+        from azure_jobs.server.submit.volcano import storage as storage_mod
 
         assert storage_mod.SAS_MAX_HOURS < 7 * 24
 
@@ -205,7 +205,7 @@ class TestMountFailureIsFatal:
 
 class TestSecretHygiene:
     def test_apply_uses_server_side_to_keep_the_sas_out_of_annotations(self, storage):
-        from azure_jobs.backend.volcano import entry
+        from azure_jobs.server.submit.volcano import entry
 
         plan = _plan(storage)
         with patch.object(entry.subprocess, "run") as run:
@@ -218,7 +218,7 @@ class TestSecretHygiene:
         assert "sig=abc" in run.call_args.kwargs["input"]
 
     def test_failed_submission_deletes_the_credential_secret(self):
-        from azure_jobs.backend.volcano import entry
+        from azure_jobs.server.submit.volcano import entry
 
         cleanup = entry._SecretCleanup(name="job-blob", namespace="ns", context="ctx")
         with patch.object(entry.subprocess, "run") as run:
@@ -231,15 +231,15 @@ class TestSecretHygiene:
         assert cmd[cmd.index("--context") + 1] == "ctx"
 
     def test_nothing_is_deleted_when_no_secret_was_created(self):
-        from azure_jobs.backend.volcano import entry
+        from azure_jobs.server.submit.volcano import entry
 
         with patch.object(entry.subprocess, "run") as run:
             entry._discard_blob_secret(entry._SecretCleanup())
         run.assert_not_called()
 
     def test_successful_submission_keeps_the_secret(self):
-        from azure_jobs.backend.volcano import entry
-        from azure_jobs.job.spec import JobResult
+        from azure_jobs.server.submit.volcano import entry
+        from azure_jobs.shared.job.spec import JobResult
 
         submitted = JobResult(job_name="job", status="submitted")
         with patch.object(entry, "_submit_via_volcano", return_value=submitted), \
@@ -248,8 +248,8 @@ class TestSecretHygiene:
         discard.assert_not_called()
 
     def test_failed_submission_triggers_cleanup(self):
-        from azure_jobs.backend.volcano import entry
-        from azure_jobs.job.spec import JobResult
+        from azure_jobs.server.submit.volcano import entry
+        from azure_jobs.shared.job.spec import JobResult
 
         failed = JobResult(job_name="job", status="failed", error="boom")
         with patch.object(entry, "_submit_via_volcano", return_value=failed), \
@@ -258,7 +258,7 @@ class TestSecretHygiene:
         discard.assert_called_once()
 
     def test_raised_submission_triggers_cleanup_and_reraises(self):
-        from azure_jobs.backend.volcano import entry
+        from azure_jobs.server.submit.volcano import entry
 
         with patch.object(entry, "_submit_via_volcano", side_effect=RuntimeError("x")), \
              patch.object(entry, "_discard_blob_secret") as discard:

@@ -7,16 +7,16 @@ from unittest.mock import MagicMock, patch
 import pytest
 from click.testing import CliRunner
 
-from azure_jobs.cli import main
-from azure_jobs.az_client.ml import vm_sku_label as _vm_sku_label
-from azure_jobs.errors import ConfigError
-from azure_jobs.az_client.arm import (
+from azure_jobs.client.cli import main
+from azure_jobs.shared.types.vm_gpu import vm_sku_label as _vm_sku_label
+from azure_jobs.shared.errors import ConfigError
+from azure_jobs.server.az_client.arm import (
     SeriesQuota,
     SlaTierQuota,
     VCInfo,
     parse_managed_quotas,
 )
-from azure_jobs.utils.ui.quota_tables import (
+from azure_jobs.client.ui.quota_tables import (
     _fmt_nodes,
     _portal_compute_url,
 )
@@ -98,6 +98,24 @@ class TestSeriesQuota:
         assert "Basic" in sq.tiers
         assert sq.tiers["Basic"].limit == 10
 
+    def test_accumulate_tier_sums_only_the_same_normalized_tier(self):
+        sq = SeriesQuota(series="X")
+        sq.accumulate_tier("premium", 10, 3)
+        sq.accumulate_tier("Premium", 7, 2)
+        sq.accumulate_tier("Standard", 5, 1)
+
+        assert sq.tiers["Premium"] == SlaTierQuota(limit=17, used=5)
+        assert sq.tiers["Standard"] == SlaTierQuota(limit=5, used=1)
+
+    def test_accumulate_tier_preserves_known_usage_when_another_row_omits_it(self):
+        sq = SeriesQuota(series="X")
+        sq.accumulate_tier("Premium", 10, None)
+        sq.accumulate_tier("Premium", 7, 2)
+        sq.accumulate_tier("Premium", 3, None)
+
+        assert sq.tiers["Premium"] == SlaTierQuota(limit=20, used=2)
+        assert sq.tiers["Premium"].available == 18
+
     def test_has_any_quota_true(self):
         sq = SeriesQuota(series="X")
         sq.set_tier("Premium", 10, 0)
@@ -164,9 +182,81 @@ class TestSeriesQuota:
         assert sq.accelerator == "MI200"
         assert sq.gpu_memory == 64
 
+    def test_regional_tiers_are_aggregated_order_independently(self):
+        overall = {
+            "limits": [
+                {
+                    "id": "ND_A100_v4",
+                    "slaTier": None,
+                    "limit": 100,
+                    "used": 25,
+                }
+            ]
+        }
+        east = {
+            "limits": [
+                {
+                    "id": "ND_A100_v4",
+                    "slaTier": "Premium",
+                    "limit": 10,
+                    "used": 2,
+                },
+                {
+                    "id": "ND_A100_v4",
+                    "slaTier": "Standard",
+                    "limit": 4,
+                    "used": 1,
+                },
+            ]
+        }
+        west = {
+            "limits": [
+                {
+                    "id": "ND_A100_v4",
+                    "slaTier": "Standard",
+                    "limit": 6,
+                    "used": 2,
+                },
+                {
+                    "id": "ND_A100_v4",
+                    "slaTier": "Premium",
+                    "limit": 20,
+                    "used": 3,
+                },
+            ]
+        }
+
+        def _raw(quotas):
+            return {
+                "properties": {
+                    "managed": {
+                        "defaultGroupPolicyOverallQuotas": overall,
+                        "quotas": quotas,
+                    }
+                }
+            }
+
+        [forward] = parse_managed_quotas(_raw({"eastus": east, "westus": west}))
+        [reverse] = parse_managed_quotas(
+            _raw(
+                {
+                    "westus": {"limits": list(reversed(west["limits"]))},
+                    "eastus": {"limits": list(reversed(east["limits"]))},
+                }
+            )
+        )
+
+        assert forward == reverse
+        assert forward.user_limit == SlaTierQuota(limit=100, used=25)
+        assert forward.user_limit.available == 75
+        assert forward.tiers["Premium"] == SlaTierQuota(limit=30, used=5)
+        assert forward.tiers["Premium"].available == 25
+        assert forward.tiers["Standard"] == SlaTierQuota(limit=10, used=3)
+        assert forward.tiers["Standard"].available == 7
+
 
 # ---------------------------------------------------------------------------
-# AzureARMClient.list_virtual_clusters tests
+# AzureClient virtual-cluster namespace tests
 # ---------------------------------------------------------------------------
 
 
@@ -202,20 +292,20 @@ _MOCK_VC_RESPONSE = {
 
 
 def _make_arm_client():
-    """Construct a real ``AzureARMClient`` with namespaces stubbed."""
-    from azure_jobs.az_client import AzureARMClient
+    """Construct a real ``AzureClient`` with namespaces stubbed."""
+    from azure_jobs.server.az_client import AzureClient
 
-    client = AzureARMClient()
-    client.subscriptions.list = MagicMock()
-    client.graph.query = MagicMock()
+    client = AzureClient()
+    client.subscription.list = MagicMock()
+    client._graph.query = MagicMock()
     return client
 
 
 class TestListVirtualClusters:
     def test_lists_vcs_from_resource_graph(self):
         client = _make_arm_client()
-        client.subscriptions.list.return_value = ["sub-1", "sub-2"]
-        client.graph.query.return_value = [
+        client.subscription.list.return_value = ["sub-1", "sub-2"]
+        client._graph.query.return_value = [
             {"name": "vc1", "resourceGroup": "rg1", "subscriptionId": "sub-1"},
             {"name": "vc2", "resourceGroup": "rg2", "subscriptionId": "sub-2"},
         ]
@@ -224,46 +314,56 @@ class TestListVirtualClusters:
 
     def test_uses_provided_subscriptions(self):
         client = _make_arm_client()
-        client.graph.query.return_value = [
+        client._graph.query.return_value = [
             {"name": "vc1", "resourceGroup": "rg1", "subscriptionId": "sub-a"},
         ]
         vcs = client.vc.list(subscription_ids=["sub-a"])
         assert len(vcs) == 1
-        client.subscriptions.list.assert_not_called()
+        client.subscription.list.assert_not_called()
 
     def test_skips_when_no_subscriptions(self):
         client = _make_arm_client()
-        client.subscriptions.list.return_value = []
+        client.subscription.list.return_value = []
         assert client.vc.list() == []
+
+    def test_strict_mode_rejects_missing_subscriptions(self):
+        from azure_jobs.shared.errors import AuthError
+
+        client = _make_arm_client()
+        client.subscription.list.return_value = []
+        with pytest.raises(AuthError, match="No enabled Azure subscriptions"):
+            client.vc.list(strict=True)
 
     def test_handles_exception_gracefully(self):
         import requests
 
         client = _make_arm_client()
-        client.subscriptions.list.side_effect = requests.ConnectionError("auth fail")
+        client.subscription.list.side_effect = requests.ConnectionError("auth fail")
         assert client.vc.list() == []
+        with pytest.raises(requests.ConnectionError, match="auth fail"):
+            client.vc.list(strict=True)
 
     def test_empty_on_no_data(self):
         client = _make_arm_client()
-        client.subscriptions.list.return_value = ["sub-1"]
-        client.graph.query.return_value = []
+        client.subscription.list.return_value = ["sub-1"]
+        client._graph.query.return_value = []
         assert client.vc.list() == []
 
     def test_quota_list_parses_payload(self):
         client = _make_arm_client()
         row = dict(_MOCK_VC_RESPONSE)
         row.update(name="vc1", resourceGroup="rg1", subscriptionId="sub-1")
-        client.subscriptions.list.return_value = ["sub-1"]
-        client.graph.query.return_value = [row]
-        vcs = client.vc.quota.list()
+        client.subscription.list.return_value = ["sub-1"]
+        client._graph.query.return_value = [row]
+        vcs = client.quota.list()
         series = sorted(sq.series for sq in vcs[0].quotas)
         assert "ND_A100_v4" in series
         assert "ND_H100_v5" in series
 
     def test_resolves_vc_by_name(self):
         client = _make_arm_client()
-        client.subscriptions.list.return_value = ["sub-1"]
-        client.graph.query.return_value = [
+        client.subscription.list.return_value = ["sub-1"]
+        client._graph.query.return_value = [
             {"name": "vc1", "resourceGroup": "rg1", "subscriptionId": "sub-1"},
         ]
         vc = client.vc.get("vc1")
@@ -271,10 +371,24 @@ class TestListVirtualClusters:
         assert vc.resource_group == "rg1"
         assert vc.subscription_id == "sub-1"
 
+    def test_resolves_vc_and_filters_case_insensitively(self):
+        client = _make_arm_client()
+        client._graph.query.return_value = [
+            {"name": "Train-VC", "resourceGroup": "Train-RG", "subscriptionId": "SUB-1"},
+        ]
+
+        vc = client.vc.get(
+            "train-vc",
+            subscription_id="sub-1",
+            resource_group="train-rg",
+        )
+
+        assert vc.name == "Train-VC"
+
     def test_resolve_vc_ambiguous_requires_filter(self):
         client = _make_arm_client()
-        client.subscriptions.list.return_value = ["sub-1", "sub-2"]
-        client.graph.query.return_value = [
+        client.subscription.list.return_value = ["sub-1", "sub-2"]
+        client._graph.query.return_value = [
             {"name": "vc1", "resourceGroup": "rg1", "subscriptionId": "sub-1"},
             {"name": "vc1", "resourceGroup": "rg2", "subscriptionId": "sub-2"},
         ]
@@ -292,16 +406,20 @@ class TestListVirtualClusters:
 
 
 class TestQuotaListCli:
+    @pytest.fixture(autouse=True)
+    def _daemon(self, cli_daemon):
+        """Commands reach Azure only through the daemon now."""
+        yield cli_daemon
+
     def setup_method(self):
         self.runner = CliRunner()
-        self._arm_patcher = patch("azure_jobs.az_client.AzureARMClient")
+        self._arm_patcher = patch("azure_jobs.server.az_client.AzureClient")
         self.arm_cls = self._arm_patcher.start()
         self.arm = self.arm_cls.return_value
-        # ``load_vcs_with_quotas`` now calls ``arm.vc.quota.list(...)`` which
-        # internally re-parses ``vc.raw`` — short-circuit it back to
+        # The quota namespace re-parses ``vc.raw`` — short-circuit it back to
         # ``arm.vc.list`` so tests can supply pre-built ``VCInfo`` rows
         # (with ``quotas`` already populated) directly.
-        self.arm.vc.quota.list.side_effect = lambda **kw: self.arm.vc.list()
+        self.arm.quota.list.side_effect = lambda *args, **kw: self.arm.vc.list()
 
     def teardown_method(self):
         self._arm_patcher.stop()
@@ -357,12 +475,12 @@ class TestQuotaListCli:
         result = self.runner.invoke(main, ["ql"])
         assert "No Singularity" in result.output
 
-    @patch("azure_jobs.cli.quota._show_aml_quotas")
+    @patch("azure_jobs.client.cli.quota._show_aml_quotas")
     def test_aml_flag_routes_to_aml(self, mock_aml):
         self.runner.invoke(main, ["quota", "list", "--aml"])
         mock_aml.assert_called_once_with(False)
 
-    @patch("azure_jobs.cli.quota._show_aml_quotas")
+    @patch("azure_jobs.client.cli.quota._show_aml_quotas")
     def test_aml_all_flag(self, mock_aml):
         self.runner.invoke(main, ["quota", "list", "--aml", "--all"])
         mock_aml.assert_called_once_with(True)
