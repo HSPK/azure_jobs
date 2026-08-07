@@ -169,6 +169,14 @@ Patterns support gitignore wildcards/negation. Native submission archives cwd;
 `uv`; otherwise use `python file.py`. `_extra` is opaque aj-only consumer data
 and is stripped before raw YAML reaches amlt.
 
+Do not set job naming through `jobs[0].submit_args.env.AJ_NAME`. aj injects and
+overwrites the stable `AJ_*` runtime contract. Set the local name base when
+submitting instead:
+
+```bash
+AJ_NAME=pretrain aj run -t TEMPLATE_NAME python train.py
+```
+
 ## Inspect
 ```bash
 aj --json template validate TEMPLATE_NAME

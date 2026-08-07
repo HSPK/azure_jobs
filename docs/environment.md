@@ -5,13 +5,38 @@ There are two different contracts:
 1. variables injected into submitted jobs;
 2. variables controlling the local client or daemon.
 
+## Job naming
+
+Set `AJ_NAME` on the local `aj` command to choose the task-name base:
+
+```bash
+AJ_NAME=pretrain aj run -t gpu -n 2 -p 8 python train.py
+```
+
+aj constructs the name in this order:
+
+1. use local `AJ_NAME` when set;
+2. otherwise use the current directory, optionally followed by the command
+   file stem when `COMMAND` directly names an existing file;
+3. append `_<8-character-AJ-ID>`;
+4. apply backend normalization.
+
+For example, `AJ_NAME=pretrain` may become `pretrain_a1b2c3d4`. AML and Sing
+use that final name. Volcano converts it to a DNS-1035 `generateName` stem;
+Kubernetes appends another suffix, so the submission result's `azure_name` is
+the authoritative resource name.
+
+The submitted process receives the normalized pre-suffix value as runtime
+`AJ_NAME`. A template `submit_args.env.AJ_NAME` does not name the task because
+aj overwrites all stable runtime variables.
+
 ## Stable job runtime contract
 
 Every built job receives:
 
 | Variable | Meaning |
 | --- | --- |
-| `AJ_NAME` | final display/job name after backend normalization |
+| `AJ_NAME` | final normalized job name injected into the task |
 | `AJ_ID` | short aj submission ID used by local records |
 | `AJ_TEMPLATE` | selected leaf template name |
 | `AJ_SUBMIT_TIMESTAMP_UTC` | ISO 8601 build timestamp |
@@ -43,7 +68,7 @@ Template values with these names are overwritten by aj.
 | `AJ_RUNTIME_DIR` | `$XDG_RUNTIME_DIR/aj` or a user-scoped fallback | daemon socket, spawn lock, log |
 | `AJ_DEBUG` | unset | debug logging and full local/remote tracebacks |
 | `AJ_OUTPUT` | `rich` | force `rich` or `json` output |
-| `AJ_NAME` | derived from directory/command | override the job-name base; aj still adds the short ID |
+| `AJ_NAME` | derived from directory/command | local job-name base; aj appends the short ID and normalizes it |
 | `AJ_SHIP_SSH` | enabled | set `0`, `false`, `no`, or `off` to stop native SSH whitelist shipping |
 | `AJ_AMLT_TIMEOUT` | `1800` | seconds allowed for daemon-side `amlt run` |
 | `AJ_LOG_LEVEL` | `WARNING` | daemon Python log level |
