@@ -12,6 +12,7 @@ These headings and commands match the current `aj --help`:
 | Getting Started | `init`, `run`, `dash` |
 | Jobs | `job`, `exp`, `queue`, `watch`, `list` |
 | Azure Resources | `ws`, `ds`, `env`, `image`, `sku`, `quota`, `sa`, `uai` |
+| Kubernetes | `k8s` (`k`) |
 | Project | `template`, `config`, `code`, `skill` |
 | System | `auth`, `daemon` |
 
@@ -74,6 +75,21 @@ values and are never copied to the template repository.
 Skill commands are local-only and do not contact the daemon or cloud. See
 [Agent Skill](skills.md) for user/project paths, `--root`, update protection,
 and JSON output.
+
+Kubernetes commands are also local-only and call `kubectl` directly:
+
+```bash
+aj k setup
+aj k status
+aj k jobs
+aj k pods --job <generated-job-name>
+aj k logs <pod>
+aj k events <pod>
+aj k delete <generated-job-name>
+```
+
+See [Kubernetes](kubernetes.md) for setup side effects, confirmation, context,
+namespace, redaction, and deletion rules.
 
 Configuration is stored in `.azure_jobs/aj_config.json`:
 

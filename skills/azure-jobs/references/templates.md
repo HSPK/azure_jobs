@@ -138,6 +138,26 @@ config:
 ```
 Remove PVC variables if unnecessary. Read [Volcano](volcano.md).
 
+Nested container runtime opt-in:
+
+```yaml
+config:
+  jobs:
+    - name: nested
+      sku: "{nodes}xG{processes}"
+      submit_args:
+        container_args:
+          capabilities: [SYS_ADMIN]
+          scratch_mount_path: /var/lib/containers
+          scratch_size: 200Gi
+```
+
+This creates one node-backed scratch `emptyDir` per replica, mounts it at the
+runtime graph root, and applies `scratch_size` as both volume size limit and
+ephemeral-storage request/limit. Scratch is not shared or persistent.
+`SYS_ADMIN` is high privilege; enable it only when the nested runtime requires
+it. See [Volcano](volcano.md#nested-container-runtime).
+
 ## SKU
 ```yaml
 sku: "{nodes}x80G{processes}-A100-NvLink"

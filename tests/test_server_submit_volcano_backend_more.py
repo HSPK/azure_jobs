@@ -20,8 +20,11 @@ from azure_jobs.server.submit.volcano.config import (
 )
 from azure_jobs.server.submit.volcano.storage import BlobMount, BlobMountError, BlobMountPlan
 from azure_jobs.server.submit.volcano.uploaders import blob as blob_mod
+from azure_jobs.server.resources import _spec_from_payload
+from azure_jobs.shared.errors import ConfigError
 from azure_jobs.shared.job.spec import JobSpec, StorageMount
 from azure_jobs.shared.opts import VolcanoOpts
+from azure_jobs.shared.template.models import Template
 
 
 class _BlobPlan:
@@ -95,6 +98,9 @@ def _request(**overrides) -> JobSpec:
             labels={"app": "user-value-must-not-win", "team": "ml"},
             container_args={"cpus": 24, "memory": "192Gi"},
             shm_size="32Gi",
+            capabilities=["SYS_ADMIN"],
+            scratch_mount_path="/var/lib/containers",
+            scratch_size="200Gi",
         ),
     }
     data.update(overrides)
@@ -150,6 +156,161 @@ def test_build_volcano_config_maps_container_defaults_and_storage(monkeypatch) -
     assert cfg.pvc_mount_dir == "/mnt/pvc"
     assert cfg.storage["data"].container_name == "cont"
     assert cfg.setup_commands == ["echo setup"]
+    assert cfg.capabilities == ["SYS_ADMIN"]
+    assert cfg.scratch_mount_path == "/var/lib/containers"
+    assert cfg.scratch_size == "200Gi"
+
+
+def test_volcano_opts_parse_nested_runtime_container_args() -> None:
+    template = Template.from_dict(
+        {
+            "target": {"service": "volcano"},
+            "jobs": [
+                {
+                    "submit_args": {
+                        "container_args": {
+                            "capabilities": [
+                                "sys_admin",
+                                "CAP_SYS_ADMIN",
+                                "net_admin",
+                            ],
+                            "scratch_mount_path": "/var//lib/containers/",
+                            "scratch_size": "200Gi",
+                        }
+                    }
+                }
+            ],
+        }
+    )
+
+    opts = VolcanoOpts.from_template(template)
+
+    assert opts.capabilities == ["SYS_ADMIN", "NET_ADMIN"]
+    assert opts.scratch_mount_path == "/var/lib/containers"
+    assert opts.scratch_size == "200Gi"
+
+
+@pytest.mark.parametrize(
+    ("container_args", "message"),
+    [
+        ({"capabilities": "SYS_ADMIN"}, "must be a list"),
+        ({"capabilities": [1]}, "entries must be strings"),
+        ({"capabilities": ["bad-name"]}, "Invalid Linux capability"),
+        ({"capabilities": ["ALL"]}, "cannot add ALL"),
+        ({"scratch_mount_path": 123}, "must be an absolute container path"),
+        ({"scratch_mount_path": "relative"}, "absolute, non-root"),
+        ({"scratch_mount_path": "/"}, "absolute, non-root"),
+        ({"scratch_mount_path": "//"}, "absolute, non-root"),
+        ({"scratch_mount_path": "//dev/shm"}, "absolute, non-root"),
+        ({"scratch_mount_path": "/var/../tmp"}, "without '..'"),
+        ({"scratch_size": "200Gi"}, "requires scratch_mount_path"),
+        (
+            {
+                "scratch_mount_path": "/var/lib/containers",
+                "scratch_size": "two-hundred",
+            },
+            "positive Kubernetes quantity",
+        ),
+        (
+            {
+                "scratch_mount_path": "/var/lib/containers",
+                "scratch_size": "0",
+            },
+            "positive Kubernetes quantity",
+        ),
+        (
+            {
+                "scratch_mount_path": "/var/lib/containers",
+                "scratch_size": "0Gi",
+            },
+            "positive Kubernetes quantity",
+        ),
+        (
+            {
+                "scratch_mount_path": "/var/lib/containers",
+                "scratch_size": "0.0",
+            },
+            "positive Kubernetes quantity",
+        ),
+        (
+            {
+                "scratch_mount_path": "/var/lib/containers",
+                "scratch_size": "1e",
+            },
+            "positive Kubernetes quantity",
+        ),
+    ],
+)
+def test_volcano_opts_reject_invalid_nested_runtime(
+    container_args: dict[str, object],
+    message: str,
+) -> None:
+    template = Template.from_dict(
+        {
+            "target": {"service": "volcano"},
+            "jobs": [{"submit_args": {"container_args": container_args}}],
+        }
+    )
+
+    with pytest.raises(ConfigError, match=message):
+        VolcanoOpts.from_template(template)
+
+
+def test_nested_runtime_options_survive_wire_reconstruction() -> None:
+    payload = JobSpec(
+        name="nested",
+        service="volcano",
+        backend_spec=VolcanoOpts(
+            capabilities=["SYS_ADMIN"],
+            scratch_mount_path="/var/lib/containers",
+            scratch_size="200Gi",
+        ),
+    ).to_dict()
+
+    rebuilt = _spec_from_payload(payload)
+
+    assert rebuilt.backend_spec.capabilities == ["SYS_ADMIN"]
+    assert rebuilt.backend_spec.scratch_mount_path == "/var/lib/containers"
+    assert rebuilt.backend_spec.scratch_size == "200Gi"
+
+
+def test_scratch_size_accepts_positive_kubernetes_exponent_quantity() -> None:
+    template = Template.from_dict(
+        {
+            "target": {"service": "volcano"},
+            "jobs": [
+                {
+                    "submit_args": {
+                        "container_args": {
+                            "scratch_mount_path": "/var/lib/containers",
+                            "scratch_size": "1e3",
+                        }
+                    }
+                }
+            ],
+        }
+    )
+
+    assert VolcanoOpts.from_template(template).scratch_size == "1e3"
+
+
+def test_wire_loader_validates_legacy_container_args() -> None:
+    payload = JobSpec(name="nested", service="volcano").to_dict()
+    payload["backend_spec"] = {
+        "container_args": {
+            "capabilities": ["cap_sys_admin"],
+            "scratch_mount_path": "/var/lib/containers",
+            "scratch_size": "100Gi",
+        }
+    }
+
+    rebuilt = _spec_from_payload(payload)
+    assert rebuilt.backend_spec.capabilities == ["SYS_ADMIN"]
+    assert rebuilt.backend_spec.scratch_size == "100Gi"
+
+    payload["backend_spec"]["container_args"]["capabilities"] = ["ALL"]
+    with pytest.raises(ConfigError, match="cannot add ALL"):
+        _spec_from_payload(payload)
 
 
 def test_build_volcano_job_adds_affinity_priority_env_and_blob_mount() -> None:
@@ -173,6 +334,9 @@ def test_build_volcano_job_adds_affinity_priority_env_and_blob_mount() -> None:
         labels={"team": "ml"},
         pvc_name="shared-pvc",
         pvc_mount_dir="/mnt/pvc",
+        capabilities=["SYS_ADMIN"],
+        scratch_mount_path="/var/lib/containers",
+        scratch_size="200Gi",
     )
 
     with patch.object(config_mod, "resolve_namespace", return_value="ns-a") as resolve_ns:
@@ -194,19 +358,122 @@ def test_build_volcano_job_adds_affinity_priority_env_and_blob_mount() -> None:
     pod = job["spec"]["tasks"][0]["template"]["spec"]
     container = pod["containers"][0]
     assert container["env"] == [{"name": "TOKEN", "value": "secret"}]
-    assert container["securityContext"] == {"privileged": True}
+    assert container["securityContext"] == {
+        "capabilities": {"add": ["SYS_ADMIN"]},
+        "privileged": True,
+    }
     assert pod["affinity"]["podAntiAffinity"]["requiredDuringSchedulingIgnoredDuringExecution"][0]["topologyKey"]
     assert any(volume["name"] == "blob-secret" for volume in pod["volumes"])
     assert any(volume["name"] == "pvc-data" for volume in pod["volumes"])
     shm = next(volume for volume in pod["volumes"] if volume["name"] == "dshm")
     assert shm["emptyDir"]["sizeLimit"] == "32Gi"
+    scratch = next(
+        volume for volume in pod["volumes"] if volume["name"] == "aj-scratch"
+    )
+    assert scratch["emptyDir"] == {"sizeLimit": "200Gi"}
+    assert {
+        "name": "aj-scratch",
+        "mountPath": "/var/lib/containers",
+    } in container["volumeMounts"]
+    assert container["resources"]["requests"]["ephemeral-storage"] == "200Gi"
+    assert container["resources"]["limits"]["ephemeral-storage"] == "200Gi"
     assert container["ports"][0]["containerPort"] == 18515
+    worker = job["spec"]["tasks"][1]["template"]["spec"]["containers"][0]
+    assert {
+        "name": "aj-scratch",
+        "mountPath": "/var/lib/containers",
+    } in worker["volumeMounts"]
 
     script = container["args"][0]
     assert script.index("echo mount-blob") < script.index("echo code-setup")
     assert script.index("echo code-setup") < script.index("echo user-setup")
     assert "cp -a /mnt/extracted/. \"$AJ_WORKDIR\"/" in script
     assert "python train.py" in script
+
+
+def test_nested_runtime_without_blob_adds_capabilities_only() -> None:
+    cfg = VolcanoConfig(
+        name="nested",
+        image="image",
+        command=["podman info"],
+        capabilities=["SYS_ADMIN", "NET_ADMIN"],
+        scratch_mount_path="/var/lib/containers",
+    )
+
+    job = build_volcano_job(cfg, namespace="ns")
+    container = job["spec"]["tasks"][0]["template"]["spec"]["containers"][0]
+    scratch = next(
+        volume
+        for volume in job["spec"]["tasks"][0]["template"]["spec"]["volumes"]
+        if volume["name"] == "aj-scratch"
+    )
+
+    assert container["securityContext"] == {
+        "capabilities": {"add": ["SYS_ADMIN", "NET_ADMIN"]}
+    }
+    assert scratch["emptyDir"] == {}
+    assert "ephemeral-storage" not in container["resources"]["requests"]
+
+
+@pytest.mark.parametrize(
+    "scratch_path",
+    [
+        "/dev/shm",
+        "/dev/shm/runtime",
+        "/mnt",
+        "/mnt/pvc",
+        "/mnt/data/cache",
+        "/mnt/secret",
+        "/mnt/extracted/cache",
+    ],
+)
+def test_scratch_mount_rejects_builtin_pvc_storage_and_blob_overlaps(
+    scratch_path: str,
+) -> None:
+    cfg = VolcanoConfig(
+        name="nested",
+        image="image",
+        scratch_mount_path=scratch_path,
+        pvc_mount_dir="/mnt/pvc",
+        storage={
+            "data": StorageMount(
+                storage_account_name="acct",
+                container_name="cont",
+                mount_dir="/mnt/data",
+            )
+        },
+    )
+
+    with pytest.raises(ConfigError, match="conflicts with another mount"):
+        build_volcano_job(
+            cfg,
+            namespace="ns",
+            code_path="/mnt/extracted",
+            blob_plan=_BlobPlan(),
+        )
+
+
+def test_scratch_mount_rejects_resolved_blob_default_destination() -> None:
+    cfg = VolcanoConfig(
+        name="nested",
+        image="image",
+        scratch_mount_path="/mnt/data",
+    )
+    plan = BlobMountPlan(
+        mounts=[
+            BlobMount(
+                key="data",
+                account="acct",
+                container="cont",
+                mount_dir="/mnt/data",
+                sas="sig=secret",
+            )
+        ],
+        secret_name="nested-blob",
+    )
+
+    with pytest.raises(ConfigError, match="conflicts with another mount"):
+        build_volcano_job(cfg, namespace="ns", blob_plan=plan)
 
 
 def test_blob_mount_plan_setup_lines_returns_empty_without_mounts() -> None:

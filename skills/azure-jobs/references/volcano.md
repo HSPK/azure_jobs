@@ -27,6 +27,39 @@ target:
 
 See [templates](templates.md) for a complete leaf.
 
+## Set up Kubernetes access
+
+`aj k8s` manages client access and Volcano resources; `aj k` is the short
+alias. It does not create a Kubernetes cluster.
+
+Preview the built-in msr02 OIDC profile:
+
+```bash
+aj --json k setup --dry-run
+```
+
+After showing the plan and obtaining confirmation:
+
+```bash
+aj k setup
+aj k status --check-cluster
+```
+
+Setup may use sudo, add the Kubernetes apt repository/key, install kubectl,
+Krew, and oidc-login, and merge kubeconfig. It backs up and preserves unrelated
+contexts. Never pass `--yes` or `--force-repo` without explicit approval.
+
+Override profile details when the user supplies a different cluster:
+
+```bash
+aj k setup \
+  --server https://<API_SERVER> \
+  --context <CONTEXT> \
+  --namespace <NAMESPACE> \
+  --issuer-url https://<OIDC_ISSUER>/ \
+  --client-id <PUBLIC_OIDC_CLIENT_ID>
+```
+
 ## Code strategies
 Default PVC/`kubectl-exec`:
 ```yaml
@@ -59,6 +92,45 @@ _extra:
 The daemon archives code, mints blob-scoped user-delegation SAS values, uploads,
 and injects bootstrap that force-installs `azcopy`, downloads, verifies
 SHA-256, and extracts. Never print the generated URL/SAS.
+
+## Nested container runtime
+
+For rootful Podman or Docker, mount a dedicated node-backed graph root instead
+of nesting overlayfs on the job container's overlay filesystem:
+
+```yaml
+jobs:
+  - name: nested
+    sku: "{nodes}xG{processes}"
+    submit_args:
+      container_args:
+        capabilities: [SYS_ADMIN]
+        scratch_mount_path: /var/lib/containers
+        scratch_size: 200Gi
+```
+
+- `capabilities` is an explicit, deduplicated Linux capability list. `CAP_`
+  prefixes are accepted and removed; `ALL` is rejected.
+- `scratch_mount_path` must be absolute, non-root, and cannot overlap aj,
+  PVC, Blob Secret, code, or storage mounts.
+- `scratch_size` is optional. It becomes `emptyDir.sizeLimit` plus the
+  container's `ephemeral-storage` request and limit.
+- Every master/worker replica gets independent ephemeral scratch. Pod deletion
+  deletes images, layers, and nested containers stored there.
+- Blob/FUSE privilege and requested capabilities are merged into one
+  `securityContext`; neither silently replaces the other.
+
+`SYS_ADMIN` is a broad privilege and must never be added speculatively. Confirm
+the user's nested-runtime requirement and inspect cluster policy first:
+
+```bash
+kubectl auth can-i create pods -n "$NS" --context "$CTX"
+kubectl get resourcequota -n "$NS" --context "$CTX"
+```
+
+Rootless Podman may require `fuse-overlayfs` and `/dev/fuse`; this feature does
+not mount host devices or bypass Pod Security admission. Verify the actual
+runtime in a non-production queue before scaling out.
 
 ## Preflight
 ```bash
@@ -188,6 +260,27 @@ test "$LOG_STATUS" -eq 0
 Never print raw Job/pod descriptions or logs.
 
 Do not use `aj job status/logs/cancel` for Volcano.
+
+Prefer these bounded operations:
+
+```bash
+aj k queues
+aj k jobs
+aj k jobs "$JOB"
+aj k pods --job "$JOB"
+aj k logs "$POD" -c "$CONTAINER" --tail 200
+aj k events "$POD"
+```
+
+Logs/events redact credential-like output by default. `--raw` is private-only.
+Deletion is exact and confirmation-gated:
+
+```bash
+aj k delete "$JOB"
+```
+
+The wrapper rejects broad flags/selectors and removes the exact aj Blob
+credential Secret referenced by the Job after deletion.
 
 ## Cancel/delete
 

@@ -50,7 +50,11 @@ src/azure_jobs/
 The daemon is mandatory for Azure operations. If it cannot start or negotiate
 API compatibility, callers receive recovery instructions instead of a fallback
 implementation. Host-only filesystem operations such as `aj skill` remain
-client-local and never authenticate to Azure.
+client-local and never authenticate to Azure. Kubernetes setup and management
+currently use a hybrid boundary: host setup stays local, while the first
+`aj k8s` task-management implementation also invokes local `kubectl`. Moving
+task operations behind daemon `/v2` APIs is tracked in
+[issue #15](https://github.com/HSPK/azure_jobs/issues/15).
 
 ## Request flow
 

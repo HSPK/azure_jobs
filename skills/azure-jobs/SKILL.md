@@ -34,12 +34,15 @@ explicitly requested that exact action:
 
 - direct chargeable submission or queueing a submission;
 - job/queue cancellation, job deletion, or `kubectl delete`;
+- `aj k8s delete` / `aj k delete`;
 - `aj template push`;
 - `gh repo create --public` or another public-repository publication.
 
 Also confirm before:
 
 - installing or upgrading `aj` when the user did not request installation;
+- `aj k8s setup`, because it may use sudo, install host tools, add an apt
+  repository, and change kubeconfig;
 - any template pull into a non-empty shareable tree, because normal pull
   overwrites matching files and `--force` also removes stale files;
 - destructive recovery such as `aj daemon stop --force`.
@@ -127,6 +130,8 @@ Choose the value with the user when it is not already implied by the task.
 - AML when the user names an AML workspace compute.
 - Sing for native VC scheduling; prefer auto-selection unless a VC is required.
 - Volcano only with a working context, CRD, queue, namespace, and upload path.
+- For Podman/Docker inside Volcano, use the nested-runtime section in the
+  Volcano reference; never add `SYS_ADMIN` without a stated requirement.
 
 Read [templates](references/templates.md) before authoring YAML and
 [Volcano](references/volcano.md) before Kubernetes submission.
@@ -278,6 +283,11 @@ For diagnosis, separate observed status/log evidence from hypotheses. Read
 [FAQ and quota](references/faq.md) for common answers and
 [Kubernetes analysis](references/kubernetes-analysis.md) for a layered K8s
 workflow.
+
+Prefer `aj k` for standard setup, status, queue, Job, pod, log, event, and
+exact delete operations. `aj k setup` configures client access to an existing
+cluster; it does not deploy Kubernetes control-plane or worker nodes. Read the
+Volcano reference before running it.
 
 ### 8. Cleanup only when requested
 

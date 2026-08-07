@@ -37,6 +37,8 @@ WORKDIR_VOLUME_NAME = "aj-workdir"
 WORKDIR_MOUNT_PATH = "/mnt/aj-workdir"
 WORKDIR_VOLUME_SIZE = "50Gi"
 
+SCRATCH_VOLUME_NAME = "aj-scratch"
+
 UPLOAD_POD_IMAGE = "busybox:latest"
 UPLOAD_POD_NAME_PREFIX = "aj-upload-"
 UPLOAD_POD_NAME_SUFFIX_MAX = 30

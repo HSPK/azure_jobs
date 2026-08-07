@@ -27,6 +27,14 @@ aj skill install                 # Copilot, Codex, and Claude Code
 aj skill status
 ```
 
+Kubernetes/Volcano client setup and task management:
+
+```bash
+aj k setup                       # `aj k` is short for `aj k8s`
+aj k status
+aj k jobs
+```
+
 ## Quickstart
 
 ```bash
@@ -54,6 +62,7 @@ of `aj init` when no shared template repository is available.
 - Persistent submit queue, job watches, HTTP Range logs, local records, and TUI.
 - OpenAI-style SDK namespaces such as `d.job.list()` and `d.ws(name).ds.list()`.
 - Managed Agent Skill installation for Copilot, Codex, and Claude Code.
+- Kubernetes OIDC client setup and narrow Volcano job/pod/log management.
 - `amlt` compatibility through `aj run --amlt`.
 
 Start with the [documentation](https://hspk.github.io/azure_jobs/), especially
