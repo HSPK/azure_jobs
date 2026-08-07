@@ -35,6 +35,25 @@ boundaries.
 
 The selected template, node count, and GPU count become future defaults.
 
+## Task name
+
+Set the local `AJ_NAME` environment variable when submitting:
+
+```bash
+AJ_NAME=pretrain aj run -t gpu train.py
+AJ_NAME=pretrain aj run --queue -t gpu train.py
+```
+
+`AJ_NAME` is a base, not the complete identifier. aj appends the
+eight-character AJ ID and applies backend normalization. Without it, aj uses
+the current directory and, for a direct existing-file command, the file stem.
+The final value is injected into the task as runtime `AJ_NAME`.
+
+Volcano uses that value as a DNS-1035 `generateName` stem and Kubernetes adds
+a suffix. Use the returned `azure_name` for subsequent `kubectl` operations.
+Do not put `AJ_NAME` in template `submit_args.env`: stable injected `AJ_*`
+values override template entries. See [Environment](environment.md).
+
 ## Script handling
 
 If `COMMAND` names an existing file:

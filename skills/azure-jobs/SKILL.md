@@ -185,10 +185,23 @@ reference. Render without upload/submission. Raw dry-run JSON contains the
 full rendered config, so never print it directly:
 
 ```bash
-python3 <SKILL_DIR>/scripts/run-aj-json.py -- \
+AJ_NAME=TRAIN_NAME python3 <SKILL_DIR>/scripts/run-aj-json.py -- \
   aj --json run -t TEMPLATE_NAME -d -n 1 -p 1 --ppn 1 \
   python train.py
 ```
+
+Set `AJ_NAME` on the local `aj` process when the user wants a specific task
+name. It is the base name, not the complete remote identifier: aj appends
+`_<8-character-AJ-ID>`, then applies backend normalization. Without
+`AJ_NAME`, the base is the current directory, plus the command file stem when
+`COMMAND` directly names an existing file. Do not set task naming through
+template `submit_args.env.AJ_NAME`; injected runtime variables override it.
+
+The remote job receives the normalized name as `AJ_NAME`, plus `AJ_ID`,
+`AJ_TEMPLATE`, `AJ_SUBMIT_TIMESTAMP_UTC`, `AJ_NODES`,
+`AJ_GPUS_PER_NODE`, `AJ_PROCESSES`, and `AJ_PROCESSES_PER_NODE`. Read
+[job operations](references/job-operations.md#job-name-and-runtime-environment)
+before submission.
 
 All `aj run` flags must precede `COMMAND`.
 
@@ -199,17 +212,18 @@ Do not invent or transfer flags between command groups. In particular,
 
 ### 5. Summarize before mutation
 
-State backend/target, template, experiment, command, nodes, GPUs per node,
-processes per node, image, storage, identity, code size/ignores, expected
-quota/queue behavior, and direct-versus-queued mode. Obtain confirmation if
-submission or queueing was not already explicitly requested.
+State the requested name base and resolved job name, backend/target, template,
+experiment, command, nodes, GPUs per node, processes per node, image, storage,
+identity, code size/ignores, expected quota/queue behavior, and
+direct-versus-queued mode. Obtain confirmation if submission or queueing was
+not already explicitly requested.
 
 ### 6. Submit and capture identity
 
 Direct:
 
 ```bash
-python3 <SKILL_DIR>/scripts/run-aj-json.py -- \
+AJ_NAME=TRAIN_NAME python3 <SKILL_DIR>/scripts/run-aj-json.py -- \
   aj --json run -t TEMPLATE_NAME -n 1 -p 1 --ppn 1 \
   python train.py
 ```
@@ -218,7 +232,7 @@ Queued:
 
 ```bash
 AJ_SUMMARY="$(
-  python3 <SKILL_DIR>/scripts/run-aj-json.py -- \
+  AJ_NAME=TRAIN_NAME python3 <SKILL_DIR>/scripts/run-aj-json.py -- \
     aj --json run --queue -t TEMPLATE_NAME -n 1 -p 1 --ppn 1 \
     python train.py
 )"

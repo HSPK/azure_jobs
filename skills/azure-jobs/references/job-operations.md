@@ -25,6 +25,52 @@ aj --json config experiment EXPERIMENT
 | `--queue` | persist work in daemon queue |
 | `--amlt` | compatibility path through daemon-side amlt |
 
+## Job name and runtime environment
+
+Set the task name base on the local `aj` process:
+
+```bash
+AJ_NAME=pretrain aj run -t TEMPLATE_NAME -n 1 -p 1 \
+  python train.py
+```
+
+Naming is deterministic:
+
+1. `AJ_NAME` is the base when it is set.
+2. Otherwise the base is the current directory name; when `COMMAND` directly
+   names an existing file, aj also appends that file's stem.
+3. aj appends `_<8-character-AJ-ID>`.
+4. The backend normalizes the result. Volcano converts it to a DNS-1035 stem
+   and Kubernetes appends a generated resource suffix; the returned
+   `azure_name` is authoritative for Kubernetes operations.
+
+Example: `AJ_NAME=pretrain` may resolve to `pretrain_a1b2c3d4`. The job sees
+that normalized value as runtime `AJ_NAME`; it does not see only `pretrain`.
+The wrapper inherits the same local variable:
+
+```bash
+AJ_NAME=pretrain python3 <SKILL_DIR>/scripts/run-aj-json.py -- \
+  aj --json run -t TEMPLATE_NAME -d -n 1 -p 1 --ppn 1 \
+  python train.py
+```
+
+Every backend receives this stable runtime contract:
+
+| Variable | Meaning |
+| --- | --- |
+| `AJ_NAME` | final normalized job name |
+| `AJ_ID` | eight-character AJ submission ID |
+| `AJ_TEMPLATE` | selected leaf template |
+| `AJ_SUBMIT_TIMESTAMP_UTC` | ISO 8601 build timestamp |
+| `AJ_NODES` | requested nodes |
+| `AJ_GPUS_PER_NODE` | CLI `-p` value |
+| `AJ_PROCESSES` | `AJ_NODES × AJ_GPUS_PER_NODE` compatibility total |
+| `AJ_PROCESSES_PER_NODE` | CLI `--ppn` value |
+
+These injected values override same-named `jobs[0].submit_args.env` entries.
+Set the task name with the local `AJ_NAME=... aj run ...` prefix, not template
+environment YAML.
+
 Dry run:
 
 ```bash

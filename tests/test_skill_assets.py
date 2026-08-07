@@ -140,6 +140,32 @@ def test_skill_frontmatter_and_local_links_are_valid() -> None:
             )
 
 
+def test_skill_documents_job_naming_and_runtime_environment() -> None:
+    main = (SKILL / "SKILL.md").read_text(encoding="utf-8")
+    operations = (SKILL / "references/job-operations.md").read_text(
+        encoding="utf-8"
+    )
+    templates = (SKILL / "references/templates.md").read_text(encoding="utf-8")
+    combined = "\n".join((main, operations, templates))
+
+    assert "AJ_NAME=TRAIN_NAME" in main
+    assert "AJ_NAME=pretrain aj run" in operations
+    assert "_<8-character-AJ-ID>" in combined
+    assert "submit_args.env.AJ_NAME" in combined
+    assert "azure_name" in operations
+    for variable in (
+        "AJ_NAME",
+        "AJ_ID",
+        "AJ_TEMPLATE",
+        "AJ_SUBMIT_TIMESTAMP_UTC",
+        "AJ_NODES",
+        "AJ_GPUS_PER_NODE",
+        "AJ_PROCESSES",
+        "AJ_PROCESSES_PER_NODE",
+    ):
+        assert f"`{variable}`" in operations
+
+
 def _fake_aj(path: Path, source: str) -> Path:
     executable = path / "aj"
     executable.write_text(f"#!/usr/bin/env python3\n{source}", encoding="utf-8")
