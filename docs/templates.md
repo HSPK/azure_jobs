@@ -152,6 +152,35 @@ The daemon archives and uploads; the pod force-installs `azcopy`, downloads,
 verifies SHA-256, and extracts. Set `target.gpus_per_node: 0` for CPU-only;
 RDMA then defaults off unless explicit.
 
+### Nested container runtime
+
+Rootful Podman or Docker cannot reliably place an overlay graph root on the
+job container's own overlay filesystem. Give it a node-backed `emptyDir` and
+only the Linux capabilities it requires:
+
+```yaml
+config:
+  jobs:
+    - name: nested
+      sku: "{nodes}xG{processes}"
+      submit_args:
+        container_args:
+          capabilities: [SYS_ADMIN]
+          scratch_mount_path: /var/lib/containers
+          scratch_size: 200Gi
+```
+
+`scratch_mount_path` must be an absolute, non-root path that does not overlap
+shm, workdir, PVC, Blob Secret, code, or storage mounts. `scratch_size` is
+optional; when set, aj applies it as both the `emptyDir.sizeLimit` and the
+container's `ephemeral-storage` request/limit. Each replica gets independent
+scratch data, which disappears with its Pod.
+
+Capabilities are normalized and deduplicated; `ALL` is rejected. `SYS_ADMIN`
+is powerful and is never enabled by default. Cluster admission policies may
+still reject it. Rootless runtimes may additionally require `/dev/fuse` and
+`fuse-overlayfs`; this option does not expose host devices.
+
 ## Storage
 
 ```yaml

@@ -74,6 +74,7 @@ Use `aj --help` as the command source of truth. Its top-level groups are:
 | Getting Started | `init`, `run`, `dash` |
 | Jobs | `job`, `exp`, `queue`, `watch`, `list` |
 | Azure Resources | `ws`, `ds`, `env`, `image`, `sku`, `quota`, `sa`, `uai` |
+| Kubernetes | `k8s` (`k`) |
 | Project | `template`, `config`, `code`, `skill` |
 | System | `auth`, `daemon` |
 
@@ -87,6 +88,7 @@ Use `aj --help` as the command source of truth. Its top-level groups are:
 | Query, log, cancel, queue, watch, or use the TUI | [Jobs](jobs.md) |
 | Find resource, config, auth, and daemon commands | [Resources](resources.md) |
 | Install the Agent Skill for Copilot, Codex, or Claude | [Agent Skill](skills.md) |
+| Set up Kubernetes access and manage Volcano tasks | [Kubernetes](kubernetes.md) |
 | Automate through Python | [SDK](sdk.md) |
 | Look up `AJ_*` variables | [Environment](environment.md) |
 | Understand HTTP/OpenAPI and Azure REST clients | [API](api.md) |

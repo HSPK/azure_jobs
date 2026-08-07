@@ -8,7 +8,7 @@ import os
 import shlex
 import subprocess
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from azure_jobs.shared.job.spec import JobSpec
@@ -82,6 +82,9 @@ class VolcanoConfig:
     pvc_name: str = ""
     pvc_mount_dir: str = ""
     storage: dict[str, Any] = field(default_factory=dict)
+    capabilities: list[str] = field(default_factory=list)
+    scratch_mount_path: str = ""
+    scratch_size: str = ""
 
 
 def code_asset_name(name: str) -> str:
@@ -156,6 +159,9 @@ def build_volcano_config_from_request(request: JobSpec) -> VolcanoConfig:
         pvc_name=pvc_name,
         pvc_mount_dir=pvc_mount_dir,
         storage=dict(request.storage),
+        capabilities=list(vol.capabilities),
+        scratch_mount_path=vol.scratch_mount_path,
+        scratch_size=vol.scratch_size,
     )
 
 def resolve_namespace(cfg: VolcanoConfig) -> str:
@@ -166,6 +172,43 @@ def resolve_namespace(cfg: VolcanoConfig) -> str:
     placement, which happens *before* the job spec is built.
     """
     return cfg.namespace or _kubectl_namespace(cfg.context)
+
+
+def _validate_scratch_mount_conflicts(
+    cfg: VolcanoConfig,
+    blob_plan: BlobMountPlan | None,
+    code_path: str,
+) -> None:
+    from azure_jobs.shared.errors import ConfigError
+
+    scratch = PurePosixPath(cfg.scratch_mount_path)
+    occupied = [
+        C.SHM_MOUNT_PATH,
+        C.WORKDIR_MOUNT_PATH,
+        cfg.pvc_mount_dir,
+        code_path,
+    ]
+    occupied.extend(
+        str(getattr(storage, "mount_dir", "") or "")
+        for storage in cfg.storage.values()
+    )
+    if blob_plan is not None and blob_plan.enabled:
+        occupied.append(str(blob_plan.volume_mount().get("mountPath") or ""))
+        occupied.extend(
+            str(getattr(mount, "mount_dir", "") or "")
+            for mount in getattr(blob_plan, "mounts", ())
+        )
+
+    for raw in occupied:
+        if not raw:
+            continue
+        path = PurePosixPath(raw)
+        if scratch == path or scratch in path.parents or path in scratch.parents:
+            raise ConfigError(
+                "Volcano scratch_mount_path conflicts with another mount: "
+                f"{cfg.scratch_mount_path} overlaps {raw}."
+            )
+
 
 def build_volcano_job(
     cfg: VolcanoConfig,
@@ -295,6 +338,26 @@ def build_volcano_job(
     if blob_plan is not None and blob_plan.enabled:
         volumes.append(blob_plan.volume())
 
+    if cfg.scratch_mount_path:
+        _validate_scratch_mount_conflicts(cfg, blob_plan, code_path)
+        scratch: dict[str, Any] = {}
+        if cfg.scratch_size:
+            scratch["sizeLimit"] = cfg.scratch_size
+            resources["requests"]["ephemeral-storage"] = cfg.scratch_size
+            resources["limits"]["ephemeral-storage"] = cfg.scratch_size
+        volumes.append(
+            {
+                "name": C.SCRATCH_VOLUME_NAME,
+                "emptyDir": scratch,
+            }
+        )
+        volume_mounts.append(
+            {
+                "name": C.SCRATCH_VOLUME_NAME,
+                "mountPath": cfg.scratch_mount_path,
+            }
+        )
+
     def _make_pod_spec(role: str) -> dict[str, Any]:
         container: dict[str, Any] = {
             "name": role,
@@ -306,11 +369,18 @@ def build_volcano_job(
         }
         if env_list:
             container["env"] = env_list
+        security_context: dict[str, Any] = {}
+        if cfg.capabilities:
+            security_context["capabilities"] = {
+                "add": list(cfg.capabilities),
+            }
         if blob_plan is not None and blob_plan.enabled:
             container["volumeMounts"].append(blob_plan.volume_mount())
             # blobfuse2 opens /dev/fuse, which an unprivileged container cannot
             # do. Only pods that declare storage are given this privilege.
-            container["securityContext"] = {"privileged": True}
+            security_context["privileged"] = True
+        if security_context:
+            container["securityContext"] = security_context
         if cfg.rdma:
             container["ports"] = [
                 {"name": C.RDMA_PORT_NAME, "containerPort": C.RDMA_PORT}

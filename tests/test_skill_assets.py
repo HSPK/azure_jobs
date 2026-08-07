@@ -166,6 +166,46 @@ def test_skill_documents_job_naming_and_runtime_environment() -> None:
         assert f"`{variable}`" in operations
 
 
+def test_skill_documents_nested_container_runtime_safely() -> None:
+    volcano = (SKILL / "references/volcano.md").read_text(encoding="utf-8")
+    templates = (SKILL / "references/templates.md").read_text(encoding="utf-8")
+    combined = f"{volcano}\n{templates}"
+
+    assert "scratch_mount_path: /var/lib/containers" in combined
+    assert "scratch_size: 200Gi" in combined
+    assert "capabilities: [SYS_ADMIN]" in combined
+    assert "ephemeral-storage" in combined
+    assert "independent ephemeral scratch" in volcano
+    assert "`ALL` is rejected" in combined
+    assert "does not mount host devices" in " ".join(volcano.split())
+
+
+def test_skill_documents_k8s_setup_and_management_safely() -> None:
+    main = (SKILL / "SKILL.md").read_text(encoding="utf-8")
+    volcano = (SKILL / "references/volcano.md").read_text(encoding="utf-8")
+    analysis = (SKILL / "references/kubernetes-analysis.md").read_text(
+        encoding="utf-8"
+    )
+    combined = f"{main}\n{volcano}\n{analysis}"
+
+    assert "aj --json k setup --dry-run" in volcano
+    assert "does not create a Kubernetes cluster" in volcano
+    assert "Also confirm before:" in main
+    assert "`aj k8s setup`" in main
+    for command in (
+        "aj k status",
+        "aj k queues",
+        "aj k jobs",
+        "aj k pods",
+        "aj k logs",
+        "aj k events",
+        "aj k delete",
+    ):
+        assert command in combined
+    assert "--raw" in volcano
+    assert "--force-repo" in volcano
+
+
 def _fake_aj(path: Path, source: str) -> Path:
     executable = path / "aj"
     executable.write_text(f"#!/usr/bin/env python3\n{source}", encoding="utf-8")

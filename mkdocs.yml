@@ -58,6 +58,7 @@ nav:
       - Jobs: jobs.md
       - Resources and configuration: resources.md
       - Agent Skill: skills.md
+      - Kubernetes: kubernetes.md
   - Python SDK: sdk.md
   - Reference:
       - Environment variables: environment.md

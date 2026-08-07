@@ -47,6 +47,7 @@ class _LazyGroup(click.Group):
         ".queue": ("queue",),
         ".watch": ("watch",),
         ".skill": ("skill",),
+        ".k8s": ("k8s", "k"),
     }
     _ALIASES_MODULE = "._aliases"
     _COMMAND_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
@@ -56,6 +57,7 @@ class _LazyGroup(click.Group):
             "Azure Resources",
             ("ws", "ds", "env", "image", "sku", "quota", "sa", "uai"),
         ),
+        ("Kubernetes", ("k8s",)),
         ("Project", ("template", "config", "code", "skill")),
         ("System", ("auth", "daemon")),
     )

@@ -152,6 +152,14 @@ the dashboard log-file picker. Log reads may be retried; submissions may not.
 
 ## Volcano context/queue/PVC
 
+Start with the bounded wrapper:
+
+```bash
+aj k status --check-cluster
+aj k queues
+aj k jobs
+```
+
 ```bash
 CTX=<KUBECTL_CONTEXT>
 NS=<KUBERNETES_NAMESPACE>

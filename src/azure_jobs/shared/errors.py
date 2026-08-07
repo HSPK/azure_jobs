@@ -56,6 +56,9 @@ class BackendError(AJError):
 class SkillError(AJError):
     """Agent Skill installation, update, or removal failed."""
 
+class K8sError(AJError):
+    """Local Kubernetes client setup or resource operation failed."""
+
 NETWORK_LIKE_ERRORS: tuple[type[Exception], ...] = (
     requests.RequestException,
     OSError,
@@ -90,6 +93,7 @@ __all__ = [
     "QuotaError",
     "BackendError",
     "SkillError",
+    "K8sError",
     "NETWORK_LIKE_ERRORS",
     "parse_exception_message",
 ]
