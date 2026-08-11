@@ -655,6 +655,25 @@ def test_auth_whoami_non_object_returns_empty(tmp_path: Path) -> None:
     assert manager.auth_whoami() == {}
 
 
+def test_interactive_auth_streams_stderr_but_captures_json_stdout(
+    tmp_path: Path,
+) -> None:
+    runner = Runner(
+        lambda command, _kwargs: completed(
+            command,
+            stdout='{"username":"user","groups":[]}',
+        )
+    )
+    manager = K8sManager(kubeconfig=tmp_path / "config", runner=runner)
+
+    assert manager.auth_whoami(interactive=True)["username"] == "user"
+    _command, kwargs = runner.calls[-1]
+    assert kwargs["stdout"] is subprocess.PIPE
+    assert kwargs["stderr"] is None
+    assert "capture_output" not in kwargs
+    assert kwargs["timeout"] == k8s_mod.OIDC_LOGIN_TIMEOUT
+
+
 def test_pods_reject_job_without_app_label(tmp_path: Path) -> None:
     manager = K8sManager(
         kubeconfig=tmp_path / "config",

@@ -35,6 +35,7 @@ _GROUP_NAMESPACE_RE = re.compile(
     r"^(?:external:)?(bonete[0-9]+)(?:-scalt-)?esg$",
     re.IGNORECASE,
 )
+OIDC_LOGIN_TIMEOUT = 600
 _URL_QUERY = re.compile(r"(https?://[^?\s]+)\?[^\s]+", re.IGNORECASE)
 _BEARER = re.compile(r"\bBearer\s+[A-Za-z0-9._~+/=-]+", re.IGNORECASE)
 _SECRET_ASSIGNMENT = re.compile(
@@ -246,7 +247,7 @@ class K8sManager:
                 self._clean_oidc_token(plugin)
             self.context = profile.context
             self.namespace = self.effective_namespace()
-            auth = self.auth_whoami()
+            auth = self.auth_whoami(interactive=True)
             detected = self._namespace_from_groups(auth.get("groups") or [])
             if detected and detected != self.namespace:
                 self._set_context_namespace(profile.context, detected)
@@ -576,12 +577,21 @@ class K8sManager:
         args: list[str],
         *,
         timeout: float = 60,
+        show_stderr: bool = False,
     ) -> str:
         command = [*self._kubectl_base(), *args]
+        output_options: dict[str, Any] = (
+            {
+                "stdout": subprocess.PIPE,
+                "stderr": None,
+            }
+            if show_stderr
+            else {"capture_output": True}
+        )
         try:
             result = self._runner(
                 command,
-                capture_output=True,
+                **output_options,
                 text=True,
                 check=False,
                 timeout=timeout,
@@ -610,8 +620,12 @@ class K8sManager:
             )
         return result.stdout or ""
 
-    def auth_whoami(self) -> dict[str, Any]:
-        output = self._run_kubectl(["auth", "whoami", "-o", "json"], timeout=180)
+    def auth_whoami(self, *, interactive: bool = False) -> dict[str, Any]:
+        output = self._run_kubectl(
+            ["auth", "whoami", "-o", "json"],
+            timeout=OIDC_LOGIN_TIMEOUT,
+            show_stderr=interactive,
+        )
         try:
             value = json.loads(output)
         except json.JSONDecodeError as exc:
@@ -845,6 +859,7 @@ __all__ = [
     "K8sManager",
     "K8sProfile",
     "MSR02_PROFILE",
+    "OIDC_LOGIN_TIMEOUT",
     "PROFILES",
     "redact_k8s_output",
 ]
