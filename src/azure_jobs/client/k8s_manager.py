@@ -168,20 +168,66 @@ class K8sManager:
         force_repo: bool = False,
         verify: bool = True,
     ) -> dict[str, Any]:
+        """Compatibility composition of one-time install plus login."""
+        if install_tools:
+            self.install_tools(
+                kubernetes_minor=kubernetes_minor,
+                force_repo=force_repo,
+                reinstall=True,
+            )
+        return self.login(profile, verify=verify)
+
+    def install_tools(
+        self,
+        *,
+        kubernetes_minor: str = "v1.32",
+        force_repo: bool = False,
+        reinstall: bool = False,
+    ) -> dict[str, Any]:
+        """Install kubectl, Krew, and oidc-login without changing kubeconfig."""
         if not _K8S_MINOR_RE.fullmatch(kubernetes_minor):
             raise K8sError("Kubernetes minor must look like v1.32.")
-        if install_tools:
-            env = {
-                **os.environ,
-                "HOME": str(self.home),
-                "AJ_K8S_MINOR": kubernetes_minor,
-                "AJ_K8S_FORCE_REPO": "1" if force_repo else "0",
-                "AJ_K8S_INSTALL_OIDC": "1",
+        kubectl = shutil.which("kubectl") or ""
+        plugin = self._find_oidc_plugin()
+        if kubectl and plugin is not None and not reinstall:
+            return {
+                "kubectl": kubectl,
+                "plugin": str(plugin),
+                "kubernetes_minor": kubernetes_minor,
+                "changed": False,
             }
-            self._run_setup_script(env)
-
+        env = {
+            **os.environ,
+            "HOME": str(self.home),
+            "AJ_K8S_MINOR": kubernetes_minor,
+            "AJ_K8S_FORCE_REPO": "1" if force_repo else "0",
+            "AJ_K8S_INSTALL_OIDC": "1",
+        }
+        self._run_setup_script(env)
         plugin = self._resolve_oidc_plugin()
-        backup = self._merge_kubeconfig(profile, plugin)
+        return {
+            "kubectl": shutil.which("kubectl") or "",
+            "plugin": str(plugin),
+            "kubernetes_minor": kubernetes_minor,
+            "changed": True,
+        }
+
+    def login(
+        self,
+        profile: K8sProfile,
+        *,
+        verify: bool = True,
+        fresh: bool = True,
+        preserve_namespace: bool = True,
+    ) -> dict[str, Any]:
+        """Merge the OIDC profile and authenticate without installing tools."""
+        plugin = self._resolve_oidc_plugin()
+        existed_before = self.kubeconfig.exists()
+        backup, changed = self._merge_kubeconfig(
+            profile,
+            plugin,
+            preserve_namespace=preserve_namespace,
+        )
         result: dict[str, Any] = {
             "profile": profile.name,
             "kubeconfig": str(self.kubeconfig),
@@ -190,24 +236,46 @@ class K8sManager:
             "namespace": profile.namespace,
             "plugin": str(plugin),
             "verified": False,
+            "changed": changed,
         }
         if not verify:
             return result
 
-        self.context = profile.context
-        self.namespace = profile.namespace
-        auth = self.auth_whoami()
-        detected = self._namespace_from_groups(auth.get("groups") or [])
-        if detected and detected != profile.namespace:
-            self._set_context_namespace(profile.context, detected)
-            self.namespace = detected
-            result["namespace"] = detected
-        result["verified"] = True
-        result["username"] = str(auth.get("username") or "")
-        result["groups"] = list(auth.get("groups") or [])
-        return result
+        try:
+            if fresh:
+                self._clean_oidc_token(plugin)
+            self.context = profile.context
+            self.namespace = self.effective_namespace()
+            auth = self.auth_whoami()
+            detected = self._namespace_from_groups(auth.get("groups") or [])
+            if detected and detected != self.namespace:
+                self._set_context_namespace(profile.context, detected)
+                self.namespace = detected
+                result["namespace"] = detected
+            else:
+                result["namespace"] = self.namespace
+            result["verified"] = True
+            result["username"] = str(auth.get("username") or "")
+            result["groups"] = list(auth.get("groups") or [])
+            return result
+        except BaseException:
+            self._restore_failed_login(
+                backup,
+                changed=changed,
+                existed_before=existed_before,
+            )
+            raise
 
     def _resolve_oidc_plugin(self) -> Path:
+        plugin = self._find_oidc_plugin()
+        if plugin is not None:
+            return plugin
+        raise K8sError(
+            "kubectl oidc-login is not installed. Run `aj k8s install`, or "
+            "put kubectl-oidc_login on PATH."
+        )
+
+    def _find_oidc_plugin(self) -> Path | None:
         expected = (
             Path(os.getenv("KREW_ROOT", str(self.home / ".krew")))
             / "bin"
@@ -218,10 +286,30 @@ class K8sManager:
         discovered = shutil.which("kubectl-oidc_login")
         if discovered:
             return Path(discovered).resolve()
-        raise K8sError(
-            "kubectl oidc-login is not installed. Run `aj k8s setup` without "
-            "--skip-tools, or put kubectl-oidc_login on PATH."
-        )
+        return None
+
+    def _clean_oidc_token(self, plugin: Path) -> None:
+        try:
+            result = self._runner(
+                [str(plugin), "clean"],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=60,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise K8sError(
+                f"Cannot clear the OIDC token cache "
+                f"({type(exc).__name__}: {exc})."
+            ) from exc
+        if result.returncode != 0:
+            detail = redact_k8s_output(
+                (result.stderr or result.stdout or "").strip()
+            )
+            raise K8sError(
+                f"oidc-login cache cleanup exited with {result.returncode}: "
+                f"{detail or '(no output)'}"
+            )
 
     def _run_setup_script(self, env: dict[str, str]) -> None:
         if not _SETUP_SCRIPT.is_file():
@@ -297,7 +385,9 @@ class K8sManager:
         self,
         profile: K8sProfile,
         plugin: Path,
-    ) -> Path | None:
+        *,
+        preserve_namespace: bool = False,
+    ) -> tuple[Path | None, bool]:
         incoming = self._profile_config(profile, plugin)
         self.kubeconfig.parent.mkdir(parents=True, exist_ok=True)
         lock_path = self.kubeconfig.with_name(f".{self.kubeconfig.name}.lock")
@@ -307,10 +397,16 @@ class K8sManager:
 
             fcntl.flock(lock_fd, fcntl.LOCK_EX)
             current = self._read_kubeconfig()
+            merged = self._merge_named_config(
+                current,
+                incoming,
+                preserve_namespace=preserve_namespace,
+            )
+            if merged == current:
+                return None, False
             backup = self._backup_kubeconfig()
-            merged = self._merge_named_config(current, incoming)
             self._write_kubeconfig(merged)
-            return backup
+            return backup, True
         finally:
             os.close(lock_fd)
 
@@ -352,6 +448,8 @@ class K8sManager:
     def _merge_named_config(
         current: dict[str, Any],
         incoming: dict[str, Any],
+        *,
+        preserve_namespace: bool = False,
     ) -> dict[str, Any]:
         merged = dict(current)
         merged["apiVersion"] = "v1"
@@ -360,6 +458,28 @@ class K8sManager:
         for section in ("clusters", "users", "contexts"):
             existing = list(merged.get(section) or [])
             replacement = incoming[section][0]
+            if section == "contexts" and preserve_namespace:
+                previous = next(
+                    (
+                        item
+                        for item in existing
+                        if isinstance(item, dict)
+                        and item.get("name") == replacement["name"]
+                    ),
+                    None,
+                )
+                previous_namespace = str(
+                    ((previous or {}).get("context") or {}).get("namespace")
+                    or ""
+                )
+                if previous_namespace:
+                    replacement = {
+                        **replacement,
+                        "context": {
+                            **replacement["context"],
+                            "namespace": previous_namespace,
+                        },
+                    }
             existing = [
                 item
                 for item in existing
@@ -370,6 +490,28 @@ class K8sManager:
             merged[section] = existing
         merged["current-context"] = incoming["current-context"]
         return merged
+
+    def _restore_failed_login(
+        self,
+        backup: Path | None,
+        *,
+        changed: bool,
+        existed_before: bool,
+    ) -> None:
+        if not changed:
+            return
+        try:
+            if backup is not None:
+                os.replace(backup, self.kubeconfig)
+                self.kubeconfig.chmod(0o600)
+            elif not existed_before:
+                self.kubeconfig.unlink(missing_ok=True)
+        except OSError as exc:
+            log.exception("Could not restore kubeconfig after failed login")
+            raise K8sError(
+                f"Kubernetes login failed and kubeconfig rollback also failed "
+                f"({type(exc).__name__}: {exc}). Backup: {backup or '(none)'}"
+            ) from exc
 
     def _write_kubeconfig(self, value: dict[str, Any]) -> None:
         fd, raw_path = tempfile.mkstemp(

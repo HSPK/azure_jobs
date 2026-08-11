@@ -180,7 +180,7 @@ def test_skill_documents_nested_container_runtime_safely() -> None:
     assert "does not mount host devices" in " ".join(volcano.split())
 
 
-def test_skill_documents_k8s_setup_and_management_safely() -> None:
+def test_skill_documents_k8s_install_login_and_management_safely() -> None:
     main = (SKILL / "SKILL.md").read_text(encoding="utf-8")
     volcano = (SKILL / "references/volcano.md").read_text(encoding="utf-8")
     analysis = (SKILL / "references/kubernetes-analysis.md").read_text(
@@ -188,11 +188,14 @@ def test_skill_documents_k8s_setup_and_management_safely() -> None:
     )
     combined = f"{main}\n{volcano}\n{analysis}"
 
-    assert "aj --json k setup --dry-run" in volcano
+    assert "aj --json k install --dry-run" in volcano
+    assert "aj --json k login --dry-run" in volcano
     assert "does not create a Kubernetes cluster" in volcano
     assert "Also confirm before:" in main
-    assert "`aj k8s setup`" in main
+    assert "`aj k8s install`" in main
     for command in (
+        "aj k install",
+        "aj k login",
         "aj k status",
         "aj k queues",
         "aj k jobs",

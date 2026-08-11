@@ -35,30 +35,41 @@ alias. It does not create a Kubernetes cluster.
 Preview the built-in msr02 OIDC profile:
 
 ```bash
-aj --json k setup --dry-run
+aj --json k install --dry-run
+aj --json k login --dry-run
 ```
 
-After showing the plan and obtaining confirmation:
+Install tools once after showing the plan and obtaining confirmation:
 
 ```bash
-aj k setup
+aj k install
+```
+
+Then log in without repeating apt/Krew work:
+
+```bash
+aj k login
 aj k status --check-cluster
 ```
 
-Setup may use sudo, add the Kubernetes apt repository/key, install kubectl,
-Krew, and oidc-login, and merge kubeconfig. It backs up and preserves unrelated
-contexts. Never pass `--yes` or `--force-repo` without explicit approval.
+Install may use sudo and add the Kubernetes apt repository/key. Login clears
+stale OIDC tokens, atomically merges kubeconfig, preserves the discovered
+namespace, and restores the prior config if authentication fails. Never pass
+install's `--yes`, `--force-repo`, or `--reinstall` without explicit approval.
+Repeated install is otherwise a no-op when the tools already exist.
 
 Override profile details when the user supplies a different cluster:
 
 ```bash
-aj k setup \
+aj k login \
   --server https://<API_SERVER> \
   --context <CONTEXT> \
   --namespace <NAMESPACE> \
   --issuer-url https://<OIDC_ISSUER>/ \
   --client-id <PUBLIC_OIDC_CLIENT_ID>
 ```
+
+`aj k setup` is a deprecated alias for login and no longer installs tools.
 
 ## Code strategies
 Default PVC/`kubectl-exec`:

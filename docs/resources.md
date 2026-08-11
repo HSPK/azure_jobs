@@ -79,7 +79,8 @@ and JSON output.
 Kubernetes commands are also local-only and call `kubectl` directly:
 
 ```bash
-aj k setup
+aj k install
+aj k login
 aj k status
 aj k jobs
 aj k pods --job <generated-job-name>
