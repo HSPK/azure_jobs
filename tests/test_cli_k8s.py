@@ -26,9 +26,18 @@ class FakeK8sManager:
         self.calls.append(("resolve_profile", (name, overrides)))
         return MSR02_PROFILE
 
-    def setup(self, profile, **options):
-        self._maybe_fail("setup")
-        self.calls.append(("setup", (profile, options)))
+    def install_tools(self, **options):
+        self._maybe_fail("install")
+        self.calls.append(("install", options))
+        return {
+            "kubectl": "/usr/bin/kubectl",
+            "plugin": "/home/u/.krew/bin/kubectl-oidc_login",
+            "changed": True,
+        }
+
+    def login(self, profile, **options):
+        self._maybe_fail("login")
+        self.calls.append(("login", (profile, options)))
         return {
             "context": profile.context,
             "namespace": profile.namespace,
@@ -87,82 +96,107 @@ def test_k8s_and_k_alias_help_render() -> None:
     for group in ("k8s", "k"):
         result = runner.invoke(main, [group, "--help"])
         assert result.exit_code == 0
-        assert "setup" in result.output
+        assert "install" in result.output
+        assert "login" in result.output
+        assert "setup" not in result.output
         assert "jobs" in result.output
         assert "delete" in result.output
 
 
-def test_setup_dry_run_supports_json() -> None:
+def test_login_and_compat_setup_dry_run_support_json() -> None:
     result = CliRunner().invoke(
         main,
-        ["--json", "k", "setup", "--dry-run"],
+        ["--json", "k", "login", "--dry-run"],
     )
     assert result.exit_code == 0
     payload = json.loads(result.output)
-    assert payload["metadata"]["kind"] == "k8s_setup_plan"
+    assert payload["metadata"]["kind"] == "k8s_login_plan"
     assert payload["data"]["profile"] == "lambda-msr02"
 
+    compatibility = CliRunner().invoke(
+        main,
+        ["--json", "k", "setup", "--dry-run"],
+    )
+    assert compatibility.exit_code == 0
+    assert json.loads(compatibility.output)["metadata"]["kind"] == "k8s_login_plan"
 
-def test_setup_requires_non_json_and_confirmation(
+
+def test_install_requires_non_json_and_confirmation(
     monkeypatch,
 ) -> None:
     fake = FakeK8sManager()
     _patch_manager(monkeypatch, fake)
     runner = CliRunner()
 
-    rejected = runner.invoke(main, ["--json", "k8s", "setup", "--yes"])
+    rejected = runner.invoke(main, ["--json", "k8s", "install", "--yes"])
     assert rejected.exit_code == 1
     assert json.loads(rejected.output)["status"] == "failed"
-    assert not any(call[0] == "setup" for call in fake.calls)
+    assert not any(call[0] == "install" for call in fake.calls)
 
     accepted = runner.invoke(
         main,
         [
             "k8s",
-            "setup",
+            "install",
             "--yes",
-            "--skip-tools",
-            "--no-verify",
             "--force-repo",
             "--kubernetes-minor",
             "v1.33",
         ],
     )
     assert accepted.exit_code == 0, accepted.output
-    setup = next(value for name, value in fake.calls if name == "setup")
-    _profile, options = setup
+    options = next(value for name, value in fake.calls if name == "install")
     assert options == {
         "kubernetes_minor": "v1.33",
-        "install_tools": False,
         "force_repo": True,
+        "reinstall": False,
+    }
+    assert "tools installed" in accepted.output
+
+
+def test_login_is_interactive_in_json_and_preserves_namespace(
+    monkeypatch,
+) -> None:
+    fake = FakeK8sManager()
+    _patch_manager(monkeypatch, fake)
+    runner = CliRunner()
+
+    rejected = runner.invoke(main, ["--json", "k8s", "login"])
+    assert rejected.exit_code == 1
+    assert json.loads(rejected.output)["status"] == "failed"
+    assert not any(call[0] == "login" for call in fake.calls)
+
+    accepted = runner.invoke(
+        main,
+        ["k8s", "login", "--cached", "--no-verify"],
+    )
+    assert accepted.exit_code == 0
+    login = next(value for name, value in fake.calls if name == "login")
+    _profile, options = login
+    assert options == {
         "verify": False,
+        "fresh": False,
+        "preserve_namespace": True,
     }
     assert "configured" in accepted.output
 
 
-def test_setup_prompts_and_can_render_result_without_namespace(
+def test_deprecated_setup_alias_calls_login_without_tool_install(
     monkeypatch,
 ) -> None:
     fake = FakeK8sManager()
-    original_setup = fake.setup
-
-    def setup_without_namespace(profile, **options):
-        result = original_setup(profile, **options)
-        result["namespace"] = ""
-        return result
-
-    fake.setup = setup_without_namespace
     _patch_manager(monkeypatch, fake)
 
     result = CliRunner().invoke(
         main,
-        ["k8s", "setup", "--skip-tools", "--no-verify"],
-        input="y\n",
+        ["k", "setup", "--no-verify"],
     )
 
     assert result.exit_code == 0
+    assert "deprecated" in result.output
     assert "configured" in result.output
-    assert "Namespace:" not in result.output
+    assert any(name == "login" for name, _value in fake.calls)
+    assert not any(name == "install" for name, _value in fake.calls)
 
 def test_status_jobs_queues_pods_and_events_emit_json(
     monkeypatch,

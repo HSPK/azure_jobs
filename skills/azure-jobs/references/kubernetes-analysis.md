@@ -24,8 +24,8 @@ the user explicitly requests a mutation.
 Use `aj k status`, `aj k jobs`, `aj k pods --job`, `aj k logs`, and
 `aj k events` for standard bounded diagnostics. Fall back to the explicit
 `kubectl` commands below only when the wrapper does not expose the required
-field. `aj k setup` changes the host and kubeconfig and therefore requires a
-reviewed plan plus confirmation.
+field. `aj k install` changes the host and requires a reviewed plan plus
+confirmation. `aj k login` only merges kubeconfig and performs OIDC login.
 
 ## 1. Establish the target
 

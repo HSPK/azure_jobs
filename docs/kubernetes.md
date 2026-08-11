@@ -3,15 +3,15 @@
 `aj k8s` manages local access to an existing Kubernetes/Volcano cluster and
 provides narrow task operations. `aj k` is the short alias.
 
-It does **not** create control-plane or worker nodes. `setup` installs client
-tools and merges an OIDC context into kubeconfig.
+It does **not** create control-plane or worker nodes. Tool installation and
+OIDC login are deliberately separate.
 
 ## Architecture boundary
 
 The first release intentionally uses a hybrid model:
 
-- `setup` is client-local because it uses sudo, interactive OIDC, and the
-  user's kubeconfig;
+- `install` and `login` are client-local because they use sudo, interactive
+  OIDC, and the user's kubeconfig;
 - status and task-management commands also call the local `kubectl` for now;
 - Volcano submission through `aj run` remains daemon-backed.
 
@@ -19,46 +19,73 @@ Future work will move status, queues, Jobs, pods, logs, events, and deletion
 behind daemon APIs while keeping setup local. This is tracked in
 [issue #15](https://github.com/HSPK/azure_jobs/issues/15).
 
-## Set up the msr02 profile
+## Install client tools once
 
 Preview without changing the host:
 
 ```bash
-aj --json k setup --dry-run
+aj --json k install --dry-run
 ```
 
 Apply after reviewing the plan:
 
 ```bash
-aj k setup
+aj k install
 ```
 
-The built-in `lambda-msr02` profile configures:
+Install configures:
 
 - Kubernetes client repository `v1.32`;
 - `kubectl`, Krew, and `oidc-login`;
-- context `oidc@msr02`;
-- device-code OIDC authentication;
-- initial namespace `bonete01`, replaced by the matching `bonete*` group after
-  successful authentication.
 
-Setup may run `sudo apt-get`, add a `pkgs.k8s.io` source/key, install user-local
-Krew plugins, back up kubeconfig, and atomically merge the profile. It never
-blindly overwrites unrelated contexts. Existing conflicting Kubernetes apt
-sources stop setup unless `--force-repo` is explicit.
+It may run `sudo apt-get`, add a `pkgs.k8s.io` source/key, and install
+user-local Krew plugins. Existing conflicting Kubernetes apt sources stop
+installation unless `--force-repo` is explicit.
 
 Useful options:
 
 ```bash
-aj k setup --skip-tools            # merge kubeconfig only
-aj k setup --no-verify             # skip OIDC whoami
-aj k setup --kubernetes-minor v1.33
-aj k setup --server https://... --issuer-url https://... --client-id ...
-aj k setup --kubeconfig /path/to/config
+aj k install --kubernetes-minor v1.33
+aj k install --force-repo
+aj k install --reinstall
 ```
 
-`setup` is interactive and rejects JSON mode except for `--dry-run`. Agents
-must present the plan and obtain confirmation before using `--yes`.
+`install` is interactive and rejects JSON mode except for `--dry-run`. Agents
+must present the plan and obtain confirmation before using `--yes`. Repeating
+install is a no-op when both kubectl and oidc-login already exist;
+`--reinstall` is required to rerun apt/Krew.
+
+## Log in to msr02
+
+Daily login does not run apt or Krew:
+
+```bash
+aj --json k login --dry-run
+aj k login
+```
+
+The built-in `lambda-msr02` profile merges context `oidc@msr02` with
+device-code authentication. Login:
+
+1. resolves the existing `oidc-login` plugin;
+2. atomically merges and backs up kubeconfig only when content changes;
+3. preserves an already discovered namespace such as `bonete04`;
+4. clears stale OIDC tokens by default;
+5. verifies `kubectl auth whoami` and derives the matching `bonete*` group;
+6. restores the previous kubeconfig if authentication fails.
+
+Useful options:
+
+```bash
+aj k login --cached               # keep the cached OIDC token
+aj k login --no-verify            # merge only
+aj k login --reset-namespace      # restore profile default before detection
+aj k login --server https://... --issuer-url https://... --client-id ...
+aj k login --kubeconfig /path/to/config
+```
+
+`aj k setup` remains a deprecated alias for `aj k login`; it no longer
+installs tools.
 
 ## Status
 
@@ -134,6 +161,6 @@ aj k status --check-cluster
 kubectl oidc-login clean
 ```
 
-If tool installation fails, preserve the complete setup output. If
+If tool installation fails, preserve the complete install output. If
 authentication succeeds but namespace discovery does not, inspect
 `kubectl auth whoami -o json` and pass the namespace explicitly.

@@ -41,8 +41,8 @@ explicitly requested that exact action:
 Also confirm before:
 
 - installing or upgrading `aj` when the user did not request installation;
-- `aj k8s setup`, because it may use sudo, install host tools, add an apt
-  repository, and change kubeconfig;
+- `aj k8s install`, because it may use sudo, install host tools, and add an
+  apt repository;
 - any template pull into a non-empty shareable tree, because normal pull
   overwrites matching files and `--force` also removes stale files;
 - destructive recovery such as `aj daemon stop --force`.
@@ -284,10 +284,11 @@ For diagnosis, separate observed status/log evidence from hypotheses. Read
 [Kubernetes analysis](references/kubernetes-analysis.md) for a layered K8s
 workflow.
 
-Prefer `aj k` for standard setup, status, queue, Job, pod, log, event, and
-exact delete operations. `aj k setup` configures client access to an existing
-cluster; it does not deploy Kubernetes control-plane or worker nodes. Read the
-Volcano reference before running it.
+Prefer `aj k` for client installation, login, status, queue, Job, pod, log,
+event, and exact delete operations. `aj k install` installs client tools once;
+`aj k login` configures access to an existing cluster without rerunning apt.
+Neither deploys Kubernetes control-plane or worker nodes. Read the Volcano
+reference first.
 
 ### 8. Cleanup only when requested
 

@@ -30,7 +30,8 @@ aj skill status
 Kubernetes/Volcano client setup and task management:
 
 ```bash
-aj k setup                       # `aj k` is short for `aj k8s`
+aj k install                     # one-time kubectl/Krew/OIDC installation
+aj k login                       # kubeconfig merge + OIDC authentication
 aj k status
 aj k jobs
 ```

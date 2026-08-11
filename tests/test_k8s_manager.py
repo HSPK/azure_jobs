@@ -168,6 +168,8 @@ def test_setup_runs_packaged_installer_and_detects_namespace_group(
     def respond(command: list[str], _kwargs: dict):
         if command[0] == "bash":
             return completed(command)
+        if command[-1] == "clean":
+            return completed(command)
         assert command[-4:] == ["auth", "whoami", "-o", "json"]
         return completed(
             command,
@@ -235,6 +237,140 @@ def test_setup_rejects_bad_minor_and_supports_no_verify(manager: K8sManager) -> 
     )
     assert result["verified"] is False
     assert result["backup"] == ""
+
+
+def test_install_tools_does_not_modify_kubeconfig(manager: K8sManager) -> None:
+    result = manager.install_tools(
+        kubernetes_minor="v1.33",
+        force_repo=True,
+        reinstall=True,
+    )
+    assert result["kubernetes_minor"] == "v1.33"
+    assert result["plugin"].endswith("kubectl-oidc_login")
+    assert not manager.kubeconfig.exists()
+    command, kwargs = manager._runner.calls[0]
+    assert command == ["bash", str(k8s_mod._SETUP_SCRIPT)]
+    assert kwargs["env"]["AJ_K8S_FORCE_REPO"] == "1"
+
+
+def test_install_tools_is_noop_when_dependencies_exist(
+    manager: K8sManager,
+) -> None:
+    with patch.object(k8s_mod.shutil, "which", return_value="/usr/bin/kubectl"):
+        result = manager.install_tools()
+    assert result["changed"] is False
+    assert result["plugin"].endswith("kubectl-oidc_login")
+    assert manager._runner.calls == []
+
+
+def test_repeated_login_preserves_namespace_and_avoids_backup(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    plugin = install_oidc_plugin(home)
+
+    def respond(command: list[str], _kwargs: dict):
+        if command == [str(plugin), "clean"]:
+            return completed(command)
+        return completed(
+            command,
+            stdout=json.dumps(
+                {
+                    "username": "user",
+                    "groups": ["external:bonete04esg"],
+                }
+            ),
+        )
+
+    manager = K8sManager(home=home, runner=Runner(respond))
+    first = manager.login(MSR02_PROFILE)
+    second = manager.login(MSR02_PROFILE)
+
+    assert first["namespace"] == "bonete04"
+    assert first["changed"] is True
+    assert second["namespace"] == "bonete04"
+    assert second["changed"] is False
+    assert second["backup"] == ""
+    assert len(list((home / ".kube").glob("config.*.bak"))) == 0
+
+
+def test_failed_login_restores_previous_kubeconfig(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    config = home / ".kube/config"
+    config.parent.mkdir(parents=True)
+    config.write_text(
+        yaml.safe_dump(
+            {
+                "apiVersion": "v1",
+                "kind": "Config",
+                "clusters": [],
+                "users": [],
+                "contexts": [
+                    {
+                        "name": "oidc@msr02",
+                        "context": {
+                            "cluster": "old",
+                            "user": "old",
+                            "namespace": "bonete04",
+                        },
+                    }
+                ],
+                "current-context": "oidc@msr02",
+            }
+        ),
+        encoding="utf-8",
+    )
+    original = config.read_text(encoding="utf-8")
+    plugin = install_oidc_plugin(home)
+
+    def respond(command: list[str], _kwargs: dict):
+        if command == [str(plugin), "clean"]:
+            return completed(command)
+        return completed(command, code=1, stderr="Unauthorized")
+
+    manager = K8sManager(home=home, runner=Runner(respond))
+    with pytest.raises(K8sError, match="Unauthorized"):
+        manager.login(MSR02_PROFILE)
+
+    assert config.read_text(encoding="utf-8") == original
+    assert stat.S_IMODE(config.stat().st_mode) == 0o600
+
+
+def test_failed_first_login_removes_new_kubeconfig(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    plugin = install_oidc_plugin(home)
+
+    def respond(command: list[str], _kwargs: dict):
+        if command == [str(plugin), "clean"]:
+            return completed(command)
+        return completed(command, code=1, stderr="Unauthorized")
+
+    manager = K8sManager(home=home, runner=Runner(respond))
+    with pytest.raises(K8sError, match="Unauthorized"):
+        manager.login(MSR02_PROFILE)
+    assert not manager.kubeconfig.exists()
+
+
+def test_oidc_cache_cleanup_failures_are_actionable(manager: K8sManager) -> None:
+    manager._runner = Runner(
+        lambda command, _kwargs: completed(
+            command,
+            code=3,
+            stderr="cleanup failed",
+        )
+    )
+    with pytest.raises(K8sError, match="cleanup exited with 3"):
+        manager.login(MSR02_PROFILE)
+
+    manager._runner = Runner(
+        lambda command, _kwargs: (_ for _ in ()).throw(
+            subprocess.TimeoutExpired(command, 4)
+        )
+    )
+    with pytest.raises(K8sError, match="TimeoutExpired"):
+        manager.login(MSR02_PROFILE)
 
 
 def test_setup_script_missing_timeout_error_and_exit_are_actionable(

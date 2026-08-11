@@ -54,21 +54,69 @@ def k8s_group() -> None:
     """Set up Kubernetes access and manage Volcano tasks."""
 
 
-@k8s_group.command(name="setup")
-@click.option(
-    "--profile",
-    type=click.Choice(tuple(sorted(PROFILES))),
-    default="lambda-msr02",
-    show_default=True,
-)
-@click.option("--cluster", default="", help="Override kubeconfig cluster name.")
-@click.option("--server", default="", help="Override Kubernetes HTTPS API URL.")
-@click.option("--context", "context_name", default="", help="Override context name.")
-@click.option("--namespace", default="", help="Initial namespace.")
-@click.option("--user", "user_name", default="", help="Kubeconfig user name.")
-@click.option("--issuer-url", default="", help="OIDC issuer HTTPS URL.")
-@click.option("--client-id", default="", help="OIDC public client ID.")
-@click.option("--extra-scopes", default="", help="Comma-separated OIDC scopes.")
+def _profile_options(command: _Command) -> _Command:
+    command = click.option(
+        "--dry-run",
+        is_flag=True,
+        help="Print the login plan only.",
+    )(command)
+    command = click.option(
+        "--reset-namespace",
+        is_flag=True,
+        help="Replace the existing context namespace with the profile default.",
+    )(command)
+    command = click.option(
+        "--fresh/--cached",
+        default=True,
+        help="Clear cached OIDC tokens before authentication.",
+    )(command)
+    command = click.option("--verify/--no-verify", default=True)(command)
+    command = click.option(
+        "--kubeconfig",
+        type=click.Path(path_type=Path, dir_okay=False),
+        default=None,
+    )(command)
+    command = click.option(
+        "--extra-scopes",
+        default="",
+        help="Comma-separated OIDC scopes.",
+    )(command)
+    command = click.option("--client-id", default="", help="OIDC public client ID.")(
+        command
+    )
+    command = click.option("--issuer-url", default="", help="OIDC issuer HTTPS URL.")(
+        command
+    )
+    command = click.option("--user", "user_name", default="", help="Kubeconfig user name.")(
+        command
+    )
+    command = click.option("--namespace", default="", help="Initial namespace.")(
+        command
+    )
+    command = click.option(
+        "--context",
+        "context_name",
+        default="",
+        help="Override context name.",
+    )(command)
+    command = click.option(
+        "--server",
+        default="",
+        help="Override Kubernetes HTTPS API URL.",
+    )(command)
+    command = click.option("--cluster", default="", help="Override cluster name.")(
+        command
+    )
+    command = click.option(
+        "--profile",
+        type=click.Choice(tuple(sorted(PROFILES))),
+        default="lambda-msr02",
+        show_default=True,
+    )(command)
+    return command
+
+
+@k8s_group.command(name="install")
 @click.option(
     "--kubernetes-minor",
     default="v1.32",
@@ -76,23 +124,118 @@ def k8s_group() -> None:
     help="pkgs.k8s.io client repository minor.",
 )
 @click.option(
-    "--kubeconfig",
-    type=click.Path(path_type=Path, dir_okay=False),
-    default=None,
-)
-@click.option(
-    "--skip-tools",
-    is_flag=True,
-    help="Only merge kubeconfig; do not install kubectl/Krew/oidc-login.",
-)
-@click.option(
     "--force-repo",
     is_flag=True,
     help="Remove conflicting pkgs.k8s.io apt source files.",
 )
-@click.option("--verify/--no-verify", default=True)
-@click.option("--dry-run", is_flag=True, help="Print the setup plan only.")
+@click.option(
+    "--reinstall",
+    is_flag=True,
+    help="Run installation even when kubectl and oidc-login already exist.",
+)
+@click.option("--dry-run", is_flag=True, help="Print the install plan only.")
 @click.option("-y", "--yes", is_flag=True, help="Skip the mutation confirmation.")
+def k8s_install(
+    kubernetes_minor: str,
+    force_repo: bool,
+    reinstall: bool,
+    dry_run: bool,
+    yes: bool,
+) -> None:
+    """Install kubectl, Krew, and oidc-login without changing kubeconfig."""
+    from azure_jobs.client.ui import (
+        DetailField,
+        DetailView,
+        get_output_mode,
+        render_detail,
+        show_command_result,
+        success,
+    )
+
+    plan = {
+        "kubernetes_minor": kubernetes_minor,
+        "force_repo": force_repo,
+        "reinstall": reinstall,
+        "installs": ["kubectl", "krew", "oidc-login"],
+    }
+    if dry_run:
+        render_detail(
+            DetailView(
+                data=plan,
+                fields=[DetailField(key) for key in plan],
+                title="Kubernetes Tool Install Plan",
+                metadata={"kind": "k8s_install_plan"},
+            )
+        )
+        return
+    if get_output_mode() == "json":
+        show_command_result(
+            "k8s.install",
+            status="failed",
+            message="Kubernetes tool installation is interactive; rerun without --json.",
+        )
+        raise click.exceptions.Exit(1)
+    if not yes:
+        click.confirm(
+            "Install system Kubernetes client tools with sudo and user-local Krew?",
+            abort=True,
+        )
+    result = _call_manager(
+        "k8s.install",
+        lambda: K8sManager().install_tools(
+            kubernetes_minor=kubernetes_minor,
+            force_repo=force_repo,
+            reinstall=reinstall,
+        ),
+    )
+    if result["changed"]:
+        success(f"Kubernetes tools installed; OIDC plugin: {result['plugin']}")
+    else:
+        success(
+            "Kubernetes tools already installed; no apt/Krew changes were made."
+        )
+
+
+@k8s_group.command(name="login")
+@_profile_options
+def k8s_login(
+    profile: str,
+    cluster: str,
+    server: str,
+    context_name: str,
+    namespace: str,
+    user_name: str,
+    issuer_url: str,
+    client_id: str,
+    extra_scopes: str,
+    kubeconfig: Path | None,
+    verify: bool,
+    fresh: bool,
+    reset_namespace: bool,
+    dry_run: bool,
+) -> None:
+    """Merge an OIDC kubeconfig profile and authenticate."""
+    _login_impl(
+        action="k8s.login",
+        profile=profile,
+        cluster=cluster,
+        server=server,
+        context_name=context_name,
+        namespace=namespace,
+        user_name=user_name,
+        issuer_url=issuer_url,
+        client_id=client_id,
+        extra_scopes=extra_scopes,
+        kubeconfig=kubeconfig,
+        verify=verify,
+        fresh=fresh,
+        reset_namespace=reset_namespace,
+        dry_run=dry_run,
+    )
+
+
+@k8s_group.command(name="setup", hidden=True)
+@_profile_options
 def k8s_setup(
     profile: str,
     cluster: str,
@@ -103,15 +246,54 @@ def k8s_setup(
     issuer_url: str,
     client_id: str,
     extra_scopes: str,
-    kubernetes_minor: str,
     kubeconfig: Path | None,
-    skip_tools: bool,
-    force_repo: bool,
     verify: bool,
+    fresh: bool,
+    reset_namespace: bool,
     dry_run: bool,
-    yes: bool,
 ) -> None:
-    """Install Kubernetes client tools and merge an OIDC kubeconfig profile."""
+    """Deprecated alias for `aj k8s login`."""
+    from azure_jobs.client.ui import get_output_mode, warning
+
+    if get_output_mode() != "json":
+        warning("`aj k setup` is deprecated; use `aj k login`.")
+    _login_impl(
+        action="k8s.setup",
+        profile=profile,
+        cluster=cluster,
+        server=server,
+        context_name=context_name,
+        namespace=namespace,
+        user_name=user_name,
+        issuer_url=issuer_url,
+        client_id=client_id,
+        extra_scopes=extra_scopes,
+        kubeconfig=kubeconfig,
+        verify=verify,
+        fresh=fresh,
+        reset_namespace=reset_namespace,
+        dry_run=dry_run,
+    )
+
+
+def _login_impl(
+    *,
+    action: str,
+    profile: str,
+    cluster: str,
+    server: str,
+    context_name: str,
+    namespace: str,
+    user_name: str,
+    issuer_url: str,
+    client_id: str,
+    extra_scopes: str,
+    kubeconfig: Path | None,
+    verify: bool,
+    fresh: bool,
+    reset_namespace: bool,
+    dry_run: bool,
+) -> None:
     from azure_jobs.client.ui import (
         DetailField,
         DetailView,
@@ -123,7 +305,7 @@ def k8s_setup(
 
     manager = K8sManager(kubeconfig=kubeconfig)
     selected = _call_manager(
-        "k8s.setup",
+        action,
         lambda: manager.resolve_profile(
             profile,
             cluster=cluster,
@@ -143,41 +325,34 @@ def k8s_setup(
         "context": selected.context,
         "namespace": selected.namespace,
         "kubeconfig": str(manager.kubeconfig),
-        "install_tools": not skip_tools,
-        "kubernetes_minor": kubernetes_minor,
+        "fresh": fresh,
         "verify": verify,
+        "preserve_namespace": not reset_namespace,
     }
     if dry_run:
         render_detail(
             DetailView(
                 data=plan,
                 fields=[DetailField(key) for key in plan],
-                title="Kubernetes Setup Plan",
-                metadata={"kind": "k8s_setup_plan"},
+                title="Kubernetes Login Plan",
+                metadata={"kind": "k8s_login_plan"},
             )
         )
         return
     if get_output_mode() == "json":
         show_command_result(
-            "k8s.setup",
+            action,
             status="failed",
-            message="Kubernetes setup is interactive; rerun without --json.",
+            message="Kubernetes login is interactive; rerun without --json.",
         )
         raise click.exceptions.Exit(1)
-    if not yes:
-        click.confirm(
-            "Install system Kubernetes client tools and merge "
-            f"{selected.context} into {manager.kubeconfig}?",
-            abort=True,
-        )
     result = _call_manager(
-        "k8s.setup",
-        lambda: manager.setup(
+        action,
+        lambda: manager.login(
             selected,
-            kubernetes_minor=kubernetes_minor,
-            install_tools=not skip_tools,
-            force_repo=force_repo,
             verify=verify,
+            fresh=fresh,
+            preserve_namespace=not reset_namespace,
         ),
     )
     success(
