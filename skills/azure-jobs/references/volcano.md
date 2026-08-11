@@ -58,6 +58,10 @@ namespace, and restores the prior config if authentication fails. Never pass
 install's `--yes`, `--force-repo`, or `--reinstall` without explicit approval.
 Repeated install is otherwise a no-op when the tools already exist.
 
+During login, relay the displayed device-code URL/code to the user and wait
+for them to authenticate. aj streams that prompt on stderr and allows up to
+ten minutes; it does not silently capture the prompt.
+
 Override profile details when the user supplies a different cluster:
 
 ```bash

@@ -71,7 +71,8 @@ device-code authentication. Login:
 2. atomically merges and backs up kubeconfig only when content changes;
 3. preserves an already discovered namespace such as `bonete04`;
 4. clears stale OIDC tokens by default;
-5. verifies `kubectl auth whoami` and derives the matching `bonete*` group;
+5. displays the device-code prompt directly, waits up to ten minutes, verifies
+   `kubectl auth whoami`, and derives the matching `bonete*` group;
 6. restores the previous kubeconfig if authentication fails.
 
 Useful options:
@@ -86,6 +87,10 @@ aj k login --kubeconfig /path/to/config
 
 `aj k setup` remains a deprecated alias for `aj k login`; it no longer
 installs tools.
+
+If login appears idle, check the terminal for the device-code URL and code.
+The prompt is written on stderr while aj keeps stdout for the final structured
+identity response.
 
 ## Status
 
