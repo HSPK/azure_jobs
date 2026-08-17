@@ -40,10 +40,10 @@ Every built job receives:
 | `AJ_ID` | short aj submission ID used by local records |
 | `AJ_TEMPLATE` | selected leaf template name |
 | `AJ_SUBMIT_TIMESTAMP_UTC` | ISO 8601 build timestamp |
-| `AJ_NODES` | requested node count |
-| `AJ_GPUS_PER_NODE` | CLI `-p` value |
+| `AJ_NODES` | resolved CLI/template node count |
+| `AJ_GPUS_PER_NODE` | resolved CLI/template GPU count |
 | `AJ_PROCESSES` | `AJ_NODES × AJ_GPUS_PER_NODE`; compatibility total |
-| `AJ_PROCESSES_PER_NODE` | CLI `--ppn` value |
+| `AJ_PROCESSES_PER_NODE` | resolved CLI/template launcher count |
 
 Example:
 
@@ -58,6 +58,38 @@ torchrun \
 The same history explains why SKU `{processes}` means GPUs per node.
 
 Template values with these names are overwritten by aj.
+
+## Heterogeneous Volcano runtime
+
+Heterogeneous Tasks derive topology from YAML and override scalar job values
+per Pod:
+
+| Variable | Meaning |
+| --- | --- |
+| `AJ_TASK_NAME` | current Volcano Task |
+| `AJ_TASK_INDEX` | zero-based replica index inside that Task |
+| `AJ_TASK_REPLICAS` | replicas in that Task |
+| `AJ_NODE_RANK` | unique node rank across all Tasks |
+| `AJ_GPU_NODES` | total replicas with GPUs |
+| `AJ_TOTAL_GPUS` | total GPUs across all Tasks |
+| `AJ_GPUS_PER_NODE` | current Task's GPU count |
+| `AJ_PROCESSES_PER_NODE` | current Task's process count |
+
+Rank order is `master`, then remaining Task names lexicographically.
+`AJ_NODE_RANK` is the Task's rank base plus `AJ_TASK_INDEX`.
+
+Volcano supplies `VK_TASK_INDEX`; aj derives and exports `AJ_TASK_INDEX`,
+`AJ_NODE_RANK`, `NODE_RANK`, and `RANK` before the user command. These are
+environment variables, not launcher arguments. Pass one explicitly when a
+launcher requires it:
+
+```bash
+torchrun --node-rank "$RANK" ...
+```
+
+Existing `RANK`, `NODE_RANK`, `WORLD_SIZE`, `MASTER_ADDR`, and `MASTER_PORT`
+values take precedence. By default, `WORLD_SIZE` is total Pods and
+`MASTER_ADDR` points to `master-0`.
 
 ## Local client and daemon controls
 

@@ -96,7 +96,7 @@ Configuration is stored in `.azure_jobs/aj_config.json`:
 
 ```json
 {
-  "defaults": {"template": "gpu", "nodes": 1, "processes": 8},
+  "defaults": {"template": "gpu"},
   "workspace": {
     "subscription_id": "...",
     "resource_group": "...",
@@ -109,7 +109,9 @@ Configuration is stored in `.azure_jobs/aj_config.json`:
 }
 ```
 
-`defaults.processes` is the historical stored name for GPUs per node.
+`aj run` does not write defaults. Legacy `defaults.nodes` and
+`defaults.processes` values are ignored; job shape comes from current CLI
+arguments or template YAML.
 
 ## Auth and daemon
 

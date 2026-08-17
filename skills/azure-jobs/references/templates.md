@@ -37,6 +37,13 @@ Only resolved `config` becomes the template. `base` may be null/string/list.
 Replacements are deep-copied. Raw merged config may contain environment
 secrets; inspect `template show` through `run-aj-json.py`.
 
+## Homogeneous shape
+
+Resolve nodes from current `-n` or `jobs[0].instance_count`; resolve GPUs from
+current `-p` or `target.gpus_per_node`. Missing either is an error.
+`--ppn` falls back to `jobs[0].process_count_per_node`, then `1`. `aj run`
+never saves shape values or silently assumes `1x1`.
+
 ## Complete AML
 ```yaml
 base:
@@ -44,6 +51,7 @@ config:
   target:
     service: aml
     name: <AML_COMPUTE>
+    gpus_per_node: 1
   environment:
     image: mcr.microsoft.com/azureml/openmpi4.1.0-ubuntu20.04:latest
     setup: [python -m pip install -e .]
@@ -53,6 +61,7 @@ config:
   jobs:
     - name: train
       sku: G1
+      instance_count: 1
       identity: managed
       tags: [purpose:training]
       submit_args:
@@ -69,6 +78,7 @@ config:
   target:
     service: sing
     workspace_name: <AML_WORKSPACE>
+    gpus_per_node: 1
     # name: <VC_NAME>                    # omit/empty for auto
     # subscription_id: <VC_SUBSCRIPTION> # optional VC filter
     # resource_group: <VC_RESOURCE_GROUP>
@@ -81,6 +91,7 @@ config:
   jobs:
     - name: train
       sku: "1x40G1-A100"
+      instance_count: 1
       sla_tier: Premium
       priority: high
       submit_args:
@@ -116,6 +127,7 @@ config:
   jobs:
     - name: train
       sku: "{nodes}xG{processes}"
+      instance_count: 2
       submit_args:
         env:
           AMLT_PERSISTENT_VOLUME_NAME: <PVC_NAME>
@@ -124,6 +136,7 @@ config:
 ```
 Volcano does not use `target.name` as compute. Default code transfer uses the
 PVC. Blob archive alternative:
+
 ```yaml
 config:
   _extra:
@@ -137,6 +150,71 @@ config:
         pod_download_retries: 5
 ```
 Remove PVC variables if unnecessary. Read [Volcano](volcano.md).
+
+## Heterogeneous Volcano Tasks
+
+Use one typed mapping when roles need different resources, images, setup, or
+commands:
+
+```yaml
+config:
+  target:
+    service: volcano
+    namespace: <KUBERNETES_NAMESPACE>
+    queue: <VOLCANO_QUEUE>
+    context: <KUBECTL_CONTEXT>
+  environment:
+    image: <COMMON_IMAGE>
+    setup: [python -m pip install -e .]
+  jobs:
+    - name: train
+      sku: heterogeneous
+  _extra:
+    volcano:
+      tasks:
+        master:
+          replicas: 1
+          cpus_per_node: 16
+          memory: 64Gi
+          gpus_per_node: 0
+          rdma: false
+          processes_per_node: 1
+          command: [python coordinator.py]
+        a100-worker:
+          replicas: 2
+          cpus_per_node: 96
+          memory: 512Gi
+          gpus_per_node: 8
+          rdma: true
+          processes_per_node: 8
+          node_selector:
+            nvidia.com/gpu.product: A100-SXM4-80GB
+        h100-worker:
+          replicas: 4
+          cpus_per_node: 96
+          memory: 1Ti
+          gpus_per_node: 8
+          rdma: true
+          processes_per_node: 8
+          node_selector:
+            nvidia.com/gpu.product: H100-80GB-HBM3
+          environment: {image: <H100_IMAGE>}
+          command: [python h100_train.py]
+```
+
+`master` is required with one replica. Every Task requires replicas, CPU,
+memory, GPUs, RDMA, and processes per node. Image/setup inherit top-level
+environment; omitted command inherits template plus CLI command; env and
+container args merge with Task values winning.
+
+Submit without `-n`, `-p`, or `--ppn`:
+
+```bash
+aj run -t HETEROGENEOUS_TEMPLATE python train.py
+```
+
+Do not use global target resources, SKU shape placeholders, or `--amlt`.
+Dry-run JSON reports the expanded Task list and aggregate resources.
 
 Nested container runtime opt-in:
 

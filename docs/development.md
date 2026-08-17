@@ -30,7 +30,8 @@ Python 3.10 and 3.12 are exercised in CI.
 | Azure REST clients | `src/azure_jobs/server/az_client/` |
 | submission backends | `src/azure_jobs/server/submit/` |
 
-See [Architecture](architecture.md) for the request and submission flows.
+See [System design](design/index.md) for request, submission, and subsystem
+boundaries.
 
 ## Hard design invariants
 

@@ -3,6 +3,9 @@
 `aj run` builds a local `JobSpec`; all real execution then crosses HTTP to the
 daemon. There is no in-process submission fallback.
 
+See [Submission backends](design/submission-backends.md) for registry,
+artifact, and failure semantics.
+
 ## Command form
 
 ```bash
@@ -25,15 +28,21 @@ boundaries.
 
 | Option | Contract |
 | --- | --- |
-| `-t`, `--template` | leaf template; omitted means the saved default |
-| `-n`, `--nodes` | node count; default is saved value or `1` |
-| `-p`, `--gpn`, `--gpus-per-node` | GPUs per node; drives SKU and runtime variables |
-| `--ppn`, `--processes-per-node` | launcher processes per node; default `1` |
+| `-t`, `--template` | leaf template; omitted only when a configured template exists |
+| `-n`, `--nodes` | nodes; otherwise `jobs[0].instance_count` is required |
+| `-p`, `--gpn`, `--gpus-per-node` | GPUs per node; otherwise `target.gpus_per_node` is required |
+| `--ppn`, `--processes-per-node` | launcher processes; template value, then `1` |
 | `-d`, `--dry-run` | render YAML; no upload or submission |
 | `--queue` | persist work in the daemon and return a ticket |
 | `--amlt` | render compatibility YAML and run external `amlt` in the daemon |
 
-The selected template, node count, and GPU count become future defaults.
+`aj run` never saves template or resource arguments. CLI values apply only to
+that invocation. For homogeneous jobs, each node/GPU value must come from the
+current command or YAML; missing values fail before upload.
+
+For `_extra.volcano.tasks`, YAML owns topology. Omit `-n`, `-p`, and `--ppn`;
+aj derives totals from Tasks. Heterogeneous Volcano Tasks also reject
+`--amlt`.
 
 ## Task name
 

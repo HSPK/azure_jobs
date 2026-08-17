@@ -123,3 +123,6 @@ Important keys:
 
 The dashboard uses the same SDK and daemon as the CLI. Controllers perform
 I/O; stores own state; HTTP Range reads keep log tailing bounded.
+
+See [TUI dashboard design](design/tui.md) for state, concurrency, and
+destructive-action contracts.

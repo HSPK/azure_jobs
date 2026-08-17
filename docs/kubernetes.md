@@ -19,6 +19,9 @@ Future work will move status, queues, Jobs, pods, logs, events, and deletion
 behind daemon APIs while keeping setup local. This is tracked in
 [issue #15](https://github.com/HSPK/azure_jobs/issues/15).
 
+See [Kubernetes management design](design/kubernetes.md) for the boundary,
+safety invariants, and migration plan.
+
 ## Install client tools once
 
 Preview without changing the host:

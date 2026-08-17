@@ -17,6 +17,9 @@ with connect() as d:
 negotiation fails, it raises an actionable transport error. There is no
 in-process fallback.
 
+See [Client and daemon](design/client-daemon.md) for transport, context, queue,
+and watcher ownership.
+
 ## Connection lifecycle
 
 ```python

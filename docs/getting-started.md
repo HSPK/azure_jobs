@@ -101,6 +101,7 @@ config:
   target:
     service: aml
     name: <AML_COMPUTE>
+    gpus_per_node: 1
   environment:
     image: mcr.microsoft.com/azureml/openmpi4.1.0-ubuntu20.04:latest
   code:
@@ -110,6 +111,7 @@ config:
   jobs:
     - name: train
       sku: G1
+      instance_count: 1
       identity: managed
 ```
 

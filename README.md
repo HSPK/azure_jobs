@@ -42,8 +42,8 @@ aj k jobs
 mkdir training && cd training
 aj init                         # pull templates, choose workspace, set experiment
 aj template list
-aj run -t <template> -d python -c "print('hello')"
-aj run -t <template> python -c "print('hello')"
+aj run -t <template> -d -n 1 -p 1 python -c "print('hello')"
+aj run -t <template> -n 1 -p 1 python -c "print('hello')"
 aj job list
 aj job logs <job-or-aj-id>
 aj dash

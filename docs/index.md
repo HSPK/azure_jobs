@@ -33,8 +33,8 @@ aj init
 
 aj template list
 aj template show <template>
-aj run -t <template> -d python -c "print('hello')"
-aj run -t <template> python -c "print('hello')"
+aj run -t <template> -d -n 1 -p 1 python -c "print('hello')"
+aj run -t <template> -n 1 -p 1 python -c "print('hello')"
 
 aj job status <job-or-aj-id>
 aj job logs <job-or-aj-id>
@@ -92,6 +92,6 @@ Use `aj --help` as the command source of truth. Its top-level groups are:
 | Automate through Python | [SDK](sdk.md) |
 | Look up `AJ_*` variables | [Environment](environment.md) |
 | Understand HTTP/OpenAPI and Azure REST clients | [API](api.md) |
-| Understand layering and backend flow | [Architecture](architecture.md) |
+| Understand architecture and design decisions | [System design](design/index.md) |
 | Change or test the repository | [Development](development.md), [Testing](testing.md) |
 | Give an agent repository facts and constraints | [Agent guide](agent-guide.md) |
