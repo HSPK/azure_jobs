@@ -16,8 +16,16 @@ from azure_jobs.client.cli import sku as sku_mod
 from azure_jobs.client.ui.console import console as ui_console
 from azure_jobs.server.az_client.arm import InstanceTypeInfo
 from azure_jobs.shared import const
+from azure_jobs.shared.contract.models import CatalogItem, Target
 from azure_jobs.shared.errors import AJError
-from azure_jobs.shared.types.azure import SeriesQuota, SlaTierQuota, VCInfo
+from azure_jobs.shared.template import validate_template
+from azure_jobs.shared.types.azure import (
+    ManagedIdentityInfo,
+    SeriesQuota,
+    SlaTierQuota,
+    StorageAccountInfo,
+    VCInfo,
+)
 
 
 class _Context(SimpleNamespace):
@@ -26,6 +34,20 @@ class _Context(SimpleNamespace):
 
     def __exit__(self, exc_type, exc, tb):
         return False
+
+
+def _wire_item(
+    category: str,
+    raw: object,
+    *,
+    name: str | None = None,
+) -> CatalogItem:
+    item = CatalogItem(
+        category,
+        name if name is not None else str(getattr(raw, "name", "")),
+        raw,
+    )
+    return CatalogItem.from_json(item.to_json())
 
 
 def test_pick_row_accepts_numeric_selection() -> None:
@@ -306,17 +328,26 @@ def test_pick_storage_prompts_manually_after_discovery_failure(
 
 
 def test_pick_workspace_returns_selected_workspace() -> None:
-    ws = SimpleNamespace(
-        name="ws-demo",
-        resource_group="rg-demo",
-        location="westus",
-        subscription_id="sub-1",
+    ws = Target.from_json(
+        Target.create(
+            backend="azureml",
+            native_id="sub-1/rg-demo/ws-demo",
+            label="ws-demo",
+            detail="rg-demo",
+            metadata={
+                "workspace_name": "ws-demo",
+                "resource_group": "rg-demo",
+                "location": "westus",
+                "subscription_id": "sub-1",
+            },
+        ).to_json()
     )
     conn = _Context(ws=SimpleNamespace(list=MagicMock(return_value=[ws])))
     with (
         patch("azure_jobs.connect", return_value=conn),
-        patch("azure_jobs.client.cli._template_init._pick_row", return_value={"ws": ws}),
+        patch("click.prompt", return_value="1"),
         patch.object(ui_console, "status", return_value=nullcontext()),
+        patch.object(ui_console, "print"),
     ):
         picked = template_init_mod._pick_workspace()
 
@@ -325,6 +356,114 @@ def test_pick_workspace_returns_selected_workspace() -> None:
         "resource_group": "rg-demo",
         "subscription_id": "sub-1",
     }
+
+
+def test_pick_workspace_preserves_domain_errors() -> None:
+    conn = _Context(ws=SimpleNamespace(list=MagicMock(side_effect=AJError("login"))))
+    with (
+        patch("azure_jobs.connect", return_value=conn),
+        patch.object(ui_console, "status", return_value=nullcontext()),
+        pytest.raises(AJError, match="login"),
+    ):
+        template_init_mod._pick_workspace()
+
+
+def test_run_wizard_accepts_sdk_contract_models(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / ".azure_jobs"
+    templates = home / "template"
+    monkeypatch.setattr(const, "AJ_HOME", home)
+    monkeypatch.setattr(const, "AJ_TEMPLATE_HOME", templates)
+
+    uai = ManagedIdentityInfo(
+        name="Demo Identity",
+        resource_group="rg",
+        subscription_id="sub",
+        location="westus",
+        id="/subscriptions/sub/resourceGroups/rg/providers/"
+        "Microsoft.ManagedIdentity/userAssignedIdentities/demo",
+    )
+    storage = StorageAccountInfo(
+        name="demostorage",
+        resource_group="rg",
+        subscription_id="sub",
+        location="westus",
+    )
+    workspace = Target.from_json(
+        Target.create(
+            backend="azureml",
+            native_id="sub/rg/ws",
+            label="ws",
+            detail="rg",
+            metadata={
+                "subscription_id": "sub",
+                "resource_group": "rg",
+                "workspace_name": "ws",
+                "location": "westus",
+            },
+        ).to_json()
+    )
+    quota = SeriesQuota(
+        series="NDH100v5",
+        accelerator="H100",
+        gpu_memory=80,
+        user_limit=SlaTierQuota(limit=1, used=0),
+    )
+    vc = VCInfo("fast", "rg", "sub", quotas=[quota])
+    conn = _Context(
+        uai=SimpleNamespace(
+            list=MagicMock(return_value=[_wire_item("identity", uai)])
+        ),
+        image=SimpleNamespace(
+            list=MagicMock(
+                return_value=[
+                    _wire_item(
+                        "singularity_image",
+                        {"names": ["demo:latest"]},
+                        name="demo:latest",
+                    )
+                ]
+            )
+        ),
+        sa=SimpleNamespace(
+            list=MagicMock(return_value=[_wire_item("storage_account", storage)])
+        ),
+        ws=SimpleNamespace(list=MagicMock(return_value=[workspace])),
+        quota=SimpleNamespace(
+            list=MagicMock(return_value=[_wire_item("vc_quota", vc)])
+        ),
+    )
+
+    with (
+        patch("azure_jobs.connect", return_value=conn),
+        patch(
+            "click.prompt",
+            side_effect=[
+                "1",
+                "1",
+                "1",
+                "container",
+                "data",
+                "/mnt/data",
+                "1",
+            ],
+        ),
+        patch("click.confirm", return_value=False),
+        patch.object(ui_console, "status", return_value=nullcontext()),
+        patch.object(ui_console, "print"),
+        patch("azure_jobs.client.ui.dim"),
+        patch("azure_jobs.client.ui.error"),
+        patch("azure_jobs.client.ui.info"),
+        patch("azure_jobs.client.ui.success"),
+        patch("azure_jobs.client.ui.warning"),
+    ):
+        template_init_mod.run_wizard(None, force=False)
+
+    leaf = templates / "fast_H100_80.yaml"
+    assert leaf.exists()
+    assert validate_template(leaf) == []
 
 
 def test_run_wizard_with_no_generated_leaves_skips_follow_up_hint() -> None:

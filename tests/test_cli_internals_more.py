@@ -16,6 +16,7 @@ import azure_jobs.client.cli._workspace_setup as ws_setup_mod
 import azure_jobs.shared.config as config_mod
 from azure_jobs.client.cli import runner as runner_mod
 from azure_jobs.shared.config import AJWorkspace
+from azure_jobs.shared.contract.models import Target
 from azure_jobs.shared.job.spec import JobEvent, JobResult
 
 
@@ -118,9 +119,14 @@ class TestWorkspaceSetupExtras:
 
     def test_workspaces_flattens_targets_and_passes_subscription_id(self) -> None:
         targets = [
-            SimpleNamespace(
-                label="fallback",
-                metadata={"resource_group": "rg", "location": "westus", "subscription_id": "sub"},
+            Target.from_json(
+                Target.create(
+                    backend="azureml",
+                    native_id="sub/rg/fallback",
+                    label="fallback",
+                    detail="rg",
+                    metadata={"location": "westus", "subscription_id": "sub"},
+                ).to_json()
             )
         ]
         conn = _Context(ws=SimpleNamespace(list=MagicMock(return_value=targets)))
