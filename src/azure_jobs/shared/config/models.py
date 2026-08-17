@@ -12,8 +12,6 @@ DEFAULT_DASHBOARD_PAGE_SIZE = 50
 @dataclass
 class AJDefaults:
     template: str | None = None
-    nodes: int | None = None
-    processes: int | None = None
 
 @dataclass
 class AJWorkspace:

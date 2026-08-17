@@ -34,6 +34,25 @@ def _aml_view(request: JobSpec) -> "AmlOpts":
 def _request_payload(request: JobSpec) -> dict[str, Any]:
     aml = _aml_view(request)
     compute = aml.compute or ("auto" if request.service == "sing" else "")
+    tasks = _volcano_task_payload(request)
+    total_processes = (
+        sum(
+            task["replicas"] * task["processes_per_node"]
+            for task in tasks
+        )
+        if tasks
+        else request.nodes * (request.processes_per_node or 1)
+    )
+    gpu_nodes = (
+        sum(task["replicas"] for task in tasks if task["gpus_per_node"] > 0)
+        if tasks
+        else (request.nodes if request.gpus_per_node > 0 else 0)
+    )
+    total_gpus = (
+        sum(task["replicas"] * task["gpus_per_node"] for task in tasks)
+        if tasks
+        else request.nodes * request.gpus_per_node
+    )
     return {
         "template_name": request.template_name,
         "experiment": request.expr_name,
@@ -44,7 +63,10 @@ def _request_payload(request: JobSpec) -> dict[str, Any]:
         "nodes": request.nodes,
         "gpus_per_node": request.gpus_per_node,
         "processes_per_node": request.processes_per_node,
-        "total_processes": request.nodes * (request.processes_per_node or 1),
+        "total_processes": total_processes,
+        "gpu_nodes": gpu_nodes,
+        "total_gpus": total_gpus,
+        "tasks": tasks,
         "image": request.image,
         "image_registry": request.image_registry,
         "subscription_id": aml.subscription_id,
@@ -57,6 +79,40 @@ def _request_payload(request: JobSpec) -> dict[str, Any]:
         "command": list(request.command),
     }
 
+
+def _volcano_task_payload(request: JobSpec) -> list[dict[str, Any]]:
+    from azure_jobs.shared.opts import VolcanoOpts
+
+    backend = request.backend_spec
+    if not isinstance(backend, VolcanoOpts) or not backend.tasks:
+        return []
+    names = ["master", *sorted(name for name in backend.tasks if name != "master")]
+    rows: list[dict[str, Any]] = []
+    for name in names:
+        task = backend.tasks[name]
+        environment = task.environment
+        command = task.command if task.command is not None else request.command
+        rows.append(
+            {
+                "name": name,
+                "replicas": task.replicas,
+                "cpus_per_node": task.cpus_per_node,
+                "memory": task.memory,
+                "gpus_per_node": task.gpus_per_node,
+                "processes_per_node": task.processes_per_node,
+                "rdma": task.rdma,
+                "image": (
+                    environment.image
+                    if environment is not None and environment.image
+                    else request.image
+                ),
+                "command": list(command),
+                "node_selector": dict(task.node_selector),
+            }
+        )
+    return rows
+
+
 def show_submission_preview(
     request: JobSpec,
     *,
@@ -68,7 +124,15 @@ def show_submission_preview(
 
     aml = _aml_view(request)
     compute = aml.compute or ("auto" if request.service == "sing" else "-")
-    total_processes = request.nodes * request.processes_per_node
+    task_rows = _volcano_task_payload(request)
+    total_processes = (
+        sum(
+            task["replicas"] * task["processes_per_node"]
+            for task in task_rows
+        )
+        if task_rows
+        else request.nodes * request.processes_per_node
+    )
     final_cmd = request.command[-1] if request.command else ""
     storage_count = len(request.storage)
     tag_text = ", ".join(aml.tags[:4]) if aml.tags else "-"
@@ -101,9 +165,17 @@ def show_submission_preview(
             ("Compute", esc(compute)),
             ("SKU", esc(request.sku or "auto")),
             ("Nodes", str(request.nodes)),
+            *([("Tasks", str(len(task_rows)))] if task_rows else []),
             (
                 "Processes",
-                f"{total_processes}  ({request.processes_per_node} x {request.nodes})",
+                (
+                    str(total_processes)
+                    if task_rows
+                    else (
+                        f"{total_processes}  "
+                        f"({request.processes_per_node} x {request.nodes})"
+                    )
+                ),
             ),
             ("Priority", esc(aml.priority)),
         ],
@@ -127,6 +199,15 @@ def show_submission_preview(
     details.add_row("Created", created_at)
     details.add_row("Storage", f"{storage_count} mounts")
     details.add_row("Tags", esc(tag_text))
+    if task_rows:
+        topology = ", ".join(
+            (
+                f"{task['name']}={task['replicas']}x"
+                f"{task['gpus_per_node']}G"
+            )
+            for task in task_rows
+        )
+        details.add_row("Topology", esc(topology))
 
     body = Table.grid(padding=(0, 0))
     body.add_column()

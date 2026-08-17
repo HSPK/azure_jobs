@@ -63,8 +63,18 @@ nav:
   - Reference:
       - Environment variables: environment.md
       - HTTP and Azure APIs: api.md
+  - Design:
+      - Overview: design/index.md
+      - Core:
+          - Client and daemon: design/client-daemon.md
+          - Templates and JobSpec: design/job-description.md
+          - Submission backends: design/submission-backends.md
+          - Heterogeneous Volcano tasks: design/volcano-heterogeneous-tasks.md
+      - Client systems:
+          - TUI dashboard: design/tui.md
+          - Kubernetes management: design/kubernetes.md
+          - Agent Skill lifecycle: design/agent-skill.md
   - Internals:
-      - Architecture: architecture.md
       - Development: development.md
       - Testing: testing.md
       - Agent guide: agent-guide.md

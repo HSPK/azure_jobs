@@ -49,7 +49,26 @@ Important guard suites:
 - `test_server_submit_archive.py`: deterministic safe archive;
 - `test_sing_auto_selection.py`: exact matching and ranking;
 - `test_json_audit.py`: structured CLI output;
+- `test_cli_template_init_quota_sku.py`: interactive template bootstrap against
+  real SDK contract models;
 - `test_tui_architecture.py`: bounded workers, state ownership, lifecycle.
+
+### Use real contract models in consumer tests
+
+When a client consumes an SDK result, tests must return the same shared model
+as production (`Target`, `CatalogItem`, `Job`, and so on). Prefer constructing
+the model through `from_json(...)`, optionally round-tripping `to_json()`, when
+the production SDK also decodes that wire shape.
+
+Do not use `SimpleNamespace` or an unrestricted `MagicMock` as the returned
+resource object. Those doubles can retain removed attributes and let a client
+keep using an obsolete SDK shape without failing. Mock the namespace or
+transport call, but keep its return value contract-accurate.
+
+For metadata-backed `Target` consumers, cover both the metadata fields and the
+documented `label`/`detail` fallbacks. When changing a shared contract, search
+all SDK consumers and run their CLI/TUI tests in addition to the model and
+transport suites.
 
 ## Stress tests
 

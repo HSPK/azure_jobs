@@ -189,11 +189,19 @@ Run only backend-relevant discovery. Volcano uses the preflight in its
 reference. Render without upload/submission. Raw dry-run JSON contains the
 full rendered config, so never print it directly:
 
+For homogeneous jobs, nodes and GPUs must come from this command or explicit
+`jobs[0].instance_count` and `target.gpus_per_node` YAML. `aj run` has no
+resource memory; never infer a prior value or silently assume `1x1`.
+
 ```bash
 AJ_NAME=TRAIN_NAME python3 <SKILL_DIR>/scripts/run-aj-json.py -- \
   aj --json run -t TEMPLATE_NAME -d -n 1 -p 1 --ppn 1 \
   python train.py
 ```
+
+For `_extra.volcano.tasks`, omit `-n`, `-p`, and `--ppn` in dry-run,
+submission, and queue commands. Never use `--amlt`; YAML defines the full
+topology.
 
 Set `AJ_NAME` on the local `aj` process when the user wants a specific task
 name. It is the base name, not the complete remote identifier: aj appends
@@ -207,6 +215,10 @@ The remote job receives the normalized name as `AJ_NAME`, plus `AJ_ID`,
 `AJ_GPUS_PER_NODE`, `AJ_PROCESSES`, and `AJ_PROCESSES_PER_NODE`. Read
 [job operations](references/job-operations.md#job-name-and-runtime-environment)
 before submission.
+
+Heterogeneous Volcano Pods additionally receive Task name/index/replica count,
+global node rank, GPU-node count, and total GPUs. `AJ_TASK_INDEX` is local to
+one Task; `AJ_NODE_RANK` is global.
 
 All `aj run` flags must precede `COMMAND`.
 

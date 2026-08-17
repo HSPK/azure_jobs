@@ -17,6 +17,7 @@ from azure_jobs.client.cli import sa as sa_mod
 from azure_jobs.client.cli import workspace as ws_mod
 from azure_jobs.client.ui.console import console as ui_console
 from azure_jobs.shared.config import AJConfig, AJWorkspace
+from azure_jobs.shared.contract.models import Target
 from azure_jobs.shared.errors import AJError
 
 
@@ -137,14 +138,18 @@ class TestWorkspaceExtras:
             ws=SimpleNamespace(
                 list=MagicMock(
                     return_value=[
-                        SimpleNamespace(
-                            label="fallback",
-                            metadata={
-                                "workspace_name": "",
-                                "resource_group": "rg-a",
-                                "location": "westus",
-                                "subscription_id": "sub-1",
-                            },
+                        Target.from_json(
+                            Target.create(
+                                backend="azureml",
+                                native_id="sub-1/rg-a/fallback",
+                                label="fallback",
+                                detail="rg-a",
+                                metadata={
+                                    "workspace_name": "",
+                                    "location": "westus",
+                                    "subscription_id": "sub-1",
+                                },
+                            ).to_json()
                         )
                     ]
                 )

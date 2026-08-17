@@ -5,7 +5,9 @@ from __future__ import annotations
 import click
 
 from azure_jobs.client.cli import main
+from azure_jobs.client.cli._workspace_setup import _target_workspace_row
 from azure_jobs.shared.errors import AJError
+
 
 @main.group(name="ws")
 def ws_group() -> None:
@@ -34,15 +36,7 @@ def _ensure_workspaces() -> tuple[dict[str, str], list[dict[str, str]]]:
     if not sub["subscription_id"]:
         raise click.ClickException("Cannot detect subscription. Run `az login` first.")
 
-    found = [
-        {
-            "name": target.metadata.get("workspace_name") or target.label,
-            "resource_group": target.metadata.get("resource_group", ""),
-            "location": target.metadata.get("location", ""),
-            "subscription_id": target.metadata.get("subscription_id", ""),
-        }
-        for target in targets
-    ]
+    found = [_target_workspace_row(target) for target in targets]
 
     if not found:
         raise click.ClickException("No ML workspaces found in this subscription")
@@ -114,11 +108,11 @@ def ws_show(name: str | None) -> None:
             raise click.ClickException(str(exc)) from exc
         if target is None:
             raise click.ClickException(f"Workspace '{name}' not found")
-        meta = target.metadata
+        row = _target_workspace_row(target)
         ws = AJWorkspace(
-            subscription_id=meta.get("subscription_id", ""),
-            resource_group=meta.get("resource_group", ""),
-            workspace_name=meta.get("workspace_name") or target.label,
+            subscription_id=row["subscription_id"],
+            resource_group=row["resource_group"],
+            workspace_name=row["name"],
         )
     else:
         cfg = read_config()

@@ -4,6 +4,9 @@
 log, and Kubernetes diagnosis guidance. It supports GitHub Copilot, OpenAI
 Codex, and Claude Code.
 
+See [Agent Skill lifecycle design](design/agent-skill.md) for ownership,
+transaction, and filesystem-safety rules.
+
 ## Install
 
 The default target is all Agents in the current user's home:

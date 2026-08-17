@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from azure_jobs import connect
 from azure_jobs.shared.config.models import AJWorkspace
+from azure_jobs.shared.contract.models import Target
 
 
 def _subscription() -> dict[str, str] | None:
@@ -19,6 +20,17 @@ def _subscription() -> dict[str, str] | None:
     return {
         "subscription_id": data.get("id", ""),
         "subscription_name": data.get("name", ""),
+    }
+
+
+def _target_workspace_row(target: Target) -> dict[str, str]:
+    """Flatten the public SDK ``Target`` contract for workspace UI code."""
+    metadata = target.metadata
+    return {
+        "name": str(metadata.get("workspace_name") or target.label),
+        "resource_group": str(metadata.get("resource_group") or target.detail),
+        "location": str(metadata.get("location") or ""),
+        "subscription_id": str(metadata.get("subscription_id") or ""),
     }
 
 
@@ -34,15 +46,7 @@ def _workspaces(subscription_id: str = "") -> list[dict[str, str]]:
     """
     with connect() as d:
         found = d.ws.list(subscription_id=subscription_id)
-    return [
-        {
-            "name": target.metadata.get("workspace_name") or target.label,
-            "resource_group": target.metadata.get("resource_group", ""),
-            "location": target.metadata.get("location", ""),
-            "subscription_id": target.metadata.get("subscription_id", ""),
-        }
-        for target in found
-    ]
+    return [_target_workspace_row(target) for target in found]
 
 
 def pick_workspace(rows: list[dict[str, str]]) -> dict[str, str] | None:

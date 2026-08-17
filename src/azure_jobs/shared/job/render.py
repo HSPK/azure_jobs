@@ -28,7 +28,8 @@ def _escape_amlt_dollars(value: Any) -> Any:
 def render_amlt_yaml(request: JobSpec) -> dict[str, Any]:
     """Render amlt YAML: user's raw template with aj-resolved fields overlaid.
 
-    Overlays jobs[0].{command, sku, name, process_count_per_node, submit_args.env}.
+    Overlays jobs[0].{command, sku, name, instance_count,
+    process_count_per_node, submit_args.env}.
     Strips ``_extra`` (aj-only); escapes ``$`` → ``$$`` except for ``$CONFIG_DIR``.
     """
     if request.template is None or not request.template.raw:
@@ -49,6 +50,8 @@ def render_amlt_yaml(request: JobSpec) -> dict[str, Any]:
             j["sku"] = request.sku
         if request.name:
             j["name"] = request.name
+        if request.nodes:
+            j["instance_count"] = request.nodes
         if request.processes_per_node:
             j["process_count_per_node"] = request.processes_per_node
         if request.env_vars:

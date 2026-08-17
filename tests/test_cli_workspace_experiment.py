@@ -15,6 +15,7 @@ from azure_jobs.client.cli import experiment as exp_mod
 from azure_jobs.client.cli import workspace as ws_mod
 from azure_jobs.client.ui.console import console as ui_console
 from azure_jobs.shared.config import AJConfig, AJWorkspace
+from azure_jobs.shared.contract.models import Target
 
 
 class _Context(SimpleNamespace):
@@ -122,13 +123,17 @@ class TestWorkspaceCommands:
 
     def test_ws_show_named_json_success(self) -> None:
         emit_json = MagicMock()
-        target = SimpleNamespace(
-            label="fallback-label",
-            metadata={
-                "subscription_id": "sub-1",
-                "resource_group": "rg-1",
-                "workspace_name": "ws-1",
-            },
+        target = Target.from_json(
+            Target.create(
+                backend="azureml",
+                native_id="sub-1/rg-1/ws-1",
+                label="ws-1",
+                detail="rg-1",
+                metadata={
+                    "subscription_id": "sub-1",
+                    "workspace_name": "ws-1",
+                },
+            ).to_json()
         )
         conn = _Context(ws=SimpleNamespace(get=MagicMock(return_value=target)))
         with (

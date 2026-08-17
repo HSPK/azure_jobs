@@ -123,8 +123,6 @@ def _pick_environment() -> tuple[str, str]:
             # An unreachable daemon already explains how to recover;
             # wrapping it again would bury the instructions.
             raise
-        except AJError:
-            raise
         except Exception as exc:
             log.exception("Could not list Singularity images")
             warning(
@@ -279,8 +277,17 @@ def _generate_leaves(
                         "target": {
                             "name": vc.name,
                             "workspace_name": workspace["workspace_name"],
+                            "gpus_per_node": 1,
                         },
-                        "jobs": [{"sku": _sku_for(sq.accelerator, sq.gpu_memory)}],
+                        "jobs": [
+                            {
+                                "sku": _sku_for(
+                                    sq.accelerator,
+                                    sq.gpu_memory,
+                                ),
+                                "instance_count": 1,
+                            }
+                        ],
                     },
                 }
                 _write_yaml(leaf_path, leaf)
@@ -304,6 +311,7 @@ def _generate_leaves(
 
 def _pick_workspace() -> dict[str, str]:
     from azure_jobs import connect
+    from azure_jobs.client.cli._workspace_setup import _target_workspace_row
     from azure_jobs.client.ui import console, error
 
     with console.status(
@@ -311,7 +319,9 @@ def _pick_workspace() -> dict[str, str]:
     ):
         try:
             with connect() as d:
-                workspaces = d.ws.list()
+                targets = d.ws.list()
+        except AJError:
+            raise
         except Exception as exc:
             log.exception("Could not discover workspaces")
             error(
@@ -320,7 +330,7 @@ def _pick_workspace() -> dict[str, str]:
             )
             raise SystemExit(1) from exc
 
-    if not workspaces:
+    if not targets:
         error("No AML workspaces visible to this account.")
         console.print(
             "  Make sure you are logged in (`az login`) and have Reader "
@@ -328,21 +338,23 @@ def _pick_workspace() -> dict[str, str]:
         )
         raise SystemExit(1)
 
+    workspaces = [_target_workspace_row(target) for target in targets]
     rows = [
         {
             "_label": (
-                f"[bold]{ws.name}[/bold]   "
-                f"[dim]{ws.resource_group} · {ws.location}[/dim]"
+                f"[bold]{workspace['name']}[/bold]   "
+                f"[dim]{workspace['resource_group']} · "
+                f"{workspace['location']}[/dim]"
             ),
-            "ws": ws,
+            "workspace": workspace,
         }
-        for ws in workspaces
+        for workspace in workspaces
     ]
-    ws = _pick_row("Workspace", rows)["ws"]
+    workspace = _pick_row("Workspace", rows)["workspace"]
     return {
-        "workspace_name": ws.name,
-        "resource_group": ws.resource_group,
-        "subscription_id": ws.subscription_id,
+        "workspace_name": workspace["name"],
+        "resource_group": workspace["resource_group"],
+        "subscription_id": workspace["subscription_id"],
     }
 
 
@@ -442,6 +454,7 @@ def _ensure_environment_base() -> None:
                     "identity": "managed",
                     "sla_tier": "Premium",
                     "priority": "high",
+                    "instance_count": 1,
                     "process_count_per_node": 1,
                 }
             ]

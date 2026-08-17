@@ -15,6 +15,9 @@ config:
 
 Only the resolved `config` becomes a `Template`.
 
+See [Templates and JobSpec](design/job-description.md) for the typed build
+boundary and backend extension model.
+
 ## Inheritance and merge
 
 `base` may be null, one string, or a list. Bases merge left to right; the
@@ -33,6 +36,19 @@ child's `config` merges last.
 
 All replacements are deep-copied.
 
+## Homogeneous job shape
+
+Ordinary jobs resolve resources from the current command first, then YAML:
+
+| Value | CLI | Template |
+| --- | --- | --- |
+| nodes | `-n` | `jobs[0].instance_count` |
+| GPUs per node | `-p` | `target.gpus_per_node` |
+| launcher processes | `--ppn` | `jobs[0].process_count_per_node`, then `1` |
+
+Nodes and GPUs have no implicit or remembered fallback. Missing either value
+fails before upload. `aj run` never saves values for a later invocation.
+
 ## AML example
 
 ```yaml
@@ -41,6 +57,7 @@ config:
   target:
     service: aml
     name: <AML_COMPUTE>
+    gpus_per_node: 1
   environment:
     image: mcr.microsoft.com/azureml/openmpi4.1.0-ubuntu20.04:latest
     setup: [python -m pip install -e .]
@@ -49,6 +66,7 @@ config:
   jobs:
     - name: train
       sku: G1
+      instance_count: 1
       identity: managed
       tags: [team:research]
       submit_args:
@@ -68,6 +86,7 @@ config:
   target:
     service: sing
     workspace_name: <AZURE_ML_WORKSPACE>
+    gpus_per_node: 1
     # name: <VC_NAME>              # omit/empty for auto-selection
     # subscription_id: <VC_SUB>    # optional VC filter
     # resource_group: <VC_RG>      # optional VC filter
@@ -77,6 +96,7 @@ config:
   jobs:
     - name: train
       sku: "{nodes}x40G{processes}-A100-NvLink"
+      instance_count: 1
       sla_tier: Premium
       priority: high
       submit_args:
@@ -123,6 +143,7 @@ config:
   jobs:
     - name: train
       sku: "{nodes}xG{processes}"
+      instance_count: 2
       submit_args:
         env:
           AMLT_PERSISTENT_VOLUME_NAME: <PVC_NAME>
@@ -180,6 +201,70 @@ Capabilities are normalized and deduplicated; `ALL` is rejected. `SYS_ADMIN`
 is powerful and is never enabled by default. Cluster admission policies may
 still reject it. Rootless runtimes may additionally require `/dev/fuse` and
 `fuse-overlayfs`; this option does not expose host devices.
+
+### Heterogeneous Tasks
+
+Define one gang-scheduled Volcano Job with role-specific Pod specs under
+`_extra.volcano.tasks`:
+
+```yaml
+config:
+  target:
+    service: volcano
+    namespace: training
+    queue: default
+    context: <KUBECTL_CONTEXT>
+  environment:
+    image: common-runtime:latest
+    setup: [python -m pip install -e .]
+  jobs:
+    - name: train
+      sku: heterogeneous
+  _extra:
+    volcano:
+      tasks:
+        master:
+          replicas: 1
+          cpus_per_node: 16
+          memory: 64Gi
+          gpus_per_node: 0
+          rdma: false
+          processes_per_node: 1
+          command: [python coordinator.py]
+        a100-worker:
+          replicas: 2
+          cpus_per_node: 96
+          memory: 512Gi
+          gpus_per_node: 8
+          rdma: true
+          processes_per_node: 8
+          node_selector:
+            nvidia.com/gpu.product: A100-SXM4-80GB
+        h100-worker:
+          replicas: 4
+          cpus_per_node: 96
+          memory: 1Ti
+          gpus_per_node: 8
+          rdma: true
+          processes_per_node: 8
+          node_selector:
+            nvidia.com/gpu.product: H100-80GB-HBM3
+          command: [python h100_train.py]
+```
+
+Run without topology flags:
+
+```bash
+aj run -t heterogeneous python train.py
+```
+
+The A100 Task inherits `python train.py`; Tasks with `command` replace it.
+Exactly one `master` with one replica is required. Every Task declares its
+resources and process count. Global target resources, `-n`, `-p`, `--ppn`,
+SKU placeholders, and `--amlt` are rejected.
+
+See [Heterogeneous Volcano tasks](design/volcano-heterogeneous-tasks.md) for
+inheritance, rank, validation, and runtime variables.
 
 ## Storage
 
@@ -248,6 +333,6 @@ aj code stats -t <name>
 ```
 
 Files with a `base` key are treated as leaf templates and checked for
-inheritance plus core `jobs`/`target` structure. Standalone component files
-without `base` are accepted without leaf-structure checks. Validation never
-checks cloud quota or permissions.
+inheritance, core `jobs`/`target` structure, and typed backend options.
+Standalone component files without `base` are accepted without leaf checks.
+Validation never checks live resources, cloud quota, or permissions.

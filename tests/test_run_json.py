@@ -99,6 +99,9 @@ class TestDryRunResultJson:
         # Request sub-object carries the same shape as a real result
         assert parsed["request"]["nodes"] == 2
         assert parsed["request"]["gpus_per_node"] == 4
+        assert parsed["request"]["gpu_nodes"] == 2
+        assert parsed["request"]["total_gpus"] == 8
+        assert parsed["request"]["tasks"] == []
         assert parsed["request"]["compute"] == "aml-compute"
         assert parsed["request"]["sku"] == "G1"
         assert parsed["request"]["total_processes"] == 2

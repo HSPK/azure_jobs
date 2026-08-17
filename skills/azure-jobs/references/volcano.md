@@ -27,6 +27,31 @@ target:
 
 See [templates](templates.md) for a complete leaf.
 
+## Heterogeneous Tasks
+
+When `_extra.volcano.tasks` exists, one Volcano Job contains multiple
+role-specific Pod specs. YAML is the only topology source:
+
+```bash
+aj --json run -d -t HETEROGENEOUS_TEMPLATE python train.py
+```
+
+- Never add `-n`, `-p`, `--ppn`, or `--amlt`.
+- Verify every Task's replicas, CPU, memory, GPU, RDMA, process count, image,
+  command, and node selector.
+- `master` must exist with one replica.
+- An omitted Task command inherits the CLI command; an explicit command
+  replaces it for that Task.
+- Aggregate quota is the sum across Tasks; selector availability is checked
+  per Task.
+
+Each Pod receives `AJ_TASK_NAME`, Task-local `AJ_TASK_INDEX`, global
+`AJ_NODE_RANK`, aggregate `AJ_NODES`/`AJ_GPU_NODES`/`AJ_TOTAL_GPUS`, and
+Task-local GPU/process counts. Volcano supplies `VK_TASK_INDEX`; aj exports
+`NODE_RANK` and `RANK` defaults before the command.
+
+Read [templates](templates.md#heterogeneous-volcano-tasks) for the schema.
+
 ## Set up Kubernetes access
 
 `aj k8s` manages client access and Volcano resources; `aj k` is the short
@@ -202,6 +227,8 @@ Use the private-output dry-run procedure from
 [job operations](job-operations.md#run-flags). After confirmation, capture the
 structured submission result privately:
 
+Homogeneous template:
+
 ```bash
 AJ_SUMMARY="$(
   python3 <SKILL_DIR>/scripts/run-aj-json.py -- \
@@ -212,6 +239,16 @@ printf '%s\n' "$AJ_SUMMARY"
 JOB="$(
   printf '%s' "$AJ_SUMMARY" |
     python3 -c 'import json,sys; print(json.load(sys.stdin)["azure_name"])'
+)"
+```
+
+Heterogeneous template:
+
+```bash
+AJ_SUMMARY="$(
+  python3 <SKILL_DIR>/scripts/run-aj-json.py -- \
+    aj --json run -t HETEROGENEOUS_TEMPLATE \
+    python train.py
 )"
 ```
 

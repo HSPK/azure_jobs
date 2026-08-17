@@ -2,6 +2,15 @@
 
 from azure_jobs.shared.opts import amlt as _amlt  # noqa: F401
 from azure_jobs.shared.opts.aml import AmlOpts
-from azure_jobs.shared.opts.volcano import VolcanoOpts
+from azure_jobs.shared.opts.volcano import (
+    VolcanoOpts,
+    VolcanoTaskEnvironment,
+    VolcanoTaskOpts,
+)
 
-__all__ = ["AmlOpts", "VolcanoOpts"]
+__all__ = [
+    "AmlOpts",
+    "VolcanoOpts",
+    "VolcanoTaskEnvironment",
+    "VolcanoTaskOpts",
+]

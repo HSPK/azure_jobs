@@ -6,8 +6,9 @@ from pathlib import Path
 
 import yaml
 
-from ..errors import ConfigError
+from ..errors import AJError, ConfigError
 from .engine import read_conf
+from .models import Template
 
 def validate_template(fp: Path | str) -> list[str]:
     """Return a list of human-readable issues for a template."""
@@ -48,4 +49,14 @@ def validate_template(fp: Path | str) -> list[str]:
             not isinstance(name, str) or not name.strip()
         ):
             issues.append("target missing 'name'")
+
+    if not issues:
+        try:
+            import azure_jobs.shared.opts  # noqa: F401  (registers hooks)
+            from azure_jobs.shared.spec import get_spec_hooks
+
+            template = Template.from_dict(conf)
+            get_spec_hooks(template.target.service).build_spec_backend(template)
+        except (AJError, TypeError, ValueError) as exc:
+            issues.append(f"backend config error: {exc}")
     return issues

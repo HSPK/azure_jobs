@@ -17,13 +17,20 @@ aj --json config experiment EXPERIMENT
 
 | Flag | Meaning |
 | --- | --- |
-| `-t`, `--template` | leaf template or saved default |
-| `-n`, `--nodes` | node count; saved default or `1` |
-| `-p`, `--gpn`, `--gpus-per-node` | GPUs per node |
-| `--ppn`, `--processes-per-node` | launcher processes per node; default `1` |
+| `-t`, `--template` | leaf template or configured template |
+| `-n`, `--nodes` | nodes; otherwise require `jobs[0].instance_count` |
+| `-p`, `--gpn`, `--gpus-per-node` | GPUs; otherwise require `target.gpus_per_node` |
+| `--ppn`, `--processes-per-node` | processes; template value, then `1` |
 | `-d`, `--dry-run` | render only |
 | `--queue` | persist work in daemon queue |
 | `--amlt` | compatibility path through daemon-side amlt |
+
+For `_extra.volcano.tasks`, omit `-n`, `-p`, and `--ppn`; explicit values fail.
+Do not use `--amlt`.
+
+`aj run` never persists template or shape arguments. For a homogeneous job,
+resolve both nodes and GPUs from the current CLI command or template before
+previewing/submitting.
 
 ## Job name and runtime environment
 
@@ -62,14 +69,29 @@ Every backend receives this stable runtime contract:
 | `AJ_ID` | eight-character AJ submission ID |
 | `AJ_TEMPLATE` | selected leaf template |
 | `AJ_SUBMIT_TIMESTAMP_UTC` | ISO 8601 build timestamp |
-| `AJ_NODES` | requested nodes |
-| `AJ_GPUS_PER_NODE` | CLI `-p` value |
+| `AJ_NODES` | resolved CLI/template nodes |
+| `AJ_GPUS_PER_NODE` | resolved CLI/template GPUs per node |
 | `AJ_PROCESSES` | `AJ_NODES × AJ_GPUS_PER_NODE` compatibility total |
-| `AJ_PROCESSES_PER_NODE` | CLI `--ppn` value |
+| `AJ_PROCESSES_PER_NODE` | resolved CLI/template launcher count |
 
 These injected values override same-named `jobs[0].submit_args.env` entries.
 Set the task name with the local `AJ_NAME=... aj run ...` prefix, not template
 environment YAML.
+
+Heterogeneous Volcano Pods also receive:
+
+| Variable | Meaning |
+| --- | --- |
+| `AJ_TASK_NAME` | Task role |
+| `AJ_TASK_INDEX` | replica index within that Task |
+| `AJ_TASK_REPLICAS` | Task replica count |
+| `AJ_NODE_RANK` | global node rank |
+| `AJ_GPU_NODES` | total GPU-bearing replicas |
+| `AJ_TOTAL_GPUS` | aggregate GPU count |
+
+aj derives `AJ_TASK_INDEX` from Volcano's `VK_TASK_INDEX`, then exports
+`NODE_RANK` and `RANK` defaults. These are environment variables, not command
+arguments.
 
 Dry run:
 
@@ -107,7 +129,7 @@ TICKET="$(
 aj queue show "$TICKET"
 ```
 
-Template, nodes, and GPU count become local defaults.
+Template and shape arguments are never saved by `aj run`.
 
 ## Command behavior
 Arguments are shell-quoted while preserving boundaries; template
