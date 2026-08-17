@@ -13,7 +13,6 @@ from azure_jobs.shared.config import (
     ensure_experiment,
     get_defaults,
     get_experiment,
-    save_defaults,
 )
 from azure_jobs.shared.errors import AJError
 from azure_jobs.shared.job import build_job_spec, write_amlt_yaml
@@ -43,21 +42,32 @@ __all__ = ["resolve_name"]
     help="Template environment to execute the command",
     default=None,
 )
-@click.option("-n", "--nodes", default=None, help="Number of nodes")
+@click.option(
+    "-n",
+    "--nodes",
+    default=None,
+    help="Nodes; required unless jobs[0].instance_count is set",
+)
 @click.option(
     "-p",
     "--gpn",
     "--gpus-per-node",
     "gpus_per_node",
     default=None,
-    help="GPUs per node (drives SKU resolution + AJ_GPUS_PER_NODE env)",
+    help=(
+        "GPUs per node; required unless target.gpus_per_node is set "
+        "(drives SKU + AJ_GPUS_PER_NODE)"
+    ),
 )
 @click.option(
     "--ppn",
     "--processes-per-node",
     "ppn",
     default=None,
-    help="Launcher processes per node (e.g. torchrun --nproc-per-node). Default: 1",
+    help=(
+        "Launcher processes per node; falls back to "
+        "jobs[0].process_count_per_node, then 1"
+    ),
 )
 @click.option(
     "-d", "--dry-run", is_flag=True, help="Dry run the command without executing"
@@ -85,22 +95,43 @@ def run(
     amlt: bool,
     queue: bool,
 ) -> None:
-    """Submit a job to Azure ML using a template."""
+    """Submit a job using a template."""
     tmpl, template_name = _load_template(template)
 
     sid = uuid.uuid4().hex[:8]
     name = resolve_name(command, sid)
 
-    defaults = get_defaults()
-    nodes_int = int(nodes or defaults.nodes or 1)
-    gpn_int = int(gpus_per_node or defaults.processes or 1)
-    ppn_int = int(ppn or 1)
     try:
-        sku_resolved = resolve_sku(tmpl.jobs[0].sku, nodes_int, gpn_int)
-    except AJError as exc:
+        explicit_nodes = int(nodes) if nodes is not None else None
+        explicit_gpn = (
+            int(gpus_per_node) if gpus_per_node is not None else None
+        )
+        explicit_ppn = int(ppn) if ppn is not None else None
+
+        import azure_jobs.shared.opts  # noqa: F401  (registers spec hooks)
+        from azure_jobs.shared.spec import RunShapeRequest, get_spec_hooks
+
+        run_shape = get_spec_hooks(tmpl.target.service).resolve_run_shape(
+            tmpl,
+            RunShapeRequest(
+                nodes=explicit_nodes,
+                gpus_per_node=explicit_gpn,
+                processes_per_node=explicit_ppn,
+            ),
+        )
+        if amlt and not run_shape.amlt_compatible:
+            raise click.ClickException(
+                "This template defines a native backend topology and cannot "
+                "be submitted with --amlt."
+            )
+        sku_resolved = resolve_sku(
+            tmpl.jobs[0].sku,
+            run_shape.nodes,
+            run_shape.gpus_per_node,
+        )
+    except (AJError, ValueError) as exc:
         raise click.ClickException(str(exc)) from exc
 
-    save_defaults(template=template_name, nodes=nodes_int, processes=gpn_int)
     experiment = get_experiment()
     if not experiment:
         if dry_run:
@@ -130,9 +161,10 @@ def run(
             user_args=args,
             template_name=template_name,
             experiment=experiment,
-            nodes=nodes_int,
-            gpus_per_node=gpn_int,
-            processes_per_node=ppn_int,
+            nodes=run_shape.nodes,
+            gpus_per_node=run_shape.gpus_per_node,
+            processes_per_node=run_shape.processes_per_node,
+            run_shape=run_shape,
         )
     except (AJError, ValueError) as exc:
         raise click.ClickException(str(exc)) from exc

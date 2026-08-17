@@ -12,6 +12,12 @@ _SCRIPT_RUNNERS: dict[str, str] = {
     ".py": "uv run",
 }
 
+PRELUDE_COMMANDS: tuple[str, ...] = (
+    "[ -f /tmp/.aj_ssh_env ] && source /tmp/.aj_ssh_env",
+    "export PATH=$HOME/.local/bin:$PATH",
+)
+
+
 def build_user_command(command: str, args: tuple[str, ...]) -> str:
     """Return a single shell command string for command + args."""
     if Path(command).is_file():

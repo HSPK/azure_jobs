@@ -16,5 +16,13 @@ def write_template(template_home: Path, name: str, conf: dict) -> Path:
 
 MINIMAL_JOB_CONF: dict = {
     "description": "placeholder",
-    "jobs": [{"name": "placeholder", "sku": "Standard_NC{nodes}s_v3", "command": []}],
+    "target": {"gpus_per_node": 1},
+    "jobs": [
+        {
+            "name": "placeholder",
+            "sku": "Standard_NC{nodes}s_v3",
+            "command": [],
+            "instance_count": 1,
+        }
+    ],
 }

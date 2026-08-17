@@ -9,19 +9,14 @@ from typing import TYPE_CHECKING
 
 from azure_jobs.shared.utils.fs import read_ignore_file
 
-from .command import build_user_command
+from .command import PRELUDE_COMMANDS, build_user_command
 from .spec import JobSpec, StorageMount
 
 if TYPE_CHECKING:
+    from azure_jobs.shared.spec import RunShape
     from ..template import Template
 
 log = logging.getLogger(__name__)
-
-_PRELUDE_COMMANDS: tuple[str, ...] = (
-    "[ -f /tmp/.aj_ssh_env ] && source /tmp/.aj_ssh_env",
-    "export PATH=$HOME/.local/bin:$PATH",
-)
-
 
 def _normalize_storage(
     storage_dict: dict[str, object],
@@ -76,6 +71,7 @@ def build_job_spec(
     processes_per_node: int = 1,
     code_dir: str | None = None,
     description: str = "",
+    run_shape: "RunShape | None" = None,
 ) -> JobSpec:
     """Build a JobSpec from a template + submission parameters."""
     import azure_jobs.shared.opts  # noqa: F401  (registers spec hooks)
@@ -104,6 +100,21 @@ def build_job_spec(
             code_ignore.append(pat)
 
     backend = get_spec_hooks(service)
+    if run_shape is None:
+        from azure_jobs.shared.spec import RunShapeRequest
+
+        run_shape = backend.resolve_run_shape(
+            template,
+            RunShapeRequest(
+                nodes=nodes,
+                gpus_per_node=gpus_per_node,
+                processes_per_node=processes_per_node,
+                validate_explicit=False,
+            ),
+        )
+    nodes = run_shape.nodes
+    gpus_per_node = run_shape.gpus_per_node
+    processes_per_node = run_shape.processes_per_node
     final_name = backend.normalize_job_name(name)
     backend_spec = backend.build_spec_backend(template)
 
@@ -117,9 +128,10 @@ def build_job_spec(
         "AJ_GPUS_PER_NODE": str(gpus_per_node),
         "AJ_PROCESSES_PER_NODE": str(processes_per_node),
     }
+    aj_envs.update(run_shape.runtime_env)
     env_vars = _merge_env(dict(submit_args.get("env", {})), aj_envs)
     command = [
-        *_PRELUDE_COMMANDS,
+        *PRELUDE_COMMANDS,
         *_normalize_template_commands(job.command),
         build_user_command(user_command, user_args),
     ]

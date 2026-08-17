@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from azure_jobs.shared.utils.naming import sanitize_dns1035
+from azure_jobs.shared.spec import get_spec_hooks
 
 from .. import register_backend
 from .config import (
@@ -28,21 +28,17 @@ from .uploaders import (
 if TYPE_CHECKING:
     from azure_jobs.shared.template.models import Template
 
-# k8s generateName appends ~5 chars; cap stem at 63-9 to stay within RFC 1035.
-_VOLCANO_NAME_MAX = 63 - 9
-
 
 def _build_volcano_spec(template: "Template") -> VolcanoOpts:
-    return VolcanoOpts.from_template(template)
+    return get_spec_hooks("volcano").build_spec_backend(template)
 
 
 def _load_volcano_spec(data: dict) -> VolcanoOpts:
-    known = set(VolcanoOpts.__dataclass_fields__)
-    return VolcanoOpts(**{k: v for k, v in (data or {}).items() if k in known})
+    return get_spec_hooks("volcano").load_spec_backend(data)
 
 
 def _normalize_volcano_name(name: str) -> str:
-    return sanitize_dns1035(name, max_length=_VOLCANO_NAME_MAX)
+    return get_spec_hooks("volcano").normalize_job_name(name)
 
 
 register_backend("volcano", submit_via_volcano, label="Volcano")

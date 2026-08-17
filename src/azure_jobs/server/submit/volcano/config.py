@@ -12,8 +12,10 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from azure_jobs.shared.job.spec import JobSpec
+from azure_jobs.shared.job.command import PRELUDE_COMMANDS
 from azure_jobs.shared.utils.naming import sanitize_dns1035
 from . import constants as C
+from ._scripts import load_script
 from .storage import BlobMountPlan
 
 log = logging.getLogger(__name__)
@@ -57,6 +59,29 @@ def _kubectl_namespace(context: str = "") -> str:
     return ns if ns else "default"
 
 @dataclass
+class VolcanoTaskConfig:
+    """Fully resolved configuration for one Volcano Task."""
+
+    name: str
+    replicas: int
+    cpus_per_node: int
+    memory: str
+    gpus_per_node: int
+    processes_per_node: int
+    image: str
+    command: list[str]
+    setup_commands: list[str]
+    env_vars: dict[str, str]
+    rdma: bool
+    node_selector: dict[str, str]
+    rank_base: int
+    shm_size: str = ""
+    capabilities: list[str] = field(default_factory=list)
+    scratch_mount_path: str = ""
+    scratch_size: str = ""
+
+
+@dataclass
 class VolcanoConfig:
     """Configuration for a Volcano job submission."""
 
@@ -85,6 +110,7 @@ class VolcanoConfig:
     capabilities: list[str] = field(default_factory=list)
     scratch_mount_path: str = ""
     scratch_size: str = ""
+    tasks: list[VolcanoTaskConfig] = field(default_factory=list)
 
 
 def code_asset_name(name: str) -> str:
@@ -130,13 +156,15 @@ def build_volcano_config_from_request(request: JobSpec) -> VolcanoConfig:
     # CPU nodes expose no RDMA device, and requesting one leaves the job
     # unschedulable, so follow the GPU count unless the template is explicit.
     rdma = vol.rdma if vol.rdma is not None else gpus_per_node > 0
+    tasks = _resolve_tasks(request, vol)
+    nodes = sum(task.replicas for task in tasks) if tasks else request.nodes
 
     return VolcanoConfig(
         name=request.name,
         namespace=vol.namespace,
         queue=vol.queue or "default",
         context=vol.context,
-        nodes=request.nodes,
+        nodes=nodes,
         gpus_per_node=gpus_per_node,
         cpus_per_node=(
             vol.cpus_per_node
@@ -162,7 +190,89 @@ def build_volcano_config_from_request(request: JobSpec) -> VolcanoConfig:
         capabilities=list(vol.capabilities),
         scratch_mount_path=vol.scratch_mount_path,
         scratch_size=vol.scratch_size,
+        tasks=tasks,
     )
+
+
+def _resolve_tasks(
+    request: JobSpec,
+    vol: Any,
+) -> list[VolcanoTaskConfig]:
+    if not vol.tasks:
+        return []
+
+    ordered_names = ["master", *sorted(name for name in vol.tasks if name != "master")]
+    total_nodes = sum(task.replicas for task in vol.tasks.values())
+    gpu_nodes = sum(
+        task.replicas
+        for task in vol.tasks.values()
+        if task.gpus_per_node > 0
+    )
+    total_gpus = sum(
+        task.replicas * task.gpus_per_node
+        for task in vol.tasks.values()
+    )
+    shared_runtime_env = {
+        "AJ_NODES": str(total_nodes),
+        "AJ_PROCESSES": str(total_gpus),
+        "AJ_GPU_NODES": str(gpu_nodes),
+        "AJ_TOTAL_GPUS": str(total_gpus),
+    }
+
+    rank_base = 0
+    resolved: list[VolcanoTaskConfig] = []
+    for name in ordered_names:
+        task = vol.tasks[name]
+        environment = task.environment
+        image = (
+            environment.image
+            if environment is not None and environment.image
+            else request.image
+        )
+        setup_commands = (
+            list(environment.setup)
+            if environment is not None and environment.setup is not None
+            else list(request.setup_commands)
+        )
+        command = (
+            [*PRELUDE_COMMANDS, *task.command]
+            if task.command is not None
+            else list(request.command)
+        )
+        env_vars = dict(request.env_vars)
+        env_vars.update(task.env)
+        env_vars.update(shared_runtime_env)
+        env_vars.update(
+            {
+                "AJ_TASK_NAME": name,
+                "AJ_TASK_REPLICAS": str(task.replicas),
+                "AJ_GPUS_PER_NODE": str(task.gpus_per_node),
+                "AJ_PROCESSES_PER_NODE": str(task.processes_per_node),
+            }
+        )
+        resolved.append(
+            VolcanoTaskConfig(
+                name=name,
+                replicas=task.replicas,
+                cpus_per_node=task.cpus_per_node,
+                memory=task.memory,
+                gpus_per_node=task.gpus_per_node,
+                processes_per_node=task.processes_per_node,
+                image=image,
+                command=command,
+                setup_commands=setup_commands,
+                env_vars=env_vars,
+                rdma=task.rdma,
+                node_selector=dict(task.node_selector),
+                rank_base=rank_base,
+                shm_size=task.shm_size,
+                capabilities=list(task.capabilities),
+                scratch_mount_path=task.scratch_mount_path,
+                scratch_size=task.scratch_size,
+            )
+        )
+        rank_base += task.replicas
+    return resolved
 
 def resolve_namespace(cfg: VolcanoConfig) -> str:
     """Pick the Kubernetes namespace to submit into.
@@ -178,10 +288,11 @@ def _validate_scratch_mount_conflicts(
     cfg: VolcanoConfig,
     blob_plan: BlobMountPlan | None,
     code_path: str,
+    scratch_mount_path: str,
 ) -> None:
     from azure_jobs.shared.errors import ConfigError
 
-    scratch = PurePosixPath(cfg.scratch_mount_path)
+    scratch = PurePosixPath(scratch_mount_path)
     occupied = [
         C.SHM_MOUNT_PATH,
         C.WORKDIR_MOUNT_PATH,
@@ -206,7 +317,7 @@ def _validate_scratch_mount_conflicts(
         if scratch == path or scratch in path.parents or path in scratch.parents:
             raise ConfigError(
                 "Volcano scratch_mount_path conflicts with another mount: "
-                f"{cfg.scratch_mount_path} overlaps {raw}."
+                f"{scratch_mount_path} overlaps {raw}."
             )
 
 
@@ -242,16 +353,16 @@ def build_volcano_job(
             else ""
         )
 
-    script_lines: list[str] = []
+    script_prefix: list[str] = []
     # Mount before anything else so code setup and the user command can both
     # read and write the blob containers.
     if blob_plan is not None and blob_plan.enabled:
-        script_lines.extend(blob_plan.setup_lines())
+        script_prefix.extend(blob_plan.setup_lines())
     if code_setup_lines:
-        script_lines.extend(code_setup_lines)
+        script_prefix.extend(code_setup_lines)
     if code_path:
         run_wd = f"{C.WORKDIR_MOUNT_PATH}/{code_asset_name(cfg.name)}/wd"
-        script_lines.extend(
+        script_prefix.extend(
             [
                 f"AJ_WORKDIR={shlex.quote(run_wd)}",
                 'mkdir -p "$AJ_WORKDIR"',
@@ -260,108 +371,147 @@ def build_volcano_job(
                 "export AJ_WORKDIR",
             ]
         )
-    if cfg.setup_commands:
-        script_lines.extend(cfg.setup_commands)
-    script_lines.extend(_load_distributed_preamble(cfg.nodes))
-    script_lines.extend(cfg.command)
-    script = "\n".join(script_lines)
 
-    resources: dict[str, Any] = {
-        "requests": {
-            "cpu": str(cfg.cpus_per_node),
-            "memory": cfg.memory,
-        },
-        "limits": {
-            "cpu": str(cfg.cpus_per_node),
-            "memory": cfg.memory,
-        },
-    }
-    if cfg.gpus_per_node > 0:
-        resources["requests"][C.GPU_RESOURCE_KEY] = str(cfg.gpus_per_node)
-        resources["limits"][C.GPU_RESOURCE_KEY] = str(cfg.gpus_per_node)
-    if cfg.rdma:
-        resources["requests"][C.RDMA_RESOURCE_KEY] = C.RDMA_RESOURCE_VALUE
-        resources["limits"][C.RDMA_RESOURCE_KEY] = C.RDMA_RESOURCE_VALUE
-
-    env_list = [{"name": k, "value": str(v)} for k, v in cfg.env_vars.items()]
-
-    tolerations = []
-    if cfg.gpus_per_node > 0:
-        tolerations.append(
-            {
-                "key": C.GPU_TAINT_KEY,
-                "operator": "Exists",
-                "effect": "NoSchedule",
-            }
+    def _make_pod_spec(
+        role: str,
+        task: VolcanoTaskConfig | None = None,
+    ) -> dict[str, Any]:
+        cpus_per_node = task.cpus_per_node if task else cfg.cpus_per_node
+        memory = task.memory if task else cfg.memory
+        gpus_per_node = task.gpus_per_node if task else cfg.gpus_per_node
+        rdma = task.rdma if task else cfg.rdma
+        image = task.image if task else cfg.image
+        setup_commands = task.setup_commands if task else cfg.setup_commands
+        command = task.command if task else cfg.command
+        env_vars = task.env_vars if task else cfg.env_vars
+        shm_size = task.shm_size if task else cfg.shm_size
+        capabilities = task.capabilities if task else cfg.capabilities
+        scratch_mount_path = (
+            task.scratch_mount_path if task else cfg.scratch_mount_path
         )
-    if cfg.rdma:
-        tolerations.append(
-            {
-                "key": C.RDMA_TAINT_KEY,
-                "operator": "Exists",
-                "effect": "NoSchedule",
-            }
-        )
+        scratch_size = task.scratch_size if task else cfg.scratch_size
 
-    shm_volume_spec: dict[str, Any] = {"medium": "Memory"}
-    if cfg.shm_size:
-        shm_volume_spec["sizeLimit"] = cfg.shm_size
-    volumes: list[dict[str, Any]] = [
-        {
-            "name": C.SHM_VOLUME_NAME,
-            "emptyDir": shm_volume_spec,
-        },
-        {
-            "name": C.WORKDIR_VOLUME_NAME,
-            "emptyDir": {"sizeLimit": C.WORKDIR_VOLUME_SIZE},
-        },
-    ]
-    volume_mounts: list[dict[str, Any]] = [
-        {"name": C.SHM_VOLUME_NAME, "mountPath": C.SHM_MOUNT_PATH},
-        {"name": C.WORKDIR_VOLUME_NAME, "mountPath": C.WORKDIR_MOUNT_PATH},
-    ]
+        script_lines = list(script_prefix)
+        if task is not None:
+            script_lines.extend(
+                load_script(
+                    "heterogeneous_preamble.sh",
+                    RANK_BASE=task.rank_base,
+                )
+            )
+            script_lines.extend(setup_commands)
+        else:
+            script_lines.extend(setup_commands)
+            script_lines.extend(_load_distributed_preamble(cfg.nodes))
+        script_lines.extend(command)
+        script = "\n".join(script_lines)
 
-    if cfg.pvc_name and cfg.pvc_mount_dir:
-        volumes.append(
-            {
-                "name": C.PVC_VOLUME_NAME,
-                "persistentVolumeClaim": {"claimName": cfg.pvc_name},
-            }
-        )
-        volume_mounts.append(
-            {
-                "name": C.PVC_VOLUME_NAME,
-                "mountPath": cfg.pvc_mount_dir,
-            }
-        )
+        resources: dict[str, Any] = {
+            "requests": {
+                "cpu": str(cpus_per_node),
+                "memory": memory,
+            },
+            "limits": {
+                "cpu": str(cpus_per_node),
+                "memory": memory,
+            },
+        }
+        if gpus_per_node > 0:
+            resources["requests"][C.GPU_RESOURCE_KEY] = str(gpus_per_node)
+            resources["limits"][C.GPU_RESOURCE_KEY] = str(gpus_per_node)
+        if rdma:
+            resources["requests"][C.RDMA_RESOURCE_KEY] = C.RDMA_RESOURCE_VALUE
+            resources["limits"][C.RDMA_RESOURCE_KEY] = C.RDMA_RESOURCE_VALUE
+        if scratch_size:
+            resources["requests"]["ephemeral-storage"] = scratch_size
+            resources["limits"]["ephemeral-storage"] = scratch_size
 
-    if blob_plan is not None and blob_plan.enabled:
-        volumes.append(blob_plan.volume())
+        env_list = [
+            {"name": key, "value": str(value)}
+            for key, value in env_vars.items()
+        ]
+        tolerations = []
+        if gpus_per_node > 0:
+            tolerations.append(
+                {
+                    "key": C.GPU_TAINT_KEY,
+                    "operator": "Exists",
+                    "effect": "NoSchedule",
+                }
+            )
+        if rdma:
+            tolerations.append(
+                {
+                    "key": C.RDMA_TAINT_KEY,
+                    "operator": "Exists",
+                    "effect": "NoSchedule",
+                }
+            )
 
-    if cfg.scratch_mount_path:
-        _validate_scratch_mount_conflicts(cfg, blob_plan, code_path)
-        scratch: dict[str, Any] = {}
-        if cfg.scratch_size:
-            scratch["sizeLimit"] = cfg.scratch_size
-            resources["requests"]["ephemeral-storage"] = cfg.scratch_size
-            resources["limits"]["ephemeral-storage"] = cfg.scratch_size
-        volumes.append(
+        shm_volume_spec: dict[str, Any] = {"medium": "Memory"}
+        if shm_size:
+            shm_volume_spec["sizeLimit"] = shm_size
+        volumes: list[dict[str, Any]] = [
             {
-                "name": C.SCRATCH_VOLUME_NAME,
-                "emptyDir": scratch,
-            }
-        )
-        volume_mounts.append(
+                "name": C.SHM_VOLUME_NAME,
+                "emptyDir": shm_volume_spec,
+            },
             {
-                "name": C.SCRATCH_VOLUME_NAME,
-                "mountPath": cfg.scratch_mount_path,
-            }
-        )
+                "name": C.WORKDIR_VOLUME_NAME,
+                "emptyDir": {"sizeLimit": C.WORKDIR_VOLUME_SIZE},
+            },
+        ]
+        volume_mounts: list[dict[str, Any]] = [
+            {"name": C.SHM_VOLUME_NAME, "mountPath": C.SHM_MOUNT_PATH},
+            {
+                "name": C.WORKDIR_VOLUME_NAME,
+                "mountPath": C.WORKDIR_MOUNT_PATH,
+            },
+        ]
 
-    def _make_pod_spec(role: str) -> dict[str, Any]:
+        if cfg.pvc_name and cfg.pvc_mount_dir:
+            volumes.append(
+                {
+                    "name": C.PVC_VOLUME_NAME,
+                    "persistentVolumeClaim": {"claimName": cfg.pvc_name},
+                }
+            )
+            volume_mounts.append(
+                {
+                    "name": C.PVC_VOLUME_NAME,
+                    "mountPath": cfg.pvc_mount_dir,
+                }
+            )
+
+        if blob_plan is not None and blob_plan.enabled:
+            volumes.append(blob_plan.volume())
+
+        if scratch_mount_path:
+            _validate_scratch_mount_conflicts(
+                cfg,
+                blob_plan,
+                code_path,
+                scratch_mount_path,
+            )
+            scratch: dict[str, Any] = {}
+            if scratch_size:
+                scratch["sizeLimit"] = scratch_size
+            volumes.append(
+                {
+                    "name": C.SCRATCH_VOLUME_NAME,
+                    "emptyDir": scratch,
+                }
+            )
+            volume_mounts.append(
+                {
+                    "name": C.SCRATCH_VOLUME_NAME,
+                    "mountPath": scratch_mount_path,
+                }
+            )
+
         container: dict[str, Any] = {
             "name": role,
-            "image": cfg.image,
+            "image": image,
             "command": ["/bin/bash", "-lc"],
             "args": [f"set -eo pipefail\n{script}"],
             "resources": resources,
@@ -370,9 +520,9 @@ def build_volcano_job(
         if env_list:
             container["env"] = env_list
         security_context: dict[str, Any] = {}
-        if cfg.capabilities:
+        if capabilities:
             security_context["capabilities"] = {
-                "add": list(cfg.capabilities),
+                "add": list(capabilities),
             }
         if blob_plan is not None and blob_plan.enabled:
             container["volumeMounts"].append(blob_plan.volume_mount())
@@ -381,7 +531,7 @@ def build_volcano_job(
             security_context["privileged"] = True
         if security_context:
             container["securityContext"] = security_context
-        if cfg.rdma:
+        if rdma:
             container["ports"] = [
                 {"name": C.RDMA_PORT_NAME, "containerPort": C.RDMA_PORT}
             ]
@@ -407,35 +557,61 @@ def build_volcano_job(
                     ]
                 }
             }
+        if task is not None and task.node_selector:
+            pod_spec["nodeSelector"] = dict(task.node_selector)
 
         return pod_spec
 
     tasks: list[dict[str, Any]] = []
-    tasks.append(
-        {
-            "name": C.TASK_MASTER,
-            "replicas": 1,
-            "template": {
-                "metadata": {
-                    "labels": {"app": app_label, "role": C.TASK_MASTER},
-                },
-                "spec": _make_pod_spec(C.TASK_MASTER),
-            },
-        }
-    )
-    if cfg.nodes > 1:
+    if cfg.tasks:
+        for task in cfg.tasks:
+            tasks.append(
+                {
+                    "name": task.name,
+                    "replicas": task.replicas,
+                    "template": {
+                        "metadata": {
+                            "labels": {
+                                "app": app_label,
+                                "role": task.name,
+                            },
+                        },
+                        "spec": _make_pod_spec(task.name, task),
+                    },
+                }
+            )
+    else:
         tasks.append(
             {
-                "name": C.TASK_WORKER,
-                "replicas": cfg.nodes - 1,
+                "name": C.TASK_MASTER,
+                "replicas": 1,
                 "template": {
                     "metadata": {
-                        "labels": {"app": app_label, "role": C.TASK_WORKER},
+                        "labels": {
+                            "app": app_label,
+                            "role": C.TASK_MASTER,
+                        },
                     },
-                    "spec": _make_pod_spec(C.TASK_WORKER),
+                    "spec": _make_pod_spec(C.TASK_MASTER),
                 },
             }
         )
+        if cfg.nodes > 1:
+            tasks.append(
+                {
+                    "name": C.TASK_WORKER,
+                    "replicas": cfg.nodes - 1,
+                    "template": {
+                        "metadata": {
+                            "labels": {
+                                "app": app_label,
+                                "role": C.TASK_WORKER,
+                            },
+                        },
+                        "spec": _make_pod_spec(C.TASK_WORKER),
+                    },
+                }
+            )
 
     resolved_ns = namespace if namespace is not None else resolve_namespace(cfg)
 

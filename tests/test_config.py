@@ -11,7 +11,6 @@ from azure_jobs.shared.config import (
     AJWorkspace,
     get_defaults,
     read_config,
-    save_defaults,
     write_config,
 )
 
@@ -61,30 +60,25 @@ class TestDefaults:
     def test_get_defaults_empty(self, aj_config):
         d = get_defaults()
         assert d.template is None
-        assert d.nodes is None
-        assert d.processes is None
 
-    def test_save_and_get_defaults(self, aj_config):
-        save_defaults(template="gpu", nodes=4, processes=2)
-        d = get_defaults()
-        assert d.template == "gpu"
-        assert d.nodes == 4
-        assert d.processes == 2
+    def test_legacy_resource_defaults_are_ignored(self, aj_config):
+        aj_config.write_text(
+            json.dumps(
+                {
+                    "defaults": {
+                        "template": "gpu",
+                        "nodes": 4,
+                        "processes": 8,
+                    }
+                }
+            )
+        )
 
-    def test_save_partial_preserves_existing(self, aj_config):
-        save_defaults(template="gpu", nodes=4)
-        save_defaults(processes=8)
-        d = get_defaults()
-        assert d.template == "gpu"
-        assert d.nodes == 4
-        assert d.processes == 8
+        defaults = get_defaults()
 
-    def test_save_defaults_preserves_other_config(self, aj_config):
-        aj_config.write_text(json.dumps({"repo_id": "foo/bar"}))
-        save_defaults(template="cpu")
-        cfg = read_config()
-        assert cfg.repo_id == "foo/bar"
-        assert cfg.defaults.template == "cpu"
+        assert defaults.template == "gpu"
+        assert not hasattr(defaults, "nodes")
+        assert not hasattr(defaults, "processes")
 
 
 class TestDetectSubscription:

@@ -112,9 +112,20 @@ class TestRunCommand:
 
     def test_sing_dry_run_resolves_vc_coords(self, aj_env):
         conf = {
-            "target": {"name": "vc1", "service": "sing", "workspace_name": "ws1"},
+            "target": {
+                "name": "vc1",
+                "service": "sing",
+                "workspace_name": "ws1",
+                "gpus_per_node": 1,
+            },
             "environment": {"image": "img"},
-            "jobs": [{"sku": "1xC1", "command": []}],
+            "jobs": [
+                {
+                    "sku": "1xC1",
+                    "command": [],
+                    "instance_count": 1,
+                }
+            ],
         }
         write_template(aj_env["template_home"], "default", conf)
         runner = CliRunner()
@@ -129,6 +140,7 @@ class TestRunCommand:
     def test_str_sku_template_formatting(self, aj_env):
         conf = {
             "description": "placeholder",
+            "target": {"gpus_per_node": 1},
             "jobs": [
                 {
                     "name": "placeholder",
@@ -148,6 +160,7 @@ class TestRunCommand:
     def test_dict_sku_exact_match(self, aj_env):
         conf = {
             "description": "placeholder",
+            "target": {"gpus_per_node": 1},
             "jobs": [
                 {
                     "name": "placeholder",
@@ -167,6 +180,7 @@ class TestRunCommand:
     def test_dict_sku_range_match(self, aj_env):
         conf = {
             "description": "placeholder",
+            "target": {"gpus_per_node": 1},
             "jobs": [
                 {
                     "name": "placeholder",
@@ -186,6 +200,7 @@ class TestRunCommand:
     def test_dict_sku_plus_match(self, aj_env):
         conf = {
             "description": "placeholder",
+            "target": {"gpus_per_node": 1},
             "jobs": [
                 {"name": "placeholder", "sku": {"4+": "huge_{nodes}"}, "command": []}
             ],
@@ -201,6 +216,7 @@ class TestRunCommand:
     def test_dict_sku_no_match_errors(self, aj_env):
         conf = {
             "description": "placeholder",
+            "target": {"gpus_per_node": 1},
             "jobs": [{"name": "placeholder", "sku": {"1": "small"}, "command": []}],
         }
         write_template(aj_env["template_home"], "default", conf)
@@ -212,7 +228,15 @@ class TestRunCommand:
     def test_unsupported_sku_type_errors(self, aj_env):
         conf = {
             "description": "placeholder",
-            "jobs": [{"name": "placeholder", "sku": 42, "command": []}],
+            "target": {"gpus_per_node": 1},
+            "jobs": [
+                {
+                    "name": "placeholder",
+                    "sku": 42,
+                    "command": [],
+                    "instance_count": 1,
+                }
+            ],
         }
         write_template(aj_env["template_home"], "default", conf)
         runner = CliRunner()
@@ -220,13 +244,13 @@ class TestRunCommand:
         assert result.exit_code != 0
         assert "Unsupported SKU" in result.output
 
-    def test_saves_default_template_to_config(self, aj_env):
+    def test_run_does_not_save_template_to_config(self, aj_env):
         write_template(aj_env["template_home"], "custom", MINIMAL_JOB_CONF)
         runner = CliRunner()
         result = runner.invoke(main, ["run", "-d", "-t", "custom", "echo"])
         assert result.exit_code == 0
         saved = json.loads(aj_env["config_fp"].read_text())
-        assert saved["defaults"]["template"] == "custom"
+        assert saved["defaults"]["template"] == "default"
 
     def test_py_script_detection(self, aj_env):
         write_template(aj_env["template_home"], "default", MINIMAL_JOB_CONF)
@@ -263,12 +287,140 @@ class TestRunCommand:
         assert env["AJ_NODES"] == "2"
         assert env["AJ_PROCESSES"] == "8"  # 4 * 2
 
+    def test_requires_shape_and_ignores_legacy_config_defaults(self, aj_env):
+        conf = {
+            "jobs": [
+                {
+                    "name": "placeholder",
+                    "sku": "{nodes}xG{processes}",
+                    "command": [],
+                }
+            ]
+        }
+        write_template(aj_env["template_home"], "default", conf)
+        saved = json.loads(aj_env["config_fp"].read_text())
+        saved["defaults"].update({"nodes": 32, "processes": 8})
+        before = json.dumps(saved, sort_keys=True)
+        aj_env["config_fp"].write_text(json.dumps(saved))
+
+        result = CliRunner().invoke(main, ["run", "-d", "echo"])
+
+        assert result.exit_code != 0
+        assert "jobs[0].instance_count" in result.output
+        assert "target.gpus_per_node" in result.output
+        after = json.dumps(
+            json.loads(aj_env["config_fp"].read_text()),
+            sort_keys=True,
+        )
+        assert after == before
+
+    def test_reads_complete_shape_from_template(self, aj_env):
+        conf = {
+            "target": {"gpus_per_node": 4},
+            "jobs": [
+                {
+                    "name": "placeholder",
+                    "sku": "{nodes}xG{processes}",
+                    "command": [],
+                    "instance_count": 2,
+                    "process_count_per_node": 3,
+                }
+            ],
+        }
+        write_template(aj_env["template_home"], "default", conf)
+
+        result = CliRunner().invoke(main, ["run", "-d", "echo"])
+
+        assert result.exit_code == 0, result.output
+        sub_file = list(aj_env["dryrun_home"].glob("*.yaml"))[0]
+        sub = yaml.safe_load(sub_file.read_text())
+        assert sub["jobs"][0]["sku"] == "2xG4"
+        assert sub["jobs"][0]["instance_count"] == 2
+        assert sub["jobs"][0]["process_count_per_node"] == 3
+        env = sub["jobs"][0]["submit_args"]["env"]
+        assert env["AJ_NODES"] == "2"
+        assert env["AJ_GPUS_PER_NODE"] == "4"
+        assert env["AJ_PROCESSES_PER_NODE"] == "3"
+
+    def test_cli_shape_overrides_template_shape(self, aj_env):
+        conf = {
+            "target": {"gpus_per_node": 4},
+            "jobs": [
+                {
+                    "name": "placeholder",
+                    "sku": "{nodes}xG{processes}",
+                    "command": [],
+                    "instance_count": 2,
+                    "process_count_per_node": 3,
+                }
+            ],
+        }
+        write_template(aj_env["template_home"], "default", conf)
+
+        result = CliRunner().invoke(
+            main,
+            ["run", "-d", "-n", "5", "-p", "0", "--ppn", "2", "echo"],
+        )
+
+        assert result.exit_code == 0, result.output
+        sub_file = list(aj_env["dryrun_home"].glob("*.yaml"))[0]
+        sub = yaml.safe_load(sub_file.read_text())
+        assert sub["jobs"][0]["sku"] == "5xG0"
+        assert sub["jobs"][0]["instance_count"] == 5
+        assert sub["jobs"][0]["process_count_per_node"] == 2
+        env = sub["jobs"][0]["submit_args"]["env"]
+        assert env["AJ_GPUS_PER_NODE"] == "0"
+
+    @pytest.mark.parametrize(
+        ("target_value", "job_field", "job_value", "message"),
+        [
+            (1, "instance_count", 0, "nodes must be an integer >= 1"),
+            (-1, "instance_count", 1, "gpus_per_node must be an integer >= 0"),
+            (1, "process_count_per_node", 0, "processes_per_node must be"),
+            ("eight", "instance_count", 1, "gpus_per_node must be"),
+        ],
+    )
+    def test_rejects_invalid_template_shape(
+        self,
+        aj_env,
+        target_value,
+        job_field,
+        job_value,
+        message,
+    ):
+        job = {
+            "name": "placeholder",
+            "sku": "{nodes}xG{processes}",
+            "command": [],
+            "instance_count": 1,
+        }
+        job[job_field] = job_value
+        write_template(
+            aj_env["template_home"],
+            "default",
+            {
+                "target": {"gpus_per_node": target_value},
+                "jobs": [job],
+            },
+        )
+
+        result = CliRunner().invoke(main, ["run", "-d", "echo"])
+
+        assert result.exit_code != 0
+        assert message in result.output
+
     def test_ignores_extra_nodes_processes(self, aj_env):
         conf = {
             "description": "placeholder",
+            "target": {"gpus_per_node": 1},
             "_extra": {"nodes": 4, "processes": 2},
             "jobs": [
-                {"name": "placeholder", "sku": "sku_{nodes}_{processes}", "command": []}
+                {
+                    "name": "placeholder",
+                    "sku": "sku_{nodes}_{processes}",
+                    "command": [],
+                    "instance_count": 1,
+                }
             ],
         }
         write_template(aj_env["template_home"], "default", conf)
