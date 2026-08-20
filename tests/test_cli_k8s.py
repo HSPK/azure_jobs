@@ -168,17 +168,69 @@ def test_login_is_interactive_in_json_and_preserves_namespace(
 
     accepted = runner.invoke(
         main,
-        ["k8s", "login", "--cached", "--no-verify"],
+        ["k8s", "login", "--cached"],
     )
     assert accepted.exit_code == 0
     login = next(value for name, value in fake.calls if name == "login")
     _profile, options = login
     assert options == {
-        "verify": False,
+        "verify": True,
         "fresh": False,
         "preserve_namespace": True,
     }
     assert "configured" in accepted.output
+
+
+def test_fresh_login_requires_session_disruption_confirmation(
+    monkeypatch,
+) -> None:
+    rejected_manager = FakeK8sManager()
+    _patch_manager(monkeypatch, rejected_manager)
+    rejected = CliRunner().invoke(
+        main,
+        ["k8s", "login"],
+        input="n\n",
+    )
+    assert rejected.exit_code == 1
+    assert "may sign out the current user" in rejected.output
+    assert not any(name == "login" for name, _value in rejected_manager.calls)
+
+    accepted_manager = FakeK8sManager()
+    _patch_manager(monkeypatch, accepted_manager)
+    accepted = CliRunner().invoke(
+        main,
+        ["k8s", "login"],
+        input="y\n",
+    )
+    assert accepted.exit_code == 0
+    profile, options = next(
+        value for name, value in accepted_manager.calls if name == "login"
+    )
+    assert profile is MSR02_PROFILE
+    assert options == {
+        "verify": True,
+        "fresh": True,
+        "preserve_namespace": True,
+    }
+
+
+def test_no_verify_login_does_not_prompt_for_token_cleanup(
+    monkeypatch,
+) -> None:
+    fake = FakeK8sManager()
+    _patch_manager(monkeypatch, fake)
+
+    result = CliRunner().invoke(
+        main,
+        ["k8s", "login", "--no-verify"],
+    )
+
+    assert result.exit_code == 0
+    _profile, options = next(
+        value for name, value in fake.calls if name == "login"
+    )
+    assert options["verify"] is False
+    assert options["fresh"] is True
 
 
 def test_deprecated_setup_alias_calls_login_without_tool_install(

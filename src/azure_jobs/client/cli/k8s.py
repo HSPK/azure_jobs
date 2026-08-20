@@ -68,7 +68,10 @@ def _profile_options(command: _Command) -> _Command:
     command = click.option(
         "--fresh/--cached",
         default=True,
-        help="Clear cached OIDC tokens before authentication.",
+        help=(
+            "Clear cached OIDC tokens before authentication; requires "
+            "confirmation because it may sign out the current user."
+        ),
     )(command)
     command = click.option("--verify/--no-verify", default=True)(command)
     command = click.option(
@@ -346,6 +349,12 @@ def _login_impl(
             message="Kubernetes login is interactive; rerun without --json.",
         )
         raise click.exceptions.Exit(1)
+    if fresh and verify:
+        click.confirm(
+            "Clear cached Kubernetes OIDC tokens before authentication? "
+            "This may sign out the current user.",
+            abort=True,
+        )
     result = _call_manager(
         action,
         lambda: manager.login(

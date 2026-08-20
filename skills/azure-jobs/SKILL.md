@@ -43,6 +43,8 @@ Also confirm before:
 - installing or upgrading `aj` when the user did not request installation;
 - `aj k8s install`, because it may use sudo, install host tools, and add an
   apt repository;
+- any `aj k` operation that may clear authentication state or sign out the
+  current Kubernetes user;
 - any template pull into a non-empty shareable tree, because normal pull
   overwrites matching files and `--force` also removes stale files;
 - destructive recovery such as `aj daemon stop --force`.
@@ -55,14 +57,6 @@ Never expose or persist in public templates:
 - project/home `.ssh/`, private keys, certificates, or local SSH material.
 
 Use placeholders in public examples and review staged content before publish.
-
-Template show/diff, dry-run, submit, and logs may contain environment or
-command secrets. Run those commands through the bundled
-[`run-aj-json.py`](scripts/run-aj-json.py), which captures both streams
-privately and emits only a bounded, redacted allowlist. Use
-[`summarize-aj-json.py`](scripts/summarize-aj-json.py) only for an already
-private JSON file. Resolve scripts relative to this skill, not the user's
-working directory.
 
 For native AML/Sing, default agent behavior is to disable home SSH shipping.
 If the daemon is not running, start it with `AJ_SHIP_SSH=0`. If it is already
@@ -161,8 +155,7 @@ work, read [public repository](references/public-repository.md).
 
 ```bash
 aj --json template validate TEMPLATE_NAME
-python3 <SKILL_DIR>/scripts/run-aj-json.py -- \
-  aj --json template show TEMPLATE_NAME
+aj --json template show TEMPLATE_NAME
 ```
 
 ### 4. Preflight
@@ -186,16 +179,14 @@ aj --json image list
 ```
 
 Run only backend-relevant discovery. Volcano uses the preflight in its
-reference. Render without upload/submission. Raw dry-run JSON contains the
-full rendered config, so never print it directly:
+reference. Render without upload/submission:
 
 For homogeneous jobs, nodes and GPUs must come from this command or explicit
 `jobs[0].instance_count` and `target.gpus_per_node` YAML. `aj run` has no
 resource memory; never infer a prior value or silently assume `1x1`.
 
 ```bash
-AJ_NAME=TRAIN_NAME python3 <SKILL_DIR>/scripts/run-aj-json.py -- \
-  aj --json run -t TEMPLATE_NAME -d -n 1 -p 1 --ppn 1 \
+AJ_NAME=TRAIN_NAME aj --json run -t TEMPLATE_NAME -d -n 1 -p 1 --ppn 1 \
   python train.py
 ```
 
@@ -240,22 +231,21 @@ not already explicitly requested.
 Direct:
 
 ```bash
-AJ_NAME=TRAIN_NAME python3 <SKILL_DIR>/scripts/run-aj-json.py -- \
-  aj --json run -t TEMPLATE_NAME -n 1 -p 1 --ppn 1 \
+AJ_NAME=TRAIN_NAME aj --json run -t TEMPLATE_NAME -n 1 -p 1 --ppn 1 \
   python train.py
 ```
 
 Queued:
 
 ```bash
-AJ_SUMMARY="$(
-  AJ_NAME=TRAIN_NAME python3 <SKILL_DIR>/scripts/run-aj-json.py -- \
-    aj --json run --queue -t TEMPLATE_NAME -n 1 -p 1 --ppn 1 \
+AJ_RESULT="$(
+  AJ_NAME=TRAIN_NAME aj --json run --queue \
+    -t TEMPLATE_NAME -n 1 -p 1 --ppn 1 \
     python train.py
 )"
-printf '%s\n' "$AJ_SUMMARY"
+printf '%s\n' "$AJ_RESULT"
 TICKET="$(
-  printf '%s' "$AJ_SUMMARY" |
+  printf '%s' "$AJ_RESULT" |
     python3 -c 'import json,sys; print(json.load(sys.stdin)["ticket"])'
 )"
 aj queue show "$TICKET"
@@ -273,8 +263,7 @@ AML/Sing:
 
 ```bash
 aj --json job status JOB_OR_AJ_ID --ws WORKSPACE
-python3 <SKILL_DIR>/scripts/run-aj-json.py --log-tail 200 -- \
-  aj --json job logs JOB_OR_AJ_ID --ws WORKSPACE
+aj --json job logs JOB_OR_AJ_ID --ws WORKSPACE
 ```
 
 Always capture the resolved workspace at submission. The active workspace may
@@ -287,7 +276,7 @@ aj queue show TICKET
 aj queue wait TICKET --timeout 3600
 ```
 
-Volcano uses narrow `kubectl get` fields and sanitized logs. Do not use raw
+Volcano uses narrow `kubectl get` fields and bounded logs. Do not use raw
 Job/pod `describe` or full YAML/JSON; Blob command arguments contain a read
 SAS, and PVC jobs can still contain sensitive values.
 

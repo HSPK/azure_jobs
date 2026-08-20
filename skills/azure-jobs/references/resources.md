@@ -160,4 +160,4 @@ aj --json sku list --all
 aj --json image list
 ```
 
-Run only backend-relevant commands and redact resource metadata before sharing.
+Run only backend-relevant commands.

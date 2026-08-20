@@ -35,7 +35,7 @@ Only resolved `config` becomes the template. `base` may be null/string/list.
 | scalars/mixed types | last value wins |
 
 Replacements are deep-copied. Raw merged config may contain environment
-secrets; inspect `template show` through `run-aj-json.py`.
+values; inspect it with `aj --json template show TEMPLATE_NAME`.
 
 ## Homogeneous shape
 

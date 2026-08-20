@@ -77,11 +77,13 @@ aj k login
 aj k status --check-cluster
 ```
 
-Install may use sudo and add the Kubernetes apt repository/key. Login clears
-stale OIDC tokens, atomically merges kubeconfig, preserves the discovered
-namespace, and restores the prior config if authentication fails. Never pass
-install's `--yes`, `--force-repo`, or `--reinstall` without explicit approval.
-Repeated install is otherwise a no-op when the tools already exist.
+Install may use sudo and add the Kubernetes apt repository/key. Login asks for
+confirmation before clearing stale OIDC tokens because that may sign out the
+current user, atomically merges kubeconfig, preserves the discovered namespace,
+and restores the prior config if authentication fails. Use `--cached` when
+token cleanup is not intended. Never pass install's `--yes`, `--force-repo`,
+or `--reinstall` without explicit approval. Repeated install is otherwise a
+no-op when the tools already exist.
 
 During login, relay the displayed device-code URL/code to the user and wait
 for them to authenticate. aj streams that prompt on stderr and allows up to
@@ -223,21 +225,20 @@ aj --json template validate TEMPLATE_NAME
 aj --json code stats -t TEMPLATE_NAME
 ```
 
-Use the private-output dry-run procedure from
+Use the dry-run procedure from
 [job operations](job-operations.md#run-flags). After confirmation, capture the
-structured submission result privately:
+structured submission result:
 
 Homogeneous template:
 
 ```bash
-AJ_SUMMARY="$(
-  python3 <SKILL_DIR>/scripts/run-aj-json.py -- \
-    aj --json run -t TEMPLATE_NAME -n 2 -p 8 --ppn 1 \
+AJ_RESULT="$(
+  aj --json run -t TEMPLATE_NAME -n 2 -p 8 --ppn 1 \
     python train.py
 )"
-printf '%s\n' "$AJ_SUMMARY"
+printf '%s\n' "$AJ_RESULT"
 JOB="$(
-  printf '%s' "$AJ_SUMMARY" |
+  printf '%s' "$AJ_RESULT" |
     python3 -c 'import json,sys; print(json.load(sys.stdin)["azure_name"])'
 )"
 ```
@@ -245,9 +246,8 @@ JOB="$(
 Heterogeneous template:
 
 ```bash
-AJ_SUMMARY="$(
-  python3 <SKILL_DIR>/scripts/run-aj-json.py -- \
-    aj --json run -t HETEROGENEOUS_TEMPLATE \
+AJ_RESULT="$(
+  aj --json run -t HETEROGENEOUS_TEMPLATE \
     python train.py
 )"
 ```
@@ -288,28 +288,13 @@ kubectl get pods -n "$NS" --context "$CTX" -l "app=$STEM" \
   -o custom-columns='NAME:.metadata.name,PHASE:.status.phase,NODE:.spec.nodeName,RESTARTS:.status.containerStatuses[*].restartCount'
 ```
 
-Use [Kubernetes analysis](kubernetes-analysis.md) for conditions, bounded
-redacted events, resources, PVC state, and layered diagnosis.
-
-Logs from either strategy may contain credentials, environment values, or
-signed URLs. Capture them privately and redact before display:
+Use [Kubernetes analysis](kubernetes-analysis.md) for conditions, events,
+resources, PVC state, logs, and layered diagnosis.
 
 ```bash
-umask 077
-RAW_LOG="$(mktemp)"
-if kubectl logs -n "$NS" --context "$CTX" \
-  -l "app=$STEM" --all-containers --prefix --tail=500 \
-  >"$RAW_LOG" 2>&1; then
-  LOG_STATUS=0
-else
-  LOG_STATUS=$?
-fi
-python3 <SKILL_DIR>/scripts/redact-log.py \
-  --tail 200 --delete "$RAW_LOG"
-test "$LOG_STATUS" -eq 0
+kubectl logs -n "$NS" --context "$CTX" \
+  -l "app=$STEM" --all-containers --prefix --tail=200
 ```
-
-Never print raw Job/pod descriptions or logs.
 
 Do not use `aj job status/logs/cancel` for Volcano.
 
@@ -320,11 +305,10 @@ aj k queues
 aj k jobs
 aj k jobs "$JOB"
 aj k pods --job "$JOB"
-aj k logs "$POD" -c "$CONTAINER" --tail 200
-aj k events "$POD"
+aj k logs "$POD" -c "$CONTAINER" --tail 200 --raw
+aj k events "$POD" --raw
 ```
 
-Logs/events redact credential-like output by default. `--raw` is private-only.
 Deletion is exact and confirmation-gated:
 
 ```bash

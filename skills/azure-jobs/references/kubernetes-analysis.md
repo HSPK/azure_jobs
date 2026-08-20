@@ -87,27 +87,16 @@ Classify:
 
 ## 3. Events
 
-Events are often more useful than logs for Pending tasks. Capture and redact
-them because admission errors can echo user-provided values:
+Events are often more useful than logs for Pending tasks:
 
 ```bash
-umask 077
-RAW_EVENTS="$(mktemp)"
-if kubectl get events -n "$NS" --context "$CTX" \
+kubectl get events -n "$NS" --context "$CTX" \
   --field-selector "involvedObject.name=$POD" \
-  --sort-by=.lastTimestamp >"$RAW_EVENTS" 2>&1; then
-  EVENT_STATUS=0
-else
-  EVENT_STATUS=$?
-fi
-python3 <SKILL_DIR>/scripts/redact-log.py \
-  --tail 100 --delete "$RAW_EVENTS"
-test "$EVENT_STATUS" -eq 0
+  --sort-by=.lastTimestamp |
+  tail -n 100
 ```
 
-Redact internal names before sharing.
-
-## 4. Logs safely
+## 4. Logs
 
 List containers:
 
@@ -116,42 +105,20 @@ kubectl get pod "$POD" -n "$NS" --context "$CTX" \
   -o jsonpath='{.spec.containers[*].name}{"\n"}'
 ```
 
-Capture current and previous logs privately:
+Read current logs:
 
 ```bash
 CONTAINER=<CONTAINER_NAME>
-umask 077
-RAW_LOG="$(mktemp)"
-if kubectl logs "$POD" -n "$NS" --context "$CTX" -c "$CONTAINER" \
-  --tail=500 >"$RAW_LOG" 2>&1; then
-  LOG_STATUS=0
-else
-  LOG_STATUS=$?
-fi
-python3 <SKILL_DIR>/scripts/redact-log.py \
-  --tail 200 --delete "$RAW_LOG"
-test "$LOG_STATUS" -eq 0
+kubectl logs "$POD" -n "$NS" --context "$CTX" -c "$CONTAINER" \
+  --tail=200
 ```
 
 For restarted containers:
 
 ```bash
-umask 077
-RAW_LOG="$(mktemp)"
-if kubectl logs "$POD" -n "$NS" --context "$CTX" -c "$CONTAINER" \
-  --previous --tail=500 >"$RAW_LOG" 2>&1; then
-  LOG_STATUS=0
-else
-  LOG_STATUS=$?
-fi
-python3 <SKILL_DIR>/scripts/redact-log.py \
-  --tail 200 --delete "$RAW_LOG"
-test "$LOG_STATUS" -eq 0
+kubectl logs "$POD" -n "$NS" --context "$CTX" -c "$CONTAINER" \
+  --previous --tail=200
 ```
-
-Treat logs as sensitive: redact URL queries, tokens, credentials, and
-environment values. Omit user paths and unrelated payloads from the report.
-Blob jobs may print signed URLs; never print raw logs or descriptions.
 
 ## 5. Short exec diagnostics
 
@@ -197,7 +164,7 @@ kubectl get pvc <PVC_NAME> -n "$NS" --context "$CTX" \
 
 Blob/blobfuse strategy:
 
-- inspect only status/events/sanitized logs;
+- inspect status, events, and logs;
 - check egress, `/dev/fuse`, privileged policy, and bootstrap errors;
 - never inspect Secret contents, full command arguments, or SAS-bearing
   manifests.
@@ -207,7 +174,7 @@ Blob/blobfuse strategy:
 Separate:
 
 1. **Observed facts**: exact phase, condition, reason, exit code, restart count,
-   event, and bounded redacted log lines.
+   event, and bounded log lines.
 2. **Conclusion**: only what the evidence establishes.
 3. **Hypotheses**: ranked alternatives with the check that would distinguish
    them.

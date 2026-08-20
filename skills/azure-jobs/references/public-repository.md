@@ -138,14 +138,13 @@ aj --json template list
 aj --json template validate
 ```
 
-GitHub shorthand expands to SSH. Stored/displayed HTTP remotes are sanitized
-to remove userinfo/query credentials.
+GitHub shorthand expands to SSH. Stored/displayed HTTP remotes omit
+userinfo/query credentials.
 
 Use force only after confirmation and reviewing local changes:
 
 ```bash
-python3 <SKILL_DIR>/scripts/run-aj-json.py -- \
-  aj --json template diff
+aj --json template diff
 aj template pull --force OWNER/REPOSITORY
 ```
 
@@ -157,8 +156,7 @@ Edit `.azure_jobs/template/` and reusable component directories, then:
 
 ```bash
 aj --json template validate
-python3 <SKILL_DIR>/scripts/run-aj-json.py -- \
-  aj --json template diff
+aj --json template diff
 ```
 
 Review for credentials/local-only data. Obtain confirmation before:
