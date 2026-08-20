@@ -73,7 +73,8 @@ device-code authentication. Login:
 1. resolves the existing `oidc-login` plugin;
 2. atomically merges and backs up kubeconfig only when content changes;
 3. preserves an already discovered namespace such as `bonete04`;
-4. clears stale OIDC tokens by default;
+4. asks for confirmation before clearing stale OIDC tokens, because clearing
+   the cache may sign out the current Kubernetes user;
 5. displays the device-code prompt directly, waits up to ten minutes, verifies
    `kubectl auth whoami`, and derives the matching `bonete*` group;
 6. restores the previous kubeconfig if authentication fails.
@@ -81,7 +82,7 @@ device-code authentication. Login:
 Useful options:
 
 ```bash
-aj k login --cached               # keep the cached OIDC token
+aj k login --cached               # keep cached tokens; no sign-out confirmation
 aj k login --no-verify            # merge only
 aj k login --reset-namespace      # restore profile default before detection
 aj k login --server https://... --issuer-url https://... --client-id ...

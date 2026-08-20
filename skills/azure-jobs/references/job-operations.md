@@ -53,11 +53,10 @@ Naming is deterministic:
 
 Example: `AJ_NAME=pretrain` may resolve to `pretrain_a1b2c3d4`. The job sees
 that normalized value as runtime `AJ_NAME`; it does not see only `pretrain`.
-The wrapper inherits the same local variable:
+The JSON invocation inherits the same local variable:
 
 ```bash
-AJ_NAME=pretrain python3 <SKILL_DIR>/scripts/run-aj-json.py -- \
-  aj --json run -t TEMPLATE_NAME -d -n 1 -p 1 --ppn 1 \
+AJ_NAME=pretrain aj --json run -t TEMPLATE_NAME -d -n 1 -p 1 --ppn 1 \
   python train.py
 ```
 
@@ -96,34 +95,27 @@ arguments.
 Dry run:
 
 ```bash
-python3 <SKILL_DIR>/scripts/run-aj-json.py -- \
-  aj --json run -t TEMPLATE_NAME -d -n 2 -p 8 --ppn 1 \
+aj --json run -t TEMPLATE_NAME -d -n 2 -p 8 --ppn 1 \
   python train.py --epochs 5
 ```
-
-The wrapper keeps raw stdout/stderr private and emits a redacted allowlist.
-Raw dry-run JSON embeds rendered environment and command values; never print
-or paste it directly.
 
 After the chargeable-action gate, submit directly or queue:
 
 ```bash
-python3 <SKILL_DIR>/scripts/run-aj-json.py -- \
-  aj --json run -t TEMPLATE_NAME -n 2 -p 8 --ppn 1 \
+aj --json run -t TEMPLATE_NAME -n 2 -p 8 --ppn 1 \
   python train.py --epochs 5
 ```
 
-Queue with the same private-output pattern:
+Queue and capture the ticket:
 
 ```bash
-AJ_SUMMARY="$(
-  python3 <SKILL_DIR>/scripts/run-aj-json.py -- \
-    aj --json run --queue -t TEMPLATE_NAME -n 2 -p 8 --ppn 1 \
+AJ_RESULT="$(
+  aj --json run --queue -t TEMPLATE_NAME -n 2 -p 8 --ppn 1 \
     python train.py --epochs 5
 )"
-printf '%s\n' "$AJ_SUMMARY"
+printf '%s\n' "$AJ_RESULT"
 TICKET="$(
-  printf '%s' "$AJ_SUMMARY" |
+  printf '%s' "$AJ_RESULT" |
     python3 -c 'import json,sys; print(json.load(sys.stdin)["ticket"])'
 )"
 aj queue show "$TICKET"
@@ -207,11 +199,8 @@ aj --json job status JOB_OR_AJ_ID --ws WORKSPACE
 sleep 15
 ```
 
-Capture logs privately and print only a bounded redacted tail:
-
 ```bash
-python3 <SKILL_DIR>/scripts/run-aj-json.py --log-tail 200 -- \
-  aj --json job logs JOB_OR_AJ_ID --ws WORKSPACE
+aj --json job logs JOB_OR_AJ_ID --ws WORKSPACE
 ```
 
 A failed log read is safe to retry. A lost submit response is ambiguous and
