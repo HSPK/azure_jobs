@@ -32,7 +32,10 @@ class _AzureCtx:
 class _WorkspaceCtx:
     def __init__(self, *, returned_job: dict[str, object]) -> None:
         self.returned_job = returned_job
-        self.blob = SimpleNamespace(upload_archive=self._upload_archive)
+        self.blob = SimpleNamespace(
+            upload_archive=self._upload_archive,
+            upload_file=self._upload_file,
+        )
         self.job = SimpleNamespace(create_or_update=MagicMock(return_value=returned_job))
 
     def __enter__(self):
@@ -49,6 +52,26 @@ class _WorkspaceCtx:
         return (
             "azureml://datastores/workspaceblobstore/paths/"
             "LocalUpload/archive-hash/code.tar.gz"
+        )
+
+    def _upload_file(
+        self,
+        file_path,
+        content_hash,
+        *,
+        blob_name,
+        content_type,
+        on_progress=None,
+    ):
+        assert file_path.name == "bootstrap_code_archive.sh"
+        assert len(content_hash) == 64
+        assert blob_name == "bootstrap_code_archive.sh"
+        assert content_type == "text/x-shellscript"
+        if on_progress is not None:
+            on_progress(1, 1, 0, blob_name)
+        return (
+            "azureml://datastores/workspaceblobstore/paths/"
+            f"LocalUpload/{content_hash}/{blob_name}"
         )
 
 
@@ -305,6 +328,8 @@ def test_aml_and_sing_share_archive_upload_flow(
         "code",
         "code",
         "upload",
+        "code",
+        "upload",
         "submit",
         "done",
     ]
@@ -321,11 +346,11 @@ def test_aml_and_sing_share_archive_upload_flow(
             "payload": {
                 "request": request,
                 "env_id": "env-id",
+                "bootstrap_uri": ANY,
                 "code_archive_uri": (
                     "azureml://datastores/workspaceblobstore/paths/"
                     "LocalUpload/archive-hash/code.tar.gz"
                 ),
-                "code_archive_hash": "archive-hash",
                 "compute_id": "compute-arm-id",
                 "env_vars": {
                     "FOO": "bar",

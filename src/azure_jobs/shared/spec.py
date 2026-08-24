@@ -100,7 +100,8 @@ def default_run_shape(
         missing.append("nodes (-n/--nodes or jobs[0].instance_count)")
     if gpus_per_node is None:
         missing.append(
-            "GPUs per node (-p/--gpus-per-node or target.gpus_per_node)"
+            "SKU processes per node (-p/--processes or "
+            "target.gpus_per_node)"
         )
     if missing:
         raise ConfigError(

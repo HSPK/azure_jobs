@@ -58,8 +58,10 @@ with the same path.
 ### Native AML and Singularity
 
 The native backend resolves workspace, compute or VC, identity, environment,
-storage, distribution, and resources before mutation. It uploads one archive
-as a `uri_file` and submits an Azure ML CommandJob through REST.
+storage, distribution, and resources before mutation. It uploads one code
+archive plus a content-addressed static bootstrap as `uri_file` inputs and
+submits an Azure ML CommandJob through REST. The command only invokes the
+bootstrap; extraction logic is not inlined into the Azure job payload.
 
 Singularity can select a VC and tier when `target.name` is empty. Selection
 uses exact GPU and optional accelerator/memory requirements, current user and

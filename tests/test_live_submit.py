@@ -20,6 +20,7 @@ from azure_jobs.shared.config import read_config
 from azure_jobs.shared.contract.models import Target
 from azure_jobs.shared.job.spec import JobSpec
 from azure_jobs.shared.opts.aml import AmlOpts
+from azure_jobs.shared.sku import SkuSpec
 
 from .live_e2e import choose_auto_sing, choose_fastest
 
@@ -247,6 +248,11 @@ def test_fastest_available_aml_or_sing_submission(
     code.mkdir()
     (code / "README.txt").write_text("aj live e2e\n", encoding="utf-8")
     name = f"aj-live-e2e-{uuid.uuid4().hex[:8]}"
+    command = (
+        ["bash -lc \"printf 'aj-live-e2e-ok\\n'\""]
+        if SkuSpec.parse(candidate.sku).is_cpu
+        else ["python -c \"print('aj-live-e2e-ok')\""]
+    )
     spec = JobSpec(
         name=name,
         sid=uuid.uuid4().hex[:8],
@@ -256,7 +262,7 @@ def test_fastest_available_aml_or_sing_submission(
         nodes=1,
         gpus_per_node=1,
         processes_per_node=1,
-        command=["python -c \"print('aj-live-e2e-ok')\""],
+        command=command,
         code_dir=str(code),
         env_vars={
             "AJ_LIVE_E2E": "1",

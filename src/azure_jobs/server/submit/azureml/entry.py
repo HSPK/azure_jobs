@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import tempfile
@@ -21,6 +22,7 @@ from azure_jobs.shared.opts import AmlOpts
 from azure_jobs.shared.utils.format import format_size
 
 from .bootstrap import RUNNER_FILENAME, generate_runner_script
+from ._scripts import script_path
 from .image import _build_environment
 from .payload import _build_env_vars, _build_job_body, _build_tags
 from .ssh import _collect_ssh_files
@@ -195,12 +197,23 @@ def _submit_impl(
                     on_progress=_on_upload,
                 )
 
+            bootstrap_path = script_path("bootstrap_code_archive.sh")
+            bootstrap_hash = hashlib.sha256(bootstrap_path.read_bytes()).hexdigest()
+            _status("code", "Uploading archive bootstrap…")
+            bootstrap_uri = workspace.blob.upload_file(
+                bootstrap_path,
+                bootstrap_hash,
+                blob_name="bootstrap_code_archive.sh",
+                content_type="text/x-shellscript",
+                on_progress=_on_upload,
+            )
+
             _status("submit", f"Submitting to {aml.compute}…")
             job_body = _build_job_body(
                 request,
                 env_id=env_id,
+                bootstrap_uri=bootstrap_uri,
                 code_archive_uri=code_archive_uri,
-                code_archive_hash=archive.code_hash,
                 compute_id=compute,
                 env_vars=env_vars,
                 distribution=distribution,

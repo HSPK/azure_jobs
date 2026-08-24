@@ -2,16 +2,15 @@
 
 from __future__ import annotations
 
-import shlex
 from typing import Any
 
 from azure_jobs.shared.job.spec import JobSpec
 from azure_jobs.shared.opts import AmlOpts
 
-from ._scripts import load_script
-
 _CODE_ARCHIVE_INPUT = "aj_code_archive"
 _CODE_ARCHIVE_EXPR = "${{inputs.aj_code_archive}}"
+_BOOTSTRAP_INPUT = "aj_bootstrap"
+_BOOTSTRAP_EXPR = "${{inputs.aj_bootstrap}}"
 
 _SING_DEFAULT_ENV = {
     "SUDO": "sudo",
@@ -43,21 +42,16 @@ def _build_tags(tag_strings: list[str]) -> dict[str, str | None]:
     return tags
 
 
-def _build_bootstrap_command(code_archive_hash: str) -> str:
-    script = "\n".join(load_script("bootstrap_code_archive.sh"))
-    return (
-        f"bash -c {shlex.quote(script)} _ "
-        f"{_CODE_ARCHIVE_EXPR} "
-        f"{shlex.quote(code_archive_hash)}"
-    )
+def _build_bootstrap_command() -> str:
+    return f"bash {_BOOTSTRAP_EXPR} {_CODE_ARCHIVE_EXPR}"
 
 
 def _build_job_body(
     request: JobSpec,
     *,
     env_id: str,
+    bootstrap_uri: str,
     code_archive_uri: str,
-    code_archive_hash: str,
     compute_id: str,
     env_vars: dict[str, str],
     distribution: dict[str, Any] | None,
@@ -73,10 +67,15 @@ def _build_job_body(
         "displayName": request.name,
         "description": request.description,
         "experimentName": request.expr_name,
-        "command": _build_bootstrap_command(code_archive_hash),
+        "command": _build_bootstrap_command(),
         "computeId": compute_id,
         "environmentVariables": env_vars,
         "inputs": {
+            _BOOTSTRAP_INPUT: {
+                "jobInputType": "uri_file",
+                "uri": bootstrap_uri,
+                "mode": "Download",
+            },
             _CODE_ARCHIVE_INPUT: {
                 "jobInputType": "uri_file",
                 "uri": code_archive_uri,

@@ -19,7 +19,7 @@ aj --json config experiment EXPERIMENT
 | --- | --- |
 | `-t`, `--template` | leaf template or configured template |
 | `-n`, `--nodes` | nodes; otherwise require `jobs[0].instance_count` |
-| `-p`, `--gpn`, `--gpus-per-node` | GPUs; otherwise require `target.gpus_per_node` |
+| `-p`, `--processes` | per-node SKU selector; GPU count for `G`, CPU size tier for `C` |
 | `--ppn`, `--processes-per-node` | processes; template value, then `1` |
 | `-d`, `--dry-run` | render only |
 | `--queue` | persist work in daemon queue |
@@ -29,8 +29,9 @@ For `_extra.volcano.tasks`, omit `-n`, `-p`, and `--ppn`; explicit values fail.
 Do not use `--amlt`.
 
 `aj run` never persists template or shape arguments. For a homogeneous job,
-resolve both nodes and GPUs from the current CLI command or template before
-previewing/submitting.
+resolve both nodes and SKU processes from the current CLI command or template
+before previewing/submitting. `--gpn`/`--gpus-per-node` are compatibility
+aliases; `--ppn` controls actual launcher processes.
 
 ## Job name and runtime environment
 
@@ -69,8 +70,8 @@ Every backend receives this stable runtime contract:
 | `AJ_TEMPLATE` | selected leaf template |
 | `AJ_SUBMIT_TIMESTAMP_UTC` | ISO 8601 build timestamp |
 | `AJ_NODES` | resolved CLI/template nodes |
-| `AJ_GPUS_PER_NODE` | resolved CLI/template GPUs per node |
-| `AJ_PROCESSES` | `AJ_NODES × AJ_GPUS_PER_NODE` compatibility total |
+| `AJ_GPUS_PER_NODE` | compatibility name for `-p`; literal for GPU SKUs |
+| `AJ_PROCESSES` | `AJ_NODES × -p` compatibility SKU-unit total |
 | `AJ_PROCESSES_PER_NODE` | resolved CLI/template launcher count |
 
 These injected values override same-named `jobs[0].submit_args.env` entries.
@@ -135,8 +136,9 @@ Arguments are shell-quoted while preserving boundaries; template
 
 ## Archive preflight
 Native AML/Sing select the working tree with built-ins, template ignores, and
-the root ignore file; create one deterministic archive; upload/reuse one
-content-addressed Blob; verify SHA-256; extract once; run `aj_runner.sh`.
+the root ignore file; create one deterministic archive; upload/reuse the code
+Blob and static bootstrap input; verify SHA-256; extract once; run
+`aj_runner.sh`.
 
 `code stats` covers project-selected files, but not the optional home SSH
 whitelist injected later by the daemon. Default agent behavior:

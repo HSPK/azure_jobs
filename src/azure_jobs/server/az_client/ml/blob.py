@@ -154,22 +154,47 @@ class BlobAPI:
         on_progress: UploadProgress | None = None,
     ) -> str:
         """Upload one content-addressed archive and return its datastore URI."""
-        path = Path(archive_path)
+        return self.upload_file(
+            archive_path,
+            code_hash,
+            blob_name="code.tar.gz",
+            content_type="application/gzip",
+            on_progress=on_progress,
+        )
+
+    def upload_file(
+        self,
+        file_path: str | Path,
+        content_hash: str,
+        *,
+        blob_name: str,
+        content_type: str = "application/octet-stream",
+        on_progress: UploadProgress | None = None,
+    ) -> str:
+        """Upload one content-addressed file and return its datastore URI."""
+        path = Path(file_path)
         if not path.is_file():
-            raise FileNotFoundError(f"Code archive does not exist: {path}")
-        if not code_hash or "/" in code_hash or "\\" in code_hash:
-            raise ValueError(f"Invalid code archive hash: {code_hash!r}")
+            raise FileNotFoundError(f"Upload file does not exist: {path}")
+        if not content_hash or "/" in content_hash or "\\" in content_hash:
+            raise ValueError(f"Invalid content hash: {content_hash!r}")
+        if (
+            not blob_name
+            or blob_name in {".", ".."}
+            or Path(blob_name).name != blob_name
+            or "/" in blob_name
+            or "\\" in blob_name
+        ):
+            raise ValueError(f"Invalid blob name: {blob_name!r}")
 
         storage = self._ensure_default_storage()
         creds = self._resolve_credentials(storage.arm_id)
-        blob_name = "code.tar.gz"
         blob_url = (
             f"{storage.account_url}/{storage.container}"
-            f"/LocalUpload/{code_hash}/{blob_name}"
+            f"/LocalUpload/{content_hash}/{blob_name}"
         )
         datastore_uri = (
             "azureml://datastores/workspaceblobstore/paths/"
-            f"LocalUpload/{code_hash}/{blob_name}"
+            f"LocalUpload/{content_hash}/{blob_name}"
         )
 
         if on_progress is not None:
@@ -179,7 +204,7 @@ class BlobAPI:
                 on_progress(1, 1, 1, blob_name)
             return datastore_uri
 
-        self._upload_blob(blob_url, path, creds, "application/gzip")
+        self._upload_blob(blob_url, path, creds, content_type)
         if on_progress is not None:
             on_progress(1, 1, 0, blob_name)
         return datastore_uri

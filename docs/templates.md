@@ -43,11 +43,12 @@ Ordinary jobs resolve resources from the current command first, then YAML:
 | Value | CLI | Template |
 | --- | --- | --- |
 | nodes | `-n` | `jobs[0].instance_count` |
-| GPUs per node | `-p` | `target.gpus_per_node` |
+| SKU processes per node | `-p` / `--processes` | `target.gpus_per_node` (compatibility field) |
 | launcher processes | `--ppn` | `jobs[0].process_count_per_node`, then `1` |
 
-Nodes and GPUs have no implicit or remembered fallback. Missing either value
-fails before upload. `aj run` never saves values for a later invocation.
+Nodes and SKU processes have no implicit or remembered fallback. Missing
+either value fails before upload. `aj run` never saves values for a later
+invocation.
 
 ## AML example
 
@@ -104,8 +105,9 @@ config:
           _AZUREML_SINGULARITY_JOB_UAI: <MANAGED_IDENTITY_ARM_ID>
 ```
 
-Auto-selection always requires an exact GPU count. Accelerator and per-GPU
-memory are exact filters when the SKU specifies them. Current user and
+Auto-selection first matches the CPU/GPU SKU family. GPU SKUs require an exact
+GPU count; CPU SKUs use `-p` as an ordered CPU size tier. Accelerator and
+per-GPU memory are exact filters when the SKU specifies them. Current user and
 SLA-tier quota must cover the selected instance. Ranking is:
 
 1. requested tier, then fallback tiers;
@@ -305,8 +307,10 @@ command, once per node in the native runner.
 sku: "{nodes}x80G{processes}-A100"
 ```
 
-`{nodes}` is `-n`. `{processes}` is the compatibility placeholder for CLI GPUs
-per node (`-p`), not `--ppn`.
+`{nodes}` is `-n`. `{processes}` is the `-p` SKU selector, not `--ppn`.
+For GPU `G` SKUs it is the exact GPUs per node. For CPU `C` SKUs it selects an
+ordered CPU instance size (for example `C1` is the smallest matching CPU
+type); it is not a GPU count or launcher process count.
 
 ```yaml
 sku:

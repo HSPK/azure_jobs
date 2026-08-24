@@ -117,6 +117,23 @@ class TestDryRunResultJson:
         assert "[/bold" not in out
         assert "[dim" not in out
 
+    def test_cpu_sku_reports_process_selector_without_fake_gpus(self):
+        req = _make_request(
+            service="sing",
+            sku="1xC1",
+            nodes=1,
+            gpus_per_node=1,
+        )
+
+        parsed = json.loads(
+            _capture_stdout(lambda: show_dry_run_result(req))
+        )
+        request = parsed["request"]
+
+        assert request["sku_processes_per_node"] == 1
+        assert request["gpu_nodes"] == 0
+        assert request["total_gpus"] == 0
+
 
 class TestSubmissionPreviewJsonSilent:
     """show_submission_preview is silent in JSON mode (avoids double-envelope)."""

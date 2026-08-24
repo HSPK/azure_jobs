@@ -798,7 +798,8 @@ class _AzureContext:
 class _WorkspaceContext:
     def __init__(self) -> None:
         self.blob = SimpleNamespace(
-            upload_archive=MagicMock(return_value="azureml://code/archive")
+            upload_archive=MagicMock(return_value="azureml://code/archive"),
+            upload_file=MagicMock(return_value="azureml://code/bootstrap"),
         )
         self.job = SimpleNamespace(
             create_or_update=MagicMock(

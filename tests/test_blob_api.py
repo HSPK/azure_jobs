@@ -198,8 +198,44 @@ def test_upload_archive_validates_path_and_hash(tmp_path) -> None:
 
     archive = tmp_path / "code.tar.gz"
     archive.write_bytes(b"x")
-    with pytest.raises(ValueError, match="Invalid code archive hash"):
+    with pytest.raises(ValueError, match="Invalid content hash"):
         value.upload_archive(archive, "../escape")
+
+
+def test_upload_file_supports_named_text_artifact(tmp_path, monkeypatch) -> None:
+    value, ctx = api()
+    script = tmp_path / "bootstrap.sh"
+    script.write_text("#!/bin/bash\n", encoding="utf-8")
+    monkeypatch.setattr(value, "_ensure_default_storage", _storage)
+    monkeypatch.setattr(
+        value,
+        "_resolve_credentials",
+        lambda _: _Credentials(bearer="token"),
+    )
+    ctx.session.head.return_value = Response(404)
+    ctx.session.put.return_value = Response(201)
+
+    uri = value.upload_file(
+        script,
+        "script-hash",
+        blob_name="bootstrap.sh",
+        content_type="text/x-shellscript",
+    )
+
+    assert uri.endswith("/LocalUpload/script-hash/bootstrap.sh")
+    assert ctx.session.put.call_args.kwargs["headers"]["Content-Type"] == (
+        "text/x-shellscript"
+    )
+
+
+@pytest.mark.parametrize("blob_name", ["", ".", "..", "../x", "a/b", r"a\b"])
+def test_upload_file_rejects_invalid_blob_name(tmp_path, blob_name) -> None:
+    value, _ctx = api()
+    script = tmp_path / "bootstrap.sh"
+    script.write_text("true\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Invalid blob name"):
+        value.upload_file(script, "hash", blob_name=blob_name)
 
 
 def test_put_blob_rejects_archive_above_single_request_limit() -> None:

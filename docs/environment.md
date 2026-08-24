@@ -41,8 +41,8 @@ Every built job receives:
 | `AJ_TEMPLATE` | selected leaf template name |
 | `AJ_SUBMIT_TIMESTAMP_UTC` | ISO 8601 build timestamp |
 | `AJ_NODES` | resolved CLI/template node count |
-| `AJ_GPUS_PER_NODE` | resolved CLI/template GPU count |
-| `AJ_PROCESSES` | `AJ_NODES × AJ_GPUS_PER_NODE`; compatibility total |
+| `AJ_GPUS_PER_NODE` | compatibility name for resolved `-p`; literal only for GPU SKUs |
+| `AJ_PROCESSES` | `AJ_NODES × -p`; compatibility SKU-unit total |
 | `AJ_PROCESSES_PER_NODE` | resolved CLI/template launcher count |
 
 Example:
@@ -54,8 +54,9 @@ torchrun \
   train.py
 ```
 
-`AJ_PROCESSES` is not `--ppn`. It retains the historical total-GPU meaning.
-The same history explains why SKU `{processes}` means GPUs per node.
+`AJ_PROCESSES` is not `--ppn`. For GPU SKUs it commonly equals total GPUs; for
+CPU SKUs it is only a compatibility SKU-unit value. Use
+`AJ_PROCESSES_PER_NODE` for actual launcher processes.
 
 Template values with these names are overwritten by aj.
 

@@ -39,8 +39,10 @@ values; inspect it with `aj --json template show TEMPLATE_NAME`.
 
 ## Homogeneous shape
 
-Resolve nodes from current `-n` or `jobs[0].instance_count`; resolve GPUs from
-current `-p` or `target.gpus_per_node`. Missing either is an error.
+Resolve nodes from current `-n` or `jobs[0].instance_count`; resolve per-node
+SKU processes from current `-p` or `target.gpus_per_node`. Missing either is
+an error. GPU `G` SKUs interpret `-p` as GPU count; CPU `C` SKUs use it as an
+ordered CPU size tier. It is not the launcher count.
 `--ppn` falls back to `jobs[0].process_count_per_node`, then `1`. `aj run`
 never saves shape values or silently assumes `1x1`.
 
@@ -97,12 +99,13 @@ config:
       submit_args:
         env: {}
 ```
-Use `-n 1 -p 1`. Without `target.name`, the daemon discovers VCs, requires
-exact GPU count, applies exact accelerator/per-GPU-memory filters when present,
-checks user/tier quota, then ranks tier, NVLink, remaining quota, and stable
-coordinates. If accelerator is omitted and both vendors match within one VC,
-NVIDIA is preferred over AMD before quota tie-breaking. Explicit VCs use the
-same matching/tier fallback.
+Use `-n 1 -p 1`. Without `target.name`, the daemon discovers VCs and matches
+the CPU/GPU family. GPU SKUs require an exact GPU count; CPU SKUs use `-p` as
+an ordered CPU size tier. It applies exact accelerator/per-GPU-memory filters
+when present, checks user/tier quota, then ranks tier, NVLink, remaining quota,
+and stable coordinates. If accelerator is omitted and both vendors match
+within one VC, NVIDIA is preferred over AMD before quota tie-breaking.
+Explicit VCs use the same matching/tier fallback.
 
 ## Complete Volcano
 ```yaml
@@ -240,8 +243,8 @@ it. See [Volcano](volcano.md#nested-container-runtime).
 ```yaml
 sku: "{nodes}x80G{processes}-A100-NvLink"
 ```
-`{nodes}` is `-n`; `{processes}` is compatibility syntax for GPUs per node
-(`-p`), not `--ppn`.
+`{nodes}` is `-n`; `{processes}` is the `-p` SKU selector, not `--ppn`. It is
+GPU count for `G` SKUs and an ordered CPU size tier for `C` SKUs.
 ```yaml
 sku:
   "1": "1x40G{processes}-A100"

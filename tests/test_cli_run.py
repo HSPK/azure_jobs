@@ -29,6 +29,13 @@ class TestRunCommand:
         assert result.exit_code != 0
         assert "No template specified" in result.output
 
+    def test_processes_is_primary_p_alias(self):
+        result = CliRunner().invoke(main, ["run", "--help"])
+
+        assert result.exit_code == 0
+        assert "-p, --processes, --gpn, --gpus-per-node" in result.output
+        assert "CPU size tier for C SKUs" in result.output
+
     def test_missing_template(self, aj_env):
         runner = CliRunner()
         result = runner.invoke(main, ["run", "-t", "nonexistent", "echo"])

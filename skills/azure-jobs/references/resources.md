@@ -67,12 +67,13 @@ aj --json sku list --all
 Sing auto-selection with omitted/empty `target.name`:
 
 1. filters optional target subscription/resource group;
-2. matches GPU count exactly;
-3. matches accelerator/per-GPU memory exactly when specified;
-4. requires user and tier quota;
-5. when accelerator is unspecified and both vendors match within one VC,
+2. matches the CPU/GPU SKU family;
+3. uses `-p` as CPU size tier or exact GPU count;
+4. matches accelerator/per-GPU memory exactly when specified;
+5. requires user and tier quota;
+6. when accelerator is unspecified and both vendors match within one VC,
    prefers NVIDIA;
-6. ranks tier, NVLink, remaining quota, stable coordinates.
+7. ranks tier, NVLink, remaining quota, stable coordinates.
 
 Error interpretation:
 

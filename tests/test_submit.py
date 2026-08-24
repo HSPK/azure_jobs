@@ -432,6 +432,7 @@ class TestSubmitMocked:
             mock_client.__enter__.return_value = mock_client
             mock_client.env.get.return_value = SimpleNamespace(id="env-id-1")
             mock_client.blob.upload_archive.return_value = "archive-uri"
+            mock_client.blob.upload_file.return_value = "bootstrap-uri"
             mock_client.job.create_or_update.return_value = mock_returned
             result = submit(request)
 
@@ -477,6 +478,7 @@ class TestSubmitMocked:
             mock_client.__enter__.return_value = mock_client
             mock_client.env.get.return_value = SimpleNamespace(id="env-id")
             mock_client.blob.upload_archive.return_value = "archive-uri"
+            mock_client.blob.upload_file.return_value = "bootstrap-uri"
             mock_client.job.create_or_update.return_value = mock_returned
             submit(request, on_event=on_event)
 

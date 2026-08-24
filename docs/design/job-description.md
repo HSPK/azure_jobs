@@ -62,10 +62,11 @@ Template + CLI shape + command
 `shared/job/build.py` handles common fields only. It never branches on
 `service`.
 
-Homogeneous nodes resolve from `-n` or `jobs[0].instance_count`; GPUs per node
-resolve from `-p` or `target.gpus_per_node`. `aj run` does not persist either
-value. Heterogeneous backends may derive their complete shape through the same
-generic hook.
+Homogeneous nodes resolve from `-n` or `jobs[0].instance_count`; the per-node
+SKU process selector resolves from `-p` or the compatibility field
+`target.gpus_per_node`. GPU SKUs interpret it as GPU count; CPU SKUs use it as
+a size tier. `aj run` does not persist either value. Heterogeneous backends may
+derive their complete shape through the same generic hook.
 
 ### JobSpec boundaries
 
