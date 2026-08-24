@@ -32,9 +32,12 @@ def _aml_view(request: JobSpec) -> "AmlOpts":
 
 
 def _request_payload(request: JobSpec) -> dict[str, Any]:
+    from azure_jobs.shared.sku import SkuSpec
+
     aml = _aml_view(request)
     compute = aml.compute or ("auto" if request.service == "sing" else "")
     tasks = _volcano_task_payload(request)
+    is_cpu = bool(request.sku and SkuSpec.parse(request.sku).is_cpu)
     total_processes = (
         sum(
             task["replicas"] * task["processes_per_node"]
@@ -46,12 +49,16 @@ def _request_payload(request: JobSpec) -> dict[str, Any]:
     gpu_nodes = (
         sum(task["replicas"] for task in tasks if task["gpus_per_node"] > 0)
         if tasks
-        else (request.nodes if request.gpus_per_node > 0 else 0)
+        else (
+            request.nodes
+            if request.gpus_per_node > 0 and not is_cpu
+            else 0
+        )
     )
     total_gpus = (
         sum(task["replicas"] * task["gpus_per_node"] for task in tasks)
         if tasks
-        else request.nodes * request.gpus_per_node
+        else (0 if is_cpu else request.nodes * request.gpus_per_node)
     )
     return {
         "template_name": request.template_name,
@@ -62,6 +69,7 @@ def _request_payload(request: JobSpec) -> dict[str, Any]:
         "matched_instances": list(aml.matched_instances),
         "nodes": request.nodes,
         "gpus_per_node": request.gpus_per_node,
+        "sku_processes_per_node": request.gpus_per_node,
         "processes_per_node": request.processes_per_node,
         "total_processes": total_processes,
         "gpu_nodes": gpu_nodes,

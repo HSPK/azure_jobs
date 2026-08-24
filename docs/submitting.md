@@ -30,15 +30,18 @@ boundaries.
 | --- | --- |
 | `-t`, `--template` | leaf template; omitted only when a configured template exists |
 | `-n`, `--nodes` | nodes; otherwise `jobs[0].instance_count` is required |
-| `-p`, `--gpn`, `--gpus-per-node` | GPUs per node; otherwise `target.gpus_per_node` is required |
+| `-p`, `--processes` | per-node SKU selector; GPU count for `G` SKUs, CPU size tier for `C` SKUs |
 | `--ppn`, `--processes-per-node` | launcher processes; template value, then `1` |
 | `-d`, `--dry-run` | render YAML; no upload or submission |
 | `--queue` | persist work in the daemon and return a ticket |
 | `--amlt` | render compatibility YAML and run external `amlt` in the daemon |
 
+`--gpn` and `--gpus-per-node` remain compatibility aliases for `-p`. They are
+literal only for GPU SKUs. `--ppn` is the actual launcher process count.
+
 `aj run` never saves template or resource arguments. CLI values apply only to
-that invocation. For homogeneous jobs, each node/GPU value must come from the
-current command or YAML; missing values fail before upload.
+that invocation. For homogeneous jobs, nodes and the SKU process selector must
+come from the current command or YAML; missing values fail before upload.
 
 For `_extra.volcano.tasks`, YAML owns topology. Omit `-n`, `-p`, and `--ppn`;
 aj derives totals from Tasks. Heterogeneous Volcano Tasks also reject
@@ -108,13 +111,21 @@ files individually:
 2. It adds generated `aj_runner.sh` and the allowed SSH payload.
 3. It writes a deterministic `tar.gz` with normalized metadata and hashes the
    complete archive with SHA-256.
-4. It checks and, if absent, uploads one blob to
+4. It checks and, if absent, uploads one code blob to
    `workspaceblobstore/LocalUpload/<hash>/code.tar.gz`.
-5. The CommandJob receives that blob as a downloaded `uri_file` input.
-6. Each node verifies SHA-256. Local processes coordinate with an
+5. It uploads or reuses the static archive bootstrap by its own content hash.
+6. The CommandJob downloads both `uri_file` inputs and invokes the bootstrap
+   with a short command.
+7. Each node verifies SHA-256. Local processes coordinate with an
    `AJ_ID`-scoped lock, so extraction and tool installation happen once per
    node.
-7. Every process enters the extracted tree and runs `bash aj_runner.sh`.
+8. Every process enters the extracted tree and runs `bash aj_runner.sh`.
+
+The Azure job command stays short:
+
+```bash
+bash ${{inputs.aj_bootstrap}} ${{inputs.aj_code_archive}}
+```
 
 Identical archive bytes reuse the existing blob. Uploads stream from disk and
 reject archives above Azure Blob's single-request limit with an actionable

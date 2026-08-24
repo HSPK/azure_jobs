@@ -98,10 +98,11 @@ aj --json sku list --all
 aj --json image list
 ```
 
-Compare nodes, GPUs/node, accelerator, per-GPU memory, tier, and VC filters.
-Errors may mean no exact size, accelerator/memory mismatch, insufficient user
-quota, insufficient tier quota, or filtered/inaccessible VCs. Do not repeatedly
-queue the same chargeable request; explain and adjust deliberately.
+Compare nodes, SKU process selector, CPU/GPU family, accelerator, per-GPU
+memory, tier, and VC filters. Errors may mean no matching CPU size or exact GPU
+count, accelerator/memory mismatch, insufficient user quota, insufficient tier
+quota, or filtered/inaccessible VCs. Do not repeatedly queue the same
+chargeable request; explain and adjust deliberately.
 
 ## Archive/input/bootstrap
 
@@ -115,7 +116,8 @@ Check that ignores leave files; code has no unsupported directory symlinks or
 non-regular files; datasets/checkpoints are excluded; image has `bash` and
 runtime/setup tools; `.py` shorthand has `uv` or uses `python`; native input
 downloads; logs show no hash, extraction, setup-barrier, or runner failure.
-Native flow is one archive; do not substitute per-file Code Assets.
+Native flow is one code archive plus a static bootstrap input; do not
+substitute per-file Code Assets.
 
 ## Ambiguous submit/queue
 

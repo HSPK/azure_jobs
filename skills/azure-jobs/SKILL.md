@@ -181,9 +181,11 @@ aj --json image list
 Run only backend-relevant discovery. Volcano uses the preflight in its
 reference. Render without upload/submission:
 
-For homogeneous jobs, nodes and GPUs must come from this command or explicit
-`jobs[0].instance_count` and `target.gpus_per_node` YAML. `aj run` has no
-resource memory; never infer a prior value or silently assume `1x1`.
+For homogeneous jobs, nodes and the per-node SKU process selector must come
+from this command or explicit `jobs[0].instance_count` and
+`target.gpus_per_node` YAML. `-p` is GPU count for GPU SKUs but a CPU size tier
+for CPU SKUs; `--ppn` is actual launcher processes. `aj run` has no resource
+memory; never infer a prior value or silently assume `1x1`.
 
 ```bash
 AJ_NAME=TRAIN_NAME aj --json run -t TEMPLATE_NAME -d -n 1 -p 1 --ppn 1 \
@@ -221,8 +223,8 @@ Do not invent or transfer flags between command groups. In particular,
 ### 5. Summarize before mutation
 
 State the requested name base and resolved job name, backend/target, template,
-experiment, command, nodes, GPUs per node, processes per node, image, storage,
-identity, code size/ignores, expected quota/queue behavior, and
+experiment, command, nodes, SKU processes per node, launcher processes per
+node, image, storage, identity, code size/ignores, expected quota/queue behavior, and
 direct-versus-queued mode. Obtain confirmation if submission or queueing was
 not already explicitly requested.
 
@@ -302,7 +304,8 @@ Kubernetes resource and obtain confirmation unless already requested.
   is guaranteed. Existing `.sh` files become `bash FILE`.
 - Other commands/arguments are shell-quoted while preserving boundaries.
 - Native AML/Sing create one deterministic content-addressed archive, upload or
-  reuse one Blob, verify SHA-256, extract once, and run `aj_runner.sh`.
+  reuse its Blob plus a static bootstrap input, verify SHA-256, extract once,
+  and run `aj_runner.sh`.
 - Review ignores and archive size before submit; see
   [templates](references/templates.md) and
   [job operations](references/job-operations.md).

@@ -166,7 +166,7 @@ Native AML/Sing:
   added unless `AJ_SHIP_SSH=0`;
 - deterministic tar/gzip; SHA-256 addresses one Blob at
   `LocalUpload/<hash>/code.tar.gz`;
-- Azure ML downloads one `uri_file`;
+- Azure ML downloads the archive and a content-addressed bootstrap `uri_file`;
 - node verifies SHA-256 and extracts once through `AJ_ID` lock/ready state;
 - process runs `bash aj_runner.sh`;
 - no Code Asset and no per-file native upload.
@@ -175,7 +175,8 @@ Sing auto-selection:
 
 - missing/empty `target.name` is allowed for `service: sing`;
 - target subscription/resource group are optional VC filters;
-- exact GPU count; exact accelerator/per-GPU memory when specified;
+- GPU SKUs use exact GPU count; CPU SKUs use ordered CPU size tier;
+- exact accelerator/per-GPU memory when specified;
 - current user and tier quota must cover capacity;
 - ranking: tier, per-VC NVIDIA preference when accelerator is omitted, NVLink,
   remaining quota, stable coordinates;

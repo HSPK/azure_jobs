@@ -50,13 +50,14 @@ __all__ = ["resolve_name"]
 )
 @click.option(
     "-p",
+    "--processes",
     "--gpn",
     "--gpus-per-node",
     "gpus_per_node",
     default=None,
     help=(
-        "GPUs per node; required unless target.gpus_per_node is set "
-        "(drives SKU + AJ_GPUS_PER_NODE)"
+        "Per-node SKU process selector; GPU count for G SKUs, CPU size "
+        "tier for C SKUs; required unless target.gpus_per_node is set"
     ),
 )
 @click.option(

@@ -132,11 +132,14 @@ class TestBuildJobBody:
         body = _build_job_body(
             request,
             env_id="azureml:env:1",
+            bootstrap_uri=(
+                "azureml://datastores/workspaceblobstore/paths/"
+                "LocalUpload/bootstrap/bootstrap_code_archive.sh"
+            ),
             code_archive_uri=(
                 "azureml://datastores/workspaceblobstore/paths/"
                 "LocalUpload/hash/code.tar.gz"
             ),
-            code_archive_hash="a" * 64,
             compute_id="azureml:compute:1",
             env_vars={"FOO": "bar"},
             distribution={"type": "PyTorch"},
@@ -148,17 +151,23 @@ class TestBuildJobBody:
         )
         job = body["properties"]
 
-        command = shlex.split(job["command"])
-        assert command[:2] == ["bash", "-c"]
-        assert command[3:] == [
-            "_",
+        assert shlex.split(job["command"]) == [
+            "bash",
+            "${{inputs.aj_bootstrap}}",
             "${{inputs.aj_code_archive}}",
-            "a" * 64,
         ]
-        assert "exec bash aj_runner.sh" in command[2]
+        assert "_aj_archive" not in job["command"]
         assert job["environmentId"] == "azureml:env:1"
         assert "codeId" not in job
         assert job["inputs"] == {
+            "aj_bootstrap": {
+                "jobInputType": "uri_file",
+                "uri": (
+                    "azureml://datastores/workspaceblobstore/paths/"
+                    "LocalUpload/bootstrap/bootstrap_code_archive.sh"
+                ),
+                "mode": "Download",
+            },
             "aj_code_archive": {
                 "jobInputType": "uri_file",
                 "uri": (
@@ -190,8 +199,8 @@ class TestBuildJobBody:
         body = _build_job_body(
             request,
             env_id="",
+            bootstrap_uri="bootstrap-uri",
             code_archive_uri="archive-uri",
-            code_archive_hash="b" * 64,
             compute_id="azureml:compute:1",
             env_vars={"FOO": "bar"},
             distribution=None,
@@ -205,6 +214,7 @@ class TestBuildJobBody:
 
         assert job["environmentId"] == "registry.example.com/repo/image:1"
         assert "codeId" not in job
+        assert job["inputs"]["aj_bootstrap"]["uri"] == "bootstrap-uri"
         assert job["inputs"]["aj_code_archive"]["uri"] == "archive-uri"
         assert "distribution" not in job
         assert "identity" not in job
@@ -214,23 +224,11 @@ class TestBuildJobBody:
         assert job["resources"] == {"instanceCount": 1}
 
 
-def test_bootstrap_command_quotes_loaded_script_archive_expression_and_hash(
-    monkeypatch,
-):
-    monkeypatch.setattr(
-        "azure_jobs.server.submit.azureml.payload.load_script",
-        lambda name: ["echo \"it's safely quoted\"", "exec true"],
-    )
-
-    command = shlex.split(_build_bootstrap_command("c" * 64))
-
-    assert command == [
+def test_bootstrap_command_is_short_input_invocation():
+    assert shlex.split(_build_bootstrap_command()) == [
         "bash",
-        "-c",
-        "echo \"it's safely quoted\"\nexec true",
-        "_",
+        "${{inputs.aj_bootstrap}}",
         "${{inputs.aj_code_archive}}",
-        "c" * 64,
     ]
 
 

@@ -110,7 +110,7 @@ Configuration is stored in `.azure_jobs/aj_config.json`:
 ```
 
 `aj run` does not write defaults. Legacy `defaults.nodes` and
-`defaults.processes` values are ignored; job shape comes from current CLI
+`defaults.processes` values are ignored; node/SKU shape comes from current CLI
 arguments or template YAML.
 
 ## Auth and daemon

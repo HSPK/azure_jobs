@@ -16,7 +16,7 @@ uv tool install azure-jobs
 
 # Run CLI
 aj --help
-aj run -t <template> -n <nodes> -p <gpus-per-node> <command> [args...]
+aj run -t <template> -n <nodes> -p <sku-processes> <command> [args...]
 aj pull <repo-url>
 aj list
 ```

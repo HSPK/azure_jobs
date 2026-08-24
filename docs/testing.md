@@ -127,6 +127,22 @@ AJ_LIVE_SING_UAI=/subscriptions/.../userAssignedIdentities/... \
 uv run pytest -q -s -m live tests/test_live_submit.py
 ```
 
+Exercise a one-node CPU size-tier request:
+
+```bash
+AJ_LIVE_E2E=1 \
+AJ_LIVE_SERVICE=sing \
+AJ_LIVE_SING_SKU=1xC1 \
+AJ_LIVE_SING_TIER=Basic \
+AJ_LIVE_WORKSPACE=<workspace-with-attached-UAI> \
+AJ_LIVE_SING_UAI=/subscriptions/.../userAssignedIdentities/... \
+uv run pytest -q -s -m live tests/test_live_submit.py
+```
+
+CPU live jobs use a `bash` marker because a valid Sing CPU image may not expose
+`python` on `PATH`. `C1` is a CPU size tier, not one GPU or one launcher
+process.
+
 In that mode `JobSpec.backend_spec.compute` is deliberately empty. The test
 verifies the auto-selection progress event, selected VC/tier/instance
 metadata, terminal completion, expected stdout marker, and cleanup.
