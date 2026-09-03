@@ -104,6 +104,24 @@ aj --json k status
 aj k status --check-cluster
 ```
 
+## Azure Workload Identity
+
+Volcano FIC storage requires a UAI/FIC:
+
+```bash
+kubectl get serviceaccount <SA> -n <NAMESPACE> \
+  -o jsonpath='{.metadata.annotations.azure\.workload\.identity/client-id}'
+```
+
+When `managed_identity` is an ARM resource ID, aj may create or annotate the
+derived ServiceAccount. An existing SA bound to a different client ID is never
+overwritten. With `service_account` alone, aj only validates it.
+
+The FIC subject must be
+`system:serviceaccount:<NAMESPACE>:<SA>` with audience
+`api://AzureADTokenExchange`. aj does not create or modify Azure identities,
+FICs, or role assignments.
+
 Without `--check-cluster`, status only inspects local tools and kubeconfig.
 Cluster checking calls `/readyz` and may start OIDC device authentication.
 

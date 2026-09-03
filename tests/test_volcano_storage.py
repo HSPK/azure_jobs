@@ -13,7 +13,11 @@ from azure_jobs.server.submit.volcano.storage import (
     BlobMountError,
     build_blob_mount_plan,
 )
+from azure_jobs.server.resources import _spec_from_payload
 from azure_jobs.shared.job.spec import JobSpec, StorageMount
+from azure_jobs.shared.opts import VolcanoBlobMountOpts
+from azure_jobs.shared.errors import ConfigError
+from azure_jobs.shared.template.models import Template
 
 
 def _config(gpus_per_node=None, rdma=None, storage=None):
@@ -81,12 +85,12 @@ def storage():
     }
 
 
-def _plan(storage, sas="sig=abc"):
+def _plan(storage, sas="sig=abc", options=None):
     with patch(
         "azure_jobs.server.submit.volcano.storage.subprocess.run",
         return_value=subprocess.CompletedProcess([], 0, stdout=sas, stderr=""),
     ):
-        return build_blob_mount_plan(storage, "job")
+        return build_blob_mount_plan(storage, "job", options=options)
 
 
 class TestBlobMountPlan:
@@ -131,6 +135,169 @@ class TestBlobMountPlan:
 
         assert storage_mod.SAS_MAX_HOURS < 7 * 24
 
+    def test_fic_plan_skips_sas_and_secret(self, storage):
+        options = VolcanoBlobMountOpts(
+            auth="fic",
+            strategy="direct",
+            service_account="blob-workload",
+        )
+        with patch(
+            "azure_jobs.server.submit.volcano.storage._mint_sas"
+        ) as mint:
+            plan = build_blob_mount_plan(
+                storage,
+                "job",
+                options=options,
+            )
+
+        mint.assert_not_called()
+        assert plan.uses_fic
+        assert not plan.requires_secret
+        assert plan.mounts[0].sas == ""
+        assert "usm blobmount mount" in "\n".join(plan.setup_lines())
+        with pytest.raises(BlobMountError, match="do not use"):
+            plan.secret_manifest("ns")
+
+    def test_fic_sidecar_plan_builds_nfs_commands(self, storage):
+        plan = build_blob_mount_plan(
+            storage,
+            "job",
+            options=VolcanoBlobMountOpts(
+                auth="fic",
+                strategy="sidecar",
+                service_account="blob-workload",
+            ),
+        )
+
+        assert plan.setup_lines() == []
+        assert "_aj_mount_blob_nfs" in "\n".join(
+            plan.main_sidecar_setup_lines()
+        )
+        sidecar = plan.sidecar_container()
+        assert sidecar["restartPolicy"] == "Always"
+        assert sidecar["startupProbe"]["exec"]["command"][-1].endswith(
+            "/ready"
+        )
+        assert sidecar["securityContext"] == {"privileged": True}
+        assert "usm blobmount mount" in sidecar["args"][0]
+        assert "--auth fic" in sidecar["args"][0]
+        assert "--force" in sidecar["args"][0]
+
+
+class TestBlobMountOptions:
+    def test_template_parses_fic_sidecar_options(self):
+        template = Template.from_dict(
+            {
+                "target": {"service": "volcano"},
+                "jobs": [{"sku": "literal"}],
+                "_extra": {
+                    "volcano": {
+                        "blob_mount": {
+                            "auth": "fic",
+                            "strategy": "sidecar",
+                            "service_account": "blob-workload",
+                            "sidecar_cpu": "750m",
+                            "sidecar_memory": "8Gi",
+                        }
+                    }
+                },
+            }
+        )
+
+        opts = VolcanoOpts.from_template(template).blob_mount
+
+        assert opts.uses_fic
+        assert opts.resolved_strategy == "sidecar"
+        assert opts.service_account == "blob-workload"
+        assert opts.sidecar_cpu == "750m"
+        assert opts.sidecar_memory == "8Gi"
+
+    def test_fic_requires_service_account(self):
+        template = Template.from_dict(
+            {
+                "target": {"service": "volcano"},
+                "jobs": [{"sku": "literal"}],
+                "_extra": {"volcano": {"blob_mount": {"auth": "fic"}}},
+            }
+        )
+
+        with pytest.raises(ConfigError, match="service_account"):
+            VolcanoOpts.from_template(template)
+
+    def test_fic_accepts_managed_identity_without_service_account(self):
+        resource_id = (
+            "/subscriptions/sub/resourceGroups/rg/providers/"
+            "Microsoft.ManagedIdentity/userAssignedIdentities/blob-mi"
+        )
+        template = Template.from_dict(
+            {
+                "target": {"service": "volcano"},
+                "jobs": [{"sku": "literal"}],
+                "_extra": {
+                    "volcano": {
+                        "blob_mount": {
+                            "auth": "fic",
+                            "managed_identity": resource_id,
+                        }
+                    }
+                },
+            }
+        )
+
+        opts = VolcanoOpts.from_template(template).blob_mount
+
+        assert opts.managed_identity == resource_id
+        assert opts.service_account == ""
+
+    def test_blob_mount_options_survive_wire_roundtrip(self):
+        opts = VolcanoBlobMountOpts(
+            auth="fic",
+            strategy="sidecar",
+            service_account="blob-workload",
+            sidecar_cpu="750m",
+            sidecar_memory="8Gi",
+        )
+        payload = JobSpec(
+            name="job",
+            service="volcano",
+            backend_spec=VolcanoOpts(blob_mount=opts),
+        ).to_dict()
+
+        rebuilt = _spec_from_payload(payload)
+
+        assert rebuilt.backend_spec.blob_mount == opts
+
+    @pytest.mark.parametrize(
+        ("raw", "message"),
+        [
+            ({"auth": "key"}, "auth"),
+            ({"auth": "fic", "service_account": "Bad_Name"}, "ServiceAccount"),
+            (
+                {"auth": "fic", "managed_identity": "not-an-identity"},
+                "managed_identity",
+            ),
+            (
+                {
+                    "auth": "sas",
+                    "strategy": "sidecar",
+                },
+                "requires auth=fic",
+            ),
+            ({"unknown": True}, "unsupported fields"),
+        ],
+    )
+    def test_invalid_blob_mount_options_are_rejected(self, raw, message):
+        template = Template.from_dict(
+            {
+                "target": {"service": "volcano"},
+                "jobs": [{"sku": "literal"}],
+                "_extra": {"volcano": {"blob_mount": raw}},
+            }
+        )
+
+        with pytest.raises(ConfigError, match=message):
+            VolcanoOpts.from_template(template)
+
 
 class TestBlobMountsInPodSpec:
     def test_storage_grants_fuse_privilege(self, storage):
@@ -165,13 +332,96 @@ class TestBlobMountsInPodSpec:
             _config(), namespace="ns", blob_plan=plan, code_setup_lines=["echo code"]
         )
         script = spec["spec"]["tasks"][0]["template"]["spec"]["containers"][0]["args"][0]
-        assert script.index("_aj_blob_mount") < script.index("echo code")
+        assert script.index("_aj_usm_blobmount") < script.index("echo code")
 
     def test_no_storage_leaves_the_pod_unprivileged(self):
         spec = build_volcano_job(_config(), namespace="ns")
         container = spec["spec"]["tasks"][0]["template"]["spec"]["containers"][0]
         assert "securityContext" not in container
-        assert "_aj_blob_mount" not in container["args"][0]
+        assert "_aj_usm_blobmount" not in container["args"][0]
+
+    def test_fic_direct_binds_identity_without_secret(self, storage):
+        plan = build_blob_mount_plan(
+            storage,
+            "job",
+            options=VolcanoBlobMountOpts(
+                auth="fic",
+                strategy="direct",
+                service_account="blob-workload",
+            ),
+        )
+        spec = build_volcano_job(_config(storage=storage), namespace="ns", blob_plan=plan)
+        template = spec["spec"]["tasks"][0]["template"]
+        pod = template["spec"]
+        container = pod["containers"][0]
+
+        assert template["metadata"]["labels"]["azure.workload.identity/use"] == "true"
+        assert pod["serviceAccountName"] == "blob-workload"
+        assert {
+            "name": "AZCOPY_AUTO_LOGIN_TYPE",
+            "value": "WORKLOAD",
+        } in container["env"]
+        assert container["securityContext"]["privileged"] is True
+        assert "aj-blob-secrets" not in str(pod)
+        assert "usm blobmount mount" in container["args"][0]
+
+    def test_fic_sidecar_sandboxes_fuse_and_reserves_resources(self, storage):
+        plan = build_blob_mount_plan(
+            storage,
+            "job",
+            options=VolcanoBlobMountOpts(
+                auth="fic",
+                strategy="sidecar",
+                service_account="blob-workload",
+            ),
+        )
+        spec = build_volcano_job(_config(storage=storage), namespace="ns", blob_plan=plan)
+        template = spec["spec"]["tasks"][0]["template"]
+        pod = template["spec"]
+        container = pod["containers"][0]
+        sidecar = pod["initContainers"][0]
+
+        assert template["metadata"]["labels"]["azure.workload.identity/use"] == "true"
+        assert pod["serviceAccountName"] == "blob-workload"
+        assert {
+            "name": "AZCOPY_AUTO_LOGIN_TYPE",
+            "value": "WORKLOAD",
+        } in container["env"]
+        assert container["securityContext"] == {
+            "capabilities": {"add": ["SYS_ADMIN"]}
+        }
+        assert sidecar["securityContext"] == {"privileged": True}
+        assert sidecar["resources"]["limits"] == {
+            "cpu": "500m",
+            "memory": "6Gi",
+        }
+        assert container["resources"]["limits"] == {
+            "cpu": "3.5",
+            "memory": "10240Mi",
+            "nvidia.com/gpu": "8",
+            "rdma/rdma_shared_device_a": "1",
+        }
+        assert "aj-blob-secrets" not in str(pod)
+        assert "_aj_mount_blob_nfs" in container["args"][0]
+
+    def test_fic_sidecar_rejects_insufficient_task_resources(self, storage):
+        cfg = _config(storage=storage)
+        cfg.cpus_per_node = 1
+        cfg.memory = "4Gi"
+        plan = build_blob_mount_plan(
+            storage,
+            "job",
+            options=VolcanoBlobMountOpts(
+                auth="fic",
+                strategy="sidecar",
+                service_account="blob-workload",
+                sidecar_cpu="1",
+                sidecar_memory="4Gi",
+            ),
+        )
+
+        with pytest.raises(ConfigError, match="smaller than each Task"):
+            build_volcano_job(cfg, namespace="ns", blob_plan=plan)
 
 
 class TestMountFailureIsFatal:
@@ -179,28 +429,25 @@ class TestMountFailureIsFatal:
 
     def test_mount_failure_aborts_the_job(self, storage):
         lines = _plan(storage).setup_lines()
-        mount = next(line for line in lines if "_aj_blob_mount " in line)
+        mount = next(line for line in lines if "_aj_usm_blobmount " in line)
         assert mount.endswith("|| exit 1")
         assert "|| true" not in mount
 
-    def test_missing_blobfuse2_aborts_the_job(self, storage):
+    def test_missing_usm_or_blobfuse2_aborts_the_job(self, storage):
         lines = _plan(storage).setup_lines()
-        tail = lines[lines.index("else"):]
-        assert "    exit 1" in tail
+        assert "_aj_install_usm_blobmount || exit 1" in lines
 
-    def test_mount_is_verified_after_blobfuse2_returns(self, storage):
+    def test_sas_mount_delegates_auth_and_supervision_to_usm(self, storage):
         script = "\n".join(_plan(storage).setup_lines())
-        assert "mount did not appear" in script
+        assert "usm blobmount mount" in script
+        assert "--sas-file" in script
+        assert "--no-supervise" not in script
 
-    def test_liveness_check_survives_a_missing_mountpoint_binary(self, storage):
-        """`mountpoint` exits 127 when absent, which must not read as unmounted."""
+    def test_aj_does_not_duplicate_blobfuse_config_or_health_checks(self, storage):
         script = "\n".join(_plan(storage).setup_lines())
-        assert "/proc/mounts" in script
-        assert "mountpoint -q \"$_aj_dir\" 2>/dev/null || exit 0" not in script
-
-    def test_blobfuse_logs_somewhere_a_container_can_read(self, storage):
-        script = "\n".join(_plan(storage).setup_lines())
-        assert "type: syslog" not in script
+        assert "azstorage:" not in script
+        assert "_aj_write_config" not in script
+        assert "_aj_is_mounted" not in script
 
 
 class TestSecretHygiene:

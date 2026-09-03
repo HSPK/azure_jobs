@@ -135,6 +135,52 @@ The daemon archives code, mints blob-scoped user-delegation SAS values, uploads,
 and injects bootstrap that force-installs `azcopy`, downloads, verifies
 SHA-256, and extracts. Never print the generated URL/SAS.
 
+## FIC Blob storage
+
+Declared `storage:` mounts use SAS by default. FIC mode is explicit:
+
+```yaml
+_extra:
+  volcano:
+    blob_mount:
+      auth: fic
+      managed_identity: <UAI_ARM_RESOURCE_ID>
+      # service_account: <OPTIONAL_OVERRIDE>
+      strategy: auto
+```
+
+Require:
+
+- SA annotation `azure.workload.identity/client-id`;
+- FIC subject `system:serviceaccount:<namespace>:<service-account>`;
+- audience `api://AzureADTokenExchange`;
+- UAI `Storage Blob Data Reader` or `Contributor` role.
+
+With an ARM resource ID, aj derives the ServiceAccount from a matching FIC
+subject or UAI name, creates it if absent, and adds a missing client-ID
+annotation. It refuses to overwrite an SA bound to another identity. With
+`service_account` alone, aj performs validation only.
+
+FIC audience and Blob Data role checks are best-effort warnings when the UAI
+ARM ID is available. Missing or conflicting ServiceAccount wiring is fatal.
+
+aj sets `serviceAccountName` and pod label
+`azure.workload.identity/use=true`. The webhook injects the projected token;
+`usm blobmount --auth fic` renders blobfuse2 `mode: spn` with the token path.
+No SAS Secret is created.
+
+`auto` uses the sandboxed NFS sidecar. It reserves `500m` CPU and `6Gi`
+memory from every Task and requires Kubernetes 1.29+. `direct` runs
+privileged FUSE in the main container and is only appropriate for whole-node
+Pods. aj validates existing resources but never creates the UAI, FIC, role
+assignment, or changes a conflicting ServiceAccount.
+
+The default sidecar installs `usmo`, blobfuse2, and NFS-Ganesha at startup;
+verify package-index/GitHub egress and blobmount command version 1.1.0+, or
+provide a prebuilt `sidecar_image`.
+This mode covers declared storage mounts; Blob code upload still uses its
+separate short-lived read SAS.
+
 ## Nested container runtime
 
 For rootful Podman or Docker, mount a dedicated node-backed graph root instead
@@ -333,11 +379,13 @@ Never delete by broad selector or remove a namespace/queue as cleanup.
 
 `config.storage` uses blobfuse2 inside the container:
 
-- daemon mints short-lived SAS values;
-- Kubernetes receives a mounted Secret, not environment variables;
-- storage pods are privileged for `/dev/fuse`;
-- bootstrap installs blobfuse2 or fails;
-- replacing the Secret can refresh a long job.
+- all modes delegate mounting, refresh, and health checks to `usm blobmount`;
+- SAS mode: daemon mints short-lived values in a mounted Secret and usm
+  supervises remounts;
+- FIC mode: no credential Secret; the webhook projects a renewable OIDC token;
+- direct mode is privileged for `/dev/fuse`;
+- sandbox mode confines privileged FUSE to the NFS sidecar;
+- `usm blobmount` installs/configures blobfuse2 or fails.
 
 Never run `kubectl get secret ... -o yaml/json`, describe/decode a Secret, or
 copy SAS-bearing manifests, raw Blob job/pod descriptions, or raw bootstrap

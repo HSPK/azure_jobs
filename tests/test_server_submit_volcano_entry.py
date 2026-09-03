@@ -12,6 +12,11 @@ from azure_jobs.server.submit.volcano import entry
 from azure_jobs.server.submit.volcano.storage import BlobMountError
 from azure_jobs.server.submit.volcano.uploaders.base import CodeUploadResult
 from azure_jobs.shared.job.spec import JobSpec
+from azure_jobs.shared.opts import VolcanoBlobMountOpts
+from azure_jobs.server.submit.volcano.workload_identity import (
+    WorkloadIdentityError,
+    WorkloadIdentityInfo,
+)
 
 
 class _NamedTempFile:
@@ -30,12 +35,31 @@ class _NamedTempFile:
 
 
 class _BlobPlan:
-    def __init__(self, *, enabled: bool, secret_name: str = "job-blob") -> None:
+    def __init__(
+        self,
+        *,
+        enabled: bool,
+        secret_name: str = "job-blob",
+        options: VolcanoBlobMountOpts | None = None,
+    ) -> None:
         self.enabled = enabled
         self.secret_name = secret_name
+        self.options = options or VolcanoBlobMountOpts()
         self.mounts = [
             SimpleNamespace(account="acct", container="cont", mount_dir="/mnt/data")
         ]
+
+    @property
+    def uses_fic(self) -> bool:
+        return self.enabled and self.options.uses_fic
+
+    @property
+    def requires_secret(self) -> bool:
+        return self.enabled and not self.uses_fic
+
+    @property
+    def strategy(self) -> str:
+        return self.options.resolved_strategy
 
     def secret_manifest(self, namespace: str) -> dict[str, object]:
         return {
@@ -58,7 +82,12 @@ def test_created_job_name_parsing(output: str, expected: str) -> None:
 
 
 def _cfg(**overrides):
-    data = {"name": "job", "storage": {}, "context": "ctx"}
+    data = {
+        "name": "job",
+        "storage": {},
+        "context": "ctx",
+        "blob_mount": VolcanoBlobMountOpts(),
+    }
     data.update(overrides)
     return SimpleNamespace(**data)
 
@@ -159,6 +188,137 @@ def test_submit_via_volcano_reports_blob_secret_apply_failure_after_storage_even
     assert result.status == "failed"
     assert result.error == "denied"
     assert [event.kind for event in events] == ["storage", "error"]
+
+
+def test_submit_via_volcano_validates_fic_and_skips_secret() -> None:
+    uploader = MagicMock()
+    uploader.name = "kubectl-exec"
+    uploader.prepare.return_value = CodeUploadResult(ok=False, error="stop")
+    options = VolcanoBlobMountOpts(
+        auth="fic",
+        strategy="sidecar",
+        service_account="blob-workload",
+    )
+    plan = _BlobPlan(enabled=True, options=options)
+
+    with (
+        patch.object(entry.shutil, "which", return_value="/usr/bin/kubectl"),
+        patch.object(
+            entry,
+            "build_volcano_config_from_request",
+            return_value=_cfg(blob_mount=options),
+        ),
+        patch.object(entry, "resolve_namespace", return_value="ns"),
+        patch.object(entry, "build_blob_mount_plan", return_value=plan),
+        patch.object(entry, "validate_workload_identity") as validate,
+        patch.object(entry, "_apply_blob_secret") as apply_secret,
+        patch.object(entry, "pick_uploader", return_value=uploader),
+    ):
+        result = entry._submit_via_volcano(
+            JobSpec(name="job", service="volcano"),
+            cleanup=entry._SecretCleanup(),
+        )
+
+    assert result.status == "failed"
+    validate.assert_called_once_with(
+        "blob-workload",
+        namespace="ns",
+        context="ctx",
+    )
+    apply_secret.assert_not_called()
+
+
+def test_submit_via_volcano_stops_before_upload_when_fic_is_invalid() -> None:
+    options = VolcanoBlobMountOpts(
+        auth="fic",
+        strategy="sidecar",
+        service_account="blob-workload",
+    )
+    plan = _BlobPlan(enabled=True, options=options)
+    uploader = MagicMock()
+
+    with (
+        patch.object(entry.shutil, "which", return_value="/usr/bin/kubectl"),
+        patch.object(
+            entry,
+            "build_volcano_config_from_request",
+            return_value=_cfg(blob_mount=options),
+        ),
+        patch.object(entry, "resolve_namespace", return_value="ns"),
+        patch.object(entry, "build_blob_mount_plan", return_value=plan),
+        patch.object(
+            entry,
+            "validate_workload_identity",
+            side_effect=WorkloadIdentityError("missing FIC"),
+        ),
+        patch.object(entry, "pick_uploader", return_value=uploader),
+    ):
+        result = entry._submit_via_volcano(
+            JobSpec(name="job", service="volcano"),
+            cleanup=entry._SecretCleanup(),
+        )
+
+    assert result.status == "failed"
+    assert result.note == "missing FIC"
+    uploader.prepare.assert_not_called()
+
+
+def test_submit_via_volcano_auto_prepares_managed_identity() -> None:
+    managed_identity = (
+        "/subscriptions/sub/resourceGroups/rg/providers/"
+        "Microsoft.ManagedIdentity/userAssignedIdentities/blob-mi"
+    )
+    options = VolcanoBlobMountOpts(
+        auth="fic",
+        strategy="sidecar",
+        managed_identity=managed_identity,
+    )
+    plan = _BlobPlan(enabled=True, options=options)
+    uploader = MagicMock()
+    uploader.name = "kubectl-exec"
+    uploader.prepare.return_value = CodeUploadResult(ok=False, error="stop")
+    azure = MagicMock()
+    azure.__enter__.return_value = azure
+    azure.__exit__.return_value = None
+
+    with (
+        patch.object(entry.shutil, "which", return_value="/usr/bin/kubectl"),
+        patch.object(
+            entry,
+            "build_volcano_config_from_request",
+            return_value=_cfg(blob_mount=options),
+        ),
+        patch.object(entry, "resolve_namespace", return_value="ns"),
+        patch.object(entry, "build_blob_mount_plan", return_value=plan),
+        patch.object(entry, "AzureClient", return_value=azure),
+        patch.object(
+            entry,
+            "prepare_workload_identity",
+            return_value=WorkloadIdentityInfo(
+                "blob-workload",
+                "11111111-2222-3333-4444-555555555555",
+                action="created",
+            ),
+        ) as prepare,
+        patch.object(entry, "_apply_blob_secret") as apply_secret,
+        patch.object(entry, "pick_uploader", return_value=uploader),
+    ):
+        result = entry._submit_via_volcano(
+            JobSpec(name="job", service="volcano"),
+            cleanup=entry._SecretCleanup(),
+        )
+
+    assert result.status == "failed"
+    prepare.assert_called_once_with(
+        managed_identity,
+        "",
+        namespace="ns",
+        context="ctx",
+        azure=azure,
+        storage_accounts=["acct"],
+    )
+    assert plan.options.service_account == "blob-workload"
+    apply_secret.assert_not_called()
 
 
 def test_submit_via_volcano_uses_fallback_detail_when_upload_fails_silently() -> None:

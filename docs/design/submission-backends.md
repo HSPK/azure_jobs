@@ -80,8 +80,10 @@ Code upload uses the narrow `CodeUploader` protocol:
 | `blob` | archive to Blob, Pod downloads with `azcopy` and verifies SHA-256 |
 
 Two strategies use direct dispatch in `pick_uploader`; a registry is
-unnecessary at this size. Blob storage mounts use blobfuse2 and a short-lived
-SAS in a Kubernetes Secret.
+unnecessary at this size. All Blob storage mounts delegate blobfuse
+authentication, configuration, mounting, supervision, and health checks to
+`usm blobmount`. SAS remains the default credential mode; FIC defaults to a
+sandbox that isolates privileged FUSE and NFS-Ganesha in a native sidecar.
 
 Templates may expand one Job into typed heterogeneous Tasks with independent
 Pod specs. See [Heterogeneous Volcano tasks](volcano-heterogeneous-tasks.md).

@@ -75,6 +75,18 @@ Commands expose a narrow resource model:
 Raw Job YAML and broad `describe` output are avoided because command arguments
 may contain short-lived credentials.
 
+### Blob mount isolation
+
+SAS mode remains compatible with existing jobs. Both SAS and FIC delegate Blob
+authentication, blobfuse configuration, mounting, refresh, and health checks
+to `usm blobmount`. FIC additionally binds a pre-provisioned Azure Workload
+Identity ServiceAccount.
+
+The default FIC strategy isolates privileged FUSE in a Kubernetes native
+sidecar. NFS-Ganesha exports the mount over Pod-local loopback; the main
+container only mounts NFS with `SYS_ADMIN`. Direct privileged mounting is an
+explicit whole-node opt-in.
+
 ## Invariants
 
 - Host installation and login remain client-local.
@@ -83,6 +95,8 @@ may contain short-lived credentials.
 - Output redaction runs before terminal or JSON rendering.
 - Delete requires an exact kind, namespace, and name.
 - Setup changes are previewable and explicit.
+- FIC mode never mints or stores a SAS.
+- aj validates identity wiring but does not create UAI/FIC resources.
 
 ## Failure handling
 

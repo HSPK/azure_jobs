@@ -17,6 +17,11 @@ from .volcano_runtime import (
     parse_scratch_mount_path,
     parse_scratch_size,
 )
+from .volcano_blob_mount import (
+    VolcanoBlobMountOpts,
+    blob_mount_opts_from_template,
+    load_blob_mount_opts,
+)
 from .volcano_tasks import (
     VolcanoTaskEnvironment,
     VolcanoTaskOpts,
@@ -47,6 +52,9 @@ class VolcanoOpts:
     scratch_mount_path: str = ""
     scratch_size: str = ""
     tasks: dict[str, VolcanoTaskOpts] = field(default_factory=dict)
+    blob_mount: VolcanoBlobMountOpts = field(
+        default_factory=VolcanoBlobMountOpts
+    )
 
     @classmethod
     def from_template(cls, template: "Template") -> "VolcanoOpts":
@@ -78,6 +86,7 @@ class VolcanoOpts:
             scratch_mount_path=scratch_mount_path,
             scratch_size=scratch_size,
             tasks=tasks_from_template(template, container_args),
+            blob_mount=blob_mount_opts_from_template(template),
         )
 
 
@@ -100,6 +109,7 @@ def _load(data: dict) -> VolcanoOpts:
         mount_path=scratch_mount_path,
     )
     values["tasks"] = load_tasks(values.get("tasks"))
+    values["blob_mount"] = load_blob_mount_opts(values.get("blob_mount"))
     return VolcanoOpts(**values)
 
 
@@ -134,6 +144,7 @@ register_spec(
 
 __all__ = [
     "VolcanoOpts",
+    "VolcanoBlobMountOpts",
     "VolcanoTaskEnvironment",
     "VolcanoTaskOpts",
 ]

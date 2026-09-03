@@ -259,7 +259,28 @@ storage:
   shared: {storage_account_name: <STORAGE_ACCOUNT>, container_name: <BLOB_CONTAINER>, mount_dir: /mnt/shared}
 ```
 AML/Sing creates/reuses a datastore and requests read-write mount. Volcano
-storage uses blobfuse2, a mounted short-lived SAS Secret, and privileged pod.
+storage delegates blobfuse lifecycle to `usm blobmount`; SAS mode uses a
+mounted short-lived Secret and privileged main container for compatibility.
+
+FIC alternative:
+
+```yaml
+config:
+  _extra:
+    volcano:
+      blob_mount:
+        auth: fic
+        managed_identity: <UAI_ARM_RESOURCE_ID>
+        # service_account: <OPTIONAL_OVERRIDE>
+        strategy: auto
+```
+
+`auto` uses a privileged `usm blobmount`/NFS-Ganesha sidecar and leaves the
+main container unprivileged except for the `SYS_ADMIN` capability needed to
+mount loopback NFS. With a UAI ARM ID, aj derives and creates/annotates the
+ServiceAccount like amlt; it never replaces a conflicting identity
+annotation. The FIC and Blob Data role must already exist. Use
+`strategy: direct` only for whole-node Pods.
 
 Code selection combines built-ins, `code.ignore`, then root `.codeignore` or
 `.amltignore`. `.azure_jobs/` is excluded except `.azure_jobs/scripts/`.

@@ -280,8 +280,63 @@ config:
 ```
 
 Native AML/Sing creates or reuses a workspace datastore and requests a
-read-write mount. Volcano uses blobfuse2 plus a mounted Kubernetes Secret
-containing a short-lived SAS; storage pods are privileged for `/dev/fuse`.
+read-write mount. Volcano delegates all blobfuse installation, configuration,
+mounting, health checks, and credential refresh to `usm blobmount`. SAS mode
+uses a mounted Kubernetes Secret and runs direct/privileged for compatibility.
+
+### Volcano FIC Blob mounts
+
+SAS remains the default credential mode. To use a pre-provisioned Azure
+Workload Identity:
+
+```yaml
+config:
+  storage:
+    shared:
+      storage_account_name: <ACCOUNT>
+      container_name: <CONTAINER>
+      mount_dir: /mnt/shared
+  _extra:
+    volcano:
+      blob_mount:
+        auth: fic
+        managed_identity: <UAI_ARM_RESOURCE_ID>
+        # service_account: <OPTIONAL_OVERRIDE>
+        strategy: auto
+```
+
+With a UAI ARM ID, aj follows amlt's setup flow: derive the ServiceAccount from
+a matching FIC subject or UAI name, create it when missing, and add a missing
+`azure.workload.identity/client-id` annotation. aj refuses to overwrite a
+ServiceAccount already bound to another identity.
+
+The UAI still needs an FIC whose subject is
+`system:serviceaccount:<namespace>:<service-account>` and a Blob Data role on
+the storage account. Supplying only `service_account` selects validation-only
+mode and never changes it.
+
+When the ARM ID is available, FIC audience and Blob Data role checks are
+best-effort warnings, matching amlt. Missing ServiceAccount wiring is a hard
+error.
+
+`auto` conservatively selects the sandboxed strategy: `usm blobmount` runs
+blobfuse2 in a privileged native sidecar and exports it over loopback NFS; the
+main container is not privileged. It reserves `500m` CPU and `6Gi` memory from
+each Task and requires Kubernetes 1.29+ native sidecars. Override with
+`sidecar_cpu`, `sidecar_memory`, and `sidecar_image`.
+
+`strategy: direct` invokes the same `usm blobmount --auth fic` command in the
+main container and makes it privileged. Use it only when the Pod owns the
+whole node. FIC mode creates no SAS or credential Secret.
+
+The default sidecar installs `usmo`, blobfuse2, and NFS-Ganesha at startup, so
+it needs package-index/GitHub egress. A custom `sidecar_image` may preinstall
+them. `usm blobmount` command version 1.1.0 or newer is required. Direct mode
+requires Python 3.10+, package-manager access, and the same egress in the
+workload image.
+
+This setting covers declared `storage:` mounts. The Volcano Blob code-upload
+strategy still uses its separate short-lived read SAS.
 
 ## Code, ignores, and setup
 

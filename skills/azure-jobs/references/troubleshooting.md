@@ -179,6 +179,18 @@ Check exact context, namespace, queue, PVC, mount directory, and permissions.
 PVC code transfer requires both PVC environment variables. Preserve
 kubectl/tar output; never delete unrelated pods.
 
+For FIC storage failures, check in order:
+
+1. Pod label `azure.workload.identity/use=true`;
+2. expected `serviceAccountName`;
+3. SA client-ID annotation;
+4. FIC subject/audience;
+5. UAI Blob Data role;
+6. sidecar logs and `/mnt/aj-blob-ready/error`.
+
+An error mentioning missing `AZURE_FEDERATED_TOKEN_FILE` means the Workload
+Identity webhook did not mutate the Pod. Do not fall back to SAS silently.
+
 ## Volcano Blob/SAS
 
 Check daemon login, `az` availability, account/container placeholders, ability

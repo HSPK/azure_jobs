@@ -7,9 +7,10 @@ import json
 import sys
 from unittest.mock import MagicMock
 
-from azure_jobs.shared.opts.aml import AmlOpts
 from azure_jobs.shared.journal import JobRecord
-from azure_jobs.shared.job.spec import JobSpec, JobResult
+from azure_jobs.shared.job.spec import JobResult, JobSpec, StorageMount
+from azure_jobs.shared.opts import VolcanoBlobMountOpts, VolcanoOpts
+from azure_jobs.shared.opts.aml import AmlOpts
 from azure_jobs.shared.template import Template
 from azure_jobs.client.ui import (
     set_output_mode,
@@ -133,6 +134,29 @@ class TestDryRunResultJson:
         assert request["sku_processes_per_node"] == 1
         assert request["gpu_nodes"] == 0
         assert request["total_gpus"] == 0
+
+    def test_volcano_fic_dry_run_reports_safe_mount_summary(self):
+        req = _make_request(
+            service="volcano",
+            backend_spec=VolcanoOpts(
+                blob_mount=VolcanoBlobMountOpts(
+                    auth="fic",
+                    strategy="sidecar",
+                    service_account="blob-workload",
+                )
+            ),
+            storage={"data": StorageMount("acct", "cont", "/mnt/data")},
+        )
+
+        parsed = json.loads(
+            _capture_stdout(lambda: show_dry_run_result(req))
+        )
+
+        assert parsed["request"]["blob_mount"] == {
+            "auth": "fic",
+            "strategy": "sidecar",
+            "service_account": "blob-workload",
+        }
 
 
 class TestSubmissionPreviewJsonSilent:

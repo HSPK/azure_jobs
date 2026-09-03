@@ -126,6 +126,10 @@ Choose the value with the user when it is not already implied by the task.
 - Volcano only with a working context, CRD, queue, namespace, and upload path.
 - For Podman/Docker inside Volcano, use the nested-runtime section in the
   Volcano reference; never add `SYS_ADMIN` without a stated requirement.
+- For Volcano FIC Blob mounts, require a real UAI ARM ID (recommended) or an
+  existing ServiceAccount, matching FIC subject, and Blob Data role. Never
+  invent identity IDs. An ARM ID authorizes aj to create/annotate the derived
+  SA, but never to replace a conflicting identity annotation.
 
 Read [templates](references/templates.md) before authoring YAML and
 [Volcano](references/volcano.md) before Kubernetes submission.

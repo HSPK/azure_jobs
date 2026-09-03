@@ -5,27 +5,117 @@ from __future__ import annotations
 import logging
 import hashlib
 import os
+import re
 import shlex
 import subprocess
 from dataclasses import dataclass, field
+from decimal import Decimal
 from pathlib import Path, PurePosixPath
 from typing import Any
 
 from azure_jobs.shared.job.spec import JobSpec
 from azure_jobs.shared.job.command import PRELUDE_COMMANDS
+from azure_jobs.shared.opts import VolcanoBlobMountOpts
 from azure_jobs.shared.utils.naming import sanitize_dns1035
 from . import constants as C
 from ._scripts import load_script
 from .storage import BlobMountPlan
+from .workload_identity import WI_USE_LABEL
 
 log = logging.getLogger(__name__)
 
 _DISTRIBUTED_PREAMBLE = Path(__file__).parent / "distributed_preamble.sh"
+_MEMORY_RE = re.compile(
+    r"^(?P<number>(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+))"
+    r"(?P<unit>[EPTGMK]i|[numkKMGTP])?$"
+)
+_BINARY_MEMORY = {
+    "Ki": 1024,
+    "Mi": 1024**2,
+    "Gi": 1024**3,
+    "Ti": 1024**4,
+    "Pi": 1024**5,
+    "Ei": 1024**6,
+}
+_DECIMAL_MEMORY = {
+    "n": Decimal("1e-9"),
+    "u": Decimal("1e-6"),
+    "m": Decimal("1e-3"),
+    "k": Decimal("1e3"),
+    "K": Decimal("1e3"),
+    "M": Decimal("1e6"),
+    "G": Decimal("1e9"),
+    "T": Decimal("1e12"),
+    "P": Decimal("1e15"),
+}
 
 def _load_distributed_preamble(nodes: int) -> list[str]:
     text = _DISTRIBUTED_PREAMBLE.read_text()
     text = text.replace("{WORLD_SIZE_DEFAULT}", str(nodes))
     return text.splitlines()
+
+
+def _cpu_quantity(value: str) -> Decimal:
+    text = str(value).strip()
+    return (
+        Decimal(text[:-1]) / 1000
+        if text.endswith("m")
+        else Decimal(text)
+    )
+
+
+def _memory_bytes(value: str) -> Decimal:
+    text = str(value).strip()
+    if re.fullmatch(
+        r"(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)[eE][+-]?[0-9]+",
+        text,
+    ):
+        return Decimal(text)
+    match = _MEMORY_RE.fullmatch(text)
+    if match is None:
+        from azure_jobs.shared.errors import ConfigError
+
+        raise ConfigError(f"Invalid Kubernetes memory quantity: {value!r}.")
+    number = Decimal(match.group("number"))
+    unit = match.group("unit") or ""
+    factor = _BINARY_MEMORY.get(unit, _DECIMAL_MEMORY.get(unit, Decimal(1)))
+    return number * factor
+
+
+def _format_cpu(value: Decimal) -> str:
+    return format(value.normalize(), "f")
+
+
+def _format_memory(value: Decimal) -> str:
+    mib = Decimal(1024**2)
+    if value == value.to_integral_value() and value % mib == 0:
+        return f"{int(value / mib)}Mi"
+    return str(int(value))
+
+
+def _reserve_sidecar_resources(
+    cpu: int,
+    memory: str,
+    blob_plan: BlobMountPlan | None,
+) -> tuple[str, str]:
+    if (
+        blob_plan is None
+        or not blob_plan.uses_fic
+        or blob_plan.strategy != "sidecar"
+    ):
+        return str(cpu), memory
+    from azure_jobs.shared.errors import ConfigError
+
+    main_cpu = Decimal(cpu) - _cpu_quantity(blob_plan.options.sidecar_cpu)
+    main_memory = _memory_bytes(memory) - _memory_bytes(
+        blob_plan.options.sidecar_memory
+    )
+    if main_cpu <= 0 or main_memory <= 0:
+        raise ConfigError(
+            "Volcano Blob FIC sidecar resources must be smaller than each "
+            "Task's CPU and memory allocation."
+        )
+    return _format_cpu(main_cpu), _format_memory(main_memory)
 
 def _kubectl_namespace(context: str = "") -> str:
     cmd = [
@@ -111,6 +201,9 @@ class VolcanoConfig:
     scratch_mount_path: str = ""
     scratch_size: str = ""
     tasks: list[VolcanoTaskConfig] = field(default_factory=list)
+    blob_mount: VolcanoBlobMountOpts = field(
+        default_factory=VolcanoBlobMountOpts
+    )
 
 
 def code_asset_name(name: str) -> str:
@@ -191,6 +284,7 @@ def build_volcano_config_from_request(request: JobSpec) -> VolcanoConfig:
         scratch_mount_path=vol.scratch_mount_path,
         scratch_size=vol.scratch_size,
         tasks=tasks,
+        blob_mount=vol.blob_mount,
     )
 
 
@@ -304,11 +398,7 @@ def _validate_scratch_mount_conflicts(
         for storage in cfg.storage.values()
     )
     if blob_plan is not None and blob_plan.enabled:
-        occupied.append(str(blob_plan.volume_mount().get("mountPath") or ""))
-        occupied.extend(
-            str(getattr(mount, "mount_dir", "") or "")
-            for mount in getattr(blob_plan, "mounts", ())
-        )
+        occupied.extend(blob_plan.occupied_main_mount_paths())
 
     for raw in occupied:
         if not raw:
@@ -358,6 +448,7 @@ def build_volcano_job(
     # read and write the blob containers.
     if blob_plan is not None and blob_plan.enabled:
         script_prefix.extend(blob_plan.setup_lines())
+        script_prefix.extend(blob_plan.main_sidecar_setup_lines())
     if code_setup_lines:
         script_prefix.extend(code_setup_lines)
     if code_path:
@@ -383,13 +474,20 @@ def build_volcano_job(
         image = task.image if task else cfg.image
         setup_commands = task.setup_commands if task else cfg.setup_commands
         command = task.command if task else cfg.command
-        env_vars = task.env_vars if task else cfg.env_vars
+        env_vars = dict(task.env_vars if task else cfg.env_vars)
+        if blob_plan is not None and blob_plan.uses_fic:
+            env_vars["AZCOPY_AUTO_LOGIN_TYPE"] = "WORKLOAD"
         shm_size = task.shm_size if task else cfg.shm_size
         capabilities = task.capabilities if task else cfg.capabilities
         scratch_mount_path = (
             task.scratch_mount_path if task else cfg.scratch_mount_path
         )
         scratch_size = task.scratch_size if task else cfg.scratch_size
+        main_cpu, main_memory = _reserve_sidecar_resources(
+            cpus_per_node,
+            memory,
+            blob_plan,
+        )
 
         script_lines = list(script_prefix)
         if task is not None:
@@ -408,12 +506,12 @@ def build_volcano_job(
 
         resources: dict[str, Any] = {
             "requests": {
-                "cpu": str(cpus_per_node),
-                "memory": memory,
+                "cpu": main_cpu,
+                "memory": main_memory,
             },
             "limits": {
-                "cpu": str(cpus_per_node),
-                "memory": memory,
+                "cpu": main_cpu,
+                "memory": main_memory,
             },
         }
         if gpus_per_node > 0:
@@ -483,8 +581,15 @@ def build_volcano_job(
                 }
             )
 
-        if blob_plan is not None and blob_plan.enabled:
+        if (
+            blob_plan is not None
+            and blob_plan.enabled
+            and blob_plan.requires_secret
+        ):
             volumes.append(blob_plan.volume())
+        if blob_plan is not None and blob_plan.enabled:
+            volumes.extend(blob_plan.sidecar_volumes())
+            volume_mounts.extend(blob_plan.main_sidecar_volume_mounts())
 
         if scratch_mount_path:
             _validate_scratch_mount_conflicts(
@@ -520,14 +625,29 @@ def build_volcano_job(
         if env_list:
             container["env"] = env_list
         security_context: dict[str, Any] = {}
-        if capabilities:
+        effective_capabilities = list(capabilities)
+        if (
+            blob_plan is not None
+            and blob_plan.uses_fic
+            and blob_plan.strategy == "sidecar"
+            and "SYS_ADMIN" not in effective_capabilities
+        ):
+            effective_capabilities.append("SYS_ADMIN")
+        if effective_capabilities:
             security_context["capabilities"] = {
-                "add": list(capabilities),
+                "add": effective_capabilities,
             }
-        if blob_plan is not None and blob_plan.enabled:
+        if (
+            blob_plan is not None
+            and blob_plan.enabled
+            and blob_plan.requires_secret
+        ):
             container["volumeMounts"].append(blob_plan.volume_mount())
-            # blobfuse2 opens /dev/fuse, which an unprivileged container cannot
-            # do. Only pods that declare storage are given this privilege.
+        if (
+            blob_plan is not None
+            and blob_plan.enabled
+            and blob_plan.strategy == "direct"
+        ):
             security_context["privileged"] = True
         if security_context:
             container["securityContext"] = security_context
@@ -543,6 +663,14 @@ def build_volcano_job(
             "tolerations": tolerations,
             "containers": [container],
         }
+        if blob_plan is not None and blob_plan.uses_fic:
+            pod_spec["serviceAccountName"] = (
+                blob_plan.options.service_account
+            )
+        if blob_plan is not None:
+            sidecar = blob_plan.sidecar_container()
+            if sidecar is not None:
+                pod_spec["initContainers"] = [sidecar]
 
         if cfg.nodes > 1:
             pod_spec["affinity"] = {
@@ -563,6 +691,12 @@ def build_volcano_job(
         return pod_spec
 
     tasks: list[dict[str, Any]] = []
+    def _labels(role: str) -> dict[str, str]:
+        labels = {"app": app_label, "role": role}
+        if blob_plan is not None and blob_plan.uses_fic:
+            labels[WI_USE_LABEL] = "true"
+        return labels
+
     if cfg.tasks:
         for task in cfg.tasks:
             tasks.append(
@@ -571,10 +705,7 @@ def build_volcano_job(
                     "replicas": task.replicas,
                     "template": {
                         "metadata": {
-                            "labels": {
-                                "app": app_label,
-                                "role": task.name,
-                            },
+                            "labels": _labels(task.name),
                         },
                         "spec": _make_pod_spec(task.name, task),
                     },
@@ -587,10 +718,7 @@ def build_volcano_job(
                 "replicas": 1,
                 "template": {
                     "metadata": {
-                        "labels": {
-                            "app": app_label,
-                            "role": C.TASK_MASTER,
-                        },
+                        "labels": _labels(C.TASK_MASTER),
                     },
                     "spec": _make_pod_spec(C.TASK_MASTER),
                 },
@@ -603,10 +731,7 @@ def build_volcano_job(
                     "replicas": cfg.nodes - 1,
                     "template": {
                         "metadata": {
-                            "labels": {
-                                "app": app_label,
-                                "role": C.TASK_WORKER,
-                            },
+                            "labels": _labels(C.TASK_WORKER),
                         },
                         "spec": _make_pod_spec(C.TASK_WORKER),
                     },

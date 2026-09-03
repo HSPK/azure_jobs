@@ -87,6 +87,10 @@ Follow SOLID — design decisions in new code must be defensible against these. 
 
 - **No large inline scripts.** Any bash/Python/YAML snippet ≥ ~15 lines that is injected into a job pod, an amlt config, or a generated file must live as a standalone resource (e.g. `server/submit/volcano/uploaders/scripts/install_azcopy.sh`). Load it via `_scripts.load_script(name, **subs)`. Placeholders use literal `{KEY}` substitution — same convention as `server/submit/volcano/distributed_preamble.sh`. Keep the loader tiny (DRY/KISS); graduate to a real templating engine only if/when a script genuinely needs conditionals or loops.
 - **Pod-side bash that depends on a binary must force-install it.** Don't assume `azcopy`, `uv`, `jq`, etc. exist in the container — install or fail loudly.
+- **All Volcano Blob mounts delegate to `usm blobmount`.** aj owns
+  ServiceAccount validation and direct/sidecar Pod topology; it does not
+  duplicate blobfuse authentication, configuration, mounting, or health
+  checks. SAS remains the compatibility default credential mode.
 - **Backend dispatch is a registry; uploader dispatch is inline if/else (KISS by size).** Execution backends self-register in `server/submit`; Volcano's two uploaders (`kubectl-exec`, `blob`) are selected by `pick_uploader(extra)` in `server/submit/volcano/uploaders/__init__.py`. Add a registry only if the strategy count grows beyond the small literal dispatch.
 - **`shared/job/build.py` is service-agnostic.** It must never branch on
   `JobSpec.service` (regression-guarded by

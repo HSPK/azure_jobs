@@ -29,9 +29,27 @@ from azure_jobs.shared.template.models import Template
 
 class _BlobPlan:
     enabled = True
+    requires_secret = True
+    uses_fic = False
+    strategy = "direct"
 
     def setup_lines(self) -> list[str]:
         return ["echo mount-blob"]
+
+    def main_sidecar_setup_lines(self) -> list[str]:
+        return []
+
+    def sidecar_volumes(self) -> list[dict[str, object]]:
+        return []
+
+    def main_sidecar_volume_mounts(self) -> list[dict[str, object]]:
+        return []
+
+    def sidecar_container(self):
+        return None
+
+    def occupied_main_mount_paths(self) -> list[str]:
+        return ["/mnt/secret"]
 
     def volume(self) -> dict[str, object]:
         return {"name": "blob-secret", "secret": {"secretName": "job-blob"}}

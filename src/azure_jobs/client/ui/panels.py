@@ -60,6 +60,7 @@ def _request_payload(request: JobSpec) -> dict[str, Any]:
         if tasks
         else (0 if is_cpu else request.nodes * request.gpus_per_node)
     )
+    blob_mount = _volcano_blob_mount_payload(request)
     return {
         "template_name": request.template_name,
         "experiment": request.expr_name,
@@ -75,6 +76,7 @@ def _request_payload(request: JobSpec) -> dict[str, Any]:
         "gpu_nodes": gpu_nodes,
         "total_gpus": total_gpus,
         "tasks": tasks,
+        "blob_mount": blob_mount,
         "image": request.image,
         "image_registry": request.image_registry,
         "subscription_id": aml.subscription_id,
@@ -119,6 +121,23 @@ def _volcano_task_payload(request: JobSpec) -> list[dict[str, Any]]:
             }
         )
     return rows
+
+
+def _volcano_blob_mount_payload(request: JobSpec) -> dict[str, Any]:
+    from azure_jobs.shared.opts import VolcanoOpts
+
+    backend = request.backend_spec
+    if (
+        not isinstance(backend, VolcanoOpts)
+        or not request.storage
+    ):
+        return {}
+    options = backend.blob_mount
+    return {
+        "auth": options.auth,
+        "strategy": options.resolved_strategy,
+        "service_account": options.service_account,
+    }
 
 
 def show_submission_preview(
@@ -206,6 +225,19 @@ def show_submission_preview(
     details.add_row("Resource Group", esc(aml.resource_group or "-"))
     details.add_row("Created", created_at)
     details.add_row("Storage", f"{storage_count} mounts")
+    blob_mount = _volcano_blob_mount_payload(request)
+    if blob_mount:
+        details.add_row(
+            "Blob auth",
+            esc(
+                f"{blob_mount['auth']}/{blob_mount['strategy']}"
+                + (
+                    f" ({blob_mount['service_account']})"
+                    if blob_mount["service_account"]
+                    else ""
+                )
+            ),
+        )
     details.add_row("Tags", esc(tag_text))
     if task_rows:
         topology = ", ".join(

@@ -19,9 +19,11 @@ from azure_jobs.server.submit.volcano.config import (
     build_volcano_config_from_request,
     build_volcano_job,
 )
+from azure_jobs.server.submit.volcano.storage import build_blob_mount_plan
 from azure_jobs.shared.errors import ConfigError
-from azure_jobs.shared.job import build_job_spec
+from azure_jobs.shared.job import StorageMount, build_job_spec
 from azure_jobs.shared.opts import (
+    VolcanoBlobMountOpts,
     VolcanoOpts,
     VolcanoTaskEnvironment,
     VolcanoTaskOpts,
@@ -150,9 +152,27 @@ def _env(container: dict) -> dict[str, str]:
 
 class _BlobPlan:
     enabled = True
+    requires_secret = True
+    uses_fic = False
+    strategy = "direct"
 
     def setup_lines(self) -> list[str]:
         return ["echo mount-blob"]
+
+    def main_sidecar_setup_lines(self) -> list[str]:
+        return []
+
+    def sidecar_volumes(self) -> list[dict]:
+        return []
+
+    def main_sidecar_volume_mounts(self) -> list[dict]:
+        return []
+
+    def sidecar_container(self):
+        return None
+
+    def occupied_main_mount_paths(self) -> list[str]:
+        return ["/mnt/secret"]
 
     def volume(self) -> dict:
         return {"name": "blob-secret", "secret": {"secretName": "job-blob"}}
@@ -370,6 +390,40 @@ def test_task_security_context_merges_with_blob_privilege(
         "privileged": True,
     }
     assert master["securityContext"] == {"privileged": True}
+
+
+def test_fic_sidecar_is_applied_to_every_heterogeneous_task(
+    tmp_path: Path,
+) -> None:
+    request = _build_request(tmp_path)
+    request.storage = {
+        "data": StorageMount("acct", "cont", "/mnt/data")
+    }
+    request.backend_spec.blob_mount = VolcanoBlobMountOpts(
+        auth="fic",
+        strategy="sidecar",
+        service_account="blob-workload",
+    )
+    cfg = build_volcano_config_from_request(request)
+    plan = build_blob_mount_plan(
+        request.storage,
+        request.name,
+        options=request.backend_spec.blob_mount,
+    )
+
+    job = build_volcano_job(cfg, namespace="training", blob_plan=plan)
+
+    for task in job["spec"]["tasks"]:
+        template = task["template"]
+        assert (
+            template["metadata"]["labels"]["azure.workload.identity/use"]
+            == "true"
+        )
+        assert template["spec"]["serviceAccountName"] == "blob-workload"
+        assert template["spec"]["initContainers"][0]["name"] == "aj-blob-nfs"
+        main = template["spec"]["containers"][0]
+        assert main["securityContext"]["capabilities"]["add"] == ["SYS_ADMIN"]
+        assert "privileged" not in main["securityContext"]
 
 
 def test_heterogeneous_preamble_uses_task_index_and_preserves_user_rank() -> None:

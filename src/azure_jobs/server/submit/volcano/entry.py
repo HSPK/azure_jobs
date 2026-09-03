@@ -8,7 +8,7 @@ import shutil
 import subprocess
 import tempfile
 import traceback
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable
 
@@ -16,6 +16,7 @@ import yaml
 
 from azure_jobs.shared.errors import AJError
 from azure_jobs.shared.job.spec import JobEvent, JobSpec, JobResult
+from azure_jobs.server.az_client import AzureClient
 from .config import (
     build_volcano_config_from_request,
     build_volcano_job,
@@ -23,6 +24,10 @@ from .config import (
 )
 from .uploaders import pick_uploader
 from .storage import BlobMountPlan, BlobMountError, build_blob_mount_plan
+from .workload_identity import (
+    prepare_workload_identity,
+    validate_workload_identity,
+)
 
 
 @dataclass
@@ -173,7 +178,47 @@ def _submit_via_volcano(
         )
 
     try:
-        blob_plan = build_blob_mount_plan(cfg.storage, cfg.name)
+        blob_plan = build_blob_mount_plan(
+            cfg.storage,
+            cfg.name,
+            options=cfg.blob_mount,
+        )
+        if blob_plan.uses_fic:
+            if blob_plan.options.managed_identity:
+                with AzureClient() as azure:
+                    identity = prepare_workload_identity(
+                        blob_plan.options.managed_identity,
+                        blob_plan.options.service_account,
+                        namespace=namespace,
+                        context=cfg.context,
+                        azure=azure,
+                        storage_accounts=[
+                            mount.account for mount in blob_plan.mounts
+                        ],
+                    )
+                blob_plan.options = replace(
+                    blob_plan.options,
+                    service_account=identity.service_account,
+                )
+                cfg.blob_mount = blob_plan.options
+                emit(
+                    JobEvent(
+                        kind="storage",
+                        detail=(
+                            "Workload Identity ServiceAccount "
+                            f"{namespace}/{identity.service_account}: "
+                            f"{identity.action}"
+                        ),
+                    )
+                )
+                for warning in identity.warnings:
+                    emit(JobEvent(kind="storage", detail=warning))
+            else:
+                validate_workload_identity(
+                    blob_plan.options.service_account,
+                    namespace=namespace,
+                    context=cfg.context,
+                )
     except AJError as exc:
         emit(JobEvent(kind="error", detail=str(exc)))
         return JobResult(
@@ -185,20 +230,29 @@ def _submit_via_volcano(
 
     if blob_plan.enabled:
         targets = ", ".join(f"{m.account}/{m.container} -> {m.mount_dir}" for m in blob_plan.mounts)
-        emit(JobEvent(kind="storage", detail=f"blobfuse2 mounts: {targets}"))
-        cleanup.name = blob_plan.secret_name
-        cleanup.namespace = namespace
-        cleanup.context = cfg.context
-        try:
-            _apply_blob_secret(blob_plan, namespace, cfg.context)
-        except AJError as exc:
-            emit(JobEvent(kind="error", detail=str(exc)))
-            return JobResult(
-                job_name=request.name,
-                status="failed",
-                error=str(exc),
-                note=str(exc),
+        emit(
+            JobEvent(
+                kind="storage",
+                detail=(
+                    f"blob mounts ({blob_plan.options.auth}/"
+                    f"{blob_plan.strategy}): {targets}"
+                ),
             )
+        )
+        if blob_plan.requires_secret:
+            cleanup.name = blob_plan.secret_name
+            cleanup.namespace = namespace
+            cleanup.context = cfg.context
+            try:
+                _apply_blob_secret(blob_plan, namespace, cfg.context)
+            except AJError as exc:
+                emit(JobEvent(kind="error", detail=str(exc)))
+                return JobResult(
+                    job_name=request.name,
+                    status="failed",
+                    error=str(exc),
+                    note=str(exc),
+                )
 
     try:
         uploader = pick_uploader(request.extra)
