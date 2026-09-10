@@ -420,6 +420,126 @@ class TestAppHelpers:
             state.events.unsubscribe(channel)
             state.close()
 
+    def test_only_aml_and_sing_submissions_require_a_workspace(self, tmp_path):
+        class MissingCatalog:
+            def configured(self):
+                return None
+
+            def discover(self, subscription_id=""):
+                return ()
+
+        def fake_submit(spec, *, on_event=None):
+            return JobResult(
+                job_name=spec.name,
+                status="submitted",
+            )
+
+        root = tmp_path / "root"
+        root.mkdir()
+        state = DaemonState(target_catalog=MissingCatalog())
+        try:
+            with (
+                patch(
+                    "azure_jobs.server.submit.get_backend",
+                    side_effect=lambda service: SimpleNamespace(
+                        fn=fake_submit,
+                        requires_workspace=service in {"aml", "sing"},
+                    ),
+                ),
+                TestClient(create_app(state)) as client,
+            ):
+                volcano = client.post(
+                    f"/v2/workspaces/{H.DEFAULT_WORKSPACE}/submissions",
+                    headers={H.ROOT_HEADER: str(root)},
+                    json={
+                        "payload": {
+                            "name": "volcano-job",
+                            "service": "volcano",
+                        }
+                    },
+                )
+                aml = client.post(
+                    f"/v2/workspaces/{H.DEFAULT_WORKSPACE}/submissions",
+                    headers={H.ROOT_HEADER: str(root)},
+                    json={"payload": {"name": "aml-job", "service": "aml"}},
+                )
+                sing = client.post(
+                    f"/v2/workspaces/{H.DEFAULT_WORKSPACE}/submissions",
+                    headers={H.ROOT_HEADER: str(root)},
+                    json={"payload": {"name": "sing-job", "service": "sing"}},
+                )
+
+            assert volcano.status_code == 200
+            assert volcano.json()["job_name"] == "volcano-job"
+            assert aml.status_code == 404
+            assert aml.json()["error"]["type"] == "WorkspaceError"
+            assert sing.status_code == 404
+            assert sing.json()["error"]["type"] == "WorkspaceError"
+            assert state.contexts.count() == 0
+        finally:
+            state.close()
+
+    def test_volcano_queue_is_available_without_a_workspace(self, tmp_path):
+        class MissingCatalog:
+            def configured(self):
+                return None
+
+            def discover(self, subscription_id=""):
+                return ()
+
+        def fake_submit(spec, *, on_event=None):
+            return JobResult(
+                job_name=spec.name,
+                status="submitted",
+            )
+
+        root = tmp_path / "root"
+        root.mkdir()
+        state = DaemonState(target_catalog=MissingCatalog())
+        try:
+            with (
+                patch(
+                    "azure_jobs.server.submit.get_backend",
+                    return_value=SimpleNamespace(fn=fake_submit),
+                ),
+                TestClient(create_app(state)) as client,
+            ):
+                queued = client.post(
+                    f"/v2/workspaces/{H.DEFAULT_WORKSPACE}/queue",
+                    headers={H.ROOT_HEADER: str(root)},
+                    json={
+                        "payload": {
+                            "name": "volcano-job",
+                            "service": "volcano",
+                        },
+                        "name": "volcano-job",
+                    },
+                )
+                ticket = queued.json()["ticket"]
+
+                deadline = time.time() + 2
+                while time.time() < deadline:
+                    shown = client.get(
+                        f"/v2/workspaces/{H.DEFAULT_WORKSPACE}/queue/{ticket}",
+                        headers={H.ROOT_HEADER: str(root)},
+                    )
+                    if shown.json()["state"] in {"done", "failed", "cancelled"}:
+                        break
+                    time.sleep(0.01)
+
+                listed = client.get(
+                    f"/v2/workspaces/{H.DEFAULT_WORKSPACE}/queue",
+                    headers={H.ROOT_HEADER: str(root)},
+                )
+
+            assert queued.status_code == 200
+            assert shown.status_code == 200
+            assert shown.json()["state"] == "done"
+            assert [entry["ticket"] for entry in listed.json()] == [ticket]
+            assert state.contexts.count() == 0
+        finally:
+            state.close()
+
 
 class TestAppRoutes:
     def test_missing_root_and_domain_error_statuses_are_explicit(self, monkeypatch, tmp_path):

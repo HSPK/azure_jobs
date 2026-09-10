@@ -100,7 +100,8 @@ separate optional protocol instead of growing unrelated methods.
 1. Define typed options beside shared backend options.
 2. Register shared build/load/name hooks.
 3. Implement daemon execution under `server/submit/<backend>/`.
-4. Register with `server.submit.register_backend`.
+4. Register with `server.submit.register_backend`, declaring
+   `requires_workspace=True` only for workspace-scoped execution.
 5. Test the backend contract and prove `build.py` remains service-agnostic.
 
 Do not add `if service == ...` to CLI, SDK, routes, or shared build.

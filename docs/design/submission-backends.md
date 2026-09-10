@@ -33,13 +33,14 @@ resolution, artifact transfer, payloads, and failure semantics.
 POST submission
   → reconstruct JobSpec and backend_spec
   → get_backend(spec.service)
+  → resolve workspace only when backend.requires_workspace
   → backend(spec, on_event)
   → JobResult
 ```
 
 `shared/spec.py` registers description hooks. `server/submit/__init__.py`
-registers executable functions. The split keeps wire description independent
-from daemon-only libraries.
+registers executable functions and their workspace capability. The split keeps
+wire description independent from daemon-only libraries.
 
 ### Deterministic code archive
 

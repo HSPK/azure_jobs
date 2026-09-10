@@ -16,12 +16,29 @@ from typing import Any, Callable
 
 from azure_jobs.server.queue import SubmissionQueue
 from azure_jobs.server.watch import TOPIC_QUEUE, JobWatcher
-from azure_jobs.shared.contract.models import JobRef, Notification, QueuedJob, Target
+from azure_jobs.shared.contract.models import (
+    JobRef,
+    Notification,
+    QueuedJob,
+    SubmitOutcome,
+    Target,
+)
 from azure_jobs.shared.contract.http import DEFAULT_WORKSPACE
 
 log = logging.getLogger(__name__)
 
 CONTEXT_IDLE_TIMEOUT = 30 * 60.0
+
+
+def _queue_notification(entry: QueuedJob) -> Notification:
+    """Build the shared notification emitted for any submission queue."""
+    return Notification(
+        topic=TOPIC_QUEUE,
+        title=f"{entry.name} is {entry.state}",
+        body=entry.detail,
+        payload={"ticket": entry.ticket, "state": entry.state},
+        created_at=time.time(),
+    )
 
 
 class Context:
@@ -64,15 +81,8 @@ class Context:
         self.queue.subscribe(self._on_queue_change)
 
     def _on_queue_change(self, entry: QueuedJob) -> None:
-        self._publish(
-            Notification(
-                topic=TOPIC_QUEUE,
-                title=f"{entry.name} is {entry.state}",
-                body=entry.detail,
-                payload={"ticket": entry.ticket, "state": entry.state},
-                created_at=time.time(),
-            )
-        )
+        """Publish queue state changes through the daemon event hub."""
+        self._publish(_queue_notification(entry))
 
     def touch(self) -> None:
         self.touched = time.time()
@@ -101,6 +111,79 @@ class Context:
             )
 
 
+class ProjectSubmissions:
+    """Workspace-independent submission dispatch and per-project queues."""
+
+    def __init__(self, publish: Callable[[Notification], None]) -> None:
+        """Initialize workspace-independent dispatch and queue storage."""
+        from azure_jobs.server.resources import WorkspaceSubmissions
+
+        self._resource = WorkspaceSubmissions()
+        self._publish = publish
+        self._queues: dict[str, SubmissionQueue] = {}
+        self._active = 0
+        self._lock = threading.Lock()
+
+    def submit(
+        self,
+        payload: dict,
+        *,
+        on_event: Callable[[Any], None] | None = None,
+    ) -> SubmitOutcome:
+        """Submit a backend payload without resolving an Azure workspace."""
+        with self._lock:
+            self._active += 1
+        try:
+            return self._resource.submit(payload, on_event=on_event)
+        finally:
+            with self._lock:
+                self._active -= 1
+
+    def queue(self, root: Path) -> SubmissionQueue:
+        """Return the persistent workspace-independent queue for a project."""
+        key = str(root)
+        with self._lock:
+            submission_queue = self._queues.get(key)
+            if submission_queue is None:
+                submission_queue = SubmissionQueue(
+                    self._resource.submit,
+                    journal_path=root / "daemon" / "queue-project.json",
+                    autostart=False,
+                )
+                submission_queue.subscribe(self._on_queue_change)
+                self._queues[key] = submission_queue
+                submission_queue.start()
+            return submission_queue
+
+    def outstanding(self) -> int:
+        """Count active direct submissions and non-terminal queued work."""
+        with self._lock:
+            active = self._active
+            queues = tuple(self._queues.values())
+        return active + sum(
+            1
+            for submission_queue in queues
+            for entry in submission_queue.list()
+            if not entry.terminal
+        )
+
+    def busy(self) -> bool:
+        """Return whether workspace-independent submission work is active."""
+        return self.outstanding() > 0
+
+    def close(self) -> None:
+        """Stop every project queue owned by this registry."""
+        with self._lock:
+            queues = tuple(self._queues.values())
+            self._queues.clear()
+        for submission_queue in queues:
+            submission_queue.stop()
+
+    def _on_queue_change(self, entry: QueuedJob) -> None:
+        """Publish queue state changes through the daemon event hub."""
+        self._publish(_queue_notification(entry))
+
+
 #: Bounded so a long-lived daemon cannot accumulate one entry per name typed.
 RESOLVE_CACHE_MAX = 128
 
@@ -124,6 +207,7 @@ class ContextRegistry:
         self._publish = publish
         self._targets: dict[tuple[str, str], Target] = {}
         self._contexts: dict[tuple[str, str], Context] = {}
+        self._project_submissions = ProjectSubmissions(publish)
         self._lock = threading.Lock()
 
     # ── resolving ────────────────────────────────────────────────────────
@@ -185,17 +269,34 @@ class ContextRegistry:
 
         return WorkspaceAPIFactory().open(target)
 
+    def submit_project(
+        self,
+        payload: dict,
+        *,
+        on_event: Callable[[Any], None] | None = None,
+    ) -> SubmitOutcome:
+        """Submit a payload whose backend does not require a workspace."""
+        return self._project_submissions.submit(payload, on_event=on_event)
+
+    def project_queue(self, root: Path) -> SubmissionQueue:
+        """Return the workspace-independent submission queue for *root*."""
+        return self._project_submissions.queue(root)
+
     # ── lifecycle ────────────────────────────────────────────────────────
 
     def outstanding(self) -> int:
         with self._lock:
             contexts = list(self._contexts.values())
-        return sum(ctx.outstanding() for ctx in contexts)
+        return self._project_submissions.outstanding() + sum(
+            ctx.outstanding() for ctx in contexts
+        )
 
     def busy(self) -> bool:
         with self._lock:
             contexts = list(self._contexts.values())
-        return any(ctx.busy() for ctx in contexts)
+        return self._project_submissions.busy() or any(
+            ctx.busy() for ctx in contexts
+        )
 
     def count(self) -> int:
         with self._lock:
@@ -220,8 +321,14 @@ class ContextRegistry:
             contexts = list(self._contexts.values())
             self._contexts.clear()
             self._targets.clear()
+        self._project_submissions.close()
         for ctx in contexts:
             ctx.close()
 
 
-__all__ = ["CONTEXT_IDLE_TIMEOUT", "Context", "ContextRegistry"]
+__all__ = [
+    "CONTEXT_IDLE_TIMEOUT",
+    "Context",
+    "ContextRegistry",
+    "ProjectSubmissions",
+]

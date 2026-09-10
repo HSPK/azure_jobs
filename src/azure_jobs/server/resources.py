@@ -12,7 +12,7 @@ from contextlib import ExitStack, contextmanager
 from typing import Any
 
 from azure_jobs.server.azure import AzureRangeLogReader
-from azure_jobs.server.submit import load_builtin_backends
+from azure_jobs.server.submit import backend_requires_workspace, load_builtin_backends
 from azure_jobs.shared.contract.models import (
     CatalogItem,
     Cursor,
@@ -143,6 +143,12 @@ class WorkspaceSubmissions:
             error=result.error,
             note=result.note,
         )
+
+
+def submission_requires_workspace(payload: dict) -> bool:
+    """Return whether the payload's registered backend needs a workspace."""
+    service = str(payload.get("service") or "aml").strip().lower()
+    return backend_requires_workspace(service)
 
 
 class WorkspaceLogs:
@@ -480,6 +486,7 @@ __all__ = [
     "WorkspaceLogs",
     "WorkspaceQuota",
     "WorkspaceSubmissions",
+    "submission_requires_workspace",
     "azure_client",
     "catalog_items",
     "image_items",

@@ -51,6 +51,8 @@ aj dash
 
 Use `aj ws set` plus a hand-written `.azure_jobs/template/*.yaml` file instead
 of `aj init` when no shared template repository is available.
+AML and Singularity submissions require that workspace selection; Volcano
+submissions use Kubernetes context from the template or kubeconfig and do not.
 
 ## Core features
 
