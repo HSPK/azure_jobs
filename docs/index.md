@@ -49,6 +49,9 @@ aj ws set
 aj config experiment training
 ```
 
+`aj ws set` is required for AML and Singularity. A Volcano-only project can
+skip it and use the Kubernetes context configured in its template or kubeconfig.
+
 Continue with [Getting started](getting-started.md) for a complete first
 submission and [Templates](templates.md) for copyable YAML.
 

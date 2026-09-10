@@ -26,6 +26,7 @@ from azure_jobs.server.resources import (
     catalog_items,
     image_items,
     jobs_all_workspaces as collect_jobs_all_workspaces,
+    submission_requires_workspace,
     subscription_items,
     workspace_computes as collect_workspace_computes,
 )
@@ -184,6 +185,36 @@ def create_app(state: DaemonState) -> FastAPI:
         than the actionable ``WorkspaceError``.
         """
         return state.contexts.context(_root_of(root), ws)
+
+    def queue_scopes(root: str | None, ws: str) -> tuple[Any, ...]:
+        """Return project and available workspace queues for a client."""
+        root_path = _root_of(root)
+        project_queue = state.contexts.project_queue(root_path)
+        try:
+            workspace_queue = state.contexts.context(root_path, ws).queue
+        except WorkspaceError:
+            return (project_queue,)
+        return (project_queue, workspace_queue)
+
+    def find_queued_entry(
+        root: str | None,
+        ws: str,
+        ticket: str,
+    ) -> tuple[Any | None, Any | None]:
+        """Find a ticket and the queue that owns it."""
+        root_path = _root_of(root)
+        project_queue = state.contexts.project_queue(root_path)
+        entry = project_queue.get(ticket)
+        if entry is not None:
+            return project_queue, entry
+        try:
+            workspace_queue = state.contexts.context(root_path, ws).queue
+        except WorkspaceError:
+            return None, None
+        entry = workspace_queue.get(ticket)
+        if entry is not None:
+            return workspace_queue, entry
+        return None, None
 
     @app.exception_handler(AJError)
     async def _domain_error(request: Request, exc: AJError) -> JSONResponse:
@@ -589,7 +620,7 @@ def create_app(state: DaemonState) -> FastAPI:
         body: dict = Body(...),
         x_aj_root: str | None = Header(default=None, alias=H.ROOT_HEADER),
     ) -> dict:
-        context = ctx(x_aj_root, ws)
+        payload = dict(body.get("payload") or {})
         stream_id = str(body.get("stream") or "")
 
         def relay(event: Any) -> None:
@@ -599,10 +630,18 @@ def create_app(state: DaemonState) -> FastAPI:
                     {"stream": stream_id, "event": event.to_json()},
                 )
 
-        outcome = context.submission.submit(
-            dict(body.get("payload") or {}),
-            on_event=relay if stream_id else None,
-        )
+        on_event = relay if stream_id else None
+        if submission_requires_workspace(payload):
+            outcome = ctx(x_aj_root, ws).submission.submit(
+                payload,
+                on_event=on_event,
+            )
+        else:
+            _root_of(x_aj_root)
+            outcome = state.contexts.submit_project(
+                payload,
+                on_event=on_event,
+            )
         return outcome.to_json()
 
     @app.get("/v2/workspaces/{ws}/queue")
@@ -610,7 +649,13 @@ def create_app(state: DaemonState) -> FastAPI:
         ws: str,
         x_aj_root: str | None = Header(default=None, alias=H.ROOT_HEADER),
     ) -> list[dict]:
-        return [e.to_json() for e in ctx(x_aj_root, ws).queue.list()]
+        entries = [
+            entry
+            for submission_queue in queue_scopes(x_aj_root, ws)
+            for entry in submission_queue.list()
+        ]
+        entries.sort(key=lambda entry: entry.enqueued_at)
+        return [entry.to_json() for entry in entries]
 
     @app.post("/v2/workspaces/{ws}/queue")
     def queue_enqueue(
@@ -618,8 +663,15 @@ def create_app(state: DaemonState) -> FastAPI:
         body: dict = Body(...),
         x_aj_root: str | None = Header(default=None, alias=H.ROOT_HEADER),
     ) -> dict:
-        entry = ctx(x_aj_root, ws).queue.enqueue(
-            dict(body.get("payload") or {}), name=str(body.get("name") or "")
+        payload = dict(body.get("payload") or {})
+        root = _root_of(x_aj_root)
+        if submission_requires_workspace(payload):
+            submission_queue = state.contexts.context(root, ws).queue
+        else:
+            submission_queue = state.contexts.project_queue(root)
+        entry = submission_queue.enqueue(
+            payload,
+            name=str(body.get("name") or ""),
         )
         return entry.to_json()
 
@@ -629,7 +681,7 @@ def create_app(state: DaemonState) -> FastAPI:
         ticket: str,
         x_aj_root: str | None = Header(default=None, alias=H.ROOT_HEADER),
     ) -> dict | None:
-        entry = ctx(x_aj_root, ws).queue.get(ticket)
+        _, entry = find_queued_entry(x_aj_root, ws, ticket)
         if entry is None:
             raise HTTPException(status_code=404, detail=f"No such ticket {ticket!r}")
         return entry.to_json()
@@ -640,7 +692,14 @@ def create_app(state: DaemonState) -> FastAPI:
         ticket: str,
         x_aj_root: str | None = Header(default=None, alias=H.ROOT_HEADER),
     ) -> dict:
-        return {"cancelled": ctx(x_aj_root, ws).queue.cancel(ticket)}
+        submission_queue, entry = find_queued_entry(x_aj_root, ws, ticket)
+        return {
+            "cancelled": bool(
+                submission_queue is not None
+                and entry is not None
+                and submission_queue.cancel(ticket)
+            )
+        }
 
     # ── watches ──────────────────────────────────────────────────────────
 

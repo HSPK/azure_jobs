@@ -35,7 +35,12 @@ def _load_aml_spec(data: dict) -> AmlOpts:
 
 
 for _name, _label in (("aml", "Azure ML"), ("sing", "Singularity")):
-    register_backend(_name, _submit_azureml, label=_label)
+    register_backend(
+        _name,
+        _submit_azureml,
+        label=_label,
+        requires_workspace=True,
+    )
 
 
 __all__ = ["AmlOpts", "resolve_target"]

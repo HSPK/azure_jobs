@@ -65,7 +65,7 @@ Use a private repository when templates contain sensitive resource metadata.
 ### Local-template path
 
 If no shared repository exists, create the project state directory and choose
-a workspace directly:
+a workspace directly for AML or Singularity:
 
 ```bash
 mkdir training && cd training
@@ -73,6 +73,10 @@ mkdir -p .azure_jobs/template
 aj ws set
 aj config experiment training
 ```
+
+Volcano submissions do not require workspace configuration. For a
+Volcano-only project, omit `aj ws set` and select the Kubernetes context in the
+template or kubeconfig.
 
 `aj ws set [NAME]` saves subscription, resource group, and workspace in
 `.azure_jobs/aj_config.json`. Check it with:

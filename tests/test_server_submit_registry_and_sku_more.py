@@ -86,11 +86,28 @@ def test_submit_registry_registers_defaults_sorts_and_reports_known_services(mon
     monkeypatch.setattr(submit_mod, "_REGISTRY", {})
 
     submit_mod.register_backend("zeta", _fake_submit)
-    submit_mod.register_backend("alpha", _fake_submit, label="Alpha Service")
+    submit_mod.register_backend(
+        "alpha",
+        _fake_submit,
+        label="Alpha Service",
+        requires_workspace=True,
+    )
 
     assert submit_mod.get_backend("zeta").label == "zeta"
     assert submit_mod.get_backend("alpha").label == "Alpha Service"
+    assert submit_mod.backend_requires_workspace("zeta") is False
+    assert submit_mod.backend_requires_workspace("alpha") is True
+    assert submit_mod.backend_requires_workspace("missing") is False
     assert submit_mod.known_backends() == ("alpha", "zeta")
+
+
+def test_builtin_backend_workspace_requirements() -> None:
+    submit_mod.load_builtin_backends()
+
+    assert submit_mod.backend_requires_workspace("aml") is True
+    assert submit_mod.backend_requires_workspace("sing") is True
+    assert submit_mod.backend_requires_workspace("volcano") is False
+    assert submit_mod.backend_requires_workspace("amlt") is False
 
 
 @pytest.mark.parametrize(

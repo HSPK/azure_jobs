@@ -21,6 +21,7 @@ class BackendEntry:
     name: str
     fn: SubmitFn
     label: str
+    requires_workspace: bool = False
 
 
 _REGISTRY: dict[str, BackendEntry] = {}
@@ -31,8 +32,20 @@ _BUILTIN_MODULES = (
 )
 
 
-def register_backend(name: str, fn: SubmitFn, *, label: str | None = None) -> None:
-    _REGISTRY[name] = BackendEntry(name=name, fn=fn, label=label or name)
+def register_backend(
+    name: str,
+    fn: SubmitFn,
+    *,
+    label: str | None = None,
+    requires_workspace: bool = False,
+) -> None:
+    """Register an executable backend and its workspace requirement."""
+    _REGISTRY[name] = BackendEntry(
+        name=name,
+        fn=fn,
+        label=label or name,
+        requires_workspace=requires_workspace,
+    )
 
 
 def get_backend(name: str) -> BackendEntry:
@@ -49,6 +62,15 @@ def known_backends() -> tuple[str, ...]:
     return tuple(sorted(_REGISTRY))
 
 
+def backend_requires_workspace(name: str) -> bool:
+    """Return the registered workspace requirement for a backend."""
+    try:
+        entry = get_backend(name)
+    except BackendError:
+        return False
+    return bool(getattr(entry, "requires_workspace", False))
+
+
 def load_builtin_backends() -> None:
     """Import built-in backend packages so their registrations run."""
     import importlib
@@ -63,6 +85,7 @@ __all__ = [
     "JobResult",
     "JobSpec",
     "SubmitFn",
+    "backend_requires_workspace",
     "get_backend",
     "known_backends",
     "load_builtin_backends",
