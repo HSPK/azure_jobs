@@ -3,6 +3,20 @@
 Use this for submission, AML/Sing management, logs, queues, statistics,
 experiments, watches, and dashboard work.
 
+## Routine submission
+
+For an existing template and known configuration, resolve only missing inputs,
+submit with `aj --json run`, return the identity, and stop. An explicit submit
+or queue request needs no second confirmation. Dry-run is optional for
+requested previews or new/changed configuration; monitoring/logs are separate
+actions, not mandatory submission steps. See the short path in
+[the main skill](../SKILL.md#routine-submission-short-path).
+
+Invoke the CLI directly. The removed `run-aj-json.py` wrapper is not needed
+for built-in JSON output; do not recreate it or introduce a `run-as-json.py`
+equivalent. Missing configuration should be resolved through aj commands,
+not a wrapper that bypasses CLI behavior.
+
 ## Run flags
 ```bash
 aj run [OPTIONS] COMMAND [ARGS]...
@@ -93,7 +107,7 @@ aj derives `AJ_TASK_INDEX` from Volcano's `VK_TASK_INDEX`, then exports
 `NODE_RANK` and `RANK` defaults. These are environment variables, not command
 arguments.
 
-Dry run:
+Optional dry run for a requested preview or configuration change:
 
 ```bash
 aj --json run -t TEMPLATE_NAME -d -n 2 -p 8 --ppn 1 \
@@ -107,20 +121,14 @@ aj --json run -t TEMPLATE_NAME -n 2 -p 8 --ppn 1 \
   python train.py --epochs 5
 ```
 
-Queue and capture the ticket:
+Queue and read `ticket` from the JSON response:
 
 ```bash
-AJ_RESULT="$(
-  aj --json run --queue -t TEMPLATE_NAME -n 2 -p 8 --ppn 1 \
-    python train.py --epochs 5
-)"
-printf '%s\n' "$AJ_RESULT"
-TICKET="$(
-  printf '%s' "$AJ_RESULT" |
-    python3 -c 'import json,sys; print(json.load(sys.stdin)["ticket"])'
-)"
-aj queue show "$TICKET"
+aj --json run --queue -t TEMPLATE_NAME -n 2 -p 8 --ppn 1 \
+  python train.py --epochs 5
 ```
+
+Return the ticket without waiting unless monitoring was requested.
 
 Template and shape arguments are never saved by `aj run`.
 
@@ -135,6 +143,10 @@ Arguments are shell-quoted while preserving boundaries; template
 - Use `bash -lc '...'` only for intentional shell composition.
 
 ## Archive preflight
+
+Use on first review of upload inputs or when the code root, ignore rules, or
+SSH policy changed; do not repeat the entire preflight for every routine run.
+
 Native AML/Sing select the working tree with built-ins, template ignores, and
 the root ignore file; create one deterministic archive; upload/reuse the code
 Blob and static bootstrap input; verify SHA-256; extract once; run
