@@ -20,6 +20,9 @@ Operate Azure Jobs conservatively from a local checkout. Prefer implemented
 - There is no supported in-process fallback or remote HTTP/TCP endpoint.
 - Prefer global `aj --json ...` for agent-readable discovery and results. The
   flag must precede the command; do not parse Rich tables when JSON exists.
+- Invoke `aj --json` directly. The old `run-aj-json.py` output wrapper was
+  removed; do not invoke or recreate it (or a `run-as-json.py` equivalent).
+  JSON mode is built into aj and needs no helper script.
 - Reads may be retried when appropriate. Never automatically replay an
   ambiguous mutation.
 
@@ -82,7 +85,76 @@ Enable home SSH shipping only after explicit confirmation.
 
 Do not use `aj job` APIs to manage Volcano.
 
-## Decision workflow
+## Routine submission: short path
+
+Use this path for an existing template. The detailed sections below are
+conditional setup/recovery guidance, not a checklist for every submission.
+
+### 1. Resolve only what is needed
+
+Use the requested or configured template and experiment. Reuse already
+verified context in this conversation when it remains applicable. If unknown,
+inspect only the relevant configuration or merged template:
+
+```bash
+aj --json config show
+aj --json template show TEMPLATE_NAME
+```
+
+Resolve backend/target, AML/Sing workspace, command, and current resource
+shape. Nodes and `-p` must come from this request or explicit template values,
+never a previous run or a guessed `1x1`. `-p` is GPU count for GPU SKUs and a
+CPU size tier for CPU SKUs; `--ppn` controls launcher processes. For
+`_extra.volcano.tasks`, use the YAML topology and omit all three shape flags.
+Set local `AJ_NAME` only when a name base was requested.
+
+Ask once for missing required inputs. Set a missing experiment only after its
+value is supplied or clearly implied; do not overwrite an existing experiment.
+Honor the SSH safety gate above for native AML/Sing.
+
+Do not routinely list all templates, workspaces, quotas, SKUs, or images, check
+auth/version, validate an unchanged template, restart a healthy daemon, or run
+code statistics. Use those checks only for first-time setup, relevant changes,
+uncertainty, or a concrete error. Inspect upload inputs/ignores when the code
+root or ignore rules changed or have not yet been reviewed.
+
+Dry-run is optional: use it when requested or when a new/changed template,
+topology, or command composition needs inspection. Read the Volcano reference
+for first-time Kubernetes submission or relevant cluster/upload changes.
+
+### 2. Submit directly
+
+An explicit request to submit or queue already authorizes that exact action;
+do not add a second confirmation. Otherwise summarize the intended action in
+one line and obtain confirmation. Never silently change resources or backend.
+
+```bash
+AJ_NAME=TRAIN_NAME aj --json run -t TEMPLATE_NAME -n 1 -p 1 --ppn 1 \
+  python train.py
+```
+
+For queued mode, add `--queue` to the same invocation. Read `ticket` directly
+from the JSON response; no temporary file or Python wrapper is needed.
+All aj flags precede `COMMAND`. The example shape is illustrative, not a
+default. Omit `AJ_NAME` and `--ppn` when their configured/default behavior is
+appropriate.
+
+### 3. Return the submission identity and stop
+
+Capture AJ ID, cloud job name and portal URL, or the queue ticket. For AML/Sing,
+retain the resolved template/compute workspace for later `--ws` operations.
+For Volcano, use returned `azure_name` as the Kubernetes resource name.
+Return a concise result. Do not poll, wait for completion, fetch logs, or clean
+up unless requested or needed to investigate a reported failure. A queue
+ticket means queued, not remotely submitted.
+
+If the response is ambiguous, reconcile before retrying using the recovery
+section below; never blindly replay a mutation.
+
+## Conditional setup and recovery
+
+Consult only the sections relevant to a missing prerequisite or changed
+configuration. These are not mandatory steps on the short path.
 
 ### 1. Inspect local context
 
@@ -111,7 +183,8 @@ Python 3.10+ is required. If authentication is missing, have the user complete
 `az login`; never request credentials. Then verify the daemon's credential
 with `aj --json auth status`.
 
-Before JSON submit/queue, ensure an experiment is configured:
+If no experiment is configured, set the supplied or agreed value before
+JSON submit/queue:
 
 ```bash
 aj --json config experiment EXPERIMENT
@@ -179,7 +252,7 @@ aj --json image list
 ```
 
 Run only backend-relevant discovery. Volcano uses the preflight in its
-reference. Render without upload/submission:
+reference. When a preview is needed, render without upload/submission:
 
 For homogeneous jobs, nodes and the per-node SKU process selector must come
 from this command or explicit `jobs[0].instance_count` and
@@ -225,8 +298,9 @@ Do not invent or transfer flags between command groups. In particular,
 State the requested name base and resolved job name, backend/target, template,
 experiment, command, nodes, SKU processes per node, launcher processes per
 node, image, storage, identity, code size/ignores, expected quota/queue behavior, and
-direct-versus-queued mode. Obtain confirmation if submission or queueing was
-not already explicitly requested.
+direct-versus-queued mode when establishing or changing a submission
+configuration. For routine submission, keep the summary to one line; obtain
+confirmation only if submission or queueing was not already explicitly requested.
 
 ### 6. Submit and capture identity
 
@@ -240,18 +314,12 @@ AJ_NAME=TRAIN_NAME aj --json run -t TEMPLATE_NAME -n 1 -p 1 --ppn 1 \
 Queued:
 
 ```bash
-AJ_RESULT="$(
-  AJ_NAME=TRAIN_NAME aj --json run --queue \
-    -t TEMPLATE_NAME -n 1 -p 1 --ppn 1 \
-    python train.py
-)"
-printf '%s\n' "$AJ_RESULT"
-TICKET="$(
-  printf '%s' "$AJ_RESULT" |
-    python3 -c 'import json,sys; print(json.load(sys.stdin)["ticket"])'
-)"
-aj queue show "$TICKET"
+AJ_NAME=TRAIN_NAME aj --json run --queue \
+  -t TEMPLATE_NAME -n 1 -p 1 --ppn 1 \
+  python train.py
 ```
+
+Read `ticket` from the JSON response; query it only when tracking is requested.
 
 Capture the eight-character `sid`/AJ ID, cloud job name, portal URL, resolved
 workspace when available, or ticket. For AML/Sing, record the template/compute
@@ -260,6 +328,8 @@ Volcano, capture returned `azure_name`, which is the generated Kubernetes
 resource name; the normalized stem is not the full name.
 
 ### 7. Poll and read logs
+
+Only when the user requests monitoring/logs or diagnosis requires them.
 
 AML/Sing:
 

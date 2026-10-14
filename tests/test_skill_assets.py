@@ -43,6 +43,28 @@ def test_skill_only_bundles_the_kubectl_retry_helper() -> None:
     }
 
 
+def test_skill_documents_direct_routine_submission() -> None:
+    main = (SKILL / "SKILL.md").read_text(encoding="utf-8")
+    operations = (SKILL / "references/job-operations.md").read_text(
+        encoding="utf-8"
+    )
+    short_path = main.split("## Routine submission: short path\n", 1)[1].split(
+        "## Conditional setup and recovery\n", 1
+    )[0]
+
+    assert "Dry-run is optional" in short_path
+    assert "do not add a second confirmation" in short_path
+    assert "Do not poll" in short_path
+    assert "never a previous run or a guessed `1x1`" in short_path
+    assert "Honor the SSH safety gate" in short_path
+    assert "aj --json run" in short_path
+    for document in (main, operations):
+        assert "run-aj-json.py" in document
+        assert "run-as-json.py" in document
+        assert "python3 <SKILL_DIR>" not in document
+        assert "AJ_RESULT=" not in document
+
+
 def test_skill_documents_job_naming_and_runtime_environment() -> None:
     main = (SKILL / "SKILL.md").read_text(encoding="utf-8")
     operations = (SKILL / "references/job-operations.md").read_text(
