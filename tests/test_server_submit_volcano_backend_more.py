@@ -391,6 +391,35 @@ def test_build_volcano_job_adds_affinity_priority_env_and_blob_mount() -> None:
     assert "python train.py" in script
 
 
+@pytest.mark.parametrize("nodes", [1, 3])
+@pytest.mark.parametrize(
+    "labels",
+    [{}, {"submitter": "test-user", "app": "custom-app", "role": "custom-role"}],
+)
+def test_target_labels_reach_all_pod_templates(nodes, labels) -> None:
+    cfg = VolcanoConfig(name="label-test", image="image", nodes=nodes, labels=labels)
+    job = build_volcano_job(cfg, namespace="training")
+
+    assert job["metadata"]["labels"] == {**labels, "app": "label-test"}
+    assert len(job["spec"]["tasks"]) == (1 if nodes == 1 else 2)
+    for task in job["spec"]["tasks"]:
+        assert task["template"]["metadata"]["labels"] == {
+            **labels,
+            "app": "label-test",
+            "role": task["name"],
+        }
+    assert cfg.labels == labels
+    job["spec"]["tasks"][0]["template"]["metadata"]["labels"]["submitter"] = "changed"
+    assert cfg.labels == labels
+    assert job["metadata"]["labels"] == {**labels, "app": "label-test"}
+    if nodes > 1:
+        assert job["spec"]["tasks"][1]["template"]["metadata"]["labels"] == {
+            **labels,
+            "app": "label-test",
+            "role": "worker",
+        }
+
+
 def test_nested_runtime_without_blob_adds_capabilities_only() -> None:
     cfg = VolcanoConfig(
         name="nested",

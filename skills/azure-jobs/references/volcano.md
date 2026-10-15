@@ -24,6 +24,9 @@ target:
 - `gpus_per_node: 0` is CPU-only. RDMA defaults off for CPU-only and on for GPU
   unless explicit.
 - `target.name` is not a Kubernetes compute name.
+- `target.labels` applies to both the Job and every task's Pod template,
+  including heterogeneous tasks. Generated `app` labels take precedence;
+  each Pod's `role` is always its task name.
 
 See [templates](templates.md) for a complete leaf.
 
