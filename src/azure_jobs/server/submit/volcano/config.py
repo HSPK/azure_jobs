@@ -572,6 +572,7 @@ def build_volcano_job(
                     "template": {
                         "metadata": {
                             "labels": {
+                                **cfg.labels,
                                 "app": app_label,
                                 "role": task.name,
                             },
@@ -588,6 +589,7 @@ def build_volcano_job(
                 "template": {
                     "metadata": {
                         "labels": {
+                            **cfg.labels,
                             "app": app_label,
                             "role": C.TASK_MASTER,
                         },
@@ -604,6 +606,7 @@ def build_volcano_job(
                     "template": {
                         "metadata": {
                             "labels": {
+                                **cfg.labels,
                                 "app": app_label,
                                 "role": C.TASK_WORKER,
                             },

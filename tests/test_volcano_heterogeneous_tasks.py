@@ -40,6 +40,11 @@ def _heterogeneous_config() -> dict:
             "namespace": "training",
             "queue": "default",
             "context": "cluster-a",
+            "labels": {
+                "submitter": "test-user",
+                "app": "custom-app",
+                "role": "custom-role",
+            },
         },
         "environment": {
             "image": "common-runtime:latest",
@@ -300,6 +305,17 @@ def test_manifest_expands_independent_pod_specs(tmp_path: Path) -> None:
         "h100-worker",
     ]
     assert [task["replicas"] for task in job["spec"]["tasks"]] == [1, 2, 4]
+    assert job["metadata"]["labels"] == {
+        "submitter": "test-user",
+        "app": "heterogeneous-job",
+        "role": "custom-role",
+    }
+    for task in job["spec"]["tasks"]:
+        assert task["template"]["metadata"]["labels"] == {
+            "submitter": "test-user",
+            "app": "heterogeneous-job",
+            "role": task["name"],
+        }
 
     master_pod = _task(job, "master")["template"]["spec"]
     a100_pod = _task(job, "a100-worker")["template"]["spec"]
