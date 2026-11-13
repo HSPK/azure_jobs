@@ -110,6 +110,7 @@ class VolcanoConfig:
     capabilities: list[str] = field(default_factory=list)
     scratch_mount_path: str = ""
     scratch_size: str = ""
+    excluded_nodes: list[str] = field(default_factory=list)
     tasks: list[VolcanoTaskConfig] = field(default_factory=list)
 
 
@@ -142,6 +143,13 @@ def build_volcano_config_from_request(request: JobSpec) -> VolcanoConfig:
 
     pvc_name = env_vars.get("AMLT_PERSISTENT_VOLUME_NAME", "")
     pvc_mount_dir = env_vars.get("AMLT_PERSISTENT_VOLUME_MOUNT_DIR", "")
+    excluded_nodes = list(
+        dict.fromkeys(
+            node.strip()
+            for node in env_vars.get("AMLT_EXCLUDED_NODE_LIST", "").split(",")
+            if node.strip()
+        )
+    )
 
     # A template that omits the GPU count keeps the requested process count, so
     # existing GPU templates are unaffected, while an explicit 0 now survives
@@ -190,6 +198,7 @@ def build_volcano_config_from_request(request: JobSpec) -> VolcanoConfig:
         capabilities=list(vol.capabilities),
         scratch_mount_path=vol.scratch_mount_path,
         scratch_size=vol.scratch_size,
+        excluded_nodes=excluded_nodes,
         tasks=tasks,
     )
 
@@ -544,19 +553,36 @@ def build_volcano_job(
             "containers": [container],
         }
 
+        affinity: dict[str, Any] = {}
         if cfg.nodes > 1:
-            pod_spec["affinity"] = {
-                "podAntiAffinity": {
-                    "requiredDuringSchedulingIgnoredDuringExecution": [
+            affinity["podAntiAffinity"] = {
+                "requiredDuringSchedulingIgnoredDuringExecution": [
+                    {
+                        "labelSelector": {
+                            "matchLabels": {"app": app_label},
+                        },
+                        "topologyKey": C.NODE_TOPOLOGY_KEY,
+                    }
+                ]
+            }
+        if cfg.excluded_nodes:
+            affinity["nodeAffinity"] = {
+                "requiredDuringSchedulingIgnoredDuringExecution": {
+                    "nodeSelectorTerms": [
                         {
-                            "labelSelector": {
-                                "matchLabels": {"app": app_label},
-                            },
-                            "topologyKey": C.NODE_TOPOLOGY_KEY,
+                            "matchExpressions": [
+                                {
+                                    "key": C.NODE_TOPOLOGY_KEY,
+                                    "operator": "NotIn",
+                                    "values": list(cfg.excluded_nodes),
+                                }
+                            ]
                         }
                     ]
                 }
             }
+        if affinity:
+            pod_spec["affinity"] = affinity
         if task is not None and task.node_selector:
             pod_spec["nodeSelector"] = dict(task.node_selector)
 

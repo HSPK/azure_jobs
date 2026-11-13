@@ -75,6 +75,7 @@ def _request(**overrides) -> JobSpec:
         "env_vars": {
             "AMLT_PERSISTENT_VOLUME_NAME": "shared-pvc",
             "AMLT_PERSISTENT_VOLUME_MOUNT_DIR": "/mnt/pvc",
+            "AMLT_EXCLUDED_NODE_LIST": "node-a, node-b,node-a,,",
             "TOKEN": "secret",
         },
         "code_dir": "",
@@ -154,6 +155,7 @@ def test_build_volcano_config_maps_container_defaults_and_storage(monkeypatch) -
     assert cfg.code_ignore == ["*.tmp"]
     assert cfg.pvc_name == "shared-pvc"
     assert cfg.pvc_mount_dir == "/mnt/pvc"
+    assert cfg.excluded_nodes == ["node-a", "node-b"]
     assert cfg.storage["data"].container_name == "cont"
     assert cfg.setup_commands == ["echo setup"]
     assert cfg.capabilities == ["SYS_ADMIN"]
@@ -337,6 +339,7 @@ def test_build_volcano_job_adds_affinity_priority_env_and_blob_mount() -> None:
         capabilities=["SYS_ADMIN"],
         scratch_mount_path="/var/lib/containers",
         scratch_size="200Gi",
+        excluded_nodes=["node-a", "node-b"],
     )
 
     with patch.object(config_mod, "resolve_namespace", return_value="ns-a") as resolve_ns:
@@ -363,6 +366,14 @@ def test_build_volcano_job_adds_affinity_priority_env_and_blob_mount() -> None:
         "privileged": True,
     }
     assert pod["affinity"]["podAntiAffinity"]["requiredDuringSchedulingIgnoredDuringExecution"][0]["topologyKey"]
+    node_expression = pod["affinity"]["nodeAffinity"][
+        "requiredDuringSchedulingIgnoredDuringExecution"
+    ]["nodeSelectorTerms"][0]["matchExpressions"][0]
+    assert node_expression == {
+        "key": "kubernetes.io/hostname",
+        "operator": "NotIn",
+        "values": ["node-a", "node-b"],
+    }
     assert any(volume["name"] == "blob-secret" for volume in pod["volumes"])
     assert any(volume["name"] == "pvc-data" for volume in pod["volumes"])
     shm = next(volume for volume in pod["volumes"] if volume["name"] == "dshm")
