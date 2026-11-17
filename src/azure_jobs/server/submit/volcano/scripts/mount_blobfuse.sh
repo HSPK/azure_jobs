@@ -16,9 +16,13 @@
 # Placeholders (rendered by storage.py):
 #   {REFRESH_SECONDS} — seconds between credential re-reads; 0 disables.
 #   {BLOBFUSE_VERSION} — blobfuse2 release to install.
+#   {TEMP_DIR}, {CACHE_DIR} — shell-quoted temporary and cache directories.
+#   {PIN_VERSION}, {BLOBFUSE_VERSION_RE} — optional exact-version check.
 
 _aj_log() { echo "[aj-blob] $*"; }
 _aj_warn() { echo "[aj-blob] $*" >&2; }
+_aj_temp_dir={TEMP_DIR}
+_aj_cache_root={CACHE_DIR}
 
 # Download to $2 from $1 using whichever client the image happens to ship.
 _aj_fetch() {
@@ -142,7 +146,7 @@ _aj_install_prereqs() {
 # it links against was handled above.
 _aj_extract_package() {
     _aj_pkg="$1"
-    _aj_dir="$(mktemp -d)"
+    _aj_dir="$(mktemp -d "$_aj_temp_dir/aj-blobfuse-XXXXXX")"
     case "$_aj_pkg" in
         *.deb)
             # ar may be absent, or present but unable to read the archive, so
@@ -196,7 +200,7 @@ AJ_PY
 
     _aj_bin="$(find "$_aj_dir" -type f -name blobfuse2 -perm -u+x -print -quit)"
     [ -n "$_aj_bin" ] || return 1
-    for _aj_target in /usr/local/bin /usr/bin "$HOME/.local/bin" /tmp/aj-bin; do
+    for _aj_target in /usr/local/bin /usr/bin "$HOME/.local/bin" "$_aj_temp_dir/aj-bin"; do
         mkdir -p "$_aj_target" 2>/dev/null || continue
         if cp "$_aj_bin" "$_aj_target/blobfuse2" 2>/dev/null; then
             chmod 0755 "$_aj_target/blobfuse2"
@@ -212,8 +216,16 @@ AJ_PY
     return 1
 }
 
+_aj_blobfuse_matches() {
+    command -v blobfuse2 >/dev/null 2>&1 || return 1
+    [ "{PIN_VERSION}" -eq 0 ] && return 0
+    blobfuse2 --version 2>/dev/null |
+        grep -Eq '(^|[[:space:]]){BLOBFUSE_VERSION_RE}([[:space:]]|$)'
+}
+
 _aj_install_blobfuse2() {
-    command -v blobfuse2 >/dev/null 2>&1 && return 0
+    _aj_blobfuse_matches && return 0
+    mkdir -p "$_aj_temp_dir" || return 1
 
     _aj_asset="$(_aj_blobfuse_asset)" || {
         _aj_warn "unsupported distribution or architecture for blobfuse2"
@@ -222,7 +234,7 @@ _aj_install_blobfuse2() {
     _aj_log "installing blobfuse2 {BLOBFUSE_VERSION} ($_aj_asset)"
     _aj_install_prereqs
 
-    _aj_pkg="/tmp/${_aj_asset}"
+    _aj_pkg="$_aj_temp_dir/${_aj_asset}"
     _aj_url="https://github.com/Azure/azure-storage-fuse/releases/download/blobfuse2-{BLOBFUSE_VERSION}/${_aj_asset}"
     _aj_fetch "$_aj_url" "$_aj_pkg" || return 1
 
@@ -248,19 +260,25 @@ _aj_install_blobfuse2() {
             ;;
     esac
 
-    command -v blobfuse2 >/dev/null 2>&1 || _aj_extract_package "$_aj_pkg" || true
+    _aj_blobfuse_matches || _aj_extract_package "$_aj_pkg" || true
     rm -f "$_aj_pkg"
 
-    if command -v blobfuse2 >/dev/null 2>&1; then
+    if _aj_blobfuse_matches; then
         _aj_log "blobfuse2 ready: $(blobfuse2 --version 2>/dev/null | head -n1)"
         return 0
     fi
-    _aj_warn "blobfuse2 installation failed"
+    _aj_warn "blobfuse2 installation failed or the requested version was not installed"
     return 1
 }
 
 # Write the config blobfuse2 reads. Called again on every refresh so a replaced
 # credential reaches the running mount.
+_aj_yaml_path() {
+    _aj_yaml_value="${1//\\/\\\\}"
+    _aj_yaml_value="${_aj_yaml_value//\"/\\\"}"
+    printf '"%s"' "$_aj_yaml_value"
+}
+
 _aj_write_config() {
     # $1 config path, $2 cache dir, $3 account, $4 container, $5 sas file
     _aj_sas="$(tr -d ' \t\r\n' <"$5" 2>/dev/null)"
@@ -271,11 +289,11 @@ _aj_write_config() {
     cat >"$1" <<AJ_BLOBFUSE_CFG
 logging:
   type: base
-  file-path: /tmp/aj-blobfuse-$3-$4.log
+  file-path: $(_aj_yaml_path "$_aj_temp_dir/aj-blobfuse-$3-$4.log")
   level: log_warning
 components: [libfuse, file_cache, attr_cache, azstorage]
 file_cache:
-  path: $2
+  path: $(_aj_yaml_path "$2")
   timeout-sec: 120
   allow-non-empty-temp: true
   sync-to-flush: true
@@ -324,9 +342,9 @@ _aj_blob_mount() {
         return 1
     fi
 
-    _aj_cache="/tmp/aj-blobfuse-cache/$_aj_id"
-    _aj_cfg="/tmp/aj-blobfuse-$_aj_id.yaml"
-    mkdir -p "$_aj_dir" "$_aj_cache"
+    _aj_cache="$_aj_cache_root/$_aj_id"
+    _aj_cfg="$_aj_temp_dir/aj-blobfuse-$_aj_id.yaml"
+    mkdir -p "$_aj_temp_dir" "$_aj_dir" "$_aj_cache"
     # NFS-Ganesha and blobfuse2 both consult /etc/mtab to detect FUSE mounts.
     [ -e /etc/mtab ] || ln -sf /proc/mounts /etc/mtab 2>/dev/null || true
 
@@ -353,8 +371,8 @@ _aj_blob_mount() {
     done
     if [ "$_aj_ready" -ne 1 ]; then
         _aj_warn "mount did not appear for $_aj_account/$_aj_container at $_aj_dir"
-        [ -f "/tmp/aj-blobfuse-$_aj_account-$_aj_container.log" ] &&
-            tail -n 50 "/tmp/aj-blobfuse-$_aj_account-$_aj_container.log" >&2
+        [ -f "$_aj_temp_dir/aj-blobfuse-$_aj_account-$_aj_container.log" ] &&
+            tail -n 50 "$_aj_temp_dir/aj-blobfuse-$_aj_account-$_aj_container.log" >&2
         return 1
     fi
     _aj_log "mounted $_aj_account/$_aj_container at $_aj_dir"

@@ -32,10 +32,11 @@ class _SecretCleanup:
     name: str = ""
     namespace: str = ""
     context: str = ""
+    timeout: float = 60
 
 
 def _apply_blob_secret(
-    plan: BlobMountPlan, namespace: str, context: str
+    plan: BlobMountPlan, namespace: str, context: str, *, timeout: float = 60
 ) -> None:
     """Create or update the Secret holding this job's SAS tokens.
 
@@ -52,7 +53,7 @@ def _apply_blob_secret(
         cmd.extend(["--context", context])
     try:
         result = subprocess.run(
-            cmd, input=manifest, capture_output=True, text=True, timeout=60
+            cmd, input=manifest, capture_output=True, text=True, timeout=timeout
         )
     except subprocess.TimeoutExpired as exc:
         raise BlobMountError(
@@ -65,6 +66,7 @@ def _apply_blob_secret(
         )
 
 log = logging.getLogger(__name__)
+
 
 _CREATED_JOB_RE = re.compile(
     r"\bjob(?:\.batch(?:\.volcano\.sh)?)?/([^\s]+)\s+"
@@ -98,7 +100,9 @@ def _discard_blob_secret(cleanup: _SecretCleanup) -> None:
     if cleanup.context:
         cmd.extend(["--context", cleanup.context])
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=cleanup.timeout
+        )
     except Exception as exc:
         log.exception("Failed to delete orphaned blob Secret %s", cleanup.name)
         log.error(
@@ -173,7 +177,9 @@ def _submit_via_volcano(
         )
 
     try:
-        blob_plan = build_blob_mount_plan(cfg.storage, cfg.name)
+        blob_plan = build_blob_mount_plan(
+            cfg.storage, cfg.name, settings=cfg.settings
+        )
     except AJError as exc:
         emit(JobEvent(kind="error", detail=str(exc)))
         return JobResult(
@@ -189,8 +195,12 @@ def _submit_via_volcano(
         cleanup.name = blob_plan.secret_name
         cleanup.namespace = namespace
         cleanup.context = cfg.context
+        cleanup.timeout = cfg.settings.kubectl_timeouts.secret_delete
         try:
-            _apply_blob_secret(blob_plan, namespace, cfg.context)
+            _apply_blob_secret(
+                blob_plan, namespace, cfg.context,
+                timeout=cfg.settings.kubectl_timeouts.secret_apply,
+            )
         except AJError as exc:
             emit(JobEvent(kind="error", detail=str(exc)))
             return JobResult(
@@ -288,7 +298,7 @@ def _submit_via_volcano(
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=30,
+                timeout=cfg.settings.kubectl_timeouts.create,
             )
         except subprocess.TimeoutExpired as exc:
             log.exception(

@@ -14,6 +14,8 @@ from typing import Any
 from azure_jobs.shared.job.spec import JobSpec
 from azure_jobs.shared.job.command import PRELUDE_COMMANDS
 from azure_jobs.shared.utils.naming import sanitize_dns1035
+from azure_jobs.shared.opts.volcano_runtime import parse_workdir_mount_path
+from azure_jobs.shared.opts.volcano_backend import VolcanoBackendOpts
 from . import constants as C
 from ._scripts import load_script
 from .storage import BlobMountPlan
@@ -27,7 +29,10 @@ def _load_distributed_preamble(nodes: int) -> list[str]:
     text = text.replace("{WORLD_SIZE_DEFAULT}", str(nodes))
     return text.splitlines()
 
-def _kubectl_namespace(context: str = "") -> str:
+def _kubectl_namespace(
+    context: str = "", *, timeout: float = C.KUBECTL_NAMESPACE_TIMEOUT
+) -> str:
+    """Read the selected context's namespace within the configured deadline."""
     cmd = [
         "kubectl",
         "config",
@@ -40,7 +45,7 @@ def _kubectl_namespace(context: str = "") -> str:
         cmd.extend(["--context", context])
     try:
         out = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=C.KUBECTL_NAMESPACE_TIMEOUT
+            cmd, capture_output=True, text=True, timeout=timeout
         )
     except Exception:
         log.debug(
@@ -76,6 +81,7 @@ class VolcanoTaskConfig:
     node_selector: dict[str, str]
     rank_base: int
     shm_size: str = ""
+    workdir_mount_path: str = ""
     capabilities: list[str] = field(default_factory=list)
     scratch_mount_path: str = ""
     scratch_size: str = ""
@@ -100,8 +106,10 @@ class VolcanoConfig:
     env_vars: dict[str, str] = field(default_factory=dict)
     rdma: bool = True
     shm_size: str = ""
+    workdir_mount_path: str = ""
     priority_class: str = ""
     labels: dict[str, str] = field(default_factory=dict)
+    settings: VolcanoBackendOpts = field(default_factory=VolcanoBackendOpts)
     code_dir: str = ""
     code_ignore: list[str] = field(default_factory=list)
     pvc_name: str = ""
@@ -188,8 +196,10 @@ def build_volcano_config_from_request(request: JobSpec) -> VolcanoConfig:
         env_vars=env_vars,
         rdma=rdma,
         shm_size=vol.shm_size,
+        workdir_mount_path=vol.workdir_mount_path,
         priority_class=vol.priority_class,
         labels=dict(vol.labels),
+        settings=vol.settings,
         code_dir=code_dir,
         code_ignore=list(request.code_ignore),
         pvc_name=pvc_name,
@@ -275,6 +285,7 @@ def _resolve_tasks(
                 node_selector=dict(task.node_selector),
                 rank_base=rank_base,
                 shm_size=task.shm_size,
+                workdir_mount_path=task.workdir_mount_path,
                 capabilities=list(task.capabilities),
                 scratch_mount_path=task.scratch_mount_path,
                 scratch_size=task.scratch_size,
@@ -290,23 +301,29 @@ def resolve_namespace(cfg: VolcanoConfig) -> str:
     before rendering a full Volcano Job spec — they need it for upload-pod
     placement, which happens *before* the job spec is built.
     """
-    return cfg.namespace or _kubectl_namespace(cfg.context)
+    return cfg.namespace or _kubectl_namespace(
+        cfg.context, timeout=cfg.settings.kubectl_timeouts.namespace
+    )
 
 
-def _validate_scratch_mount_conflicts(
+def _validate_mount_conflicts(
     cfg: VolcanoConfig,
     blob_plan: BlobMountPlan | None,
     code_path: str,
-    scratch_mount_path: str,
+    mount_path: str,
+    *,
+    field_name: str,
+    other_mount_paths: tuple[str, ...] = (),
 ) -> None:
+    """Reject mount paths that hide other mounts or the uploaded code."""
     from azure_jobs.shared.errors import ConfigError
 
-    scratch = PurePosixPath(scratch_mount_path)
+    mount = PurePosixPath(mount_path)
     occupied = [
         C.SHM_MOUNT_PATH,
-        C.WORKDIR_MOUNT_PATH,
         cfg.pvc_mount_dir,
         code_path,
+        *other_mount_paths,
     ]
     occupied.extend(
         str(getattr(storage, "mount_dir", "") or "")
@@ -323,10 +340,10 @@ def _validate_scratch_mount_conflicts(
         if not raw:
             continue
         path = PurePosixPath(raw)
-        if scratch == path or scratch in path.parents or path in scratch.parents:
+        if mount == path or mount in path.parents or path in mount.parents:
             raise ConfigError(
-                "Volcano scratch_mount_path conflicts with another mount: "
-                f"{scratch_mount_path} overlaps {raw}."
+                f"Volcano {field_name} conflicts with another mount: "
+                f"{mount_path} overlaps {raw}."
             )
 
 
@@ -354,6 +371,17 @@ def build_volcano_job(
     """
     job_name = sanitize_dns1035(cfg.name, max_length=C.JOB_NAME_MAX_LEN)
     app_label = job_name
+    settings = cfg.settings
+    scheduling = settings.scheduling
+    min_available = scheduling.min_available
+    if min_available is None:
+        min_available = cfg.nodes
+    if min_available > cfg.nodes:
+        from azure_jobs.shared.errors import ConfigError
+
+        raise ConfigError(
+            "Volcano scheduling.min_available cannot exceed the Pod count."
+        )
 
     if code_path is None:
         code_path = (
@@ -369,17 +397,6 @@ def build_volcano_job(
         script_prefix.extend(blob_plan.setup_lines())
     if code_setup_lines:
         script_prefix.extend(code_setup_lines)
-    if code_path:
-        run_wd = f"{C.WORKDIR_MOUNT_PATH}/{code_asset_name(cfg.name)}/wd"
-        script_prefix.extend(
-            [
-                f"AJ_WORKDIR={shlex.quote(run_wd)}",
-                'mkdir -p "$AJ_WORKDIR"',
-                f"cp -a {shlex.quote(code_path)}/. \"$AJ_WORKDIR\"/",
-                'cd "$AJ_WORKDIR"',
-                "export AJ_WORKDIR",
-            ]
-        )
 
     def _make_pod_spec(
         role: str,
@@ -394,13 +411,46 @@ def build_volcano_job(
         command = task.command if task else cfg.command
         env_vars = task.env_vars if task else cfg.env_vars
         shm_size = task.shm_size if task else cfg.shm_size
+        workdir_mount_path = parse_workdir_mount_path(
+            (task.workdir_mount_path or cfg.workdir_mount_path)
+            if task
+            else cfg.workdir_mount_path
+        ) or C.WORKDIR_MOUNT_PATH
         capabilities = task.capabilities if task else cfg.capabilities
         scratch_mount_path = (
             task.scratch_mount_path if task else cfg.scratch_mount_path
         )
         scratch_size = task.scratch_size if task else cfg.scratch_size
 
+        if scratch_mount_path:
+            _validate_mount_conflicts(
+                cfg,
+                blob_plan,
+                code_path,
+                scratch_mount_path,
+                field_name="scratch_mount_path",
+                other_mount_paths=(workdir_mount_path,),
+            )
+        _validate_mount_conflicts(
+            cfg,
+            blob_plan,
+            code_path,
+            workdir_mount_path,
+            field_name="workdir_mount_path",
+        )
+
         script_lines = list(script_prefix)
+        if code_path:
+            run_wd = f"{workdir_mount_path}/{code_asset_name(cfg.name)}/wd"
+            script_lines.extend(
+                [
+                    f"AJ_WORKDIR={shlex.quote(run_wd)}",
+                    'mkdir -p "$AJ_WORKDIR"',
+                    f"cp -a {shlex.quote(code_path)}/. \"$AJ_WORKDIR\"/",
+                    'cd "$AJ_WORKDIR"',
+                    "export AJ_WORKDIR",
+                ]
+            )
         if task is not None:
             script_lines.extend(
                 load_script(
@@ -429,8 +479,10 @@ def build_volcano_job(
             resources["requests"][C.GPU_RESOURCE_KEY] = str(gpus_per_node)
             resources["limits"][C.GPU_RESOURCE_KEY] = str(gpus_per_node)
         if rdma:
-            resources["requests"][C.RDMA_RESOURCE_KEY] = C.RDMA_RESOURCE_VALUE
-            resources["limits"][C.RDMA_RESOURCE_KEY] = C.RDMA_RESOURCE_VALUE
+            for resource_set in resources.values():
+                resource_set[settings.rdma.resource_name] = str(
+                    settings.rdma.resource_count
+                )
         if scratch_size:
             resources["requests"]["ephemeral-storage"] = scratch_size
             resources["limits"]["ephemeral-storage"] = scratch_size
@@ -451,7 +503,7 @@ def build_volcano_job(
         if rdma:
             tolerations.append(
                 {
-                    "key": C.RDMA_TAINT_KEY,
+                    "key": settings.rdma.taint_key,
                     "operator": "Exists",
                     "effect": "NoSchedule",
                 }
@@ -467,14 +519,14 @@ def build_volcano_job(
             },
             {
                 "name": C.WORKDIR_VOLUME_NAME,
-                "emptyDir": {"sizeLimit": C.WORKDIR_VOLUME_SIZE},
+                "emptyDir": {},
             },
         ]
         volume_mounts: list[dict[str, Any]] = [
             {"name": C.SHM_VOLUME_NAME, "mountPath": C.SHM_MOUNT_PATH},
             {
                 "name": C.WORKDIR_VOLUME_NAME,
-                "mountPath": C.WORKDIR_MOUNT_PATH,
+                "mountPath": workdir_mount_path,
             },
         ]
 
@@ -496,12 +548,6 @@ def build_volcano_job(
             volumes.append(blob_plan.volume())
 
         if scratch_mount_path:
-            _validate_scratch_mount_conflicts(
-                cfg,
-                blob_plan,
-                code_path,
-                scratch_mount_path,
-            )
             scratch: dict[str, Any] = {}
             if scratch_size:
                 scratch["sizeLimit"] = scratch_size
@@ -521,7 +567,7 @@ def build_volcano_job(
         container: dict[str, Any] = {
             "name": role,
             "image": image,
-            "command": ["/bin/bash", "-lc"],
+            "command": list(settings.runtime.shell),
             "args": [f"set -eo pipefail\n{script}"],
             "resources": resources,
             "volumeMounts": list(volume_mounts),
@@ -542,29 +588,33 @@ def build_volcano_job(
             container["securityContext"] = security_context
         if rdma:
             container["ports"] = [
-                {"name": C.RDMA_PORT_NAME, "containerPort": C.RDMA_PORT}
+                {"name": C.RDMA_PORT_NAME, "containerPort": settings.rdma.port}
             ]
 
         pod_spec: dict[str, Any] = {
-            "schedulerName": C.SCHEDULER_NAME,
-            "restartPolicy": "Never",
+            "schedulerName": scheduling.scheduler_name,
+            "restartPolicy": settings.runtime.restart_policy,
             "volumes": list(volumes),
             "tolerations": tolerations,
             "containers": [container],
         }
 
         affinity: dict[str, Any] = {}
-        if cfg.nodes > 1:
-            affinity["podAntiAffinity"] = {
-                "requiredDuringSchedulingIgnoredDuringExecution": [
-                    {
-                        "labelSelector": {
-                            "matchLabels": {"app": app_label},
-                        },
-                        "topologyKey": C.NODE_TOPOLOGY_KEY,
-                    }
-                ]
+        if cfg.nodes > 1 and scheduling.pod_anti_affinity != "none":
+            term = {
+                "labelSelector": {"matchLabels": {"app": app_label}},
+                "topologyKey": scheduling.topology_key,
             }
+            if scheduling.pod_anti_affinity == "required":
+                affinity["podAntiAffinity"] = {
+                    "requiredDuringSchedulingIgnoredDuringExecution": [term]
+                }
+            else:
+                affinity["podAntiAffinity"] = {
+                    "preferredDuringSchedulingIgnoredDuringExecution": [
+                        {"weight": 100, "podAffinityTerm": term}
+                    ]
+                }
         if cfg.excluded_nodes:
             affinity["nodeAffinity"] = {
                 "requiredDuringSchedulingIgnoredDuringExecution": {
@@ -654,8 +704,8 @@ def build_volcano_job(
         },
         "spec": {
             "queue": cfg.queue,
-            "minAvailable": cfg.nodes,
-            "plugins": {name: [] for name in C.DEFAULT_PLUGINS},
+            "minAvailable": min_available,
+            "plugins": {name: list(args) for name, args in scheduling.plugins.items()},
             "tasks": tasks,
         },
     }

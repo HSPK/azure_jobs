@@ -85,6 +85,43 @@ Enable home SSH shipping only after explicit confirmation.
 
 Do not use `aj job` APIs to manage Volcano.
 
+For workdir storage or backend tuning, read
+[Volcano backend controls](references/volcano.md#backend-controls).
+The workdir is node-backed ephemeral storage with no aj-imposed size cap;
+changing its mount path does not choose another host disk.
+
+## Kubernetes Pod command execution
+
+- Run simple commands directly with `kubectl --context CONTEXT -n NAMESPACE
+  exec POD -c CONTAINER -- COMMAND`; specify the container explicitly.
+- Send complex scripts through stdin instead of long `bash -lc` arguments,
+  keeping the exec URL short:
+
+  ```bash
+  kubectl --context CONTEXT -n NAMESPACE exec -i POD -c CONTAINER -- bash -s <<'EOF'
+  set -euo pipefail
+  # Commands run inside the Pod.
+  EOF
+  ```
+
+- Quote `<<'EOF'` to prevent local expansion. Automation uses `-i`, not `-it`;
+  the container must have Bash. Put remote redirects, pipes, and environment
+  assignments inside the script.
+- First probe with `true`. If simple exec succeeds but a complex command fails,
+  inspect arguments, quoting, URL length, and gateway/WAF rules; do not assume
+  WAF blocking without evidence.
+- k9s Shell also uses exec; later commands travel over the established stream.
+  A Shell/worker session can accept more commands; a fixed service process's
+  connection cannot be repurposed as a command channel.
+- Distinguish API upgrade failures, in-Pod timeouts, connection refusals, and
+  unexpected HTTP status codes. Without a local route to the Pod network,
+  check service health from a reachable Pod instead.
+- A disconnect does not prove a command never ran or its remote process exited.
+  Verify remote state before retrying non-idempotent operations; check PID/PGID
+  and GPU usage when stopping workloads. Prefer the container's main process or
+  a process manager for long-lived services, not a local asynchronous exec.
+- Never expose credentials in command arguments, output, shell tracing, or logs.
+
 ## Routine submission: short path
 
 Use this path for an existing template. The detailed sections below are
@@ -402,7 +439,8 @@ Never blind retry a chargeable or destructive command.
 - [Job operations](references/job-operations.md): run, queue, jobs, logs,
   stats, experiments, watches, dashboard, and AJ IDs.
 - [Volcano](references/volcano.md): Kubernetes preflight, upload strategies,
-  generated names, pod logs, storage, and deletion.
+  generated names, pod logs, workdir, scheduling/runtime/RDMA controls,
+  Blobfuse/temp paths, kubectl deadlines, storage, and deletion.
 - [Resources](references/resources.md): auth, daemon, workspace, quota, SKU,
   image, datastore, environment, identity, storage, config, and code.
 - [Troubleshooting](references/troubleshooting.md): daemon, protocol, template,

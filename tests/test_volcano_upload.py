@@ -22,6 +22,7 @@ from azure_jobs.server.submit.volcano.upload import (
     write_filelist,
 )
 from azure_jobs.shared.utils.fs import CodeFile
+from azure_jobs.shared.opts.volcano_backend import KubectlTimeouts
 
 
 def completed(code: int = 0, stdout: str = "", stderr: str = ""):
@@ -146,6 +147,47 @@ def test_empty_upload_is_a_noop(tmp_path) -> None:
         ) == (True, "")
     run.assert_not_called()
     assert events[-1].detail == "No files to upload"
+
+
+@pytest.mark.parametrize("ready", [True, False])
+@pytest.mark.parametrize(
+    ("wait", "duration"),
+    [(17, "17s"), (1e6, "1000000.0s"), (1e-6, "0.000001s")],
+)
+def test_upload_timeouts_reach_each_kubectl_operation(
+    tmp_path, ready: bool, wait: float, duration: str,
+) -> None:
+    deadlines = KubectlTimeouts.from_dict({
+        "apply": 11, "exec": 13, "wait": wait, "wait_grace": 3,
+        "delete": 19, "describe": 23,
+    })
+    calls = {}
+
+    def run(command, **kwargs):
+        calls[command[1]] = (command, kwargs["timeout"])
+        code = 1 if command[1] == "wait" and not ready else 0
+        return completed(code, stderr="not ready" if code else "")
+
+    with (
+        patch(
+            "azure_jobs.server.submit.volcano.upload.subprocess.run",
+            side_effect=run,
+        ),
+        patch(
+            "azure_jobs.server.submit.volcano.upload.stream_tar",
+            return_value=(completed(), [], 0),
+        ) as stream,
+    ):
+        ok, _ = upload_files_to_pvc(**kwargs(tmp_path), timeouts=deadlines)
+    assert ok is ready
+    assert calls["apply"][1] == 11
+    assert calls["wait"][1] == wait + 3
+    assert f"--timeout={duration}" in calls["wait"][0]
+    assert calls["delete"][1] == 19
+    if ready:
+        assert stream.call_args.kwargs["timeout"] == 13
+    else:
+        assert calls["describe"][1] == 23
 
 
 def test_apply_failure_is_detailed_without_deleting_unowned_pod(tmp_path) -> None:

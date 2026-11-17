@@ -154,6 +154,33 @@ config:
 ```
 Remove PVC variables if unnecessary. Read [Volcano](volcano.md).
 
+### Volcano workdir and backend controls
+
+The per-Pod workdir uses disk-backed `emptyDir: {}` with no aj-imposed size
+limit. It shares node-local capacity; ephemeral-storage limits, cluster policy,
+and node disk pressure still apply. Pod deletion removes its contents.
+
+```yaml
+config:
+  jobs:
+    - submit_args:
+        container_args:
+          workdir_mount_path: /workspace
+```
+
+Default mount: `/mnt/aj-workdir`. `$AJ_WORKDIR` is the copied-code directory,
+`<mount>/<job-code-name>/wd`, not the mount root. Heterogeneous Tasks inherit
+this setting and may override `container_args.workdir_mount_path`.
+The path must be absolute, non-root, and must not overlap shm, scratch, PVC,
+Blob Secret, code staging, or storage mounts. It does not choose a host disk.
+
+Scheduling, shell/restart policy, multi-Pod placement, RDMA allocation,
+remote temporary storage, Blobfuse cache/version, and kubectl timeouts are
+configurable under `config._extra.volcano`. See
+[backend controls](volcano.md#backend-controls) for the schema, defaults, and
+safety constraints. These controls are job-wide, including heterogeneous
+Tasks; the workdir override above is per Task.
+
 ## Heterogeneous Volcano Tasks
 
 Use one typed mapping when roles need different resources, images, setup, or
