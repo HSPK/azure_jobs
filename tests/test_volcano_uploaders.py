@@ -526,7 +526,8 @@ class TestScriptLoader:
     def test_blob_download_round_trip(self):
         lines = load_script(
             "blob_download.sh",
-            EXTRACT_DIR="/tmp/aj-code/jx",
+            EXTRACT_DIR_SHELL="/tmp/aj-code/jx",
+            TEMP_DIR="/tmp",
             URL_WITH_SAS="https://sa.blob.core.windows.net/c/x.tgz?sv=…&sig=…",
             EXPECTED_SHA256="abc123",
         )
@@ -547,7 +548,7 @@ class TestScriptLoader:
         assert "$(uname -m)" in text
         assert "$(mktemp" in text
         # bash command grouping `{ ... }` (with spaces) is not a {KEY} match
-        assert "mkdir -p /tmp/aj-bin" in text
+        assert 'mkdir -p "$_aj_temp_dir/aj-bin"' in text
 
 
 class TestRenderAmltDoesNotLeakExtra:

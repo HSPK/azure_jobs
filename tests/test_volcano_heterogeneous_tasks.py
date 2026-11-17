@@ -27,6 +27,7 @@ from azure_jobs.shared.opts import (
     VolcanoTaskOpts,
 )
 from azure_jobs.shared.opts.volcano_tasks import load_tasks
+from azure_jobs.shared.opts.volcano_backend import VolcanoBackendOpts
 from azure_jobs.shared.spec import RunShapeRequest, get_spec_hooks
 from azure_jobs.shared.template import Template
 
@@ -206,6 +207,65 @@ def test_task_options_survive_wire_roundtrip(tmp_path: Path) -> None:
     assert h100.scratch_size == "200Gi"
 
 
+def test_backend_controls_apply_to_each_heterogeneous_task(tmp_path: Path) -> None:
+    request = _build_request(tmp_path)
+    request.backend_spec.settings = VolcanoBackendOpts.from_dict({
+        "scheduling": {
+            "pod_anti_affinity": "none",
+            "min_available": 1,
+            "scheduler_name": "custom",
+        },
+        "runtime": {"shell": ["/usr/bin/bash", "-c"], "restart_policy": "OnFailure"},
+        "rdma": {"resource_name": "example.com/rdma", "resource_count": 2},
+    })
+    rebuilt = _spec_from_payload(request.to_dict())
+    job = build_volcano_job(
+        build_volcano_config_from_request(rebuilt), namespace="training"
+    )
+    assert job["spec"]["minAvailable"] == 1
+    for task in job["spec"]["tasks"]:
+        pod = task["template"]["spec"]
+        container = pod["containers"][0]
+        assert pod["schedulerName"] == "custom"
+        assert pod["restartPolicy"] == "OnFailure"
+        assert "podAntiAffinity" not in pod.get("affinity", {})
+        assert container["command"] == ["/usr/bin/bash", "-c"]
+        requested = container["resources"]["requests"]
+        if task["name"] == "master":
+            assert "example.com/rdma" not in requested
+        else:
+            assert requested["example.com/rdma"] == "2"
+
+
+def test_workdir_inherits_and_can_be_overridden_per_task(tmp_path: Path) -> None:
+    config = _heterogeneous_config()
+    config["jobs"][0]["submit_args"]["container_args"][
+        "workdir_mount_path"
+    ] = "/workspace/shared"
+    config["_extra"]["volcano"]["tasks"]["h100-worker"]["container_args"][
+        "workdir_mount_path"
+    ] = "/workspace/h100"
+    request = _build_request(tmp_path)
+    request.backend_spec = VolcanoOpts.from_template(Template.from_dict(config))
+    rebuilt = _spec_from_payload(request.to_dict())
+    cfg = build_volcano_config_from_request(rebuilt)
+    job = build_volcano_job(
+        cfg,
+        namespace="training",
+        code_path="/mnt/extracted",
+    )
+
+    for name in ("master", "a100-worker", "h100-worker"):
+        path = "/workspace/h100" if name == "h100-worker" else "/workspace/shared"
+        assert rebuilt.backend_spec.tasks[name].workdir_mount_path == path
+        container = _container(job, name)
+        assert {
+            "name": "aj-workdir",
+            "mountPath": path,
+        } in container["volumeMounts"]
+        assert f"AJ_WORKDIR={path}/heterogeneous-job/wd" in container["args"][0]
+
+
 def test_task_optional_sections_and_absent_topology_defaults() -> None:
     homogeneous = Template.from_dict(
         {
@@ -311,6 +371,12 @@ def test_manifest_expands_independent_pod_specs(tmp_path: Path) -> None:
         "role": "custom-role",
     }
     for task in job["spec"]["tasks"]:
+        workdir = next(
+            volume
+            for volume in task["template"]["spec"]["volumes"]
+            if volume["name"] == "aj-workdir"
+        )
+        assert workdir["emptyDir"] == {}
         assert task["template"]["metadata"]["labels"] == {
             "submitter": "test-user",
             "app": "heterogeneous-job",

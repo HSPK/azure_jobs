@@ -8,8 +8,11 @@
 #
 # Placeholders (rendered by uploaders/_scripts.py::load_script):
 #   {RETRIES}  — int, number of download attempts for the azcopy archive.
+#   {TEMP_DIR} — shell-quoted remote temporary directory.
 
 set -eo pipefail
+_aj_temp_dir={TEMP_DIR}
+mkdir -p "$_aj_temp_dir"
 
 if ! command -v tar >/dev/null 2>&1 ||
     ! command -v sha256sum >/dev/null 2>&1; then
@@ -62,7 +65,7 @@ case "$_aj_arch" in
         ;;
 esac
 
-_aj_az_tgz="$(mktemp /tmp/azcopy-XXXXXX.tgz)"
+_aj_az_tgz="$(mktemp "$_aj_temp_dir/azcopy-XXXXXX.tgz")"
 _aj_ok=0
 for _aj_i in $(seq 1 {RETRIES}); do
     if command -v curl >/dev/null 2>&1; then
@@ -88,7 +91,7 @@ if [ "$_aj_ok" != "1" ]; then
     exit 1
 fi
 
-_aj_az_extract="$(mktemp -d /tmp/azcopy-XXXXXX)"
+_aj_az_extract="$(mktemp -d "$_aj_temp_dir/azcopy-XXXXXX")"
 if ! tar xzf "$_aj_az_tgz" -C "$_aj_az_extract"; then
     echo "[aj] azcopy install failed: tar extract" >&2
     exit 1
@@ -103,9 +106,9 @@ fi
 install -m 0755 "$_aj_az_bin" /usr/local/bin/azcopy 2>/dev/null \
     || install -m 0755 "$_aj_az_bin" "$HOME/.local/bin/azcopy" 2>/dev/null \
     || {
-        mkdir -p /tmp/aj-bin
-        install -m 0755 "$_aj_az_bin" /tmp/aj-bin/azcopy
-        export PATH="/tmp/aj-bin:$PATH"
+        mkdir -p "$_aj_temp_dir/aj-bin"
+        install -m 0755 "$_aj_az_bin" "$_aj_temp_dir/aj-bin/azcopy"
+        export PATH="$_aj_temp_dir/aj-bin:$PATH"
     }
 
 rm -rf "$_aj_az_tgz" "$_aj_az_extract"

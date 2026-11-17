@@ -1,24 +1,26 @@
 #!/usr/bin/env bash
-# blob_download.sh — fetch the code tarball from Azure Blob (SAS) and
+# blob_download.sh — fetch the code tarball from Azure Blob and
 # extract it into the pod-side code directory. Assumes azcopy is already
 # on PATH (see install_azcopy.sh, which the uploader injects first).
 #
 # Placeholders (rendered by uploaders/_scripts.py::load_script):
-#   {EXTRACT_DIR}  — absolute path inside the pod where code is unpacked.
-#   {URL_WITH_SAS} — full https URL including '?sv=…&sig=…' SAS query.
+#   {EXTRACT_DIR_SHELL} — shell-quoted path where code is unpacked.
+#   {TEMP_DIR} — shell-quoted remote temporary directory.
+#   {URL_WITH_SAS} — HTTPS URL including the read-only SAS.
 #   {EXPECTED_SHA256} — daemon-computed SHA-256 for integrity verification.
 
 set -eo pipefail
 
 echo "[aj] preparing code from Azure Blob…"
-_aj_code_dir='{EXTRACT_DIR}'
+_aj_code_dir={EXTRACT_DIR_SHELL}
+_aj_temp_dir={TEMP_DIR}
 _aj_url_with_sas='{URL_WITH_SAS}'
 _aj_expected_sha256='{EXPECTED_SHA256}'
 
-mkdir -p "$_aj_code_dir"
-_aj_tgz="$(mktemp /tmp/aj-code-XXXXXX.tgz)"
+mkdir -p "$_aj_code_dir" "$_aj_temp_dir"
+_aj_tgz="$(mktemp "$_aj_temp_dir/aj-code-XXXXXX.tgz")"
 
-export AZCOPY_LOG_LOCATION=/tmp/aj-azcopy-logs
+export AZCOPY_LOG_LOCATION="$_aj_temp_dir/aj-azcopy-logs"
 mkdir -p "$AZCOPY_LOG_LOCATION"
 
 azcopy copy "$_aj_url_with_sas" "$_aj_tgz" --log-level=INFO

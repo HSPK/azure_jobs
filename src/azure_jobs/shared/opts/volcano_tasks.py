@@ -15,6 +15,7 @@ from .volcano_runtime import (
     parse_positive_quantity,
     parse_scratch_mount_path,
     parse_scratch_size,
+    parse_workdir_mount_path,
 )
 
 if TYPE_CHECKING:
@@ -28,6 +29,7 @@ _LABEL_NAME_RE = re.compile(
 _TASK_CONTAINER_ARGS = frozenset(
     {
         "shm_size",
+        "workdir_mount_path",
         "capabilities",
         "scratch_mount_path",
         "scratch_size",
@@ -70,6 +72,7 @@ class VolcanoTaskOpts:
     env: dict[str, str] = field(default_factory=dict)
     container_args: dict[str, Any] = field(default_factory=dict)
     shm_size: str = ""
+    workdir_mount_path: str = ""
     capabilities: list[str] = field(default_factory=list)
     scratch_mount_path: str = ""
     scratch_size: str = ""
@@ -202,6 +205,7 @@ def _parse_task(
         env=_parse_env(name, raw.get("env")),
         container_args=container["raw"],
         shm_size=container["shm_size"],
+        workdir_mount_path=container["workdir_mount_path"],
         capabilities=container["capabilities"],
         scratch_mount_path=container["scratch_mount_path"],
         scratch_size=container["scratch_size"],
@@ -235,6 +239,7 @@ def _parse_task_container_args(
         field_name=f"Volcano Task {name!r} container_args.shm_size",
     )
     capabilities = parse_capabilities(merged.get("capabilities"))
+    workdir_mount_path = parse_workdir_mount_path(merged.get("workdir_mount_path"))
     scratch_mount_path = parse_scratch_mount_path(
         merged.get("scratch_mount_path")
     )
@@ -248,6 +253,8 @@ def _parse_task_container_args(
         normalized["shm_size"] = shm_size
     if "capabilities" in normalized:
         normalized["capabilities"] = capabilities
+    if "workdir_mount_path" in normalized:
+        normalized["workdir_mount_path"] = workdir_mount_path
     if "scratch_mount_path" in normalized:
         normalized["scratch_mount_path"] = scratch_mount_path
     if "scratch_size" in normalized:
@@ -255,6 +262,7 @@ def _parse_task_container_args(
     return {
         "raw": normalized,
         "shm_size": shm_size,
+        "workdir_mount_path": workdir_mount_path,
         "capabilities": capabilities,
         "scratch_mount_path": scratch_mount_path,
         "scratch_size": scratch_size,

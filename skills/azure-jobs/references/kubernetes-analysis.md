@@ -122,6 +122,9 @@ kubectl logs "$POD" -n "$NS" --context "$CTX" -c "$CONTAINER" \
 
 ## 5. Short exec diagnostics
 
+Follow [Pod command execution](../SKILL.md#kubernetes-pod-command-execution)
+for stdin scripts, session reuse, failure classification, and safe retries.
+
 Only exec when logs/events are insufficient. Verify a harmless command:
 
 ```bash

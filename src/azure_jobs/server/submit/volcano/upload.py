@@ -8,6 +8,7 @@ import subprocess
 import tempfile
 import threading
 import uuid
+from decimal import Decimal
 from pathlib import Path
 from typing import Callable
 
@@ -17,6 +18,7 @@ from azure_jobs.shared.utils.format import format_size
 from azure_jobs.shared.utils.fs import CodeFile, walk_code
 
 from azure_jobs.shared.job.spec import JobEvent
+from azure_jobs.shared.opts.volcano_backend import KubectlTimeouts
 from . import constants as C
 from .config import VolcanoConfig, code_asset_name, pvc_code_path
 
@@ -73,6 +75,7 @@ def stream_tar(
     ctx_args: list[str],
     total_files: int,
     emit: Callable[[JobEvent], None],
+    timeout: float = C.KUBECTL_EXEC_TIMEOUT,
 ) -> tuple[subprocess.CompletedProcess[str], list[str], int]:
     """Stream tar c into kubectl exec tar x, emitting per-file events.
 
@@ -133,7 +136,7 @@ def stream_tar(
             stdin=tar_proc.stdout,
             capture_output=True,
             text=True,
-            timeout=C.KUBECTL_EXEC_TIMEOUT,
+            timeout=timeout,
         )
     finally:
         if tar_proc.stdout is not None:
@@ -168,6 +171,7 @@ def upload_files_to_pvc(
     on_event: Callable[[JobEvent], None] | None = None,
     status_kind: str = "code",
     label: str = "Files",
+    timeouts: KubectlTimeouts | None = None,
 ) -> tuple[bool, str]:
     """Upload files (relative to src_dir) into dest_dir on a PVC.
 
@@ -177,6 +181,7 @@ def upload_files_to_pvc(
     surface it to the user without forcing them to enable AJ_DEBUG.
     """
     emit = on_event or (lambda _ev: None)
+    timeouts = timeouts or KubectlTimeouts()
 
     def status(kind: str, detail: str) -> None:
         emit(JobEvent(kind=kind, detail=detail))
@@ -242,7 +247,7 @@ def upload_files_to_pvc(
             apply_cmd,
             capture_output=True,
             text=True,
-            timeout=C.KUBECTL_APPLY_TIMEOUT,
+            timeout=timeouts.apply,
         )
         if result.returncode != 0:
             detail = _format_subprocess_failure(
@@ -259,20 +264,22 @@ def upload_files_to_pvc(
             "--for=condition=Ready",
             f"pod/{pod_name}",
             f"--namespace={namespace}",
-            f"--timeout={C.KUBECTL_WAIT_TIMEOUT}s",
+            f"--timeout={Decimal(str(timeouts.wait)):f}s",
             *ctx_args,
         ]
         result = subprocess.run(
             wait_cmd,
             capture_output=True,
             text=True,
-            timeout=C.KUBECTL_WAIT_SUBPROCESS_TIMEOUT,
+            timeout=timeouts.wait + timeouts.wait_grace,
         )
         if result.returncode != 0:
             detail = _format_subprocess_failure(
                 f"kubectl wait pod/{pod_name}", wait_cmd, result
             )
-            describe = _describe_pod(pod_name, namespace, ctx_args)
+            describe = _describe_pod(
+                pod_name, namespace, ctx_args, timeout=timeouts.describe
+            )
             if describe:
                 detail = f"{detail}\n\nkubectl describe pod:\n{describe}"
             log.error("Upload pod failed to become ready\n%s", detail)
@@ -292,6 +299,7 @@ def upload_files_to_pvc(
             ctx_args=ctx_args,
             total_files=len(files),
             emit=emit,
+            timeout=timeouts.exec,
         )
         benign_tar_warning = (
             tar_returncode == 1
@@ -372,6 +380,7 @@ def upload_files_to_pvc(
                 pod_name,
                 namespace,
                 ctx_args,
+                timeout=timeouts.delete,
             )
             if cleanup_error:
                 log.error("%s", cleanup_error)
@@ -382,6 +391,8 @@ def _delete_upload_pod(
     pod_name: str,
     namespace: str,
     ctx_args: list[str],
+    *,
+    timeout: float = C.KUBECTL_DELETE_TIMEOUT,
 ) -> str:
     """Best-effort cleanup with one retry; return an actionable warning."""
     cmd = [
@@ -401,7 +412,7 @@ def _delete_upload_pod(
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=C.KUBECTL_DELETE_TIMEOUT,
+                timeout=timeout,
             )
         except Exception as exc:
             log.exception(
@@ -423,7 +434,11 @@ def _delete_upload_pod(
     return f"Upload pod cleanup failed after retry: {last_detail}"
 
 def _describe_pod(
-    pod_name: str, namespace: str, ctx_args: list[str]
+    pod_name: str,
+    namespace: str,
+    ctx_args: list[str],
+    *,
+    timeout: float = C.KUBECTL_NAMESPACE_TIMEOUT,
 ) -> str:
     """Best-effort `kubectl describe pod` for use in error messages."""
     try:
@@ -438,7 +453,7 @@ def _describe_pod(
             ],
             capture_output=True,
             text=True,
-            timeout=C.KUBECTL_NAMESPACE_TIMEOUT,
+            timeout=timeout,
         )
     except Exception as exc:
         log.debug(
@@ -503,4 +518,5 @@ def upload_code_to_pvc(
         on_event=on_event,
         status_kind="code",
         label="Code",
+        timeouts=cfg.settings.kubectl_timeouts,
     )

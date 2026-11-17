@@ -280,10 +280,34 @@ config:
 ```
 
 Native AML/Sing creates or reuses a workspace datastore and requests a
-read-write mount. Volcano uses blobfuse2 plus a mounted Kubernetes Secret
-containing a short-lived SAS; storage pods are privileged for `/dev/fuse`.
+read-write mount. Volcano uses blobfuse2 with a short-lived SAS in a mounted
+Kubernetes Secret. Storage pods are privileged for `/dev/fuse`.
 
 ## Code, ignores, and setup
+
+Volcano runs copied code under `/mnt/aj-workdir` on a per-Pod, disk-backed
+`emptyDir` with no aj-imposed size limit. It shares the node's available local
+storage; cluster policies, container ephemeral-storage limits, and node disk
+pressure can still constrain usage or trigger eviction. Data disappears when
+the Pod is deleted.
+
+Set `jobs[0].submit_args.container_args.workdir_mount_path` to change the
+container-side working volume mount:
+
+```yaml
+config:
+  jobs:
+    - submit_args:
+        container_args:
+          workdir_mount_path: /workspace
+```
+
+Copied code runs in `/workspace/<job-code-name>/wd`, exported as `AJ_WORKDIR`.
+The path must be absolute, non-root, and must not overlap shm, scratch, PVC,
+Blob Secret, code staging, or storage mounts. Heterogeneous Tasks inherit this
+setting and can override it with their own `container_args.workdir_mount_path`.
+Changing the mount path does not select a different host disk or make data
+persistent.
 
 Native and Volcano select files from the current working directory. Ignore
 sources are:
@@ -300,6 +324,89 @@ submission archives the invocation directory.
 For native AML/Sing, `environment.registry` can prefix the image. Volcano uses
 `environment.image` as written. `environment.setup` runs before the user
 command, once per node in the native runner.
+
+## Volcano backend controls
+
+Optional controls live under `config._extra.volcano`. Omitted fields preserve
+the existing backend defaults; the same controls apply to all homogeneous and
+heterogeneous task Pods.
+
+```yaml
+config:
+  _extra:
+    volcano:
+      scheduling:
+        scheduler_name: volcano
+        plugins:
+          svc: []
+          env: []
+        min_available: null
+        pod_anti_affinity: required
+        topology_key: kubernetes.io/hostname
+      runtime:
+        shell: [/bin/bash, -lc]
+        restart_policy: Never
+      rdma:
+        resource_name: rdma/rdma_shared_device_a
+        resource_count: 1
+        port: 18515
+        taint_key: rdma
+      temp_dir: /tmp
+      blobfuse:
+        cache_dir: /tmp/aj-blobfuse-cache
+        version: "2.5.4"
+      kubectl_timeouts:
+        default: 120
+        exec: 600
+        wait: 300
+        wait_grace: 10
+```
+
+- Scheduling: `min_available: null` requires all task replicas; an explicit
+  positive integer must not exceed the Pod count. Placement accepts
+  `required`, `preferred`, or `none`; it controls pod anti-affinity, without
+  removing excluded-node or per-Task node-selector rules. The scheduler,
+  topology key, plugin names, and plugin argument lists are configurable.
+  Removing `svc`/`env` means supplying the equivalent DNS/rank discovery
+  yourself; a different scheduler must be compatible with the cluster's
+  Volcano controller and desired gang semantics.
+- Runtime: `shell` is a nonempty argument list for a **Bash-compatible**
+  interpreter; the generated startup script is appended as its final argument.
+  Restart policy accepts `Never`, `OnFailure`, or `Always`, subject to cluster
+  and Volcano admission rules. These options configure task Pods, not the
+  transient upload helper. Existing `environment.setup` and `jobs[].command`
+  remain the places for startup commands.
+- RDMA: the section changes the extended-resource name/count, declared
+  container port, and toleration key. Whether RDMA is requested still comes
+  from `target.rdma` or each heterogeneous Task's `rdma`. The count is per
+  enabled Pod: four Pods request four units by default, or eight with
+  `resource_count: 2`. Shared-device-plugin units are not necessarily physical
+  NICs or extra bandwidth. It does not configure the application's transport
+  or the host's network devices.
+- Paths: `temp_dir` selects the writable **remote** temporary root for code
+  extraction, download archives, bootstrap binaries, and Blobfuse configuration
+  and logs. It does not change daemon-side temporary files or select a host
+  disk. `blobfuse.cache_dir` defaults to `<temp_dir>/aj-blobfuse-cache`; each
+  storage key gets a subdirectory. Both paths must be absolute and non-root.
+- Version: an explicit `blobfuse.version` pins the installed binary and fails
+  if that version cannot be provided. Omit it to reuse an image's existing
+  binary, or install the default `2.5.4` when absent.
+
+Kubectl deadlines are finite positive numbers of seconds. `default` overrides
+all command deadlines, then explicit operation keys override that value.
+`wait_grace` is separate and may be zero: the upload wait subprocess deadline
+is `wait + wait_grace`, while kubectl receives `--timeout=<wait>s`.
+
+| `kubectl_timeouts` key | Default seconds |
+| --- | --- |
+| `apply`, `create`, `delete` | 30 |
+| `exec`, `wait` | 120 |
+| `namespace`, `describe` | 5 |
+| `secret_apply`, `secret_delete` | 60 |
+| `wait_grace` | 10 |
+
+These deadlines cover Volcano submission and code-upload operations, including
+failure cleanup; they do not replay ambiguous submissions automatically.
 
 ## SKU syntax
 

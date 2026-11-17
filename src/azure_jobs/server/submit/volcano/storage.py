@@ -14,11 +14,13 @@ from a Secret through ``env`` are fixed when the container starts, while a
 mounted Secret is refreshed in place by the kubelet. Combined with the mount
 script's refresh loop, replacing the Secret extends a running job's mount
 without restarting it.
+
 """
 
 from __future__ import annotations
 
 import datetime as _dt
+import re
 import shlex
 import subprocess
 from dataclasses import dataclass, field
@@ -26,6 +28,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from azure_jobs.shared.errors import AJError
+from azure_jobs.shared.opts.volcano_backend import VolcanoBackendOpts
 
 if TYPE_CHECKING:
     from azure_jobs.shared.job.spec import StorageMount
@@ -69,6 +72,7 @@ class BlobMount:
 class BlobMountPlan:
     mounts: list[BlobMount] = field(default_factory=list)
     secret_name: str = ""
+    settings: VolcanoBackendOpts = field(default_factory=VolcanoBackendOpts)
 
     @property
     def enabled(self) -> bool:
@@ -107,7 +111,18 @@ class BlobMountPlan:
             return []
         script = (_SCRIPTS_DIR / "mount_blobfuse.sh").read_text(encoding="utf-8")
         script = script.replace("{REFRESH_SECONDS}", str(REFRESH_SECONDS))
-        script = script.replace("{BLOBFUSE_VERSION}", BLOBFUSE_VERSION)
+        version = self.settings.blobfuse.version or BLOBFUSE_VERSION
+        script = script.replace("{BLOBFUSE_VERSION}", version)
+        script = script.replace("{BLOBFUSE_VERSION_RE}", re.escape(version))
+        script = script.replace(
+            "{PIN_VERSION}", "1" if self.settings.blobfuse.version else "0"
+        )
+        script = script.replace("{TEMP_DIR}", shlex.quote(self.settings.temp_dir))
+        cache_dir = (
+            self.settings.blobfuse.cache_dir
+            or f"{self.settings.temp_dir}/aj-blobfuse-cache"
+        )
+        script = script.replace("{CACHE_DIR}", shlex.quote(cache_dir))
         lines = script.splitlines()
         lines.append("")
         lines.append("if _aj_install_blobfuse2; then")
@@ -184,9 +199,14 @@ def build_blob_mount_plan(
     storage: dict[str, "StorageMount"],
     job_name: str,
     expiry_hours: int = SAS_MAX_HOURS,
+    *,
+    settings: VolcanoBackendOpts | None = None,
 ) -> BlobMountPlan:
     """Mint credentials and describe how each declared container is mounted."""
-    plan = BlobMountPlan(secret_name=f"{job_name}-blob")
+    plan = BlobMountPlan(
+        secret_name=f"{job_name}-blob",
+        settings=settings if settings is not None else VolcanoBackendOpts(),
+    )
     for key, mount in storage.items():
         account = getattr(mount, "storage_account_name", "")
         container = getattr(mount, "container_name", "")

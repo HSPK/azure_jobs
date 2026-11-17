@@ -7,6 +7,7 @@ from __future__ import annotations
 import datetime as _dt
 import logging
 import os
+import shlex
 import subprocess
 import tempfile
 import time
@@ -238,14 +239,20 @@ def _build_pod_setup(
     extract_dir: str,
     retries: int,
     expected_sha256: str,
+    *,
+    temp_dir: str = "/tmp",
 ) -> list[str]:
+    """Render download/bootstrap scripts using the selected remote temp root."""
     bootstrap_retries = max(1, int(retries))
     install_lines = load_script(
-        "install_azcopy.sh", RETRIES=bootstrap_retries
+        "install_azcopy.sh",
+        RETRIES=bootstrap_retries,
+        TEMP_DIR=shlex.quote(temp_dir),
     )
     download_lines = load_script(
         "blob_download.sh",
-        EXTRACT_DIR=extract_dir,
+        EXTRACT_DIR_SHELL=shlex.quote(extract_dir),
+        TEMP_DIR=shlex.quote(temp_dir),
         URL_WITH_SAS=f"{blob_url}?{sas}",
         EXPECTED_SHA256=expected_sha256,
     )
@@ -324,7 +331,7 @@ class BlobUploader(CodeUploader):
                 f"{opts.upload_dir.strip('/')}/{archive.code_hash}.tgz"
             )
             blob_url = f"{account_url}/{opts.container}/{blob_rel}"
-            extract_dir = f"/tmp/aj-code/{archive.code_hash}"
+            extract_dir = f"{cfg.settings.temp_dir}/aj-code/{archive.code_hash}"
             emit(
                 JobEvent(
                     kind="code",
@@ -397,6 +404,7 @@ class BlobUploader(CodeUploader):
                 extract_dir,
                 opts.pod_download_retries,
                 archive.code_hash,
+                temp_dir=cfg.settings.temp_dir,
             ),
             code_path=extract_dir,
         )

@@ -47,28 +47,43 @@ def parse_capabilities(raw: object) -> list[str]:
     return capabilities
 
 
-def parse_scratch_mount_path(raw: object) -> str:
+def parse_mount_path(raw: object, *, field_name: str) -> str:
+    """Normalize an optional absolute, non-root container mount path."""
     if raw in (None, ""):
         return ""
     if not isinstance(raw, str):
         raise ConfigError(
-            "Volcano container_args.scratch_mount_path must be an absolute "
-            "container path."
+            f"{field_name} must be an absolute container path."
         )
     value = raw.strip()
     path = PurePosixPath(value)
     if (
         not value.startswith("/")
         or value.startswith("//")
-        or value == "/"
+        or path == PurePosixPath("/")
         or "\0" in value
         or ".." in path.parts
     ):
         raise ConfigError(
-            "Volcano container_args.scratch_mount_path must be an absolute, "
-            "non-root path without '..'."
+            f"{field_name} must be an absolute, non-root path without '..'."
         )
     return str(path)
+
+
+def parse_scratch_mount_path(raw: object) -> str:
+    """Validate the optional scratch volume mount path."""
+    return parse_mount_path(
+        raw,
+        field_name="Volcano container_args.scratch_mount_path",
+    )
+
+
+def parse_workdir_mount_path(raw: object) -> str:
+    """Validate the optional working volume mount path."""
+    return parse_mount_path(
+        raw,
+        field_name="Volcano container_args.workdir_mount_path",
+    )
 
 
 def parse_positive_quantity(raw: object, *, field_name: str) -> str:
@@ -103,8 +118,10 @@ def parse_scratch_size(raw: object, *, mount_path: str) -> str:
 
 __all__ = [
     "parse_capabilities",
+    "parse_mount_path",
     "parse_optional_quantity",
     "parse_positive_quantity",
     "parse_scratch_mount_path",
     "parse_scratch_size",
+    "parse_workdir_mount_path",
 ]

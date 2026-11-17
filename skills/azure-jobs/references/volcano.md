@@ -55,6 +55,88 @@ Task-local GPU/process counts. Volcano supplies `VK_TASK_INDEX`; aj exports
 
 Read [templates](templates.md#heterogeneous-volcano-tasks) for the schema.
 
+## Backend controls
+
+The workdir has no aj-imposed size cap and shares node-local disk; see
+[workdir settings](templates.md#volcano-workdir-and-backend-controls) for
+`workdir_mount_path`, `$AJ_WORKDIR`, per-Task overrides, and storage limits.
+
+Optional job-wide controls use `config._extra.volcano`. This example shows
+scheduler/runtime/RDMA defaults and illustrative overrides for paths,
+version, and deadlines; omit fields to retain their defaults.
+
+```yaml
+config:
+  _extra:
+    volcano:
+      scheduling:
+        scheduler_name: volcano
+        plugins: {svc: [], env: []}
+        min_available: null
+        pod_anti_affinity: required
+        topology_key: kubernetes.io/hostname
+      runtime:
+        shell: [/bin/bash, -lc]
+        restart_policy: Never
+      rdma:
+        resource_name: rdma/rdma_shared_device_a
+        resource_count: 1
+        port: 18515
+        taint_key: rdma
+      temp_dir: /remote/tmp
+      blobfuse:
+        cache_dir: /remote/cache
+        version: "2.5.4"
+      kubectl_timeouts:
+        default: 120
+        exec: 600
+        wait: 300
+        wait_grace: 10
+```
+
+- Scheduling: omitted/null `min_available` requires all replicas; an explicit
+  positive value cannot exceed the Pod count. Placement accepts `required`,
+  `preferred`, or `none`; it changes anti-affinity, not excluded-node or Task
+  node-selector constraints. Custom schedulers must work with Volcano;
+  removing `svc`/`env` plugins requires equivalent DNS/rank discovery.
+- Runtime: `shell` is a nonempty **Bash-compatible** argument list; aj appends
+  the generated script. Restart policy accepts `Never`, `OnFailure`, or
+  `Always`, subject to cluster/Volcano admission. These settings affect task
+  Pods, not upload helpers. Keep user startup commands in `environment.setup`
+  or job/Task commands.
+- RDMA: only Pods with `target.rdma` or Task `rdma` enabled request resources.
+  `resource_count` is per enabled Pod: four Pods request four units by default,
+  or eight with `resource_count: 2`, subject to available capacity. Shared
+  device-plugin units are not necessarily physical NICs or extra bandwidth.
+  This does not configure application transports or host networking.
+- Paths: `temp_dir` defaults to `/tmp` and controls **remote** code extraction,
+  archives, bootstrap binaries, and Blobfuse configs/logs, not daemon-local
+  temporary files. Cache defaults to `<temp_dir>/aj-blobfuse-cache`, with a
+  subdirectory per storage key. Both roots must be writable, absolute, and
+  non-root; neither chooses a different host disk.
+- Version: omit `blobfuse.version` to reuse an installed binary, or install
+  `2.5.4` if absent. An explicit version pins/checks the binary and fails if
+  that version cannot be provided.
+
+Kubectl deadlines are finite positive seconds. `default` overrides operation
+deadlines; explicit operation keys win. `wait_grace` is separate and may be
+zero: helper readiness uses kubectl `--timeout=<wait>s` and a subprocess
+deadline of `wait + wait_grace`.
+
+| `kubectl_timeouts` key | Default seconds |
+| --- | --- |
+| `apply`, `create`, `delete` | 30 |
+| `exec`, `wait` | 120 |
+| `namespace`, `describe` | 5 |
+| `secret_apply`, `secret_delete` | 60 |
+| `wait_grace` | 10 |
+
+These settings cover Volcano submission/upload and failure cleanup, not
+every standalone kubectl command. A timeout does not prove a mutation failed;
+reconcile remote state before retrying. Use the
+[Pod execution guidance](../SKILL.md#kubernetes-pod-command-execution) for
+complex commands; increasing deadlines does not fix gateway argument blocking.
+
 ## Set up Kubernetes access
 
 `aj k8s` manages client access and Volcano resources; `aj k` is the short

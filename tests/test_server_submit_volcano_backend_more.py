@@ -99,6 +99,7 @@ def _request(**overrides) -> JobSpec:
             labels={"app": "user-value-must-not-win", "team": "ml"},
             container_args={"cpus": 24, "memory": "192Gi"},
             shm_size="32Gi",
+            workdir_mount_path="/workspace",
             capabilities=["SYS_ADMIN"],
             scratch_mount_path="/var/lib/containers",
             scratch_size="200Gi",
@@ -161,6 +162,7 @@ def test_build_volcano_config_maps_container_defaults_and_storage(monkeypatch) -
     assert cfg.capabilities == ["SYS_ADMIN"]
     assert cfg.scratch_mount_path == "/var/lib/containers"
     assert cfg.scratch_size == "200Gi"
+    assert cfg.workdir_mount_path == "/workspace"
 
 
 def test_volcano_opts_parse_nested_runtime_container_args() -> None:
@@ -178,6 +180,7 @@ def test_volcano_opts_parse_nested_runtime_container_args() -> None:
                             ],
                             "scratch_mount_path": "/var//lib/containers/",
                             "scratch_size": "200Gi",
+                            "workdir_mount_path": "/workspace//code/",
                         }
                     }
                 }
@@ -190,6 +193,7 @@ def test_volcano_opts_parse_nested_runtime_container_args() -> None:
     assert opts.capabilities == ["SYS_ADMIN", "NET_ADMIN"]
     assert opts.scratch_mount_path == "/var/lib/containers"
     assert opts.scratch_size == "200Gi"
+    assert opts.workdir_mount_path == "/workspace/code"
 
 
 @pytest.mark.parametrize(
@@ -205,6 +209,13 @@ def test_volcano_opts_parse_nested_runtime_container_args() -> None:
         ({"scratch_mount_path": "//"}, "absolute, non-root"),
         ({"scratch_mount_path": "//dev/shm"}, "absolute, non-root"),
         ({"scratch_mount_path": "/var/../tmp"}, "without '..'"),
+        ({"workdir_mount_path": 123}, "must be an absolute container path"),
+        ({"workdir_mount_path": "relative"}, "absolute, non-root"),
+        ({"workdir_mount_path": "/"}, "absolute, non-root"),
+        ({"workdir_mount_path": "/./"}, "absolute, non-root"),
+        ({"workdir_mount_path": "//workspace"}, "absolute, non-root"),
+        ({"workdir_mount_path": "/var/../tmp"}, "without '..'"),
+        ({"workdir_mount_path": "/work\0space"}, "absolute, non-root"),
         ({"scratch_size": "200Gi"}, "requires scratch_mount_path"),
         (
             {
@@ -263,6 +274,7 @@ def test_nested_runtime_options_survive_wire_reconstruction() -> None:
         name="nested",
         service="volcano",
         backend_spec=VolcanoOpts(
+            workdir_mount_path="/workspace",
             capabilities=["SYS_ADMIN"],
             scratch_mount_path="/var/lib/containers",
             scratch_size="200Gi",
@@ -274,6 +286,7 @@ def test_nested_runtime_options_survive_wire_reconstruction() -> None:
     assert rebuilt.backend_spec.capabilities == ["SYS_ADMIN"]
     assert rebuilt.backend_spec.scratch_mount_path == "/var/lib/containers"
     assert rebuilt.backend_spec.scratch_size == "200Gi"
+    assert rebuilt.backend_spec.workdir_mount_path == "/workspace"
 
 
 def test_scratch_size_accepts_positive_kubernetes_exponent_quantity() -> None:
@@ -303,12 +316,14 @@ def test_wire_loader_validates_legacy_container_args() -> None:
             "capabilities": ["cap_sys_admin"],
             "scratch_mount_path": "/var/lib/containers",
             "scratch_size": "100Gi",
+            "workdir_mount_path": "/workspace//code/",
         }
     }
 
     rebuilt = _spec_from_payload(payload)
     assert rebuilt.backend_spec.capabilities == ["SYS_ADMIN"]
     assert rebuilt.backend_spec.scratch_size == "100Gi"
+    assert rebuilt.backend_spec.workdir_mount_path == "/workspace/code"
 
     payload["backend_spec"]["container_args"]["capabilities"] = ["ALL"]
     with pytest.raises(ConfigError, match="cannot add ALL"):
@@ -404,6 +419,74 @@ def test_build_volcano_job_adds_affinity_priority_env_and_blob_mount() -> None:
 
 @pytest.mark.parametrize("nodes", [1, 3])
 @pytest.mark.parametrize(
+    ("configured_path", "mount_path"),
+    [("", "/mnt/aj-workdir"), ("/workspace//code/", "/workspace/code")],
+)
+def test_workdir_uses_node_storage_without_an_implicit_limit(
+    nodes: int,
+    configured_path: str,
+    mount_path: str,
+) -> None:
+    cfg = VolcanoConfig(
+        name="workdir-test",
+        image="image",
+        nodes=nodes,
+        workdir_mount_path=configured_path,
+    )
+    job = build_volcano_job(
+        cfg,
+        namespace="training",
+        code_path="/mnt/extracted",
+    )
+
+    for task in job["spec"]["tasks"]:
+        pod = task["template"]["spec"]
+        workdir = next(
+            volume for volume in pod["volumes"] if volume["name"] == "aj-workdir"
+        )
+        assert workdir["emptyDir"] == {}
+        container = pod["containers"][0]
+        assert {
+            "name": "aj-workdir",
+            "mountPath": mount_path,
+        } in container["volumeMounts"]
+        assert f"AJ_WORKDIR={mount_path}/workdir-test/wd" in container["args"][0]
+        assert 'cd "$AJ_WORKDIR"' in container["args"][0]
+        for resources in container["resources"].values():
+            assert "ephemeral-storage" not in resources
+
+
+def test_workdir_script_copies_code_and_changes_directory(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "marker.txt").write_text("code", encoding="utf-8")
+    workdir = tmp_path / "working volume"
+    cfg = VolcanoConfig(
+        name="workdir-test",
+        image="image",
+        workdir_mount_path=str(workdir),
+        command=[
+            "test -f marker.txt",
+            'test "$PWD" = "$AJ_WORKDIR"',
+            'printf "%s\\n" "$AJ_WORKDIR"',
+        ],
+    )
+    job = build_volcano_job(cfg, namespace="training", code_path=str(source))
+    container = job["spec"]["tasks"][0]["template"]["spec"]["containers"][0]
+
+    result = subprocess.run(
+        ["bash", "-c", container["args"][0]],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert result.stdout.strip() == str(workdir / "workdir-test" / "wd")
+
+
+@pytest.mark.parametrize("nodes", [1, 3])
+@pytest.mark.parametrize(
     "labels",
     [{}, {"submitter": "test-user", "app": "custom-app", "role": "custom-role"}],
 )
@@ -455,6 +538,7 @@ def test_nested_runtime_without_blob_adds_capabilities_only() -> None:
     assert "ephemeral-storage" not in container["resources"]["requests"]
 
 
+@pytest.mark.parametrize("mount_option", ["scratch_mount_path", "workdir_mount_path"])
 @pytest.mark.parametrize(
     "scratch_path",
     [
@@ -467,13 +551,14 @@ def test_nested_runtime_without_blob_adds_capabilities_only() -> None:
         "/mnt/extracted/cache",
     ],
 )
-def test_scratch_mount_rejects_builtin_pvc_storage_and_blob_overlaps(
+def test_runtime_mount_rejects_builtin_pvc_storage_and_blob_overlaps(
     scratch_path: str,
+    mount_option: str,
 ) -> None:
     cfg = VolcanoConfig(
         name="nested",
         image="image",
-        scratch_mount_path=scratch_path,
+        **{mount_option: scratch_path},
         pvc_mount_dir="/mnt/pvc",
         storage={
             "data": StorageMount(
@@ -491,6 +576,25 @@ def test_scratch_mount_rejects_builtin_pvc_storage_and_blob_overlaps(
             code_path="/mnt/extracted",
             blob_plan=_BlobPlan(),
         )
+
+
+def test_scratch_conflicts_use_the_configured_workdir_path() -> None:
+    cfg = VolcanoConfig(
+        name="custom-workdir",
+        image="image",
+        workdir_mount_path="/workspace",
+        scratch_mount_path="/workspace/cache",
+    )
+    with pytest.raises(ConfigError, match="scratch_mount_path conflicts"):
+        build_volcano_job(cfg, namespace="ns")
+
+    cfg.scratch_mount_path = "/mnt/aj-workdir"
+    job = build_volcano_job(cfg, namespace="ns")
+    mounts = job["spec"]["tasks"][0]["template"]["spec"]["containers"][0][
+        "volumeMounts"
+    ]
+    assert {"name": "aj-workdir", "mountPath": "/workspace"} in mounts
+    assert {"name": "aj-scratch", "mountPath": "/mnt/aj-workdir"} in mounts
 
 
 def test_scratch_mount_rejects_resolved_blob_default_destination() -> None:
@@ -695,11 +799,14 @@ def test_build_pod_setup_clamps_retry_floor() -> None:
             "abc123",
         )
 
-    assert calls[0] == ("install_azcopy.sh", {"RETRIES": 1})
+    assert calls[0] == (
+        "install_azcopy.sh", {"RETRIES": 1, "TEMP_DIR": "/tmp"}
+    )
     assert calls[1] == (
         "blob_download.sh",
         {
-            "EXTRACT_DIR": "/work",
+            "EXTRACT_DIR_SHELL": "/work",
+            "TEMP_DIR": "/tmp",
             "URL_WITH_SAS": "https://blob/x.tgz?sig=abc",
             "EXPECTED_SHA256": "abc123",
         },

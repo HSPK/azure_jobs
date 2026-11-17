@@ -12,6 +12,7 @@ from azure_jobs.server.submit.volcano import entry
 from azure_jobs.server.submit.volcano.storage import BlobMountError
 from azure_jobs.server.submit.volcano.uploaders.base import CodeUploadResult
 from azure_jobs.shared.job.spec import JobSpec
+from azure_jobs.shared.opts.volcano_backend import VolcanoBackendOpts
 
 
 class _NamedTempFile:
@@ -58,7 +59,12 @@ def test_created_job_name_parsing(output: str, expected: str) -> None:
 
 
 def _cfg(**overrides):
-    data = {"name": "job", "storage": {}, "context": "ctx"}
+    data = {
+        "name": "job",
+        "storage": {},
+        "context": "ctx",
+        "settings": VolcanoBackendOpts(),
+    }
     data.update(overrides)
     return SimpleNamespace(**data)
 

@@ -16,6 +16,7 @@ from .volcano_runtime import (
     parse_capabilities,
     parse_scratch_mount_path,
     parse_scratch_size,
+    parse_workdir_mount_path,
 )
 from .volcano_tasks import (
     VolcanoTaskEnvironment,
@@ -24,6 +25,7 @@ from .volcano_tasks import (
     resolve_task_run_shape,
     tasks_from_template,
 )
+from .volcano_backend import VolcanoBackendOpts
 
 if TYPE_CHECKING:
     from azure_jobs.shared.template.models import Template
@@ -40,9 +42,11 @@ class VolcanoOpts:
     rdma: bool | None = None
     priority_class: str = ""
     labels: dict[str, str] = field(default_factory=dict)
+    settings: VolcanoBackendOpts = field(default_factory=VolcanoBackendOpts)
 
     container_args: dict[str, Any] = field(default_factory=dict)
     shm_size: str = ""
+    workdir_mount_path: str = ""
     capabilities: list[str] = field(default_factory=list)
     scratch_mount_path: str = ""
     scratch_size: str = ""
@@ -62,6 +66,7 @@ class VolcanoOpts:
             container_args.get("scratch_size"),
             mount_path=scratch_mount_path,
         )
+        tasks = tasks_from_template(template, container_args)
         return cls(
             namespace=target.namespace,
             queue=target.queue or "default",
@@ -72,18 +77,24 @@ class VolcanoOpts:
             rdma=target.rdma,
             priority_class=target.priority_class,
             labels=dict(target.labels),
+            settings=VolcanoBackendOpts.from_dict(template._extra.get("volcano")),
             container_args=container_args,
             shm_size=str(container_args.get("shm_size") or ""),
+            workdir_mount_path=parse_workdir_mount_path(
+                container_args.get("workdir_mount_path")
+            ),
             capabilities=capabilities,
             scratch_mount_path=scratch_mount_path,
             scratch_size=scratch_size,
-            tasks=tasks_from_template(template, container_args),
+            tasks=tasks,
         )
 
 
 def _load(data: dict) -> VolcanoOpts:
+    """Reconstruct and validate typed Volcano options from wire data."""
     known = set(VolcanoOpts.__dataclass_fields__)
     values = {key: value for key, value in (data or {}).items() if key in known}
+    values["settings"] = VolcanoBackendOpts.from_dict(values.get("settings"))
     container_args = dict(values.get("container_args") or {})
     scratch_mount_path = parse_scratch_mount_path(
         values.get(
@@ -93,6 +104,9 @@ def _load(data: dict) -> VolcanoOpts:
     )
     values["capabilities"] = parse_capabilities(
         values.get("capabilities", container_args.get("capabilities"))
+    )
+    values["workdir_mount_path"] = parse_workdir_mount_path(
+        values.get("workdir_mount_path", container_args.get("workdir_mount_path"))
     )
     values["scratch_mount_path"] = scratch_mount_path
     values["scratch_size"] = parse_scratch_size(
